@@ -44,14 +44,17 @@ Source → destination, once, first.
 | 2 | `u32` | The repository format capability the source speaks ([02 §5](02-session.md#5-protocol-version) governs the *protocol* version; this is the *format* the objects are in) |
 | 3 | `text` | The scope, ≤ 64 bytes (§4) |
 | 4 | `bytes[32]` | *(optional)* The repository's **reclaim public key** ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)) — what this destination checks a deletion instruction's signature against ([06 §3](06-retention.md#3-what-the-spoke-validates)) |
+| 5 | `bytes[32]` | *(optional)* The installation's **claim public key** ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)) — what this destination checks a claim against (§6) |
 
 A destination that does not implement the offered format capability MUST refuse with `feature_unsupported`. A destination that will not accept this repository at all MUST refuse with `not_paired` — it is a policy refusal, and no finer reason is owed a peer (§7).
 
-Key 4 present with a length other than 32 bytes is `malformed`. A destination MUST NOT silently ignore a key of the wrong width: one that did would go on accepting unsigned deletion instructions while believing it held a key to check them against.
+Key 4 or key 5 present with a length other than 32 bytes is `malformed`. A destination MUST NOT silently ignore a key of the wrong width: one that did would go on accepting unsigned deletion instructions while believing it held a key to check them against, or would refuse the owner's own claim while believing it held a key to check that.
 
-A destination records key 4 **at first attribution** ([05 §2](05-quotas.md#2-ownership)) and MUST NOT let a later offer replace a key it already holds — the peer sending deletion instructions is exactly the peer that would like the key they are checked against to be its own. A destination whose attribution carries no key yet MAY record one a later offer publishes: filling an absence is not replacing an answer, and without it a peering established before this key existed could never be secured without being torn down.
+A destination records keys 4 and 5 **at first attribution** ([05 §2](05-quotas.md#2-ownership)) and MUST NOT let a later offer replace a key it already holds — the peer sending deletion instructions is exactly the peer that would like the key they are checked against to be its own, and the same is true of whoever would like the replica handed to them. A destination whose attribution carries neither key yet, or only one of them, MAY record what a later offer publishes: filling an absence is not replacing an answer, and without it a peering established before these keys existed could never be secured without being torn down. Each key fills independently — a source may publish one and not the other.
 
-A source with no key to publish — an older build, or a write-only repository provisioned before the decision — omits key 4, and an older destination skips it like any other key it does not know.
+A source with no key to publish — an older build, or a repository provisioned before the decision — omits the key, and an older destination skips it like any other key it does not know.
+
+Key 5 is the **installation's** key rather than the repository's, so the same 32 bytes appear against every repository one installation stores at this destination; the attribution stays per repository, because the quota ([05 §1](05-quotas.md)) and the retrieval gate ([07 §4](07-retrieval.md)) are.
 
 ### 3.2 ReplicationInventory
 
@@ -154,7 +157,48 @@ With it, the destination declares what it part holds and the **source** decides 
 
 The agreement is deliberately weak in one direction: the destination's claim binds nothing, and a source that cannot verify it simply sends the object whole. A peer cannot therefore cause a source to skip bytes it has not proved it holds.
 
-## 6 Framing and limits
+## 6 The claim
+
+A machine rebuilt after total loss proves a replica is its own and has the attribution follow it to the device identity it now has ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)). Gated by the `replica-claim` feature ([02 §6](02-session.md#6-feature-negotiation)).
+
+A claim is the **first payload frame** of its own session; a session that carries a claim carries nothing else. The claimant pairs first, as any new peer does ([01](01-identity-and-pairing.md)) — pairing establishes who is speaking and nothing more.
+
+**`ReplicationClaim`** — claimant → destination
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `bytes[32]` | The claim public key, the same 32 bytes its predecessor published as §3.1's key 5 |
+| 2 | `bytes[64]` | Ed25519 over the signed material below |
+
+Either key absent, or present with the wrong width, is `malformed`.
+
+**The claim names no repository**, and that is deliberate. A claimant that has lost everything holds a recovery kit, which for the provisioned shape names no repository at all; nor can it ask, because the owner inventory ([07 §3.5](07-retrieval.md)) is itself gated on attribution and answers an unrecognised device with an empty page. The claim public key is therefore the selector: the destination acts on every repository it recorded that key against.
+
+The signed material is the concatenation, all fields fixed-length so no separator is needed ([00 §4](00-conventions.md#4-domain-separation)):
+
+```text
+"fbp-peer-v1:replica-claim" ‖ session_id ‖ claimant_fingerprint
+```
+
+where `session_id` is [02 §3.5](02-session.md#35-the-session-identifier)'s 32 bytes and `claimant_fingerprint` is the claimant's peer fingerprint as lower-hex text. Binding to the session is what makes a recorded claim verify against nothing in a later connection — the same reason [06 §4.1](06-retention.md#41-retentionoffer) binds a retention instruction, and it matters more here, because a replayed claim re-points ownership rather than deleting one page.
+
+**`ReplicationClaimAccepted`** — destination → claimant
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `array` of `bytes[16]` | The repositories now attributed to the claimant, at most 1024 |
+
+An entry that is not 16 bytes, or an array longer than the limit, is `malformed`. The answer exists because the claimant could not have known to ask: it named no repository, and this is the list it then opens for retrieval.
+
+A destination MUST verify the signature against the claim public key **it recorded**, never against the key the claim presents as if it were authoritative — the presented key is a claim about identity, and the recorded key is what makes it checkable. On success it re-points each matching attribution at the claimant's fingerprint, replacing the old one rather than duplicating it: one repository, one owner here. The recorded keys are unchanged; the same passphrase re-derives them.
+
+A claim whose key matches nothing recorded here, and one whose signature does not verify, MUST refuse **identically**, with `terms_refused` and the same text. This is [07 §4](07-retrieval.md)'s reconnaissance rule in the place it matters most: distinguishable refusals would make this a way to ask a stranger's peer whether it holds a given installation's replicas. A destination SHOULD compute both answers before acting on either, so the two do not time differently.
+
+A destination that does not offer `replica-claim` MUST refuse a claim with `feature_unsupported` naming the feature, rather than letting it fall through to the offer reader. The claimant is mid-recovery, and "expected a replication offer" is true and no use at all.
+
+**A replica attributed before key 5 existed has nothing to check against.** It becomes claimable the moment an updated source makes one more offer, because a destination fills an absence — but if the machine died before that offer, there is nothing, and the remedy is the destination's own operator re-pointing the attribution out of band. That verb is not specified here.
+
+## 7 Framing and limits
 
 Frames are as [02 §7](02-session.md#7-framing) defines them. This document occupies the reserved 256+ type range:
 
@@ -167,14 +211,16 @@ Frames are as [02 §7](02-session.md#7-framing) defines them. This document occu
 | 260 | `ReplicationComplete` | §3.4 |
 | 261 | `ReplicationAck` | §3.4 |
 | 266 | `ReplicationPartial` | §3.3.1 |
+| 267 | `ReplicationClaim` | §6 |
+| 268 | `ReplicationClaimAccepted` | §6 |
 
 The per-message body limits are in [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own). The one that constrains the wire design is the chunk limit: an object larger than it is sent as several chunks, none of which — with its CBOR framing — may push a frame past the 16 MiB cap.
 
-## 7 Refusal
+## 8 Refusal
 
-Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse` and its codes; it defines no error mechanism of its own. The codes this document uses: `not_paired` (a grant that does not permit storing here, §1), `feature_unsupported` (an unimplemented format capability, §3.1), and `malformed` (a chunk out of order, a scope not understood, or any body that violates this document). A refusal closes the session, as everywhere in this protocol; there is no partial transfer left half-open.
+Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse` and its codes; it defines no error mechanism of its own. The codes this document uses: `not_paired` (a grant that does not permit storing here, §1), `feature_unsupported` (an unimplemented format capability, §3.1, or a claim where `replica-claim` is not offered, §6), `terms_refused` (a claim that proves nothing, §6), and `malformed` (a chunk out of order, a scope not understood, or any body that violates this document). A refusal closes the session, as everywhere in this protocol; there is no partial transfer left half-open.
 
-## 8 What replication does not carry
+## 9 What replication does not carry
 
 **No key material and no plaintext, as [02 §9](02-session.md#9-what-a-session-does-not-carry) requires of every payload.** The objects that cross are encrypted repository objects; their keys are store keys, not file paths. A destination stores what it cannot read. → NFR-SEC-001, NFR-SEC-004, NFR-SEC-009
 

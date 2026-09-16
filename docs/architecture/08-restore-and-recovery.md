@@ -85,7 +85,7 @@ The recovery kit is what makes clean-machine recovery possible, and it is a rele
 
 - **The passphrase.** The kit is one factor; the passphrase is the other. A stolen kit alone does not open the repository.
 - **Store credentials.** The kit says *where* the repository is, never how to authenticate to it. A kit found on a printout must not grant access to the user's cloud account.
-- **The device private key.** Recovery does not need it; a new device establishes a new identity and is re-authorised.
+- **The device private key.** Recovery does not need it; a new device establishes a new identity and is re-authorised. For a peer destination, "re-authorised" is the claim ceremony rather than only re-pairing (§6).
 
 ### 4.3 Representations
 
@@ -131,10 +131,16 @@ The release gate is recovery using **only** repository access and a recovery kit
 | Store | Rebuildable from repository? | Needed for clean-machine recovery? |
 |-------|------------------------------|-----------------------------------|
 | Catalogue | Yes — [`02-repository-format.md` §8](02-repository-format.md#8-catalogue-rebuild) | No |
-| Durable local state (device keypair, pairing grants, job history) | **No** | No — a recovering device establishes a new identity |
+| Durable local state (device keypair, pairing grants, job history) | **No** | No — a recovering device establishes a new identity, and for a peer destination claims its replica under that new identity (below) |
 | Configuration (backup sets, schedules, policies) | Partially — policy manifests record what each snapshot used | Not for restore; needed to *resume backing up* |
 
 Recovery of **data** needs only the repository and the kit. Recovery of **operation** — resuming scheduled backups to the same destinations — additionally needs configuration and re-pairing. The distinction is stated plainly in the UI, because a user who has restored their files and believes they are protected again is in a worse position than one who knows they still have to set up their destinations.
+
+**A peer destination needed one more thing than "a new identity", and it now has it** ([ADR-0053](../adr/0053-peer-claim-and-configuration-recovery.md)). A peer attributes each replica to a *pinned device identity*, and re-pairing deliberately does not transfer an attribution — that rule is what stops a stranger who pairs with your friend's machine asking for your repository by name. A rebuilt machine therefore arrives with a new identity that owns nothing, and the row above was, for peers, an aspiration.
+
+The exit is a **claim**: the machine signs a challenge bound to the live session under a claim key its predecessor published at first attribution, and the peer re-points the attribution at the new identity. The authority is the installation's passphrase and kit — the same two things that already open every byte of the replica — so the claim grants no new power over the data, only over whom the destination will hand it to. `claim` is the verb; it takes the kit, the passphrase and the peer's address, and nothing else.
+
+Two limits belong on the recovery screen rather than in a footnote. A replica attributed before the claim key existed has no key to check against: it becomes claimable the moment an updated source makes one more offer, and if the machine died first it needs the destination's operator to re-point it by hand. And the **set's shape** — name, roots, schedule, retention, destinations — still lives only in the local configuration, so a claimed replica restores every byte and cannot yet say what it was for.
 
 Full model in [`11-solution-structure.md` §3](11-solution-structure.md#3-local-state-separation).
 

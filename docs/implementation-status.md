@@ -77,7 +77,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
-| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Specified only** | `Repository.Format/RecoveryKit` — one latent trap closed; [notes](#0053--a-claim-nobody-can-make-and-a-shape-with-no-producer) |
+| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Partly built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Repository/RecoveryKitClaim`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the ceremony and the key; the set's shape in the kit is not built; [notes](#0053--the-claim-is-built-the-shape-is-not) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, and (Amendment 1) an interrupted drill recording nothing at all | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/KeyHierarchy` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
@@ -244,29 +244,58 @@ format revision. After a compactor ships the same change costs a data
 migration. The window closes on its own, which is why the record exists before
 the code rather than alongside it.
 
-### 0053 — a claim nobody can make, and a shape with no producer
+### 0053 — the claim is built, the shape is not
 
-Both halves are **designed and unbuilt**, and the record says which obstacle
-each is behind rather than leaving it as effort not yet spent.
+**Decisions 1–3 are built**, and building them changed two of them; ADR-0053's
+[Amendment 1](adr/0053-peer-claim-and-configuration-recovery.md) is the record.
+`Hosts.Tests/PeerClaimTests` is the drill: archive, configuration, state
+directory and device keypair all destroyed, a fresh install paired afresh, and
+the replica claimed back and read from the printed kit and the passphrase
+alone.
 
-The **claim ceremony** needs a peer-protocol message, a derivation on a new
-domain, and a durable field beside each attribution — a protocol version bump
-with its own drill. Nothing of it exists.
+Two things the attempt found, worth keeping because they are the kind of thing
+that gets re-derived:
 
-The **set's shape in the kit** looked free and is not. The kit a service
-builds is an *installation* kit (ADR-0042's 2026-08 amendment), and the
-per-repository builder has exactly one production caller: the CLI's `kit`
-verb, pointed at a repository path with no configured set to read from. So the
-shape has no producer where the record put it, and carrying it means the
-installation kit holding one shape per set.
+**The claim key could not be what §1 said it was.** It derived from the
+repository's master key, and a claimant that has lost the repository holds an
+installation kit — no repository id, no key object, every key re-derived from
+the passphrase and the kit's public salt. So the key is the *installation's*,
+`fbp/claim/v2`, with `fbp/claim/v1` off the master key for a claimant holding a
+format-v1 kit. `Repository/RecoveryKitClaim` answers both, and takes no store,
+because there is no archive to open.
 
-What the attempt did land is a latent trap it walked into.
+**The claim can name no repository either**, for the same reason, and the owner
+inventory cannot tell it one because that path is itself gated on attribution.
+The claim public key is the selector: `Agent/ClaimResponder` re-attributes
+every repository recorded against it and names them in its answer.
+
+What is **not** built: §3's operator re-attribution, for a replica attributed
+before the claim key existed by a machine that then died — it self-heals on one
+more offer from an updated source, and otherwise needs the destination's
+operator. And §4, the set's shape in the kit, which §5 already explained: the
+kit a service builds is an *installation* kit, the per-repository builder has
+one production caller with no configured set to read from, and carrying the
+shape means the installation kit holding one per set.
+
+An earlier latent trap this record closed still stands:
 `Repository.Format/RecoveryKit` decided "is this an installation kit" by
 `version >= 2`, so the version number meant both how new a kit is and which of
-the two shapes it has. Nothing writes a third version yet, so nothing was
-broken — and the first field anyone added would have been, by a kit parsed for
-a repository id it does not carry. The test is now an equality, pinned in
+the two shapes it has. The test is an equality, pinned in
 `Repository.Tests/InstallationKitCodecTests`.
+
+**A defect the seventh member found in the sixth.** Adding the claim public key
+to `Repository.Crypto/RepositoryWriteCredential` turned up two live faults the
+reclaim key had left behind. The credential's two containers —
+`Agent/WriteOnlyServiceState`'s stored provisioning and
+`Repository.Crypto/WriteOnlyProvisioning`'s sealed envelope — each pinned one
+exact total length, so widening the credential had made every bundle an older
+build wrote unreadable; an installation would have reported its own credential
+as damage, with no way back, because saving deliberately never overwrites. And
+`ToBytes` always wrote the current shape with an absent member left zero, so a
+round trip — which `KeyHierarchy.ForWriteOnly` performs on every open — turned
+"no reclaim key" into 32 bytes of zeros, which a peer would have recorded
+permanently and then demanded signatures under. Both are fixed: the containers
+ask the credential how long it is, and a credential writes the shape it holds.
 
 ### 0054 — what the scheduled drill does not prove
 

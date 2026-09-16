@@ -15,6 +15,8 @@ One logical document with two representations carrying **identical content**:
 
 A kit is **one factor**. It contains the wrapped master key and the public parameters needed to unwrap it, but unwrapping requires the passphrase. A kit MUST NOT contain the passphrase, any store credential, or any device private key; a parser encountering a kit that claims to is looking at a forgery or a defect, and MUST refuse it (FR-KIT-002).
 
+The kit and the passphrase together reach **every** authority a recovery needs, not only the one that opens bytes. A machine rebuilt after total loss also derives its **claim key** from them — the authority that proves a peer replica is this installation's and has the attribution follow the new machine ([peer-protocol 03 §6](../peer-protocol/03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)). Nothing new is stored here for it: a v2 kit's salt and parameters already determine it, and a v1 kit's key object already carries the root it expands from.
+
 ## 2 Body
 
 The body is one deterministic-CBOR map ([repository-format 00 §4](../repository-format/00-conventions.md#4-cbor-encoding)):

@@ -1,6 +1,6 @@
 # ADR-0053 — A rebuilt machine claims its peer replica, and its backup set's shape survives with it
 
-**Status:** Proposed
+**Status:** Amended (2026-09) — decisions 1–3 built; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message)
 **Date:** 2026-09
 **Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership), [peer-protocol 07 §4](../../specifications/peer-protocol/07-retrieval.md)
@@ -67,6 +67,19 @@ nobody else:
 claim_key = Ed25519 from HKDF-Expand(master_key, "fbp/claim/v1" ‖ repository_id)
 ```
 
+> **Amended (2026-09): a claimant cannot reach that key.** Building the
+> ceremony found the derivation above unreachable at the moment it is wanted.
+> A machine claiming a replica has lost the repository, and what it holds is an
+> **installation** kit — which carries no repository id and no key object at
+> all, because every key re-derives from the passphrase and the kit's public
+> salt. There is no master key to expand from until the repository is open, and
+> the repository is what is being claimed. The claim key is therefore derived
+> from the **installation**: `"fbp/claim/v2"` off the root
+> `Argon2id(passphrase, installation salt, params)`, with `"fbp/claim/v1"` off
+> the master key kept for a claimant holding a format-v1 per-repository kit.
+> The destination neither knows nor cares which produced the public key it
+> recorded. See [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message).
+
 The destination stores the **public** half. That is what makes this workable
 at all: a peer holds no repository keys by design, so it cannot verify a
 signature made with the repository's ordinary signing key
@@ -100,6 +113,27 @@ The nonce is per-claim and single-use, so a recorded exchange replays into
 nothing. Binding the claimant's fingerprint into the signed material is what
 stops an observer re-using a captured signature to point the replica at
 themselves.
+
+> **Amended (2026-09): steps 2–4 collapse into one message, and the claim
+> names no repository.** Two changes, both found by building it.
+>
+> The nonce round trip is unnecessary. [ADR-0059](0059-session-bound-deletion-authority.md)
+> surfaced the **session identifier**
+> ([02 §3.5](../../specifications/peer-protocol/02-session.md)), which is
+> already fresh per connection, already derived from both sides' contributions
+> including both TLS keys, and already known to both ends before the claim —
+> so signing over it buys the same freshness for one message instead of three.
+>
+> And step 2's `repository_id` cannot be supplied. The claimant holds an
+> installation kit, which names no repository; nor can it ask, because the
+> owner-inventory path is itself gated on attribution and answers a fresh
+> device identity with an empty page. So the **claim public key is the
+> selector**: the destination re-attributes every repository it recorded that
+> key against — which for one installation may be several at once — and its
+> answer says which. The signed material is
+> `"fbp-peer-v1:replica-claim" ‖ session_id ‖ claimant_fingerprint`.
+> The identical-refusal rule of step 3 is unchanged and is what
+> `Agent/ClaimResponder` implements.
 
 ### 3 A replica attributed before this exists is claimed by a person
 
@@ -172,6 +206,98 @@ claim gap preserves the state directory, and every future drill written before
 the decision would preserve it too. Naming the ceremony is what lets the drill
 be written against something.
 
+## Amendment 1 (2026-09) — the claim key is the installation's, and the ceremony is one message
+
+Decisions 1–3 are built. Building them changed two of them, and the changes
+are recorded here rather than edited silently into the decisions above.
+
+### The claim key is derived from the installation
+
+§1's `HKDF-Expand(master_key, "fbp/claim/v1" ‖ repository_id)` is unreachable
+by the party that needs it. A claimant has lost the repository — that is what
+it is claiming — and what it still holds is an installation kit, which carries
+a KDF salt, Argon2 parameters and a sealing public key, and no repository id
+and no key object at all. `Recovery/RecoverySession` says so in as many words:
+an installation kit "names no repository", and the path that opens one needs
+the archive.
+
+So the authority is the **installation's**, which is already the product's
+model: [ADR-0044](0044-first-run-setup.md)'s one passphrase stamps every
+archive, an installation kit opens every archive that passphrase wrote, and
+`ServiceRuntime.OpenFromInstallationAsync` creates every new set from the
+installation credential. "Whoever holds this installation's kit and passphrase"
+and "whoever can open this repository" name the same person.
+
+| Claimant holds | Root | Domain |
+|---|---|---|
+| An installation kit (the provisioned default) | `WriteOnlyDerivation`'s installation root | `fbp/claim/v2` |
+| A per-repository kit (format v1) | the repository master key | `fbp/claim/v1` |
+
+`Repository/RecoveryKitClaim` answers both through one entry point, because
+the person holding the kit should not have to know which kind they were given
+and the destination cannot tell either — it recorded a public key and nothing
+about where it came from.
+
+**The key takes no generation**, alone among the derived keys, and the reason
+is its carrier rather than its cryptography. `Application/ReplicaOwnerStore`
+records it at first attribution and never replaces it — the same
+irreplaceability the reclaim key relies on under
+[ADR-0055](0055-reclaim-authority.md) §5 — so a key that turned over with the
+generation would go stale on the first rotation with no way to tell the peer.
+It could not be generational anyway: an installation root knows nothing of any
+one repository's generations.
+
+**The private half is withheld from the write credential**, exactly as the
+reclaim seed is, and from every grant besides. A service that could author a
+claim could re-point a replica's attribution to a machine of its choosing; the
+decision of which machine a peer hands the backups back to belongs to the
+person holding the passphrase and the kit.
+
+### The ceremony is one message and its answer
+
+§2's nonce round trip existed only for freshness, and
+[ADR-0059](0059-session-bound-deletion-authority.md) surfaced something
+fresher: the session identifier
+([02 §3.5](../../specifications/peer-protocol/02-session.md)) is per
+connection, derived from both sides' contributions including both TLS keys,
+and known to both ends before the claim.
+
+And the claim names no repository, because the claimant holds no repository
+id. The claim public key is the selector: `Agent/ClaimResponder` re-attributes
+every repository recorded against it and names them in
+`ReplicationClaimAccepted`, which is also the list the claimant could not have
+known to ask for. `ReplicaOwnerStore.Reattribute` is the first writer in that
+ledger that changes a fingerprint, and the one place the "already stored here
+for another peer" rule is set aside — on proof the ledger itself cannot check,
+since it holds no cryptography.
+
+Gating on the negotiated `replica-claim` feature is safe in a way it was not
+for `signed-retention` ([ADR-0059](0059-session-bound-deletion-authority.md)):
+withholding it can only make the destination refuse, so a party that omits it
+is asking for less authority rather than more. A destination that does not
+offer it refuses by name, so the half of the pair that needs updating is
+identified rather than guessed at.
+
+### What is still not built, said plainly
+
+**§3's operator re-attribution is not built.** A replica attributed before the
+claim key existed has no key to check against. It self-heals the moment an
+updated source makes one more offer, because `TryAttribute` fills an absence —
+but if the machine died before that offer, there is nothing, and §3's
+out-of-band verb is the only answer. `docs/proof-obligations.md` carries that
+limit rather than the record implying otherwise.
+
+**§4 is untouched**, and §5 still says why: the kit a service builds is an
+installation kit, and carrying one shape per set is a larger change to a
+printed artefact than this record scoped. The decision above does not reopen
+it — the claim needs nothing new in the kit, only the salt and parameters an
+installation kit already carries.
+
+**A passphrase change would invalidate every recorded claim key.** Nothing in
+the product rotates a passphrase today, so this costs nothing now. It is a
+constraint on whoever adds one: rotation must re-publish the claim key, or
+claims made before it stop verifying.
+
 ## Consequences
 
 **Positive**
@@ -216,4 +342,5 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (derivation and ceremony) | Decisions 1–3 built. [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) records two changes the attempt forced: §1's repository-derived claim key is unreachable by a claimant that has lost the repository, so the key is derived from the **installation** (`fbp/claim/v2`, with `fbp/claim/v1` for a format-v1 kit); and §2's nonce round trip is replaced by the session identifier from [ADR-0059](0059-session-bound-deletion-authority.md), with the claim naming no repository because the claimant holds no repository id. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Repository/RecoveryKitClaim` and `Application/ReplicaOwnerStore` carry it; `Hosts.Tests/PeerClaimTests` runs the drill. §3's operator re-attribution and §4 remain unbuilt |
 | 2026-09 | Proposed | In response to the 2026-09 architecture review's R2. Nothing is built: decisions 1–3 need a peer-protocol message, a new derivation and a ledger field; decision 4 was attempted and found to need the *installation* kit to carry a shape per set, because the per-repository builder has one caller and no configuration to read. The attempt did land one fix — `Repository.Format/RecoveryKit` — where the kit's version number doubled as its shape discriminator and would have misread the next version as an installation kit |

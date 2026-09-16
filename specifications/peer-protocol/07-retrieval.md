@@ -105,6 +105,12 @@ failure shapes — someone else's replica, and one never stored here — MUST
 refuse identically (`terms_refused`, one message), because which of the two it
 was is reconnaissance the requester is not owed.
 
+A machine rebuilt after total loss holds a new device identity, so this gate
+refuses it — correctly, since the gate is what stops a stranger asking for a
+repository by name. The exit is the claim ([03 §6](03-replication.md#6-the-claim)),
+which re-points the attribution before retrieval is attempted; the claim
+refuses in these same identical terms and for this same reason.
+
 Within an authorised replica every key is servable, `keys/` included: the
 key objects are the owner's own passphrase-wrapped bytes, indistinguishable
 in sensitivity from every other object the destination already holds for it.

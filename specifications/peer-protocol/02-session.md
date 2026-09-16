@@ -205,10 +205,11 @@ The features defined so far:
 | `session-bound-retention` | The peer verifies a `RetentionOffer` signature over the session identifier as well as the page ([§3.5](#35-the-session-identifier); [06 §4.1](06-retention.md#41-retentionoffer)). Tells a **commander how to sign**; a spoke requires whichever form it offered |
 | `retrieval` | An owner may read its own replica back over the session ([07](07-retrieval.md)) |
 | `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
+| `replica-claim` | A machine rebuilt after total loss may prove a replica is its own and have the attribution follow it ([03 §6](03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)). A gate is safe here because withholding it can only make the destination refuse |
 
 `signed-retention` is separate from `retention-instruction` rather than folded into it, because the two say different things: one is *I accept deletion instructions at all*, the other is *and I will not act on one I cannot prove came from the repository's reclaim authority*. It tells a commander at the hello what it will be held to, rather than leaving it refused mid-exchange after the objects have already crossed.
 
-It says what the spoke expects and **decides nothing**, which is a rule worth stating in general and not only here: *a feature MUST NOT be the sole gate on a check that defends one side against the other.* The intersection is computed from both hellos, so conditioning such a check on a feature hands the decision to the party being checked. Where a check exists to constrain a peer, it is gated on a fact this side holds — for [06 §3](06-retention.md#3-what-the-spoke-validates), the reclaim public key recorded at first attribution. Features remain the right mechanism for what the other side can *understand*, which is what every other row in this table is about.
+It says what the spoke expects and **decides nothing**, which is a rule worth stating in general and not only here: *a feature MUST NOT be the sole gate on a check that defends one side against the other.* The intersection is computed from both hellos, so conditioning such a check on a feature hands the decision to the party being checked. Where a check exists to constrain a peer, it is gated on a fact this side holds — for [06 §3](06-retention.md#3-what-the-spoke-validates), the reclaim public key recorded at first attribution. Features remain the right mechanism for what the other side can *understand*, which is what every other row in this table is about — and for a capability whose absence can only mean **less** authority, which is why `replica-claim` may be a gate where `signed-retention` may not: omitting it refuses a claim, and no attacker gains by being refused.
 
 The mechanism predates its first feature deliberately — retrofitting negotiation onto a deployed protocol means a flag day — and `termination-notice` is the proof it was worth specifying early: the message it gates is announced only to peers that offered it, and an older build is never sent a type it would refuse as `message_unknown`.
 
@@ -237,11 +238,12 @@ frame = u32(payload_length) ‖ payload
 | 9 | `SessionAuthProof` | §3.1 |
 | 10 | `PeeringTermination` | [01 §3.1](01-identity-and-pairing.md#31-ending-a-peering) |
 | 11–255 | Reserved for this specification | — |
-| 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
+| 256–261 | Replication | [03](03-replication.md#7-framing-and-limits) |
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
 | 264–265 | Verification | [04](04-verification.md#4-messages) |
 | 266 | Partial-object declaration | [03 §3.3.1](03-replication.md#331-replicationpartial) |
-| 267–271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 267–268 | Replica claim | [03 §6](03-replication.md#6-the-claim) |
+| 269–271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 | 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
 | 278+ | Reserved for later payload documents | — |
 
