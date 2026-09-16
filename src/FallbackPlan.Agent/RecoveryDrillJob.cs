@@ -52,10 +52,22 @@ internal static class RecoveryDrillJob
     private const int MaximumDepth = 24;
 
     /// <summary>What one drill found.</summary>
-    /// <param name="Files">Files restored whole.</param>
-    /// <param name="Bytes">What they amounted to.</param>
+    /// <param name="Files">Files restored whole — or, under <paramref name="Limit"/>, proved as far as the sealed content.</param>
+    /// <param name="Bytes">What they amounted to; zero under a limit, since nothing was written.</param>
     /// <param name="Failure">Why it did not work, or null when it did.</param>
-    public sealed record DrillOutcome(int Files, long Bytes, string? Failure);
+    /// <param name="Limit">What a passing drill could not prove, or null when it proved everything.</param>
+    public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null);
+
+    /// <summary>
+    /// The limit a drill states on a write-only set (ADR-0054 Amendment 2):
+    /// the service holds no content key, so the road back is proved as far
+    /// as the sealed content and no further.
+    /// </summary>
+    public const string SealedContentLimit =
+        "content sealed: this set is write-only, so the service could prove the road back only as far as the "
+        + "sealed content — the replica opens, its index and catalogue rebuild, and every sampled file's manifest "
+        + "and segment records were found — and could not read the content itself without the passphrase. A "
+        + "content drill is the recovery tool with the passphrase (ADR-0054).";
 
     /// <summary>
     /// Drills one (set, destination) pair and records the result. Never
@@ -86,7 +98,7 @@ internal static class RecoveryDrillJob
                 .ConfigureAwait(false);
 
             runtime.DestinationSync.RecordDrill(
-                set.Id, destinationName, outcome.Files, outcome.Bytes, outcome.Failure, nowMs);
+                set.Id, destinationName, outcome.Files, outcome.Bytes, outcome.Failure, outcome.Limit, nowMs);
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -108,7 +120,7 @@ internal static class RecoveryDrillJob
         catch (Exception exception)
         {
             var outcome = new DrillOutcome(0, 0, $"the drill did not complete: {exception.Message}");
-            runtime.DestinationSync.RecordDrill(set.Id, destinationName, 0, 0, outcome.Failure, nowMs);
+            runtime.DestinationSync.RecordDrill(set.Id, destinationName, 0, 0, outcome.Failure, limit: null, nowMs);
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -196,6 +208,7 @@ internal static class RecoveryDrillJob
 
         var files = 0;
         var bytes = 0L;
+        var sealedFiles = 0;
         foreach (var path in paths)
         {
             var restored = await handler.ExecuteAsync(
@@ -219,6 +232,39 @@ internal static class RecoveryDrillJob
                     bytes += ok.Restored > 0 ? BytesUnder(Path.Combine(scratch, $"{files - 1}")) : 0;
                     break;
 
+                // A write-only set's content is sealed to a key the service
+                // does not hold (ADR-0042 §7), so the engine reached every
+                // segment record and stopped there. That is the road back
+                // proved as far as it can be from inside the service, and a
+                // stated limit rather than damage — provided the plan finds
+                // every segment the manifest names, which a missing or
+                // unreadable record would fail.
+                case RestoreResult sealedOnly when SealedOnly(sealedOnly):
+                    var planned = await handler.ExecuteAsync(
+                        new PlanRestoreCommand(newest.SnapshotId, path, Source: source.SourceId), cancellationToken)
+                        .ConfigureAwait(false);
+                    switch (planned)
+                    {
+                        case ServiceError error:
+                            ThrowIfCancelled(error);
+                            return new DrillOutcome(0, 0, $"'{path}' would not plan: {error.Message}");
+
+                        case RestorePlanResult { MissingObjects.Count: 0 }:
+                            sealedFiles++;
+                            break;
+
+                        case RestorePlanResult missing:
+                            return new DrillOutcome(
+                                0, 0,
+                                $"'{path}' is missing {missing.MissingObjects.Count} object(s) at the replica: "
+                                + $"{missing.MissingObjects[0]}");
+
+                        default:
+                            return new DrillOutcome(0, 0, $"planning '{path}' answered {planned.GetType().Name}.");
+                    }
+
+                    break;
+
                 case RestoreResult other:
                     return new DrillOutcome(
                         0, 0,
@@ -230,8 +276,22 @@ internal static class RecoveryDrillJob
             }
         }
 
-        return new DrillOutcome(files, bytes, null);
+        return sealedFiles > 0
+            ? new DrillOutcome(files + sealedFiles, bytes, null, SealedContentLimit)
+            : new DrillOutcome(files, bytes, null);
     }
+
+    /// <summary>
+    /// Whether a restore failed for no reason other than sealed content:
+    /// nothing written, and every failure the engine reported — all of them,
+    /// not a sample of a longer list — names <c>ContentSealed</c>.
+    /// </summary>
+    private static bool SealedOnly(RestoreResult result) =>
+        result.Restored == 0
+        && result.Failed > 0
+        && result.FailedSample is { Count: > 0 } sample
+        && sample.Count == result.Failed
+        && sample.All(line => line.Contains("ContentSealed", StringComparison.Ordinal));
 
     /// <summary>
     /// Picks files to restore by descending the snapshot at random.

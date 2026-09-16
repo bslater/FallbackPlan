@@ -311,6 +311,15 @@ tool's dependency closure, and cannot delete the state directory it is running
 out of. All three remain [the committed recovery drill](../eng/recovery-drill.sh)'s,
 which is unchanged and not superseded ([ADR-0054](adr/0054-scheduled-restore-drills.md) §5).
 
+Nor, on a write-only set, does it read content: the service holds no content
+key, so the scheduled drill proves the road back as far as the sealed content
+— the replica opens, its index and catalogue rebuild, every sampled file's
+manifest and segment records are found — and records that as a pass with a
+stated limit, on the ledger and the status matrix as `drill_limit` (contract
+1.27), never as a failure ([Amendment 2](adr/0054-scheduled-restore-drills.md#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09)).
+Damage before the content plane still fails and still raises the notice.
+`Agent/RecoveryDrillJob`, `Hosts.Tests/RecoveryDrillTests`.
+
 Peer destinations are not drilled: restoring across the wire on a cadence the
 peer never agreed to is peer-protocol work rather than a schedule, and the gap
 is carried openly on [proof obligations](proof-obligations.md) rather than

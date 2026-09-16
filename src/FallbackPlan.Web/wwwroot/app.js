@@ -623,6 +623,15 @@ function drillLabel(d) {
     return `<b class="bad">could not restore</b> <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillFailure)}</span>`;
   }
 
+  // A pass with a stated limit (contract 1.27): a write-only set's drill
+  // proves the road back as far as the sealed content, and says so rather
+  // than claiming a restore it did not perform — or a failure it did not
+  // find.
+  if (d.drillLimit) {
+    const proved = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) proved to the sealed content` : "proved to the sealed content";
+    return `${esc(proved)} <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillLimit)}</span>`;
+  }
+
   const files = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) restored` : "restored";
   return `${esc(files)} <span class="detail">${esc(rel(d.drilledAt))}</span>`;
 }

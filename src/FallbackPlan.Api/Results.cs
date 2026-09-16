@@ -686,6 +686,16 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// byte it was sent, prove possession of them, and still fail this — which
 /// is the whole reason the field is separate from the sync state.
 /// </param>
+/// <param name="DrillLimit">
+/// What the last drill could not prove when it passed with a stated limit
+/// (contract 1.27, ADR-0054 Amendment 2): on a write-only set the service
+/// holds no content key, so its drill proves the road back as far as the
+/// sealed content — replica opens, index and catalogue rebuild, manifests
+/// and segment records found — and says so here. Null when the drill proved
+/// everything, when it failed, when none has run, and from services before
+/// 1.27. A limit is not a failure: <paramref name="DrillFailure"/> is null
+/// beside it, and a client must not render it as one.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -702,7 +712,8 @@ public sealed record DestinationStatusDescriptor(
     ulong? MeasuredAt = null,
     ulong? DrilledAt = null,
     int DrillFiles = 0,
-    string? DrillFailure = null);
+    string? DrillFailure = null,
+    string? DrillLimit = null);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

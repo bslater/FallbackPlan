@@ -86,6 +86,12 @@ which is the specific failure this record exists to prevent. It is the same
 rule `measured_at` carries for the completion figures (contract 1.24), for the
 same reason.
 
+> **Amended (2026-09): a pass may carry a stated limit.** On a write-only
+> set the service cannot read content, so its drill passes *as far as the
+> sealed content* and says so beside the stamp — still the second answer,
+> with a qualifier a surface must show and must not render as the third.
+> See [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09).
+
 ### 4 A failed drill is not a failed sync
 
 The outcome lands on its own fields and leaves the sync state alone. A
@@ -128,6 +134,13 @@ superseded by this record. The two answer different questions: the script asks
 "does recovery work at all", once, thoroughly, when a person runs it; the
 scheduled drill asks "does *this* destination still restore", repeatedly,
 without anybody remembering to ask.
+
+> **Amended (2026-09): on a write-only set, add the content plane.** The
+> service holds no content key ([ADR-0042 §7](0042-write-only-repositories.md)),
+> so the scheduled drill does not read a byte of content there; it proves
+> the road back as far as the sealed content and states that limit. The
+> content drill is the manual one, with the passphrase — see
+> [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09).
 
 ### 6 Peers are not drilled
 
@@ -219,9 +232,55 @@ Two consequences follow, and both are now built:
   found, in a state directory that would not delete because something the
   caller had stopped waiting for was still writing to it.
 
+## Amendment 2 — a drill on a write-only set proves the road as far as the sealed content (2026-09)
+
+This record was written against a service that holds the keys, and every
+installation setup produces does not: a write-only set's replica seals its
+content to a key the service never holds ([ADR-0042 §7](0042-write-only-repositories.md)),
+so the drill of §1, run as written, restored nothing there — every sampled
+file read `ContentSealed`, and §4 turned that into a recovery failure and the
+loudest notice the product has, on every drill, on every write-only set, for a
+key the service was never meant to hold. Found by moving
+`Hosts.Tests/RecoveryDrillTests` onto a set-up installation (slice 12A), where
+the clean drills went red with that message.
+
+**Decision.** Unattended, a drill on a write-only set proves what the service
+can prove without the passphrase, and states what it cannot:
+
+- It runs the same verbs (§2). Opening the replica proves the descriptor
+  verifies and the index plane rebuilds; sampling proves the catalogue
+  projects and the manifests decode; the restore reaches every segment
+  record of each sampled file — located in a footer table authenticated
+  under the metadata key — and stops at the sealed content. When every
+  failure the engine reports is `ContentSealed` and nothing else, and a
+  restore plan for the same file names no missing object, that is the road
+  back proved as far as it can be from inside the service.
+- The outcome is a **pass with a stated limit**: the stamp moves, the files
+  proved that far are counted, no bytes are counted as restored, the failure
+  stays null, and the limit rides beside it on the ledger and the status
+  matrix (`drill_limit`, contract 1.27). No notice: the limit is on the row,
+  and a notice every thirty days about a key the service is not meant to
+  hold would be noise wearing an alarm's clothes.
+- Damage is still damage. A replica whose data blobs are rotted fails the
+  footer authentication before the content question arises, and a missing
+  segment fails the plan: both record a failure and raise the notice exactly
+  as before. The limit is reserved for the one case where the only thing
+  between the drill and the bytes is the passphrase.
+- The **content drill** on a write-only set is the manual one: the recovery
+  tool with the passphrase, `eng/recovery-drill.sh` and
+  `Hosts.Tests/RecoveryHostTests`. §5's list gains that item for the
+  write-only shape, and the proof obligations say the scheduled drill proves
+  the content plane only where the service holds the key.
+
+§3's three answers stand. A pass with a limit is the second answer with a
+qualifier, not a fourth state: a surface shows the limit, and must not fold it
+into "could not restore" — which it is not — or into a plain pass, which
+overstates by exactly what the limit says.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R11. Built: `Agent/RecoveryDrillJob` drills through the guided-restore verbs, `Agent/Scheduler` decides when, `Application/DestinationSyncStore` carries the answer, and contract 1.25 puts it on the status matrix. The scheduled drill deliberately proves less than [the operator drill](../../eng/recovery-drill.sh), and §5 says what |
 | 2026-09 | Amended | [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09): an interrupted drill states nothing. `Agent/RecoveryDrillJob` translates a cancelled command answer back into a cancellation, `Agent/AgentPass` waits for the drill phase, and `Agent/JobScheduler` refuses work once stopped instead of posting to disposed semaphores |
+| 2026-09 | Amended | [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09): on a write-only set the scheduled drill proves the road back as far as the sealed content and states that limit as a pass, never as a failure. `Agent/RecoveryDrillJob` recognises a sealed-only refusal and confirms the plan finds every segment; `Application/DestinationSyncStore` and contract 1.27 carry `drill_limit`; `Hosts.Tests/RecoveryDrillTests` runs on a set-up installation |

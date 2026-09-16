@@ -2561,7 +2561,8 @@ public sealed partial class ServiceCommandHandler(
                 MeasuredAt: ledger?.MeasuredAt,
                 DrilledAt: ledger?.DrilledAt,
                 DrillFiles: ledger?.DrillFiles ?? 0,
-                DrillFailure: ledger?.DrillFailure));
+                DrillFailure: ledger?.DrillFailure,
+                DrillLimit: ledger?.DrillLimit));
         }
 
         return (inputs, rows, lastCompleted);

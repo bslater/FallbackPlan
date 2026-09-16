@@ -418,6 +418,33 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheDrillLimit_WireNameAndPre127Default()
+    {
+        // Contract 1.27 (ADR-0054 Amendment 2): a drill on a write-only set
+        // passes with a stated limit — the road back proved as far as the
+        // sealed content — and the limit rides beside a null failure.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
+                "other-drive", "verified", DrilledAt: 7_000, DrillFiles: 3, DrillLimit: "content sealed"),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"drill_limit\":\"content sealed\"", modern, StringComparison.Ordinal);
+        Assert.Contains("\"drill_failure\":null", modern, StringComparison.Ordinal);
+
+        // A pre-1.27 frame carries no limit and reads as a plain pass — which
+        // overstates by exactly the limit it cannot see, and is the honest
+        // reading of a field that did not exist.
+        var old = modern.Replace(",\"drill_limit\":\"content sealed\"", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(row.DrillLimit);
+        Assert.IsNull(row.DrillFailure);
+        Assert.AreEqual(7_000UL, row.DrilledAt);
+    }
+
+    [TestMethod]
     public void TheRestoreDrillAnswer_WireNamesAndPre125Defaults()
     {
         // Contract 1.25 (ADR-0054): the status matrix carries when a drill

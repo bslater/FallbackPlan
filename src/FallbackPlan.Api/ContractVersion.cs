@@ -190,8 +190,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// authors nothing. A write-only set applying without one is refused by
     /// name rather than falling back to the key it publishes with. Additive:
     /// a pre-1.26 client's retention command still parses, and still reports.
+    /// 1.27 adds `drill_limit` to each destination row (ADR-0054 Amendment
+    /// 2): what a passing drill could not prove. A write-only set's replica
+    /// seals its content to a key the service does not hold, so its drill
+    /// proves the road back as far as the sealed content — the replica
+    /// opens, its index and catalogue rebuild, every sampled file's manifest
+    /// and segment records are found — and states that limit instead of
+    /// reporting the passphrase's absence as damage. A limit rides beside a
+    /// null failure: it is a pass, and a client must not render it as a
+    /// failure. Additive with a default: a pre-1.27 client reads such a row
+    /// as a plain pass, which overstates by exactly the limit it cannot see.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 26);
+    public static ContractVersion Current { get; } = new(1, 27);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

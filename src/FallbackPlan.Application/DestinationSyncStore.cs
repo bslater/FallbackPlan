@@ -279,6 +279,24 @@ public sealed record DestinationSyncRecord
     [JsonPropertyName("drill_failure")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DrillFailure { get; init; }
+
+    /// <summary>
+    /// What the last drill could not prove, in its own words, when it passed
+    /// with a stated limit; null when it proved everything it set out to, when
+    /// it failed, and when none has run.
+    /// </summary>
+    /// <remarks>
+    /// A write-only set's replica seals its content to a key the service does
+    /// not hold (ADR-0042 §7), so a drill run by the service proves the road
+    /// back as far as the sealed content and no further — the replica opens,
+    /// its index and catalogue rebuild, the sampled files' manifests and
+    /// segment records are found — and says so here rather than reporting
+    /// the passphrase's absence as damage (ADR-0054 Amendment 2). A pass with
+    /// a limit is still a pass: <see cref="DrillFailure"/> stays null.
+    /// </remarks>
+    [JsonPropertyName("drill_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DrillLimit { get; init; }
 }
 
 /// <summary>
@@ -579,9 +597,10 @@ public sealed class DestinationSyncStore
     /// <param name="files">Files restored whole; zero on a failure.</param>
     /// <param name="bytes">What those files amounted to.</param>
     /// <param name="failure">Why it did not work, or null when it did.</param>
+    /// <param name="limit">What a passing drill could not prove, or null when it proved everything.</param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
     public DestinationSyncRecord RecordDrill(
-        string setId, string destination, int files, long bytes, string? failure, ulong nowUnixMilliseconds)
+        string setId, string destination, int files, long bytes, string? failure, string? limit, ulong nowUnixMilliseconds)
     {
         return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
@@ -589,6 +608,7 @@ public sealed class DestinationSyncStore
             DrillFiles = files,
             DrillBytes = bytes,
             DrillFailure = failure,
+            DrillLimit = limit,
         });
     }
 

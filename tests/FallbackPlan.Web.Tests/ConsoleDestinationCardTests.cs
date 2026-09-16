@@ -138,6 +138,23 @@ public sealed class ConsoleDestinationCardTests
     }
 
     [TestMethod]
+    public void Drill_APassWithAStatedLimit_IsNeitherAFailureNorAPlainPass()
+    {
+        var body = FunctionBody(AppJs(), "drillLabel");
+
+        // Contract 1.27: a write-only set's drill proves the road back as far
+        // as the sealed content. The label says exactly that — not "restored",
+        // which it did not do, and not "could not restore", which it did not
+        // find — and the limit's own words go through the escape.
+        Assert.Contains("d.drillLimit", body, StringComparison.Ordinal);
+        Assert.Contains("proved to the sealed content", body, StringComparison.Ordinal);
+        Assert.Contains("esc(d.drillLimit)", body, StringComparison.Ordinal);
+        Assert.IsTrue(
+            body.IndexOf("d.drillFailure", StringComparison.Ordinal) < body.IndexOf("d.drillLimit", StringComparison.Ordinal),
+            "a failure outranks a limit: a drill that failed says so whatever it also could not prove");
+    }
+
+    [TestMethod]
     public void Drill_TheFailureText_ComesFromTheServiceAndIsEscaped()
     {
         var body = FunctionBody(AppJs(), "drillLabel");

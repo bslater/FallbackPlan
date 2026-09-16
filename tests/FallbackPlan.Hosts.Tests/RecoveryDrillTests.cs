@@ -1,7 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
-using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -48,8 +47,13 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Drill_ADestinationHoldingTheSet_RestoresASampledFileAndRecordsIt()
+    public async Task Drill_AWriteOnlySet_ProvesTheRoadToTheSealedContentAndSaysSo()
     {
+        // The only shape setup produces: the replica's content is sealed to a
+        // key the service does not hold (ADR-0042 §7), so the drill can prove
+        // the road back only as far as that — and must say so as a stated
+        // limit, not claim a restore it did not perform, and not report the
+        // passphrase's absence as damage (ADR-0054 Amendment 2).
         Directory.CreateDirectory(Vault);
         WriteConfiguration(directShip: true);
         _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
@@ -68,8 +72,17 @@ public sealed class RecoveryDrillTests : IDisposable
             record.DrilledAt,
             $"a destination holding a converged set is due its first drill: error={record.DrillFailure}");
         Assert.IsNull(record.DrillFailure, record.DrillFailure);
-        Assert.IsGreaterThan(0, record.DrillFiles, "a drill that restored nothing has proved nothing");
-        Assert.IsGreaterThan(0L, record.DrillBytes);
+        Assert.IsNotNull(record.DrillLimit, "a drill that could not read the content must say what it could not prove");
+        Assert.Contains("sealed", record.DrillLimit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("passphrase", record.DrillLimit, StringComparison.OrdinalIgnoreCase);
+        Assert.IsGreaterThan(0, record.DrillFiles, "a drill that reached no file has proved nothing");
+        Assert.AreEqual(0L, record.DrillBytes, "nothing was written, so nothing is counted as restored");
+
+        // A limit is not a failure: the loudest notice this product raises
+        // is for a recovery that would not work, not for a key it was never
+        // meant to hold.
+        Assert.IsEmpty(
+            runtime.Notices.Notices.Where(notice => notice.Key.StartsWith("drill-failed:", StringComparison.Ordinal)));
     }
 
     [TestMethod]
@@ -275,6 +288,8 @@ public sealed class RecoveryDrillTests : IDisposable
         Assert.AreEqual(record.DrilledAt, row.DrilledAt);
         Assert.AreEqual(record.DrillFiles, row.DrillFiles);
         Assert.IsNull(row.DrillFailure);
+        Assert.AreEqual(record.DrillLimit, row.DrillLimit, "the limit reaches the matrix beside the stamp (contract 1.27)");
+        Assert.IsNotNull(row.DrillLimit);
     }
 
     private static void TamperEveryDataBlob(string replicaRoot)
@@ -324,14 +339,7 @@ public sealed class RecoveryDrillTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        // Deliberately a passphrase-holding service over a format-1 archive,
-        // for now: a scheduled drill restores content, and on a set-up
-        // installation the service holds no content key (ADR-0042 §7) —
-        // every sampled file reads as sealed. What a drill on a write-only
-        // set proves is a decision ADR-0054 has not taken, and this fixture
-        // moves when it has.
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -339,7 +347,7 @@ public sealed class RecoveryDrillTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
+            passphrase: null,
             Timeout);
     }
 }
