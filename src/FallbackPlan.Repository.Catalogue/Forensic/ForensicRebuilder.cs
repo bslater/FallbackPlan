@@ -65,8 +65,13 @@ public sealed class ForensicRebuilder : IDisposable
         _storeKeyDeriver = new StoreBlobKeyDeriver(hierarchy.DeriveKeyIdKey());
     }
 
+    // The reader asks for a blob's STRUCTURE class, which is the metadata
+    // plane for every blob — a sealed data blob's footer derives from the
+    // metadata key too (ADR-0042 §2). There is no data key to hand out.
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>
-        blobClass == BlobClass.Data ? _hierarchy.DeriveDataKey(generation) : _hierarchy.DeriveMetadataKey(generation);
+        blobClass == BlobClass.Metadata
+            ? _hierarchy.DeriveMetadataKey(generation)
+            : throw new InvalidOperationException("A repository holds no data class key (specification 03 §9.2).");
 
     /// <summary>Runs the scan into <paramref name="target"/>.</summary>
     public async ValueTask<ForensicReport> RebuildAsync(

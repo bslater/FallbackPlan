@@ -94,24 +94,9 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RepositoryKeySet_BlobClassXNotDefined, arg0);
 
     /// <summary>
-    /// The descriptor does not verify — nothing is exported from an unverifiable repository.
-    /// </summary>
-    internal static string RepositoryLifecycle_DescriptorDoesNotVerify => Get(nameof(RepositoryLifecycle_DescriptorDoesNotVerify));
-
-    /// <summary>
-    /// The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).
-    /// </summary>
-    internal static string RepositoryLifecycle_DescriptorPresentButKeysListed => Get(nameof(RepositoryLifecycle_DescriptorPresentButKeysListed));
-
-    /// <summary>
     /// The descriptor's digest does not verify — accidental corruption (specification 01 §3.1).
     /// </summary>
     internal static string RepositoryLifecycle_DescriptorSDigestDoesNot => Get(nameof(RepositoryLifecycle_DescriptorSDigestDoesNot));
-
-    /// <summary>
-    /// No repository descriptor exists at /repository-format.
-    /// </summary>
-    internal static string RepositoryLifecycle_NoRepositoryDescriptorExistsRepository => Get(nameof(RepositoryLifecycle_NoRepositoryDescriptorExistsRepository));
 
     /// <summary>
     /// No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).
@@ -162,22 +147,22 @@ internal static class Strings
     internal static string RepositoryLifecycle_CredentialNotThisRepository => Get(nameof(RepositoryLifecycle_CredentialNotThisRepository));
 
     /// <summary>
-    /// This repository is not write-only (format v2); open it with its passphrase through the key-object path.
-    /// </summary>
-    internal static string RepositoryLifecycle_NotWriteOnlyRepository => Get(nameof(RepositoryLifecycle_NotWriteOnlyRepository));
-
-    /// <summary>
     /// The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.
     /// </summary>
     internal static string RepositoryLifecycle_PassphraseDoesNotReproduce => Get(nameof(RepositoryLifecycle_PassphraseDoesNotReproduce));
 
     /// <summary>
-    /// This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).
-    /// </summary>
-    internal static string RepositoryLifecycle_WriteOnlyNeedsDerivedOpen => Get(nameof(RepositoryLifecycle_WriteOnlyNeedsDerivedOpen));
-
-    /// <summary>
     /// The passphrase does not open this recovery kit (ADR-0042): the derived public key disagrees with the kit's, so no claim could be made under it.
     /// </summary>
     internal static string RecoveryKitClaim_PassphraseDoesNotReproduce => Get(nameof(RecoveryKitClaim_PassphraseDoesNotReproduce));
+
+    /// <summary>
+    /// A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.
+    /// </summary>
+    internal static string RepositoryKeySet_NoDataClassKey => Get(nameof(RepositoryKeySet_NoDataClassKey));
+
+    /// <summary>
+    /// This kit names a format-1 repository. Format 1 is withdrawn: its key object cannot be opened and no peer holds a replica of one — use the installation kit made by first-run setup.
+    /// </summary>
+    internal static string RecoveryKitClaim_FormatOneWithdrawn => Get(nameof(RecoveryKitClaim_FormatOneWithdrawn));
 }

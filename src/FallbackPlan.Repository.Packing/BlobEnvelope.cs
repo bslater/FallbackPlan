@@ -28,7 +28,7 @@ public sealed class BlobEnvelope
     private readonly byte[] _blobSalt;
     private readonly byte[]? _sealedContentKey;
 
-    /// <summary>Creates a v1 or v2-metadata envelope (no sealed content key).</summary>
+    /// <summary>Creates a symmetric (metadata) envelope — no sealed content key.</summary>
     /// <exception cref="ArgumentException">The salt is not exactly 32 bytes or the class undefined.</exception>
     public BlobEnvelope(
         ushort formatVersion,
@@ -68,7 +68,7 @@ public sealed class BlobEnvelope
             throw new ArgumentException(Strings.BlobEnvelope_BlobSaltExactlyBytes, nameof(blobSalt));
         }
 
-        var sealedRequired = formatVersion >= FormatLimits.SealedFormatVersion && blobClass == BlobClass.Data;
+        var sealedRequired = formatVersion >= FormatLimits.FormatVersion && blobClass == BlobClass.Data;
         if (sealedRequired != !sealedContentKey.IsEmpty
             || (!sealedContentKey.IsEmpty && sealedContentKey.Length != FallbackPlan.Repository.Crypto.ContentSealing.SealedLength))
         {
@@ -169,7 +169,7 @@ public sealed class BlobEnvelope
         // A v2 data blob's envelope carries its sealed content key; a blob
         // claiming that shape without the bytes is damaged, not shorter.
         var sealedContentKey = ReadOnlySpan<byte>.Empty;
-        if (formatVersion >= FormatLimits.SealedFormatVersion && blobClass == BlobClass.Data)
+        if (formatVersion >= FormatLimits.FormatVersion && blobClass == BlobClass.Data)
         {
             if (data.Length < MaxLength)
             {

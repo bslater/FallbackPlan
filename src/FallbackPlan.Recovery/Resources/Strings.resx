@@ -82,4 +82,7 @@
   <data name="RecoverySession_KitBelongsToAnotherInstallation" xml:space="preserve">
     <value>The passphrase and kit agree with each other but not with this archive: this kit belongs to a different FallbackPlan installation.</value>
   </data>
+  <data name="RecoverySession_FormatOneWithdrawn" xml:space="preserve">
+    <value>This kit names a format-1 repository. Format 1 is withdrawn: its key object cannot be opened by this tool — recover from an archive a set-up installation wrote, with its installation kit.</value>
+  </data>
 </root>

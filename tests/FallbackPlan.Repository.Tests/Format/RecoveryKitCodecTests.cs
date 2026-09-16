@@ -20,7 +20,7 @@ public sealed class RecoveryKitCodecTests
         KitFormatVersion = 1,
         MinimumToolVersion = "0.1.0",
         RepositoryId = RepositoryId.FromBytes(Convert.FromHexString("1112131415161718191a1b1c1d1e1f20")),
-        RepositoryFormatVersion = FallbackPlan.Domain.FormatLimits.SealedFormatVersion,
+        RepositoryFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion,
         KeyObject = ReadOnlyMemory<byte>.Empty,
         KdfMemoryKiB = 8 * 1024,
         KdfIterations = 1,
@@ -38,7 +38,7 @@ public sealed class RecoveryKitCodecTests
     {
         var parsed = RecoveryKitCodec.Parse(RecoveryKitCodec.Serialize(V2Kit()));
 
-        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.SealedFormatVersion, parsed.RepositoryFormatVersion);
+        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.FormatVersion, parsed.RepositoryFormatVersion);
         Assert.IsTrue(parsed.KeyObject.IsEmpty, "a write-only kit carries no key material at all");
         SequenceAssert.AreEqual(V2Kit().SealingPublicKey.ToArray(), parsed.SealingPublicKey.ToArray());
         SequenceAssert.AreEqual(V2Kit().KdfSalt.ToArray(), parsed.KdfSalt.ToArray());
@@ -60,7 +60,7 @@ public sealed class RecoveryKitCodecTests
         Assert.ThrowsExactly<RecoveryKitFormatException>(() => RecoveryKitCodec.Serialize(
             V2Kit() with
             {
-                RepositoryFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion,
+                RepositoryFormatVersion = 1,
                 KeyObject = "FBPKKEYS-shaped-key-object-bytes"u8.ToArray(),
             }));
 

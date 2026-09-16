@@ -220,7 +220,6 @@
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Diagnostics": "[1.0.0, )",
           "FallbackPlan.Filesystem.Local": "[1.0.0, )",
-          "FallbackPlan.Keystore": "[1.0.0, )",
           "FallbackPlan.Protocol": "[1.0.0, )",
           "FallbackPlan.Replication": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
@@ -306,13 +305,6 @@
         "type": "Project",
         "dependencies": {
           "FallbackPlan.Domain": "[1.0.0, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
-        }
-      },
-      "fallbackplan.keystore": {
-        "type": "Project",
-        "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },

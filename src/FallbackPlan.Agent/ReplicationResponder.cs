@@ -458,7 +458,6 @@ internal static class ReplicationResponder
             foreach (var key in page.Keys)
             {
                 if (key is "repository-format"
-                    || key.StartsWith("keys/", StringComparison.Ordinal)
                     || key.StartsWith("tombstones/", StringComparison.Ordinal)
                     || key.StartsWith("leases/", StringComparison.Ordinal))
                 {

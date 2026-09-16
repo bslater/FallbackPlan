@@ -391,12 +391,12 @@ public static class FanOut
 
             // The commander signs each retention page under the reclaim key
             // (ADR-0055 §5) so the spoke can tell an authorised deletion from
-            // one sent by whoever merely holds this session. A v1 set derives
-            // the key; a write-only set cannot, and holds it only as the
-            // grant of a collection run (ADR-0055 §6) — so a pass without one
-            // instructs nothing rather than sending a page the spoke will
-            // refuse whole, and says why.
-            var reclaimSigner = grantedSigner ?? DerivedReclaimSigner(archive);
+            // one sent by whoever merely holds this session. A service cannot
+            // derive that key, and holds it only as the grant of a collection
+            // run (ADR-0055 §6) — so a pass without one instructs nothing
+            // rather than sending a page the spoke will refuse whole, and
+            // says why.
+            var reclaimSigner = grantedSigner;
             var awaitsGrantKey = $"convergence-awaits-grant:{set.Id}:{destination.Name}";
 
             Func<string, bool>? keeps = null;
@@ -408,8 +408,8 @@ public static class FanOut
                     runtime.Notices.Raise(
                         awaitsGrantKey,
                         $"destination '{destination.Name}' of set '{set.Name}' received a whole copy instead of its "
-                        + "retention keep-set: this set is write-only, and a deletion instruction needs the reclaim "
-                        + "grant a retention run carries (ADR-0055 §6). It converges on the next `retention --apply`.",
+                        + "retention keep-set: a deletion instruction needs the reclaim grant a retention run "
+                        + "carries (ADR-0055 §6). It converges on the next `retention --apply`.",
                         nowMs);
                 }
                 else
@@ -465,11 +465,10 @@ public static class FanOut
 
             var priorSuccess = previous?.LastSuccessAt is not null;
             // The reclaim public key travels with every offer and is kept by
-            // the destination at first attribution (ADR-0055 §5). Read from
-            // wherever this repository can reach it — derived for v1, off the
-            // write credential for v2 — so a write-only set, which cannot
-            // derive the private half at all, still tells its peers which key
-            // to check deletion instructions against.
+            // the destination at first attribution (ADR-0055 §5): read off
+            // the write credential, so a set whose service cannot derive the
+            // private half at all still tells its peers which key to check
+            // deletion instructions against.
             var reclaimPublicKey = archive.Repository.Hierarchy.ReclaimPublicKey(
                 archive.Repository.CurrentMetadataGeneration);
 
@@ -1118,33 +1117,6 @@ public static class FanOut
     /// condition that is true now, not one that once was (Z0c's rule).
     /// </para>
     /// </remarks>
-    /// <summary>
-    /// The reclaim signer a v1 archive derives from its own hierarchy; null
-    /// for a write-only archive, which holds the key only as a grant.
-    /// </summary>
-    private static Func<byte[], byte[]>? DerivedReclaimSigner(ArchiveHandle archive)
-    {
-        if (archive.Repository.Keys.WriteOnly)
-        {
-            return null;
-        }
-
-        return signed =>
-        {
-            var generation = archive.Repository.CurrentMetadataGeneration;
-            var seed = archive.Repository.Hierarchy.DeriveReclaimKeySeed(generation);
-            try
-            {
-                using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
-                return signer.Sign(signed);
-            }
-            finally
-            {
-                System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
-            }
-        };
-    }
-
     /// <summary>
     /// Converges a write-only set's peer destinations under the reclaim grant
     /// of a collection run (ADR-0055 §6): each peer under retention rules is

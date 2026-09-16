@@ -302,12 +302,12 @@ public sealed partial class ServiceCommandHandler(
                     runtime.LoggerFor(typeof(Retention.RetentionRunner)),
                     reclaim).ConfigureAwait(false);
 
-                // A write-only set's peers converge here and nowhere else
-                // (ADR-0055 §6): the scheduled sync holds no authority to
-                // delete, so it pushes whole copies and defers to this run,
-                // whose grant signs the instruction — while the gate is held
-                // and before the grant is zeroed.
-                if (apply && reclaim is not null && archive.Repository.Keys.WriteOnly)
+                // A set's peers converge here and nowhere else (ADR-0055 §6):
+                // the scheduled sync holds no authority to delete, so it
+                // pushes whole copies and defers to this run, whose grant
+                // signs the instruction — while the gate is held and before
+                // the grant is zeroed.
+                if (apply && reclaim is not null)
                 {
                     lines.AddRange(
                         (await FanOut.ConvergePeersAsync(runtime, set, archive, reclaim, now, cancellationToken)

@@ -262,7 +262,6 @@ public sealed class MultiRootSetTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

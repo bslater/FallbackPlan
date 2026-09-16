@@ -246,7 +246,6 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(_root, "refused-sequence.txt"))),
             Path.Combine(_root, "refused-spool")));
-        Assert.Contains("write-only", refused.Message, StringComparison.Ordinal);
         Assert.Contains("device", refused.Message, StringComparison.Ordinal);
 
         // The exact sealed population, from the structure plane: every
@@ -356,18 +355,6 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
                 other, Settings.KdfParameters, salt, KdfValidationMode.OpenRepository);
             await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
                 await RepositoryLifecycle.OpenWriteOnlyAsync(store, foreign.Credential, CancellationToken.None));
-        }
-
-        // The v1 open paths name what this is instead of failing confusingly.
-        using (var passphrase = Right())
-        {
-            var openRefusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None));
-            Assert.Contains("write-only", openRefusal.Message, StringComparison.Ordinal);
-
-            var exportRefusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.ExportVerifiedKeyObjectAsync(store, passphrase, CancellationToken.None));
-            Assert.Contains("write-only", exportRefusal.Message, StringComparison.Ordinal);
         }
     }
 

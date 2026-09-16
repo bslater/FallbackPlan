@@ -155,7 +155,6 @@ public sealed class ObservedHeadAdoptionTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
     }
 }

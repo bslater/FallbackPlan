@@ -76,17 +76,8 @@
   <data name="RepositoryKeySet_BlobClassXNotDefined" xml:space="preserve">
     <value>Blob class 0x{0:x4} is not defined (specification 05 §2).</value>
   </data>
-  <data name="RepositoryLifecycle_DescriptorDoesNotVerify" xml:space="preserve">
-    <value>The descriptor does not verify — nothing is exported from an unverifiable repository.</value>
-  </data>
-  <data name="RepositoryLifecycle_DescriptorPresentButKeysListed" xml:space="preserve">
-    <value>The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).</value>
-  </data>
   <data name="RepositoryLifecycle_DescriptorSDigestDoesNot" xml:space="preserve">
     <value>The descriptor's digest does not verify — accidental corruption (specification 01 §3.1).</value>
-  </data>
-  <data name="RepositoryLifecycle_NoRepositoryDescriptorExistsRepository" xml:space="preserve">
-    <value>No repository descriptor exists at /repository-format.</value>
   </data>
   <data name="RepositoryLifecycle_NoRepositoryFormatObjectExists" xml:space="preserve">
     <value>No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).</value>
@@ -106,16 +97,16 @@
   <data name="RepositoryLifecycle_CredentialNotThisRepository" xml:space="preserve">
     <value>The write credential does not belong to this repository: its sealing public key disagrees with the descriptor's (ADR-0042).</value>
   </data>
-  <data name="RepositoryLifecycle_NotWriteOnlyRepository" xml:space="preserve">
-    <value>This repository is not write-only (format v2); open it with its passphrase through the key-object path.</value>
-  </data>
   <data name="RepositoryLifecycle_PassphraseDoesNotReproduce" xml:space="preserve">
     <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.</value>
   </data>
-  <data name="RepositoryLifecycle_WriteOnlyNeedsDerivedOpen" xml:space="preserve">
-    <value>This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).</value>
-  </data>
   <data name="RecoveryKitClaim_PassphraseDoesNotReproduce" xml:space="preserve">
     <value>The passphrase does not open this recovery kit (ADR-0042): the derived public key disagrees with the kit's, so no claim could be made under it.</value>
+  </data>
+  <data name="RepositoryKeySet_NoDataClassKey" xml:space="preserve">
+    <value>A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.</value>
+  </data>
+  <data name="RecoveryKitClaim_FormatOneWithdrawn" xml:space="preserve">
+    <value>This kit names a format-1 repository. Format 1 is withdrawn: its key object cannot be opened and no peer holds a replica of one — use the installation kit made by first-run setup.</value>
   </data>
 </root>

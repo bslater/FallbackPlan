@@ -21,7 +21,6 @@ public sealed class IdentifierTests
 
         Assert.ThrowsExactly<ArgumentException>(() => WriterId.FromBytes(bytes));
         Assert.ThrowsExactly<ArgumentException>(() => RepositoryId.FromBytes(bytes));
-        Assert.ThrowsExactly<ArgumentException>(() => KeyId.FromBytes(bytes));
         Assert.ThrowsExactly<ArgumentException>(() => BlobId.FromBytes(bytes));
         Assert.ThrowsExactly<ArgumentException>(() => StoreBlobKey.FromBytes(bytes));
     }
@@ -47,7 +46,6 @@ public sealed class IdentifierTests
 
         SequenceAssert.AreEqual(sixteen, WriterId.FromBytes(sixteen).ToArray());
         SequenceAssert.AreEqual(sixteen, RepositoryId.FromBytes(sixteen).ToArray());
-        SequenceAssert.AreEqual(sixteen, KeyId.FromBytes(sixteen).ToArray());
         SequenceAssert.AreEqual(sixteen, BlobId.FromBytes(sixteen).ToArray());
         SequenceAssert.AreEqual(sixteen, StoreBlobKey.FromBytes(sixteen).ToArray());
         SequenceAssert.AreEqual(thirtyTwo, ContentId.FromBytes(thirtyTwo).ToArray());

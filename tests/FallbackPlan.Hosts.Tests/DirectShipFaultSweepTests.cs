@@ -54,7 +54,6 @@ public sealed class DirectShipFaultSweepTests
                     ReplicaStoreDecorator = (name, store) =>
                         string.Equals(name, "vault-b", StringComparison.Ordinal) ? faulting.Wrap(store) : store,
                 },
-                passphrase: null,
                 timeout.Token);
             var set = runtime.Configuration.BackupSets.Single();
 
@@ -115,7 +114,6 @@ public sealed class DirectShipFaultSweepTests
                 AvailableBytesProbe = root =>
                     root.StartsWith(vaultB, StringComparison.Ordinal) ? 1L : null,
             },
-            passphrase: null,
             timeout.Token);
         var set = runtime.Configuration.BackupSets.Single();
 

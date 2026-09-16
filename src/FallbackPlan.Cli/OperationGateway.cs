@@ -818,12 +818,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             : catalogue.EnumerateSnapshots()
                 .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
-        // A write-only repository takes the device trust domain (ADR-0042):
-        // verify-on-reuse reads content, which it cannot.
         var orchestrator = new PublicationOrchestrator(
-            session.Repository.Keys.WriteOnly
-                ? CapturePolicy.Default with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device }
-                : CapturePolicy.Default,
+            CapturePolicy.Default,
             session.Repository.RepositoryId,
             session.Writer,
             session.CurrentGeneration,

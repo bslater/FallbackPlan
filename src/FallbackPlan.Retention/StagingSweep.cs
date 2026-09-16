@@ -62,12 +62,12 @@ public static class StagingSweep
     /// <param name="nowUnixMilliseconds">Informational stamp only (11 §3.1).</param>
     /// <param name="cancellationToken">Cancels the writes.</param>
     /// <param name="reclaim">
-    /// The run's authority to author deletions (ADR-0055 §6), or null when the
-    /// repository derives it — a v1 repository holds the master key and needs
-    /// no grant. A write-only repository declaring <c>reclaim-authority</c>
-    /// cannot derive it and will throw without one, which is the intended
-    /// refusal: a service that cannot be granted the authority must not
-    /// quietly fall back to the key it publishes with.
+    /// The run's authority to author deletions (ADR-0055 §6). A repository
+    /// declaring <c>reclaim-authority</c> cannot derive it and will throw
+    /// without one, which is the intended refusal: a service that cannot be
+    /// granted the authority must not quietly fall back to the key it
+    /// publishes with. Null only for a repository written before the feature,
+    /// whose tombstones still sign under the signing key.
     /// </param>
     /// <returns>Tombstones written (or already present).</returns>
     public static async ValueTask<int> TombstoneAsync(
@@ -135,12 +135,12 @@ public static class StagingSweep
     /// <param name="currentPublicationSequence">The writer's highest journal sequence now — the grace clock.</param>
     /// <param name="cancellationToken">Cancels the sweep.</param>
     /// <param name="reclaim">
-    /// The run's authority to author deletions (ADR-0055 §6), or null when the
-    /// repository derives it — a v1 repository holds the master key and needs
-    /// no grant. A write-only repository declaring <c>reclaim-authority</c>
-    /// cannot derive it and will throw without one, which is the intended
-    /// refusal: a service that cannot be granted the authority must not
-    /// quietly fall back to the key it publishes with.
+    /// The run's authority to author deletions (ADR-0055 §6). A repository
+    /// declaring <c>reclaim-authority</c> cannot derive it and will throw
+    /// without one, which is the intended refusal: a service that cannot be
+    /// granted the authority must not quietly fall back to the key it
+    /// publishes with. Null only for a repository written before the feature,
+    /// whose tombstones still sign under the signing key.
     /// </param>
     /// <returns>What was deleted, deferred, cleared and found.</returns>
     public static async ValueTask<SweepOutcome> SweepAsync(
@@ -428,13 +428,18 @@ public static class StagingSweep
             return RepositorySigner.Create(repository.Hierarchy, generation);
         }
 
-        // A grant wins where one was supplied, because a write-only
-        // repository's hierarchy cannot derive this key at all (ADR-0055 §6).
-        // A v1 repository derives it and needs no grant — the split defends
-        // the write-only shape, and §3 says so rather than implying more.
-        var seed = granted is not null
-            ? granted.SeedFor(generation)
-            : repository.Hierarchy.DeriveReclaimKeySeed(generation);
+        // The grant is the only source of this key: a repository's hierarchy
+        // cannot derive it at all (ADR-0055 §2, §6). A collection reaching
+        // here without one is a caller bug — the handler refuses an apply
+        // without a grant by name before a sweep starts — and is refused
+        // again here rather than allowed to sign under the wrong key.
+        if (granted is null)
+        {
+            throw new InvalidOperationException(
+                "A tombstone needs the reclaim authority, which only a grant supplies for this run (ADR-0055 §6).");
+        }
+
+        var seed = granted.SeedFor(generation);
         try
         {
             return RepositorySigner.FromSeed(seed, generation);

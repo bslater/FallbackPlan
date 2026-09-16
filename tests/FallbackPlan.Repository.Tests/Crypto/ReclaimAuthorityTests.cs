@@ -8,24 +8,16 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 
 /// <summary>
 /// The reclaim key (ADR-0055; FR-GC-008): the authority that deletes, on its
-/// own derivation domain, and deliberately absent from a write-only
-/// repository's write credential.
+/// own derivation domain, and deliberately absent from the repository's
+/// write credential.
 /// </summary>
 /// <remarks>
-/// <para>
 /// The split exists because a tombstone's signature <em>is</em> the
 /// authorisation to delete ([specification 11 §3]), while a publication's
-/// signature only says an append was authentic. A write-only service holds
-/// the signing key by design (ADR-0042) and must not therefore hold the other
-/// one.
-/// </para>
-/// <para>
-/// What these do not establish, said here so nobody reads them as more:
-/// against a fully compromised <b>v1</b> service the split proves nothing,
-/// because a v1 service holds the master key and derives both keys from it.
-/// ADR-0055 §3 states that limit; the destination-side retention floor is
-/// what holds there.
-/// </para>
+/// signature only says an append was authentic. A service holds the signing
+/// key by design (ADR-0042) and must not therefore hold the other one; the
+/// reclaim seed reaches a collection run only as a grant the passphrase
+/// derives (ADR-0055 §6).
 /// </remarks>
 [TestClass]
 public sealed class ReclaimAuthorityTests
@@ -42,16 +34,15 @@ public sealed class ReclaimAuthorityTests
     }
 
     [TestMethod]
-    public void Reclaim_AndSigning_AreIndependentDomainsOfTheSameMaster()
+    public void Reclaim_AndSigning_AreIndependentDomainsOfTheSameRoot()
     {
-        var master = new byte[KeyHierarchy.DerivedKeyLength];
-        RandomNumberGenerator.Fill(master);
-        using var hierarchy = new KeyHierarchy(master);
+        using var authority = DeriveAuthority("one long passphrase to rule them");
+        using var grant = new ReclaimAuthority(authority.ReclaimKeySeed);
 
-        var signing = hierarchy.DeriveSigningKeySeed(new KeyGeneration(4));
-        var reclaim = hierarchy.DeriveReclaimKeySeed(new KeyGeneration(4));
+        var signing = authority.Credential.DeriveSigningKeySeed(new KeyGeneration(4));
+        var reclaim = grant.SeedFor(new KeyGeneration(4));
 
-        // One master, two one-way domains. If these ever coincided the whole
+        // One root, two one-way domains. If these ever coincided the whole
         // decision would be a rename.
         Assert.AreEqual(KeyHierarchy.DerivedKeyLength, reclaim.Length);
         Assert.IsFalse(
@@ -62,40 +53,40 @@ public sealed class ReclaimAuthorityTests
     [TestMethod]
     public void Reclaim_IsGenerational_LikeEveryOtherDerivedKey()
     {
-        var master = new byte[KeyHierarchy.DerivedKeyLength];
-        RandomNumberGenerator.Fill(master);
-        using var hierarchy = new KeyHierarchy(master);
+        using var authority = DeriveAuthority("one long passphrase to rule them");
+        using var grant = new ReclaimAuthority(authority.ReclaimKeySeed);
 
         Assert.IsFalse(
-            hierarchy.DeriveReclaimKeySeed(new KeyGeneration(1)).AsSpan()
-                .SequenceEqual(hierarchy.DeriveReclaimKeySeed(new KeyGeneration(2))),
+            grant.SeedFor(new KeyGeneration(1)).AsSpan().SequenceEqual(grant.SeedFor(new KeyGeneration(2))),
             "a reclaim key that ignored the generation would survive a rotation that was meant to retire it");
     }
 
     [TestMethod]
-    public void Reclaim_FromTheSameMaster_IsDeterministic()
+    public void Reclaim_FromTheSamePassphraseAndSalt_IsDeterministic()
     {
-        var master = new byte[KeyHierarchy.DerivedKeyLength];
-        RandomNumberGenerator.Fill(master);
-        using var first = new KeyHierarchy(master);
-        using var second = new KeyHierarchy(master);
+        using var first = DeriveAuthority("one long passphrase to rule them");
+        using var second = DeriveAuthority("one long passphrase to rule them");
+        using var firstGrant = new ReclaimAuthority(first.ReclaimKeySeed);
+        using var secondGrant = new ReclaimAuthority(second.ReclaimKeySeed);
 
         SequenceAssert.AreEqual(
-            first.DeriveReclaimKeySeed(new KeyGeneration(7)),
-            second.DeriveReclaimKeySeed(new KeyGeneration(7)));
+            firstGrant.SeedFor(new KeyGeneration(7)),
+            secondGrant.SeedFor(new KeyGeneration(7)));
     }
 
     [TestMethod]
-    public void Reclaim_AWriteOnlyCredential_CannotDeriveOneAtAll()
+    public void Reclaim_TheWriteCredential_CannotDeriveOneAtAll()
     {
         // The decision, in one assertion. A service provisioned with the write
         // bundle can publish for ever and cannot author a deletion, because
-        // the bundle does not carry the domain a tombstone signs under.
+        // the bundle does not carry the domain a tombstone signs under — and
+        // since format 1 went, no hierarchy anywhere derives it: the member
+        // does not exist to be called.
         using var authority = DeriveAuthority("one long passphrase to rule them");
         using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
 
-        Assert.ThrowsExactly<InvalidOperationException>(
-            () => hierarchy.DeriveReclaimKeySeed(new KeyGeneration(1)));
+        Assert.IsNull(typeof(KeyHierarchy).GetMethod("DeriveReclaimKeySeed"));
+        Assert.IsNull(typeof(RepositoryWriteCredential).GetMethod("DeriveReclaimKeySeed"));
 
         // And the signing key is still there, or the service could not do its
         // job — which would make this a denial of service rather than a split.

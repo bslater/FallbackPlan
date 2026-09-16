@@ -25,10 +25,10 @@ namespace FallbackPlan.Repository.Crypto;
 /// capability should prefer short-lived credentials.
 /// </para>
 /// <para>
-/// A v1 repository needs none of this: it holds the master key and derives the
-/// reclaim key from it, so the split defends the write-only shape and nothing
-/// else. ADR-0055 §3 states that limit plainly rather than letting a reader
-/// infer a protection that is not there.
+/// This is the only road to the key. No hierarchy derives it: the write
+/// credential a service holds carries the signing domain and deliberately
+/// not this one (ADR-0055 §2), so a service compromised between runs holds
+/// nothing that deletes.
 /// </para>
 /// </remarks>
 public sealed class ReclaimAuthority : IDisposable

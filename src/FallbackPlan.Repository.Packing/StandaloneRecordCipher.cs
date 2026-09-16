@@ -79,7 +79,7 @@ public static class StandaloneRecordCipher
         var span = buffer.AsSpan();
 
         StandaloneRecordFraming.WritePrefix(
-            FormatLimits.FormatVersion, keyGeneration, salt, writerId, counter, span);
+            FormatLimits.SymmetricFormatVersion, keyGeneration, salt, writerId, counter, span);
         header.WriteTo(span.Slice(StandaloneRecordFraming.PrefixLength, RecordHeader.Length));
 
         var recordKey = new byte[BlobKeyDeriver.BlobKeyLength];
@@ -91,7 +91,7 @@ public static class StandaloneRecordCipher
             Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
             RecordNonce.Write(0, nonce);
             Span<byte> aad = stackalloc byte[RecordAad.Length];
-            RecordAad.Write(repositoryId, FormatLimits.FormatVersion, objectType, objectId, 0, aad);
+            RecordAad.Write(repositoryId, FormatLimits.SymmetricFormatVersion, objectType, objectId, 0, aad);
 
             RecordCipher.Seal(
                 recordKey,

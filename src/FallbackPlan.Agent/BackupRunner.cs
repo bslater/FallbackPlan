@@ -130,17 +130,11 @@ public static class BackupRunner
                     ? archive.Repository.CurrentDataGeneration
                     : archive.Repository.CurrentMetadataGeneration;
 
-            // A write-only archive takes the device trust domain (ADR-0042):
-            // the repository domain's verify-on-reuse reads content, which a
-            // write-only holder cannot, and the orchestrator refuses the
-            // combination by name rather than degrading silently. A
-            // direct-ship set does the same (ADR-0046): the content sits at
-            // destinations, and verify-on-reuse pulling ranges back over the
-            // sink would pay a destination round trip per reuse to re-check
-            // bytes the catalogue already vouches for.
-            var policy = archive.Repository.Keys.WriteOnly || archive.ShipSink is not null
-                ? CapturePolicy.Default with { DedupTrustDomain = DedupTrustDomain.Device }
-                : CapturePolicy.Default;
+            // The device trust domain (ADR-0042, ADR-0046): the repository
+            // domain's verify-on-reuse reads content, which a service holds
+            // no key for, and the orchestrator refuses the combination by
+            // name rather than degrading silently.
+            var policy = CapturePolicy.Default;
 
             var orchestrator = new PublicationOrchestrator(
                 policy,

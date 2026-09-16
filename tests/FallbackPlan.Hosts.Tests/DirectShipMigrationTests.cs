@@ -429,7 +429,6 @@ public sealed class DirectShipMigrationTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
     }
 }

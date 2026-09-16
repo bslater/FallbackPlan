@@ -424,8 +424,7 @@ public sealed record RunRestoreCommand(
 /// scalar, sealed end-to-end to this service's published recipient key and
 /// rendered as hex. The one shape of key material NFR-SEC-009 permits on the
 /// contract — opaque to every relay, opened only inside the service, held
-/// only for the source handle's life. Null opens structure-plane only on a
-/// write-only set; v1 sets ignore it.
+/// only for the source handle's life. Null opens the structure plane only.
 /// </param>
 public sealed record OpenRestoreSourceCommand(
     string SetName, string? DestinationName = null, string? Envelope = null) : ServiceCommand;
@@ -613,10 +612,9 @@ public sealed record CheckCommand(string Level) : ServiceCommand;
 /// under NFR-SEC-009, as ADR-0042 §5's restore grant. Held for the run and
 /// zeroed with it.
 /// <para>
-/// Null is correct for every v1 set, which derives the key from the master key
-/// and needs no grant, and for a dry run, which authors nothing. A write-only
-/// set declaring <c>reclaim-authority</c> and applying without one is refused
-/// by name rather than falling back to the key it publishes with.
+/// Null is correct for a dry run, which authors nothing. A set declaring
+/// <c>reclaim-authority</c> and applying without one is refused by name
+/// rather than falling back to the key it publishes with.
 /// </para>
 /// </param>
 public sealed record RetentionCommand(bool Apply, string? ReclaimGrant = null) : ServiceCommand;

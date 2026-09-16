@@ -54,6 +54,7 @@ public sealed class DestinationVerificationTests : IDisposable
     [TestMethod]
     public async Task Sync_APeerProvingItsProofOverTheWire_EarnsTheVerificationStamp()
     {
+        await _source.SetupAsync();
         // The peer twin of the stamp: the proof is an HMAC over bytes the
         // responder read off its own disk (04 §2), and both destination
         // kinds earn the identical ledger fact.
@@ -66,7 +67,7 @@ public sealed class DestinationVerificationTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var sync = await RunSyncAsync();
@@ -92,6 +93,7 @@ public sealed class DestinationVerificationTests : IDisposable
     [TestMethod]
     public async Task Sync_APeerThatCannotProveItself_IsRefusedRatherThanQuietlyTrusted()
     {
+        await _source.SetupAsync();
         // FR-VER-006, and the reversal of an earlier posture: a destination
         // that will not answer challenges used to be synced to anyway and
         // simply left unstamped. But verification is the stated mitigation
@@ -107,7 +109,7 @@ public sealed class DestinationVerificationTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         // Exit 0: the backup itself succeeded. The destination's state is the
@@ -142,6 +144,7 @@ public sealed class DestinationVerificationTests : IDisposable
     [TestMethod]
     public async Task Sync_AnAcknowledgedUnprovableDestination_SyncsButClaimsNothing()
     {
+        await _source.SetupAsync();
         // The escape hatch, and the shape of it: keeping an unprovable
         // destination takes a word in the configuration that nobody types by
         // accident. Having typed it, the copy is made and counts as a copy —
@@ -154,7 +157,7 @@ public sealed class DestinationVerificationTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var sync = await RunSyncAsync();
@@ -325,7 +328,7 @@ public sealed class DestinationVerificationTests : IDisposable
         var probe = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "verify-destination", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--destination", "friend", "--probe");
+            "--destination", "friend", "--probe");
 
         Assert.AreEqual(0, probe.ExitCode, probe.Error);
         Assert.Contains("session established", probe.Output, StringComparison.Ordinal);
@@ -397,13 +400,13 @@ public sealed class DestinationVerificationTests : IDisposable
     private Task<HostHarness.Invocation> ProbeAsync() => HostHarness.RunAsync(
         AgentHost.RunAsync,
         "verify-destination", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-        "--passphrase-env", _source.PassphraseVariable, "--destination", "friend", "--probe");
+        "--destination", "friend", "--probe");
 
     /// <summary>Runs the agent `sync` verb against the harness's archives and state.</summary>
     private Task<HostHarness.Invocation> RunSyncAsync() => HostHarness.RunAsync(
         AgentHost.RunAsync,
-        "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-        "--passphrase-env", _source.PassphraseVariable);
+        "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory
+        );
 
     /// <summary>Runs the CLI `status` verb in direct mode, output captured.</summary>
     private async Task<(int ExitCode, string Output, string Error)> RunStatusAsync()

@@ -116,13 +116,6 @@
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
-      "fallbackplan.keystore": {
-        "type": "Project",
-        "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
-        }
-      },
       "fallbackplan.protocol": {
         "type": "Project",
         "dependencies": {

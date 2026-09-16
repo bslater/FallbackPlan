@@ -355,15 +355,10 @@ public sealed partial class ServiceCommandHandler
     /// scalar, sealed to this service's recipient key; the scalar is proved
     /// against the repository's descriptor copy of the sealing public key —
     /// a mismatch is a wrong passphrase at the client and is refused by
-    /// name. A grant on a v1 source is ignored, as the contract says.
+    /// name.
     /// </summary>
     private ServiceError? AttachReadAuthority(OpenRestoreSourceHandle handle, string envelopeHex)
     {
-        if (!handle.Keys.WriteOnly)
-        {
-            return null;
-        }
-
         byte[] envelope;
         try
         {
@@ -422,10 +417,9 @@ public sealed partial class ServiceCommandHandler
     /// Opens a candidate source repository the way its set opens: a
     /// write-only set with the credential it opens with — its own, or the
     /// installation's — since a v2 replica carries the same descriptor, so
-    /// the same bundle proves and opens it (ADR-0042 §5); and a v1 set with
-    /// the runtime's passphrase. A v1
-    /// candidate on a passphrase-free service is a stated refusal the
-    /// probing loops surface as a warning like any other failed open.
+    /// the same bundle proves and opens it (ADR-0042 §5). A candidate no
+    /// credential answers for is a stated refusal the probing loops surface
+    /// as a warning like any other failed open.
     /// </summary>
     private async ValueTask<OpenedRepository> OpenSourceRepositoryAsync(
         Application.BackupSetConfiguration set,
@@ -442,13 +436,9 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
-        var passphrase = runtime.ArchivePassphrase
-            ?? throw new RepositoryOpenException(
-                "This service started without a passphrase and the set is not provisioned write-only (ADR-0042).");
-
-        return await RepositoryLifecycle.OpenAsync(
-                store, passphrase, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
-            .ConfigureAwait(false);
+        throw new RepositoryOpenException(
+            $"Set '{set.Name}' holds no write credential this service can open its archive with — run "
+            + "first-run setup, or provision the set (ADR-0044, ADR-0042 §10).");
     }
 
     /// <summary>

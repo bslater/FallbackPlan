@@ -403,38 +403,6 @@ public sealed class WriteOnlySetTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ProvisionWriteOnlySet_AgainstAnExistingV1Archive_IsRefusedByName()
-    {
-        await _harness.CreateFormatOneRepositoryAsync();
-        _harness.WriteSourceFile("notes.txt", "a v1 archive");
-        _harness.WriteConfiguration("every 1h");
-        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
-
-        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        Assert.IsInstanceOfType<ServiceDescriptionResult>(
-            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
-
-        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(
-                new ProvisionWriteOnlySetCommand(
-                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
-                _timeout.Token),
-            out var refused);
-        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
-        Assert.Contains("format 1", refused.Message, StringComparison.Ordinal);
-
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(
-                new ProvisionWriteOnlySetCommand(
-                    "no-such-set", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
-                _timeout.Token),
-            out var unknownSet);
-        Assert.AreEqual(ServiceErrorReason.NotFound, unknownSet.Reason);
-    }
-
-    [TestMethod]
     public async Task ProvisionWriteOnlySet_MalformedOrCrossPurposeEnvelopes_AreRefusedAndReProvisionIsAdoption()
     {
         _harness.WriteSourceFile("notes.txt", "the envelope gauntlet");
@@ -541,39 +509,6 @@ public sealed class WriteOnlySetTests : IDisposable
             out var wrongPassphrase);
         Assert.AreEqual(ServiceErrorReason.InvalidArgument, wrongPassphrase.Reason);
         Assert.Contains("not this repository's", wrongPassphrase.Message, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task OpenRestoreSource_AGrantOnAV1Source_IsIgnoredAndTheRestoreStillWorks()
-    {
-        // A v1 archive with a service that holds its passphrase — the world
-        // the grant machinery must leave completely alone.
-        await _harness.CreateFormatOneRepositoryAsync();
-        _harness.WriteSourceFile("notes.txt", "v1 ignores grants");
-        _harness.WriteConfiguration("every 1h");
-        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
-
-        await using var runtime = await StartWithServicePassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        await RunBackupAndWaitAsync(runtime, handler);
-
-        // The contract says a grant on a v1 source is ignored — even one
-        // that is not hex — because there is nothing for it to mean.
-        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(
-                new OpenRestoreSourceCommand("docs", Envelope: "zz ignored on v1 zz"), _timeout.Token),
-            out var opened);
-        var snapshotId = Assert.ContainsSingle(opened.Snapshots).SnapshotId;
-
-        var restoredOut = Path.Combine(_harness.WorkPath, "v1-ignored");
-        Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(
-                new RunRestoreCommand(
-                    snapshotId, null, restoredOut, Source: opened.SourceId, InPlace: true),
-                _timeout.Token),
-            out var restored);
-        Assert.AreEqual("complete", restored.Outcome);
-        Assert.AreEqual("v1 ignores grants", File.ReadAllText(Path.Combine(restoredOut, "notes.txt")));
     }
 
     [TestMethod]
@@ -782,21 +717,6 @@ public sealed class WriteOnlySetTests : IDisposable
                 Convert.FromHexString(recipientHex), authority.ReclaimKeySeed));
     }
 
-    private async Task<ServiceRuntime> StartWithServicePassphraseAsync()
-    {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
-
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = _harness.ArchivesRoot,
-                StateDirectory = _harness.StateDirectory,
-            },
-            passphrase,
-            _timeout.Token);
-    }
-
     private async Task RunBackupAndWaitAsync(ServiceRuntime runtime, ServiceCommandHandler handler)
     {
         var progress = runtime.Progress.WatchAsync(_timeout.Token);
@@ -827,6 +747,5 @@ public sealed class WriteOnlySetTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = stateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
 }

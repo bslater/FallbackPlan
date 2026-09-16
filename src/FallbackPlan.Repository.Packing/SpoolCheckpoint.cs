@@ -120,9 +120,9 @@ public sealed class SpoolCheckpoint
         SpoolPinnedConfiguration pinned,
         ReadOnlyMemory<byte>? contentKey = null)
     {
-        // Empty is "none" — the shape a v1 writer's null byte[] arrives in
-        // through the implicit ReadOnlyMemory conversion — so only a PRESENT
-        // key of the wrong length is a caller defect.
+        // Empty is "none" — the shape a symmetric writer's null byte[] arrives
+        // in through the implicit ReadOnlyMemory conversion — so only a
+        // PRESENT key of the wrong length is a caller defect.
         if (contentKey is { Length: not (0 or 32) })
         {
             throw new ArgumentException(
@@ -257,7 +257,7 @@ public sealed class SpoolCheckpoint
         var sidecarVersion = BinaryPrimitives.ReadUInt16BigEndian(data[8..]);
         var sidecarClass = (BlobClass)BinaryPrimitives.ReadUInt16BigEndian(data[10..]);
         var contentKeyLength =
-            sidecarVersion >= FormatLimits.SealedFormatVersion && sidecarClass == BlobClass.Data ? 32 : 0;
+            sidecarVersion >= FormatLimits.FormatVersion && sidecarClass == BlobClass.Data ? 32 : 0;
 
         var codecLength = BinaryPrimitives.ReadUInt16BigEndian(data[(FixedPrefix - 2)..]);
         var total = FixedPrefix + codecLength + contentKeyLength + 32;

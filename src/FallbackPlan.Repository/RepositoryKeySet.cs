@@ -6,10 +6,12 @@ using FallbackPlan.Repository.Resources;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// The derived keys a session needs, bundled so the master key itself is
-/// handled exactly once (specification 03 §4): the repository-scoped
-/// content-ID and key-ID keys, and data or metadata class keys by
-/// generation. Dispose zeroes everything (specification 03 §8).
+/// The derived keys a session needs, bundled so the credential is handled
+/// exactly once (specification 03 §9): the repository-scoped content-ID and
+/// key-ID keys, and the metadata class key by generation. There is no data
+/// class key — content is sealed to the repository's public key, and a code
+/// path asking for one is a bug, not a missing capability. Dispose zeroes
+/// everything (specification 03 §8).
 /// </summary>
 public sealed class RepositoryKeySet : IDisposable
 {
@@ -24,18 +26,9 @@ public sealed class RepositoryKeySet : IDisposable
         _keyIdKey = keyIdKey;
     }
 
-    /// <summary>Derives the set from a 32-byte master key. The bytes are copied.</summary>
-    public static RepositoryKeySet FromMasterKey(ReadOnlySpan<byte> masterKey)
-    {
-        var hierarchy = new KeyHierarchy(masterKey);
-
-        return new RepositoryKeySet(hierarchy, hierarchy.DeriveContentIdKey(), hierarchy.DeriveKeyIdKey());
-    }
-
     /// <summary>
-    /// Derives the set from a write-only repository's write credential
-    /// (ADR-0042): everything answers from the bundle, and asking for a data
-    /// class key throws — a v2 repository has none. The credential is cloned.
+    /// Derives the set from the repository's write credential (ADR-0042).
+    /// The credential is cloned.
     /// </summary>
     public static RepositoryKeySet FromWriteCredential(RepositoryWriteCredential credential)
     {
@@ -44,11 +37,7 @@ public sealed class RepositoryKeySet : IDisposable
         return new RepositoryKeySet(hierarchy, hierarchy.DeriveContentIdKey(), hierarchy.DeriveKeyIdKey());
     }
 
-    /// <summary>Whether this set is a write-only bundle rather than a master-key hierarchy.</summary>
-    public bool WriteOnly => _hierarchy.WriteOnly;
-
-    /// <summary>The write-only repository's sealing public key.</summary>
-    /// <exception cref="InvalidOperationException">The set is not write-only.</exception>
+    /// <summary>The repository's sealing public key — what content seals to.</summary>
     public ReadOnlySpan<byte> SealingPublicKey => _hierarchy.SealingPublicKey;
 
     /// <summary>The repository-scoped content-ID key.</summary>
@@ -58,13 +47,14 @@ public sealed class RepositoryKeySet : IDisposable
     public ReadOnlySpan<byte> KeyIdKey => _keyIdKey;
 
     /// <summary>
-    /// Derives the class key — data or metadata — for
-    /// <paramref name="generation"/>. The caller owns and zeroes the result.
+    /// Derives the class key for <paramref name="generation"/>. Only the
+    /// metadata class has one; the caller owns and zeroes the result.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The data class was asked for: a repository holds no data key (specification 03 §9.2).</exception>
     public byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) => blobClass switch
     {
-        BlobClass.Data => _hierarchy.DeriveDataKey(generation),
         BlobClass.Metadata => _hierarchy.DeriveMetadataKey(generation),
+        BlobClass.Data => throw new InvalidOperationException(Strings.RepositoryKeySet_NoDataClassKey),
         _ => throw new ArgumentException(Strings.FormatRepositoryKeySet_BlobClassXNotDefined((ushort)blobClass), nameof(blobClass)),
     };
 

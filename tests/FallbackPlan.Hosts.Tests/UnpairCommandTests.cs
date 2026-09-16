@@ -185,7 +185,6 @@ public sealed class UnpairCommandTests : IDisposable
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

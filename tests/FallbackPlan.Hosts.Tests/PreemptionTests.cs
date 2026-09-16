@@ -146,7 +146,6 @@ public sealed class PreemptionTests : IDisposable
                 StateDirectory = harness.StateDirectory,
                 MaxConcurrentBackupsOverride = 1,
             },
-            passphrase: null,
             Timeout);
 
         var set = runtime.Configuration.BackupSets.Single();

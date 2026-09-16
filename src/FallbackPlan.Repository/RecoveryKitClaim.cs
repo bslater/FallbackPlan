@@ -1,9 +1,7 @@
-using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.RecoveryKit;
 
 namespace FallbackPlan.Repository;
@@ -42,6 +40,7 @@ public static class RecoveryKitClaim
     /// be answered "no replica here is claimable under that key" — true, and
     /// the wrong diagnosis entirely.
     /// </exception>
+    /// <exception cref="RecoveryKitFormatException">The kit names a format-1 repository, which is withdrawn.</exception>
     public static byte[] SeedFrom(RecoveryKit kit, Passphrase passphrase)
     {
         ThrowHelper.ThrowIfNull(kit);
@@ -54,11 +53,11 @@ public static class RecoveryKitClaim
             Parallelism = kit.KdfParallelism,
         };
 
-        // An installation kit, and a per-repository kit of a write-only
-        // repository, both re-derive everything from the passphrase and the
-        // public salt; the sealing public key the kit carries is the
-        // wrong-passphrase verifier (ADR-0042 §8).
-        if (kit.IsInstallationKit || kit.RepositoryFormatVersion >= 2)
+        // An installation kit and a per-repository kit both re-derive
+        // everything from the passphrase and the public salt; the sealing
+        // public key the kit carries is the wrong-passphrase verifier
+        // (ADR-0042 §8).
+        if (kit.IsInstallationKit || kit.RepositoryFormatVersion >= FormatLimits.FormatVersion)
         {
             using var authority = WriteOnlyDerivation.Derive(
                 passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
@@ -72,30 +71,9 @@ public static class RecoveryKitClaim
             return authority.ClaimKeySeed.ToArray();
         }
 
-        // A format-v1 kit carries the master key inside a wrapped key object,
-        // so the claim key is the repository's own domain rather than an
-        // installation's. The unwrap is its own wrong-passphrase check: it is
-        // authenticated, and a wrong KEK fails the tag.
-        using var derivation = KekDerivation.Derive(
-            passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
-
-        var keyObject = KeyObjectFraming.Parse(kit.KeyObject.Span);
-        var bundleCbor = KeyWrapping.Unwrap(
-            derivation.Kek,
-            keyObject.WrapNonce,
-            KeyObjectFraming.BuildAad(keyObject.FormatVersion, keyObject.KekProfile, keyObject.KeyId),
-            keyObject.Wrapped,
-            keyObject.Tag);
-
-        try
-        {
-            using var bundle = KeyBundleCodec.Decode(bundleCbor);
-            using var hierarchy = new KeyHierarchy(bundle.MasterKey);
-            return hierarchy.DeriveClaimKeySeed();
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(bundleCbor);
-        }
+        // A format-1 kit carried the master key inside a wrapped key object.
+        // Format 1 is withdrawn: nothing here can unwrap it, and a claim key
+        // derived from such a kit would name a repository no peer holds.
+        throw new RecoveryKitFormatException(Resources.Strings.RecoveryKitClaim_FormatOneWithdrawn);
     }
 }

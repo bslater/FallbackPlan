@@ -109,15 +109,15 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 2030, Level = LogLevel.Information,
-        Message = "Repository {Repository} created at format version {FormatVersion}, write-only {WriteOnly}")]
+        Message = "Repository {Repository} created at format version {FormatVersion}")]
     internal static partial void RepositoryCreated(
-        ILogger logger, RepositoryId repository, int formatVersion, bool writeOnly);
+        ILogger logger, RepositoryId repository, int formatVersion);
 
     [LoggerMessage(
         EventId = 2031, Level = LogLevel.Information,
-        Message = "Repository {Repository} opened at format version {FormatVersion}, write-only {WriteOnly}")]
+        Message = "Repository {Repository} opened at format version {FormatVersion}")]
     internal static partial void RepositoryOpened(
-        ILogger logger, RepositoryId repository, int formatVersion, bool writeOnly);
+        ILogger logger, RepositoryId repository, int formatVersion);
 
     // No repository id: a refusal usually happens before there is one. The
     // descriptor is step one of an open, and "not a FallbackPlan repository",

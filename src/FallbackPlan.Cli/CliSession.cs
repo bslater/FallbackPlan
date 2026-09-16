@@ -66,10 +66,9 @@ public sealed class CliSession : IDisposable
     public OpenedRepository Repository { get; }
 
     /// <summary>
-    /// The full read authority of a write-only repository (ADR-0042 §5).
-    /// Direct mode holds the passphrase, so it holds the whole capability —
-    /// derived at open, alive for the command, zeroed with the session. Null
-    /// on v1 repositories.
+    /// The full read authority of the repository (ADR-0042 §5). Direct mode
+    /// holds the passphrase, so it holds the whole capability — derived at
+    /// open, alive for the command, zeroed with the session.
     /// </summary>
     public RepositoryReadAuthority? ReadAuthority { get; }
 
@@ -156,24 +155,14 @@ public sealed class CliSession : IDisposable
         using var passphrase = ReadPassphrase(passphraseEnvironmentVariable);
 
         OpenedRepository repository;
-        RepositoryReadAuthority? readAuthority = null;
+        RepositoryReadAuthority? readAuthority;
         try
         {
-            // A write-only repository has no key object to unwrap: direct
-            // mode derives the full authority from the passphrase and proves
-            // it against the descriptor (ADR-0042 §1) — same variable, same
-            // commands, different open underneath.
-            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
-            if (RepositoryLifecycle.IsWriteOnly(descriptor))
-            {
-                (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
-                    store, passphrase, cancellationToken, log).ConfigureAwait(false);
-            }
-            else
-            {
-                repository = await RepositoryLifecycle.OpenAsync(store, passphrase, cancellationToken, log)
-                    .ConfigureAwait(false);
-            }
+            // Direct mode derives the full authority from the passphrase and
+            // proves it against the descriptor (ADR-0042 §1): the person is
+            // present, so the content plane opens here.
+            (repository, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+                store, passphrase, cancellationToken, log).ConfigureAwait(false);
         }
         catch (RepositoryOpenException exception)
         {

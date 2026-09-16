@@ -22,23 +22,15 @@ public sealed class UnattendedWorkTests : IDisposable
     [TestMethod]
     public async Task ScheduledWork_RunsWithAnOwnerAccountAndNobodySignedIn()
     {
+        // Setup leaves the owner account and the installation credential
+        // behind (ADR-0044); the run holds no passphrase and needs nobody
+        // present (ADR-0042 §5).
+        await _harness.SetupAsync();
         _harness.WriteConfiguration("every 1h");
-        UserStore.Open(_harness.StateDirectory).Create(
-            "ben", "The-0wner-passw0rd",
-            parameters: new Domain.Configuration.Argon2Parameters
-            {
-                MemoryKiB = 64,
-                Iterations = 1,
-                Parallelism = 1,
-            });
-
-        Environment.SetEnvironmentVariable(
-            _harness.PassphraseVariable, "the one long passphrase of this installation");
 
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "run", "--once", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "run", "--once", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory);
 
         Assert.AreEqual(0, result.ExitCode, result.All);
     }

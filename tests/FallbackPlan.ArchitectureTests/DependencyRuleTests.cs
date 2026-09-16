@@ -63,9 +63,6 @@ public sealed class DependencyRuleTests
     /// <summary>The client contract (ADR-0028 §7).</summary>
     private static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
 
-    /// <summary>The platform keystores (ADR-0028 §9).</summary>
-    private static Assembly Keystore => Assembly.Load("FallbackPlan.Keystore");
-
     /// <summary>The peer protocol (ADR-0030).</summary>
     private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
@@ -80,7 +77,7 @@ public sealed class DependencyRuleTests
     private static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web];
 
     private static void AssertPasses(TestResult result, string rule)
     {
@@ -654,7 +651,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Repository",
                     "FallbackPlan.Storage",
                     "FallbackPlan.Filesystem",
-                    "FallbackPlan.Keystore",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
             "FallbackPlan.Api must reference Domain and nothing else (11 §2).");
@@ -671,7 +667,7 @@ public sealed class DependencyRuleTests
         AssertPasses(
             Types.InAssembly(Recovery)
                 .ShouldNot()
-                .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application", "FallbackPlan.Keystore")
+                .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application")
                 .GetResult(),
             "FallbackPlan.Recovery must run from repository plus kit alone (11 §2, NFR-OPS-005).");
     }
@@ -726,7 +722,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Storage",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
-                    "FallbackPlan.Keystore",
                     "FallbackPlan.Protocol",
                     "FallbackPlan.Replication",
                     "FallbackPlan.Retention",
@@ -749,7 +744,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Application",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
-                    "FallbackPlan.Keystore",
                     "FallbackPlan.Protocol",
                     "FallbackPlan.Replication",
                     "FallbackPlan.Retention",
@@ -769,26 +763,6 @@ public sealed class DependencyRuleTests
 
         SequenceAssert.AreEqual(
             ["FallbackPlan.Api", "FallbackPlan.Repository", "FallbackPlan.Storage.Local"], references);
-    }
-
-    /// <summary>
-    /// The keystore holds unlocked key material for the service account and
-    /// must not become a route to anything else (NFR-SEC-009).
-    /// </summary>
-    [TestMethod]
-    public void Keystore_DependencyClosure_KnowsNothingAboutRepositories()
-    {
-        AssertPasses(
-            Types.InAssembly(Keystore)
-                .ShouldNot()
-                .HaveDependencyOnAny(
-                    "FallbackPlan.Domain",
-                    "FallbackPlan.Repository",
-                    "FallbackPlan.Api",
-                    "FallbackPlan.Application",
-                    "FallbackPlan.Storage")
-                .GetResult(),
-            "FallbackPlan.Keystore stores a passphrase for an account; it must not reach the repository.");
     }
 
 }

@@ -178,39 +178,6 @@
   <data name="FooterAad_FooterAADExactlyBytesGot" xml:space="preserve">
     <value>The footer AAD is exactly {0} bytes; got {1}.</value>
   </data>
-  <data name="KeyBundleCodec_KeyBundleBytesLimit" xml:space="preserve">
-    <value>Key bundle is {0} bytes; the limit is {1} (specification 00 §8).</value>
-  </data>
-  <data name="KeyBundleCodec_KeyBundleMissingRequiredField" xml:space="preserve">
-    <value>Key bundle is missing a required field (specification 03 §3.1).</value>
-  </data>
-  <data name="KeyBundle_MasterKeyExactlyBytes" xml:space="preserve">
-    <value>The master key is exactly 32 bytes (specification 03 §3.1).</value>
-  </data>
-  <data name="KeyObjectFraming_KeyObjectBytesDeclaredBundle" xml:space="preserve">
-    <value>Key object is {0} bytes; the declared bundle length implies exactly {1}.</value>
-  </data>
-  <data name="KeyObjectFraming_KeyObjectBytesFramingAlone" xml:space="preserve">
-    <value>Key object is {0} bytes; the framing alone requires {1}.</value>
-  </data>
-  <data name="KeyObjectFraming_NotKeyObjectFBPKKEYSMagic" xml:space="preserve">
-    <value>Not a key object: the FBPKKEYS magic is absent.</value>
-  </data>
-  <data name="KeyObjectFraming_WrapNonceExactlyBytes" xml:space="preserve">
-    <value>The wrap nonce is exactly {0} bytes.</value>
-  </data>
-  <data name="KeyObjectFraming_WrapProfileXNotPermitted" xml:space="preserve">
-    <value>Wrap profile 0x{0:x4} is not permitted: format v1 requires aes-256-gcm-v1 (0x0001) (specification 03 §3).</value>
-  </data>
-  <data name="KeyObjectFraming_WrapTagExactlyBytes" xml:space="preserve">
-    <value>The wrap tag is exactly {0} bytes.</value>
-  </data>
-  <data name="KeyObjectFraming_WrappedBundleBytesLimit" xml:space="preserve">
-    <value>The wrapped bundle is {0} bytes; the limit is {1} (specification 00 §8).</value>
-  </data>
-  <data name="KeyObjectFraming_WrappedBundleDeclaresBytesLimit" xml:space="preserve">
-    <value>Wrapped bundle declares {0} bytes; the limit is {1} (specification 00 §8).</value>
-  </data>
   <data name="PolicyManifestCodec_BlobWriteProfileCarriesUnknown" xml:space="preserve">
     <value>blob_write_profile carries an unknown key (ADR-0022 §Decision 6).</value>
   </data>

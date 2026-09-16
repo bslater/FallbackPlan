@@ -212,7 +212,7 @@ public sealed class PeerClaimTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var replica = await ReplicaPathAsync();

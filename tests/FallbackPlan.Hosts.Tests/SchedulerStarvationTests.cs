@@ -159,7 +159,6 @@ public sealed class SchedulerStarvationTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
     }
 }

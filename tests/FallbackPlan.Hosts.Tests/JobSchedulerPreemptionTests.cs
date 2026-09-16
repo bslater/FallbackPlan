@@ -475,7 +475,6 @@ public sealed class JobSchedulerPreemptionTests : IDisposable
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
         Assert.IsNotNull(runtime.Queue);
     }

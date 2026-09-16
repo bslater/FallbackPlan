@@ -17,14 +17,15 @@ public sealed class RepositoryDescriptorCodecTests
 {
     private static RepositoryDescriptor Sample(bool unstable = true) => new(
         RepositoryId.FromBytes(Convert.FromHexString("0102030405060708090a0b0c0d0e0f10")),
-        FormatVersion: 1,
-        RequiredFeatures: [],
+        FallbackPlan.Domain.FormatLimits.FormatVersion,
+        RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
         OptionalFeatures: [7],
         new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },
         KdfSalt: Enumerable.Range(0, 16).Select(value => (byte)value).ToArray(),
         CreatedAt: 1_722_600_000_000,
         CreatedBy: "fallbackplan-tests/1.0",
-        UnstableFormat: unstable);
+        UnstableFormat: unstable,
+        SealingPublicKey: Enumerable.Repeat((byte)0xAB, 32).ToArray());
 
     [TestMethod]
     public void RepositoryDescriptor_EncodedAndDecoded_RoundTrips()
@@ -41,12 +42,7 @@ public sealed class RepositoryDescriptorCodecTests
         SequenceAssert.AreEqual<ushort>([7], ok.Descriptor.OptionalFeatures);
     }
 
-    private static RepositoryDescriptor SampleV2() => Sample() with
-    {
-        FormatVersion = FallbackPlan.Domain.FormatLimits.SealedFormatVersion,
-        RequiredFeatures = [RepositoryDescriptorCodec.FeatureSealedDataPlane],
-        SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray(),
-    };
+    private static RepositoryDescriptor SampleV2() => Sample();
 
     [TestMethod]
     public void RepositoryDescriptorV2_EncodedAndDecoded_RoundTripsTheSealingKey()
@@ -57,7 +53,7 @@ public sealed class RepositoryDescriptorCodecTests
         // key 9, the sealed-data-plane feature is required, and this reader
         // implements it — so the parse proceeds rather than refusing.
         Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
-        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.SealedFormatVersion, ok.Descriptor.FormatVersion);
+        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.FormatVersion, ok.Descriptor.FormatVersion);
         SequenceAssert.AreEqual(
             SampleV2().SealingPublicKey.ToArray(), ok.Descriptor.SealingPublicKey.ToArray());
         SequenceAssert.AreEqual<ushort>(
@@ -67,12 +63,35 @@ public sealed class RepositoryDescriptorCodecTests
     [TestMethod]
     public void RepositoryDescriptorV2_TheKeyAndVersionDisagreeing_IsRefusedAtSerialize()
     {
-        // A v2 descriptor without its verifier, or a v1 descriptor claiming
-        // one, is a caller bug — refused before anything is stored.
+        // A descriptor without its verifier is a caller bug — refused before
+        // anything is stored. So is a format-1 stamp: format 1 is withdrawn,
+        // and nothing writes it.
         Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
             SampleV2() with { SealingPublicKey = ReadOnlyMemory<byte>.Empty }));
         Assert.ThrowsExactly<ArgumentException>(() => RepositoryDescriptorCodec.Serialize(
-            Sample() with { SealingPublicKey = Enumerable.Repeat((byte)0xAB, 32).ToArray() }));
+            Sample() with { FormatVersion = 1, SealingPublicKey = ReadOnlyMemory<byte>.Empty }));
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptor_AFormatOneStamp_IsRefusedByNameNotMisread()
+    {
+        // ADR-0014's rule: refuse, never misread. A stored descriptor stamped
+        // format 1 is a distinct finding with its remedy named — not "not a
+        // repository", not damage, not an unknown feature. Both copies of the
+        // version move (framing at offset 8, body key 2 at offset 36) and the
+        // digest is re-sealed, so the refusal is the version's alone.
+        var bytes = RepositoryDescriptorCodec.Serialize(Sample());
+        bytes[9] = 1;
+        const int bodyVersion = RepositoryDescriptorCodec.HeaderLength + 1 + 1 + 1 + 16 + 1;
+        Assert.AreEqual(0x02, bytes[bodyVersion]);
+        bytes[bodyVersion] = 0x01;
+        System.Security.Cryptography.SHA256.HashData(
+            bytes.AsSpan(0, bytes.Length - RepositoryDescriptorCodec.DigestLength),
+            bytes.AsSpan(bytes.Length - RepositoryDescriptorCodec.DigestLength));
+
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("format 1", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("withdrawn", violation.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -150,18 +150,6 @@ public sealed class HostHarness : IDisposable
     }
 
     /// <summary>
-    /// Creates a format-1 repository through the CLI, for the tests that are
-    /// about a format-1 archive specifically — an archive that predates
-    /// setup, a service holding its passphrase. Goes when format v1 does.
-    /// </summary>
-    public async Task CreateFormatOneRepositoryAsync()
-    {
-        var exitCode = await Cli.CliApplication.RunAsync(
-            ["init", "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable]);
-        Assert.AreEqual(0, exitCode);
-    }
-
-    /// <summary>
     /// The restore grant a console sends when it opens a restore source on a
     /// set-up installation (ADR-0042 §5): the sealing scalar, re-derived from
     /// the passphrase under the installation's salt and sealed to the

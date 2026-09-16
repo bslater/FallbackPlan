@@ -70,9 +70,6 @@
   <data name="KekDerivation_KDFSaltExactlyBytesGot" xml:space="preserve">
     <value>The KDF salt is exactly {0} bytes; got {1}.</value>
   </data>
-  <data name="KeyHierarchy_MasterKeyExactlyBytes" xml:space="preserve">
-    <value>The master key is exactly {0} bytes.</value>
-  </data>
   <data name="KeyedFileIdentity_DeviceIdentifierExactlyBytes" xml:space="preserve">
     <value>The device identifier is exactly 16 bytes.</value>
   </data>
@@ -109,20 +106,8 @@
   <data name="WriteOnlyDerivation_RootExactlyBytes" xml:space="preserve">
     <value>The derivation root is exactly {0} bytes.</value>
   </data>
-  <data name="KeyHierarchy_NotWriteOnly" xml:space="preserve">
-    <value>This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).</value>
-  </data>
-  <data name="KeyHierarchy_WriteOnlyHoldsNoDataKey" xml:space="preserve">
-    <value>A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).</value>
-  </data>
-  <data name="KeyHierarchy_WriteOnlyHoldsNoReclaimKey" xml:space="preserve">
-    <value>A write-only service holds no reclaim key: it may publish but not authorise a deletion, and a collection run takes its reclaim authority from a grant (ADR-0055).</value>
-  </data>
   <data name="RepositoryWriteCredential_ClaimNeedsReclaim" xml:space="preserve">
     <value>A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.</value>
-  </data>
-  <data name="KeyHierarchy_WriteOnlyHoldsNoClaimKey" xml:space="preserve">
-    <value>A write-only service holds no claim key: it may publish the public half but not author a claim, which belongs to whoever holds the passphrase and the installation kit (ADR-0053).</value>
   </data>
   <data name="WriteOnlyDerivation_ReclaimSeedExactlyBytes" xml:space="preserve">
     <value>A reclaim key seed is exactly {0} bytes.</value>

@@ -100,7 +100,7 @@ public static class FixtureRepositoryV2
             // re-derives from.
             await PutAsync(store, ObjectKey.Parse("repository-format"),
                 RepositoryDescriptorCodec.Serialize(new RepositoryDescriptor(
-                    Repo, FormatLimits.SealedFormatVersion,
+                    Repo, FormatLimits.FormatVersion,
                     RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane], OptionalFeatures: [],
                     FixtureKdf, KdfSalt, CreatedAt, "fallbackplan-fixture/1.0", UnstableFormat: true,
                     authority.Credential.SealingPublicKey.ToArray())),

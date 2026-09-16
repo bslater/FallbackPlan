@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Local;

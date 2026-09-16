@@ -6,7 +6,6 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
-using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Format.RecoveryKit;
@@ -187,10 +186,12 @@ public sealed class RecoverySession : IDisposable
     }
 
     /// <summary>
-    /// Opens a session: KEK from the kit's KDF parameters and the
-    /// passphrase, master key from the kit's verbatim key object.
+    /// Opens a session from a repository kit: the whole authority re-derived
+    /// from the passphrase and the kit's public salt and parameters, proven
+    /// against the kit's copy of the sealing public key (ADR-0042 §8).
     /// </summary>
-    /// <exception cref="KeyUnwrapFailedException">The passphrase does not open this kit's key object.</exception>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this kit's keys.</exception>
+    /// <exception cref="RecoveryKitFormatException">The kit is an installation kit, or names a format-1 repository, which is withdrawn.</exception>
     public static RecoverySession Open(RecoveryKit kit, Passphrase passphrase, IObjectStore store)
     {
         ThrowHelper.ThrowIfNull(kit);
@@ -213,12 +214,12 @@ public sealed class RecoverySession : IDisposable
             Parallelism = kit.KdfParallelism,
         };
 
-        // A write-only (format v2) kit carries no key object at all — the
-        // passphrase and the kit's public salt and parameters re-derive
-        // everything, proven by comparing the derived public key against the
-        // kit's copy (ADR-0042 §8). The session keeps the authority: its
-        // scalar is what opens each sealed blob's content key.
-        if (kit.RepositoryFormatVersion >= 2)
+        // The kit carries no key object at all — the passphrase and the
+        // kit's public salt and parameters re-derive everything, proven by
+        // comparing the derived public key against the kit's copy
+        // (ADR-0042 §8). The session keeps the authority: its scalar is what
+        // opens each sealed blob's content key.
+        if (kit.RepositoryFormatVersion >= FormatLimits.FormatVersion)
         {
             var authority = WriteOnlyDerivation.Derive(
                 passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
@@ -241,23 +242,10 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
-        using var derivation = KekDerivation.Derive(
-            passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
-
-        var keyObject = KeyObjectFraming.Parse(kit.KeyObject.Span);
-        var aad = KeyObjectFraming.BuildAad(keyObject.FormatVersion, keyObject.KekProfile, keyObject.KeyId);
-        var bundleCbor = KeyWrapping.Unwrap(
-            derivation.Kek, keyObject.WrapNonce, aad, keyObject.Wrapped, keyObject.Tag);
-
-        try
-        {
-            using var bundle = KeyBundleCodec.Decode(bundleCbor);
-            return new RecoverySession(store, kit.RepositoryId!.Value, new KeyHierarchy(bundle.MasterKey));
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(bundleCbor);
-        }
+        // A format-1 kit carried the master key inside a wrapped key object.
+        // Format 1 is withdrawn: nothing here can unwrap it, and nothing it
+        // could open still exists to be recovered.
+        throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_FormatOneWithdrawn);
     }
 
     /// <summary>
@@ -595,6 +583,11 @@ public sealed class RecoverySession : IDisposable
         _authority?.Dispose();
     }
 
+    // The reader asks for a blob's STRUCTURE class, which is the metadata
+    // plane for every blob — a sealed data blob's footer derives from the
+    // metadata key too (ADR-0042 §2). There is no data key to hand out.
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>
-        blobClass == BlobClass.Data ? _hierarchy.DeriveDataKey(generation) : _hierarchy.DeriveMetadataKey(generation);
+        blobClass == BlobClass.Metadata
+            ? _hierarchy.DeriveMetadataKey(generation)
+            : throw new InvalidOperationException("A repository holds no data class key (specification 03 §9.2).");
 }

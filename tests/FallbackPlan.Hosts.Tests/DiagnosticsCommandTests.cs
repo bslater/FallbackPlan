@@ -51,7 +51,6 @@ public sealed class DiagnosticsCommandTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 Logging = _logging,
             },
-            passphrase: null,
             _timeout.Token);
     }
 
@@ -284,7 +283,6 @@ public sealed class DiagnosticsCommandTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
 
         var handler = Handler(runtime, CallerScope.Local);

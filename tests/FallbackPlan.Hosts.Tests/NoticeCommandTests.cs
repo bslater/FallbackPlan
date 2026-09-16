@@ -125,7 +125,6 @@ public sealed class NoticeCommandTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

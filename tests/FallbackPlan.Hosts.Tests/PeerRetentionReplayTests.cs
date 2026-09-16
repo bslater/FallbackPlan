@@ -175,7 +175,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var owner = ReplicaOwnerStore.Open(_destinationState).Find(await RepositoryIdHexAsync());

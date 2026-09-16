@@ -27,7 +27,6 @@ public sealed class GuardClauseTests
         Row("ObjectId", ObjectId.Size, bytes => ObjectId.FromBytes(bytes), destination => ObjectId.FromBytes(Bytes(ObjectId.Size)).CopyTo(destination)),
         Row("ContentId", ContentId.Size, bytes => ContentId.FromBytes(bytes), destination => ContentId.FromBytes(Bytes(ContentId.Size)).CopyTo(destination)),
         Row("BlobId", BlobId.Size, bytes => BlobId.FromBytes(bytes), destination => BlobId.FromBytes(Bytes(BlobId.Size)).CopyTo(destination)),
-        Row("KeyId", KeyId.Size, bytes => KeyId.FromBytes(bytes), destination => KeyId.FromBytes(Bytes(KeyId.Size)).CopyTo(destination)),
         Row("RepositoryId", RepositoryId.Size, bytes => RepositoryId.FromBytes(bytes), destination => RepositoryId.FromBytes(Bytes(RepositoryId.Size)).CopyTo(destination)),
         Row("WriterId", WriterId.Size, bytes => WriterId.FromBytes(bytes), destination => WriterId.FromBytes(Bytes(WriterId.Size)).CopyTo(destination)),
         Row("StoreBlobKey", StoreBlobKey.Size, bytes => StoreBlobKey.FromBytes(bytes), destination => StoreBlobKey.FromBytes(Bytes(StoreBlobKey.Size)).CopyTo(destination)),
@@ -75,7 +74,6 @@ public sealed class GuardClauseTests
         SequenceAssert.AreEqual(Bytes(ObjectId.Size), ObjectId.FromBytes(Bytes(ObjectId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(ContentId.Size), ContentId.FromBytes(Bytes(ContentId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(BlobId.Size), BlobId.FromBytes(Bytes(BlobId.Size)).ToArray());
-        SequenceAssert.AreEqual(Bytes(KeyId.Size), KeyId.FromBytes(Bytes(KeyId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(RepositoryId.Size), RepositoryId.FromBytes(Bytes(RepositoryId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(WriterId.Size), WriterId.FromBytes(Bytes(WriterId.Size)).ToArray());
         SequenceAssert.AreEqual(Bytes(StoreBlobKey.Size), StoreBlobKey.FromBytes(Bytes(StoreBlobKey.Size)).ToArray());

@@ -89,14 +89,6 @@ public sealed partial class ServiceCommandHandler
                         ServiceErrorReason.Failed,
                         $"Set '{set.Name}' has a repository whose descriptor does not read: {damaged.Message}");
                 }
-                if (!RepositoryLifecycle.IsWriteOnly(descriptor))
-                {
-                    return new ServiceError(
-                        ServiceErrorReason.InvalidArgument,
-                        $"Set '{set.Name}' has a format {descriptor.FormatVersion} repository — an existing "
-                        + "repository cannot become write-only; write-only is chosen at creation (ADR-0042).");
-                }
-
                 if (!credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
                 {
                     return new ServiceError(
@@ -164,14 +156,12 @@ public sealed partial class ServiceCommandHandler
 
         if (envelopeHex is null or { Length: 0 })
         {
-            return archive.Repository.Keys.WriteOnly
-                ? (null, new ServiceError(
-                    ServiceErrorReason.Refused,
-                    $"Set '{set.Name}' is write-only and applying retention needs a reclaim grant: this service "
-                    + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
-                    + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
-                    + "with the command."))
-                : (null, null);
+            return (null, new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Set '{set.Name}': applying retention needs a reclaim grant: this service "
+                + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
+                + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
+                + "with the command."));
         }
 
         byte[] root;

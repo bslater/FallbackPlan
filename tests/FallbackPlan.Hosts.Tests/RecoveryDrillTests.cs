@@ -347,7 +347,6 @@ public sealed class RecoveryDrillTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
     }
 }

@@ -540,7 +540,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+                "--destination", "wide", "--full"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -567,7 +567,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+                "--destination", "wide", "--full"],
             output, error, CancellationToken.None);
 
         // The agent verb prints the report and returns 0; the damage is in the
@@ -590,7 +590,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "friend"],
+                "--destination", "friend"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -606,7 +606,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "nowhere"],
+                "--destination", "nowhere"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(2, exit);
@@ -725,7 +725,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", destination, "--probe"],
+                "--destination", destination, "--probe"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -790,7 +790,7 @@ public sealed class DestinationConvergenceTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 

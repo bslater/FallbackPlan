@@ -32,6 +32,13 @@ public sealed class RecoveryKitFormatException : FormatException
 /// </summary>
 public static class RecoveryKitCodec
 {
+    /// <summary>
+    /// The framing magic of a format-1 key object ("FBPKKEYS"), kept only so a
+    /// format-1 kit still parses to a shape the opener can refuse by name.
+    /// Format 1 is withdrawn; nothing here can open what such a kit carries.
+    /// </summary>
+    private static ReadOnlySpan<byte> FormatOneKeyObjectMagic => "FBPKKEYS"u8;
+
     /// <summary>The framing magic, <c>"FBPKRKIT"</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "FBPKRKIT"u8;
 
@@ -163,7 +170,7 @@ public static class RecoveryKitCodec
                 throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_WriteOnlyKitShape);
             }
         }
-        else if (!kit.SealingPublicKey.IsEmpty || !kit.KeyObject.Span.StartsWith(Keys.KeyObjectFraming.Magic))
+        else if (!kit.SealingPublicKey.IsEmpty || !kit.KeyObject.Span.StartsWith(FormatOneKeyObjectMagic))
         {
             throw new RecoveryKitFormatException(Strings.RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey);
         }

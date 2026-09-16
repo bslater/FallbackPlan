@@ -97,8 +97,8 @@ public sealed class RetentionSyncInterlockTests : IDisposable
 
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory
+            );
 
         Assert.AreEqual(1, result.ExitCode, result.All);
         Assert.Contains("writer role", result.Error, StringComparison.Ordinal);
@@ -154,7 +154,6 @@ public sealed class RetentionSyncInterlockTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 

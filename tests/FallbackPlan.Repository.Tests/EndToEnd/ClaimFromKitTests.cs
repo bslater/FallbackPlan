@@ -56,35 +56,32 @@ public sealed class ClaimFromKitTests : IDisposable
     }
 
     [TestMethod]
-    public async Task APerRepositoryKit_AndThePassphrase_ReachTheOtherRootsClaimSeed()
+    public void AFormatOneKit_IsRefusedByNameRatherThanYieldingASeed()
     {
-        // The v1 shape: the master key rides the kit inside a key object, so
-        // the claimant unwraps it and expands fbp/claim/v1. A different root
-        // and a different label — and the caller does not have to care.
-        var store = new LocalFileSystemObjectStore(Directory.CreateDirectory(_scratch).FullName);
+        // A format-1 kit carried the master key inside a wrapped key object,
+        // and format 1 is withdrawn: nothing can unwrap it, and no peer holds
+        // a replica of one. The kit still parses — the wire shape is pinned
+        // until the kit goes — and the claimant refuses it by name.
+        var kit = new RecoveryKit
+        {
+            KitFormatVersion = 1,
+            MinimumToolVersion = "0.1.0",
+            RepositoryId = Domain.Identifiers.RepositoryId.FromBytes(Enumerable.Repeat((byte)0x0C, 16).ToArray()),
+            RepositoryFormatVersion = 1,
+            KeyObject = "FBPKKEYS-withdrawn"u8.ToArray(),
+            KdfMemoryKiB = 8 * 1024,
+            KdfIterations = 1,
+            KdfParallelism = 1,
+            KdfSalt = new byte[16],
+            IssuingDeviceId = new byte[16],
+            IssuedAt = 0,
+            Instructions = string.Empty,
+        };
         using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.CreateAsync(
-            store,
-            passphrase,
-            // The real Argon2 parameters, because creating a repository
-            // enforces the creation minimums — so this test pays two genuine
-            // derivations, which is also what a claimant pays.
-            RepositoryCreationSettings.Default,
-            0,
-            _timeout.Token);
 
-        var kit = await RecoveryKitFactory.BuildAsync(store, passphrase, new byte[16], 0, [], _timeout.Token);
-        Assert.IsFalse(kit.IsInstallationKit);
+        var refusal = Assert.ThrowsExactly<RecoveryKitFormatException>(() => RecoveryKitClaim.SeedFrom(kit, passphrase));
 
-        var seed = RecoveryKitClaim.SeedFrom(kit, passphrase);
-        try
-        {
-            SequenceAssert.AreEqual(repository.Hierarchy.DeriveClaimKeySeed(), seed);
-        }
-        finally
-        {
-            System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
-        }
+        Assert.Contains("withdrawn", refusal.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]

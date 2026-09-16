@@ -1,56 +1,33 @@
-using System.Buffers.Binary;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
-using FallbackPlan.Repository.Crypto.Resources;
 
 namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
-/// Derives every repository key from the master key via HKDF-Expand with
-/// domain-separated info strings (specification 03 §4; FR-ARCH-008). The
-/// master key is used directly as the PRK — the extract step is deliberately
-/// omitted because the master key is already uniform random — and it never
-/// encrypts anything itself.
+/// The repository's key hierarchy over its write credential (ADR-0042;
+/// specification 03 §9): the metadata, signing, content-ID and key-ID
+/// derivations answer from the bundle. There is no data-key family — content
+/// is sealed to the repository's public key — and no reclaim or claim private
+/// half: a service publishes for ever and cannot author a deletion or re-point
+/// a replica (ADR-0055 §2, ADR-0053 §1); both authorities arrive as grants or
+/// are derived where the person typed.
 /// </summary>
 /// <remarks>
-/// Info strings are ASCII without a terminating NUL; generation numbers are
-/// appended big-endian. All primitives here are platform-provided
-/// (<see cref="HKDF"/> over HMAC-SHA256); no third-party code is involved.
+/// All primitives are platform-provided (<see cref="HKDF"/> over
+/// HMAC-SHA256); no third-party code is involved.
 /// </remarks>
 public sealed class KeyHierarchy : IDisposable
 {
     /// <summary>Every derived key is 32 bytes.</summary>
     public const int DerivedKeyLength = 32;
 
-    /// <summary>The master key is 32 bytes (specification 03 §3.1).</summary>
-    public const int MasterKeyLength = 32;
-
-    private readonly byte[]? _masterKey;
-    private readonly RepositoryWriteCredential? _credential;
-
-    /// <summary>
-    /// Creates the hierarchy over a 32-byte master key. The bytes are copied;
-    /// the caller keeps responsibility for its own copy.
-    /// </summary>
-    /// <exception cref="ArgumentException"><paramref name="masterKey"/> is not exactly 32 bytes.</exception>
-    public KeyHierarchy(ReadOnlySpan<byte> masterKey)
-    {
-        if (masterKey.Length != MasterKeyLength)
-        {
-            throw new ArgumentException(Strings.FormatKeyHierarchy_MasterKeyExactlyBytes(MasterKeyLength), nameof(masterKey));
-        }
-
-        _masterKey = masterKey.ToArray();
-    }
+    private readonly RepositoryWriteCredential _credential;
 
     private KeyHierarchy(RepositoryWriteCredential owned) => _credential = owned;
 
     /// <summary>
-    /// Creates a write-only (format v2) hierarchy over a write credential
-    /// (ADR-0042; specification 03 §9): metadata, signing, content-ID and
-    /// key-ID derivations answer from the bundle; the data-key family does
-    /// not exist and asking for it throws. The credential is cloned — the
-    /// caller keeps responsibility for its own copy.
+    /// Creates the hierarchy over a write credential. The credential is
+    /// cloned — the caller keeps responsibility for its own copy.
     /// </summary>
     public static KeyHierarchy ForWriteOnly(RepositoryWriteCredential credential)
     {
@@ -65,198 +42,47 @@ public sealed class KeyHierarchy : IDisposable
         }
     }
 
-    /// <summary>Whether this hierarchy is a write-only bundle rather than a master key.</summary>
-    public bool WriteOnly => _credential is not null;
+    /// <summary>The repository's sealing public key — the wrong-passphrase verifier and what content seals to.</summary>
+    public ReadOnlySpan<byte> SealingPublicKey => _credential.SealingPublicKey;
 
-    /// <summary>The write-only repository's sealing public key.</summary>
-    /// <exception cref="InvalidOperationException">The hierarchy is not write-only.</exception>
-    public ReadOnlySpan<byte> SealingPublicKey =>
-        _credential is { } credential
-            ? credential.SealingPublicKey
-            : throw new InvalidOperationException(Strings.KeyHierarchy_NotWriteOnly);
+    /// <summary>The repository-scoped content-ID key.</summary>
+    public byte[] DeriveContentIdKey() => _credential.ContentIdKey.ToArray();
 
-    /// <summary>Derives the repository-scoped content-ID key (<c>"fbp/content-id/v1"</c>, or the v2 bundle's).</summary>
-    public byte[] DeriveContentIdKey() =>
-        _credential is { } credential ? credential.ContentIdKey.ToArray() : Expand("fbp/content-id/v1"u8, generation: null);
+    /// <summary>The repository-scoped key-ID key.</summary>
+    public byte[] DeriveKeyIdKey() => _credential.KeyIdKey.ToArray();
 
-    /// <summary>Derives the repository-scoped key-ID key (<c>"fbp/key-id/v1"</c>, or the v2 bundle's).</summary>
-    public byte[] DeriveKeyIdKey() =>
-        _credential is { } credential ? credential.KeyIdKey.ToArray() : Expand("fbp/key-id/v1"u8, generation: null);
-
-    /// <summary>Derives the data key for <paramref name="generation"/> (<c>"fbp/data/v1" ‖ u32(g)</c>).</summary>
-    /// <exception cref="InvalidOperationException">
-    /// The hierarchy is write-only: a v2 repository has no data-key family —
-    /// content is sealed to its public key (specification 03 §9.2), and a
-    /// code path asking for one is a bug, not a missing capability.
-    /// </exception>
-    public byte[] DeriveDataKey(KeyGeneration generation) =>
-        _credential is null
-            ? Expand("fbp/data/v1"u8, generation.Value)
-            : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoDataKey);
-
-    /// <summary>Derives the metadata key for <paramref name="generation"/> (<c>"fbp/metadata/v1" ‖ u32(g)</c>, or the v2 bundle's).</summary>
-    public byte[] DeriveMetadataKey(KeyGeneration generation) =>
-        _credential is { } credential
-            ? credential.DeriveMetadataKey(generation)
-            : Expand("fbp/metadata/v1"u8, generation.Value);
+    /// <summary>Derives the metadata key for <paramref name="generation"/> (<c>"fbp/metadata-generation/v2" ‖ u32(g)</c>).</summary>
+    public byte[] DeriveMetadataKey(KeyGeneration generation) => _credential.DeriveMetadataKey(generation);
 
     /// <summary>
     /// Derives the signing-key seed for <paramref name="generation"/>
-    /// (<c>"fbp/signing/v1" ‖ u32(g)</c>, or the v2 bundle's). The 32 bytes
-    /// are an Ed25519 private-key seed per RFC 8032 §5.1.5 — the input to
-    /// seed expansion, not a pre-clamped scalar (specification 03 §4;
-    /// ADR-0020).
+    /// (<c>"fbp/signing-generation/v2" ‖ u32(g)</c>). The 32 bytes are an
+    /// Ed25519 private-key seed per RFC 8032 §5.1.5 — the input to seed
+    /// expansion, not a pre-clamped scalar (ADR-0020).
     /// </summary>
-    public byte[] DeriveSigningKeySeed(KeyGeneration generation) =>
-        _credential is { } credential
-            ? credential.DeriveSigningKeySeed(generation)
-            : Expand("fbp/signing/v1"u8, generation.Value);
+    public byte[] DeriveSigningKeySeed(KeyGeneration generation) => _credential.DeriveSigningKeySeed(generation);
 
     /// <summary>
-    /// Derives the reclaim-key seed for <paramref name="generation"/>
-    /// (<c>"fbp/reclaim/v1" ‖ u32(g)</c>) — the authority a tombstone signs
-    /// under, separate from the one publications sign under
-    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §1). The 32 bytes
-    /// are an Ed25519 private-key seed per RFC 8032 §5.1.5, exactly as
-    /// <see cref="DeriveSigningKeySeed"/>'s are — one clamping rule for both
-    /// keys, because two would be a second chance to get it wrong (ADR-0020 §1).
+    /// The Ed25519 <b>public</b> half of the claim key, read off the write
+    /// credential (ADR-0053 §1). Empty only for a credential written before
+    /// the claim decision, whose replica is the case ADR-0053 §3 leaves to
+    /// the destination's operator.
     /// </summary>
-    /// <exception cref="InvalidOperationException">
-    /// The hierarchy is write-only. This is the decision, not a gap: a v2
-    /// service is provisioned with a write credential that deliberately
-    /// carries no reclaim domain, so it can publish for ever and cannot author
-    /// a deletion (ADR-0055 §2). A collection run on such a repository takes
-    /// its reclaim seed from a grant instead (§6) — see
-    /// <see cref="RepositoryReadAuthority.ReclaimKeySeed"/>.
-    /// </exception>
-    public byte[] DeriveReclaimKeySeed(KeyGeneration generation) =>
-        _credential is null
-            ? Expand("fbp/reclaim/v1"u8, generation.Value)
-            : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoReclaimKey);
+    public byte[] ClaimPublicKey() => _credential.ClaimPublicKey.ToArray();
 
     /// <summary>
-    /// Derives the claim-key seed (<c>"fbp/claim/v1"</c>) — the authority a
-    /// machine rebuilt after total loss proves a peer replica is its own with
-    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
-    /// The 32 bytes are an Ed25519 private-key seed per RFC 8032 §5.1.5,
-    /// exactly as <see cref="DeriveSigningKeySeed"/>'s are.
+    /// The Ed25519 <b>public</b> half of the reclaim key, read off the write
+    /// credential ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
+    /// Empty only for a credential written before the reclaim decision, which
+    /// publishes nothing until it is re-provisioned.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Takes no generation, alone among the derived keys. A destination
-    /// records the claim public key at first attribution and never replaces
-    /// it, so a key that turned over with the generation would go stale on
-    /// the first rotation with no way to tell the peer — and the claim would
-    /// stop verifying exactly when it was needed.
-    /// </para>
-    /// <para>
-    /// This is the <b>per-repository</b> root, which a claimant reaches only
-    /// while holding a format-v1 recovery kit. The provisioned default is an
-    /// installation kit, which names no repository; that claimant derives
-    /// <c>"fbp/claim/v2"</c> from the installation root instead
-    /// (<see cref="WriteOnlyDerivation.FromRoot"/>). The destination neither
-    /// knows nor cares which produced the public key it recorded.
-    /// </para>
-    /// </remarks>
-    /// <exception cref="InvalidOperationException">
-    /// The hierarchy is write-only, and deliberately so: a service that could
-    /// author a claim could re-point a replica's attribution to a machine of
-    /// its choosing. The claimant derives the key from the passphrase and the
-    /// kit, which is where the decision belongs.
-    /// </exception>
-    public byte[] DeriveClaimKeySeed() =>
-        _credential is null
-            ? Expand("fbp/claim/v1"u8, generation: null)
-            : throw new InvalidOperationException(Strings.KeyHierarchy_WriteOnlyHoldsNoClaimKey);
-
-    /// <summary>
-    /// The Ed25519 <b>public</b> half of the claim key, from wherever this
-    /// hierarchy can reach it — derived for a v1 repository, read off the
-    /// write credential for a v2 one (ADR-0053 §1).
-    /// </summary>
-    /// <remarks>
-    /// Uniform across both shapes, exactly as
-    /// <see cref="ReclaimPublicKey"/> is and for the same reason: publishing
-    /// the key to a keyless destination is the same act either way. Empty
-    /// only for a v2 credential written before the claim decision, whose
-    /// replica is the case ADR-0053 §3 leaves to the destination's operator.
-    /// </remarks>
-    public byte[] ClaimPublicKey()
-    {
-        if (_credential is { } credential)
-        {
-            return credential.ClaimPublicKey.ToArray();
-        }
-
-        var seed = Expand("fbp/claim/v1"u8, generation: null);
-        try
-        {
-            using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
-            return signer.PublicKey.ToArray();
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(seed);
-        }
-    }
-
-    /// <summary>
-    /// The Ed25519 <b>public</b> half of the reclaim key, from wherever this
-    /// hierarchy can reach it — derived for a v1 repository, read off the
-    /// write credential for a v2 one
-    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
-    /// </summary>
-    /// <remarks>
-    /// Uniform across both shapes on purpose: publishing the key to a keyless
-    /// destination is the same act either way, and a caller that had to ask
-    /// which kind of repository it held would be a caller that could get it
-    /// wrong. Empty only for a v2 credential written before the reclaim
-    /// decision, which publishes nothing until it is re-provisioned.
-    /// </remarks>
-    /// <param name="generation">The key generation in force.</param>
+    /// <param name="generation">The key generation in force; the credential's copy does not turn over with it.</param>
     public byte[] ReclaimPublicKey(KeyGeneration generation)
     {
-        if (_credential is { } credential)
-        {
-            return credential.ReclaimPublicKey.ToArray();
-        }
-
-        var seed = Expand("fbp/reclaim/v1"u8, generation.Value);
-        try
-        {
-            using var signer = RepositorySigner.FromSeed(seed, generation);
-            return signer.PublicKey.ToArray();
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(seed);
-        }
+        _ = generation;
+        return _credential.ReclaimPublicKey.ToArray();
     }
 
     /// <summary>Zeroes the held key material.</summary>
-    public void Dispose()
-    {
-        if (_masterKey is not null)
-        {
-            CryptographicOperations.ZeroMemory(_masterKey);
-        }
-
-        _credential?.Dispose();
-    }
-
-    private byte[] Expand(ReadOnlySpan<byte> label, uint? generation)
-    {
-        Span<byte> info = stackalloc byte[label.Length + (generation.HasValue ? 4 : 0)];
-        label.CopyTo(info);
-
-        if (generation.HasValue)
-        {
-            BinaryPrimitives.WriteUInt32BigEndian(info[label.Length..], generation.Value);
-        }
-
-        var derived = new byte[DerivedKeyLength];
-        HKDF.Expand(HashAlgorithmName.SHA256, _masterKey!, derived, info);
-
-        return derived;
-    }
+    public void Dispose() => _credential.Dispose();
 }

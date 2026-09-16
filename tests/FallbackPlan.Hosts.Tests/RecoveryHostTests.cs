@@ -380,7 +380,7 @@ public sealed class RecoveryHostTests : IDisposable
             _harness.WriteSourceFile("docs/big.bin", new string('r', 300_000));
             WriteDirectShipConfiguration(vault);
 
-            await using (var runtime = await StartAsync(passphrase))
+            await using (var runtime = await StartAsync())
             {
                 var set = runtime.Configuration.BackupSets.Single();
                 var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
@@ -459,9 +459,8 @@ public sealed class RecoveryHostTests : IDisposable
             ],
         }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
 
-    private async Task<ServiceRuntime> StartAsync(string passphraseText)
+    private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(passphraseText);
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
@@ -472,7 +471,6 @@ public sealed class RecoveryHostTests : IDisposable
                 // describes.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
             TestContext.CancellationTokenSource.Token);
     }
 

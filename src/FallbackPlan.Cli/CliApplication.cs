@@ -432,21 +432,18 @@ public static class CliApplication
                 Description = "Informational creator string recorded in the descriptor.",
                 DefaultValueFactory = _ => "fallbackplan-cli/0.1",
             };
-            var writeOnlyOption = new Option<bool>("--write-only")
-            {
-                Description = "Create a write-only (format 2) repository (ADR-0042): every key derives from the "
-                    + "passphrase, nothing is stored, content seals to a public key. Requires --acknowledge-loss.",
-            };
             var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
             {
-                Description = "Acknowledge that a write-only repository's passphrase can never change and that "
-                    + "losing it loses the backup irrecoverably.",
+                Description = "Acknowledge that a repository's passphrase can never change and that losing it "
+                    + "loses the backup irrecoverably (ADR-0042).",
             };
-            var command = new Command("init", "Create a new repository at --repo (keys first, descriptor last).");
+            var command = new Command(
+                "init",
+                "Create a new repository at --repo: every key derives from the passphrase, nothing is stored, "
+                + "content seals to a public key (ADR-0042). Requires --acknowledge-loss.");
             command.Options.Add(repoOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(createdByOption);
-            command.Options.Add(writeOnlyOption);
             command.Options.Add(acknowledgeLossOption);
             root.Subcommands.Add(command);
 
@@ -456,40 +453,30 @@ public static class CliApplication
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
                 var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
 
-                if (parse.GetValue(writeOnlyOption))
+                // The loss acknowledgement is the ceremony, not a speed bump
+                // (ADR-0042 §11, architecture 03 §1 rule 6): there is no
+                // recovery path to offer later, so consent is collected
+                // before the descriptor exists. `init` is the one creation
+                // path with no wizard in front of it, which is why it asks.
+                if (!parse.GetValue(acknowledgeLossOption))
                 {
-                    // The loss acknowledgement is the ceremony, not a speed
-                    // bump (ADR-0042 §11, architecture 03 §1 rule 6): there
-                    // is no recovery path to offer later, so consent is
-                    // collected before the descriptor exists.
-                    if (!parse.GetValue(acknowledgeLossOption))
-                    {
-                        throw new CliFailureException(
-                            "A write-only repository's passphrase can never change, and if it is lost the backup "
-                            + "is unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
-                            + "to accept this (ADR-0042).");
-                    }
-
-                    var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
-                        store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        cancellationToken).ConfigureAwait(false);
-                    using (created)
-                    using (authority)
-                    {
-                        output.WriteLine($"created write-only repository {Base32.Encode(created.RepositoryId.ToArray())}");
-                        output.WriteLine(
-                            "the passphrase is the only key: it can never change, and losing it loses the backup.");
-                    }
-
-                    output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
-                    return 0;
+                    throw new CliFailureException(
+                        "A repository's passphrase can never change, and if it is lost the backup is "
+                        + "unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
+                        + "to accept this (ADR-0042).");
                 }
 
-                using var repository = await RepositoryLifecycle.CreateAsync(
-                    store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
-                    .ConfigureAwait(false);
+                var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+                    store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    cancellationToken).ConfigureAwait(false);
+                using (created)
+                using (authority)
+                {
+                    output.WriteLine($"created repository {Base32.Encode(created.RepositoryId.ToArray())}");
+                    output.WriteLine(
+                        "the passphrase is the only key: it can never change, and losing it loses the backup.");
+                }
 
-                output.WriteLine($"created repository {Base32.Encode(repository.RepositoryId.ToArray())}");
                 output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
                 return 0;
             }));
@@ -520,13 +507,6 @@ public static class CliApplication
                         CdcParameters = CdcParameters.Default,
                     }
                     : CapturePolicy.Default;
-
-                // A write-only repository takes the device trust domain
-                // (ADR-0042): verify-on-reuse reads content, which it cannot.
-                if (session.Repository.Keys.WriteOnly)
-                {
-                    policy = policy with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device };
-                }
 
                 var orchestrator = new PublicationOrchestrator(
                     policy,

@@ -168,6 +168,6 @@ public sealed class LocalPlacementTests : IDisposable
             StateDirectory = _harness.StateDirectory,
         };
 
-        return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, passphrase: null, Timeout);
+        return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, Timeout);
     }
 }

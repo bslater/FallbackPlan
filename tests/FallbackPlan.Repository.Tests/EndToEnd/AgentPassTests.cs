@@ -37,13 +37,19 @@ public sealed class AgentPassTests : IDisposable
         File.WriteAllBytes(Path.Combine(SourceRoot, "sub", "b.bin"), [.. Enumerable.Range(0, 5000).Select(i => (byte)i)]);
     }
 
+    // The installation is set up and the "docs" archive created the way the
+    // service creates one on a set's first backup: from the installation
+    // credential, under the installation's salt (ADR-0044).
     private async Task CreateRepositoryAsync()
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var _ = await RepositoryLifecycle.CreateAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase,
-            Domain.Configuration.RepositoryCreationSettings.Default,
-            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+        Assert.IsNotNull(provisioning);
+        (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            new LocalFileSystemObjectStore(RepoPath), provisioning.Credential,
+            provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
+            createdBy: "fallbackplan-tests/1.0",
+            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None)).Dispose();
     }
 
     private DestinationConfiguration Vault => new()
@@ -73,10 +79,23 @@ public sealed class AgentPassTests : IDisposable
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
 
+    private static string Outcomes(AgentPassResult result) =>
+        string.Join("; ", result.Sets.Select(set => $"{set.Outcome}: {set.Detail}"));
+
     private async Task<AgentPassResult> RunPassAsync(DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        return await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        // A pass creates any missing archive from the installation credential
+        // (ADR-0044), so the installation is set up before the first pass
+        // whether or not a test created an archive by hand.
+        using (var provisioned = new InstallationCredentialStore(StateDirectory).TryLoad())
+        {
+            if (provisioned is null)
+            {
+                WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+            }
+        }
+
+        return await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
     }
 
     [TestMethod]
@@ -156,9 +175,9 @@ public sealed class AgentPassTests : IDisposable
         }
 
         // And the catalogue really holds both snapshots.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         using var catalogue = CatalogueDb.Open(
             Path.Combine(StateDirectory, $"catalogue-{repository.RepositoryId}.db"), repository.RepositoryId);
         Assert.AreEqual(2, catalogue.EnumerateSnapshots().Count);
@@ -205,23 +224,22 @@ public sealed class AgentPassTests : IDisposable
         }.Save(Path.Combine(StateDirectory, "config.json"));
 
         var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
-        Assert.AreEqual(2, result.Ran);
+        Assert.AreEqual(2, result.Ran, Outcomes(result));
 
         // Two archives on disk, each a complete repository with its own
         // identity — and therefore its own writer sequence and catalogue,
         // named by that identity.
-        using var passphrase = Passphrase.Create(PassphraseText);
         var identities = new List<string>();
         foreach (var setId in new[] { new string('a', 32), new string('f', 32) })
         {
-            using var repository = await RepositoryLifecycle.OpenAsync(
-                new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, setId)), passphrase, CancellationToken.None);
-            var identity = repository.RepositoryId.ToString();
+            using var opened = await WriteOnlyInstallation.OpenAsync(
+                new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, setId)), PassphraseText, CancellationToken.None);
+            var identity = opened.Repository.RepositoryId.ToString();
             identities.Add(identity);
 
             Assert.IsTrue(File.Exists(Path.Combine(StateDirectory, $"sequence-{identity}.txt")));
             using var catalogue = CatalogueDb.Open(
-                Path.Combine(StateDirectory, $"catalogue-{identity}.db"), repository.RepositoryId);
+                Path.Combine(StateDirectory, $"catalogue-{identity}.db"), opened.Repository.RepositoryId);
             var snapshot = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
             Assert.IsTrue(snapshot.BackupSetId.Span.SequenceEqual(Convert.FromHexString(setId)));
         }
@@ -249,7 +267,7 @@ public sealed class AgentPassTests : IDisposable
         WriteConfiguration("every 4h");
 
         var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
-        Assert.AreEqual(1, result.Ran);
+        Assert.AreEqual(1, result.Ran, Outcomes(result));
 
         // The pair is in sync and says so durably (FR-DEST-004).
         var record = DestinationSyncStore.Open(StateDirectory).Find(new string('a', 32), "vault");
@@ -259,9 +277,9 @@ public sealed class AgentPassTests : IDisposable
         // Byte-for-byte the same archive: every object key the staging
         // archive holds, the destination holds (FR-DEST-002). The replica
         // lands under the archive's repository id, like a peer's would.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var replicaRoot = Path.Combine(Vault.Path!, repository.RepositoryId.ToString());
 
         var stagingKeys = await KeysOfAsync(RepoPath);
@@ -271,9 +289,9 @@ public sealed class AgentPassTests : IDisposable
 
         // And it is a repository in its own right: it opens with nothing but
         // the path and the passphrase.
-        using var replica = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(replicaRoot), passphrase, CancellationToken.None);
-        Assert.AreEqual(repository.RepositoryId, replica.RepositoryId);
+        using var replica = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(replicaRoot), PassphraseText, CancellationToken.None);
+        Assert.AreEqual(repository.RepositoryId, replica.Repository.RepositoryId);
     }
 
     [TestMethod]
@@ -334,16 +352,16 @@ public sealed class AgentPassTests : IDisposable
         }.Save(Path.Combine(StateDirectory, "config.json"));
 
         var result = await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
-        Assert.AreEqual(1, result.Ran);
+        Assert.AreEqual(1, result.Ran, Outcomes(result));
 
         var ledger = DestinationSyncStore.Open(StateDirectory);
         Assert.AreEqual(DestinationSyncState.InSync, ledger.Find(new string('a', 32), "vault")!.State);
         Assert.AreEqual(DestinationSyncState.InSync, ledger.Find(new string('a', 32), "vault-2")!.State);
 
         var stagingKeys = await KeysOfAsync(RepoPath);
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         foreach (var root in new[] { Vault.Path!, second })
         {
             var keys = await KeysOfAsync(Path.Combine(root, repository.RepositoryId.ToString()));
@@ -410,7 +428,7 @@ public sealed class AgentPassTests : IDisposable
             [.. Enumerable.Range(0, 24 * 1024 * 1024).Select(i => (byte)(i * 31))]);
 
         var result = await RunPassAsync(DateTimeOffset.UtcNow);
-        Assert.AreEqual(1, result.Ran);
+        Assert.AreEqual(1, result.Ran, Outcomes(result));
         Assert.IsTrue(result.Drills.IsCompleted, "the pass returned with a drill still running");
 
         // The observable that found this: the owner of the state directory

@@ -62,9 +62,11 @@ public sealed class RestoreGateTests
         {
             using (var right = Passphrase.Create("the right passphrase!!"))
             {
-                (await RepositoryLifecycle.CreateAsync(
+                var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
                     new LocalFileSystemObjectStore(archive), right, RepositoryCreationSettings.Default,
-                    1_722_700_000_000UL, CancellationToken.None)).Dispose();
+                    1_722_700_000_000UL, CancellationToken.None);
+                created.Dispose();
+                authority.Dispose();
             }
 
             await using var harness = await ConsoleHarness.StartAsync();
@@ -123,9 +125,11 @@ public sealed class RestoreGateTests
         {
             using (var right = Passphrase.Create("the right passphrase!!"))
             {
-                (await RepositoryLifecycle.CreateAsync(
+                var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
                     new LocalFileSystemObjectStore(metadata), right, RepositoryCreationSettings.Default,
-                    1_722_700_000_000UL, CancellationToken.None)).Dispose();
+                    1_722_700_000_000UL, CancellationToken.None);
+                created.Dispose();
+                authority.Dispose();
             }
 
             await using var harness = await ConsoleHarness.StartAsync();

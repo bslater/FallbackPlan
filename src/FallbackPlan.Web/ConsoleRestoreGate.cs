@@ -112,40 +112,25 @@ public static class ConsoleRestoreGate
                 var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
                     .ConfigureAwait(false);
 
-                if (RepositoryLifecycle.IsWriteOnly(descriptor))
+                // The verifier is equality, not decryption: derive and
+                // compare the sealing public key (ADR-0042 §1). The same
+                // derivation's scalar is the restore grant, so a verified
+                // answer carries it sealed rather than making the wizard pay
+                // the Argon2 cost twice.
+                if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var authority))
                 {
-                    // The v2 verifier is equality, not decryption: derive and
-                    // compare the sealing public key (ADR-0042 §1). The same
-                    // derivation's scalar is the restore grant, so a verified
-                    // answer carries it sealed rather than making the wizard
-                    // pay the Argon2 cost twice.
-                    if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var authority))
-                    {
-                        return new GateAnswer(GateOutcome.Wrong);
-                    }
-
-                    using (authority)
-                    {
-                        return new GateAnswer(
-                            GateOutcome.Verified,
-                            GrantEnvelope: recipient is not null
-                                ? Convert.ToHexStringLower(
-                                    WriteOnlyProvisioning.SealGrant(recipient, authority!.SealingPrivateKey))
-                                : null);
-                    }
+                    return new GateAnswer(GateOutcome.Wrong);
                 }
 
-                // The genuine v1 check: derive the key-encryption key with the
-                // archive's own KDF parameters and unwrap a key object. There
-                // is no cheaper honest answer, and the cost is the point —
-                // this is the same wall a stolen archive presents.
-                _ = await RepositoryLifecycle.ExportVerifiedKeyObjectAsync(
-                    store, passphrase, cancellationToken).ConfigureAwait(false);
-                return new GateAnswer(GateOutcome.Verified);
-            }
-            catch (KeyUnwrapFailedException)
-            {
-                return new GateAnswer(GateOutcome.Wrong);
+                using (authority)
+                {
+                    return new GateAnswer(
+                        GateOutcome.Verified,
+                        GrantEnvelope: recipient is not null
+                            ? Convert.ToHexStringLower(
+                                WriteOnlyProvisioning.SealGrant(recipient, authority!.SealingPrivateKey))
+                            : null);
+                }
             }
             catch (Exception damaged) when (damaged is RepositoryOpenException or IOException or FormatException)
             {
@@ -220,14 +205,6 @@ public static class ConsoleRestoreGate
             {
                 var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
                     new LocalFileSystemObjectStore(archivePath), cancellationToken).ConfigureAwait(false);
-                if (!RepositoryLifecycle.IsWriteOnly(descriptor))
-                {
-                    return new ProvisionAnswer(
-                        GateOutcome.Unavailable,
-                        "This set's existing repository is format 1 — an existing repository cannot "
-                        + "become write-only (ADR-0042).");
-                }
-
                 if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var derived))
                 {
                     return new ProvisionAnswer(
@@ -540,11 +517,6 @@ public static class ConsoleRestoreGate
                     new Storage.Local.LocalFileSystemObjectStore(path), cancellationToken).ConfigureAwait(false);
             }
             catch (Repository.RepositoryOpenException)
-            {
-                continue;
-            }
-
-            if (!Repository.RepositoryLifecycle.IsWriteOnly(descriptor))
             {
                 continue;
             }

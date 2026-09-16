@@ -383,7 +383,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
         using var passphrase = Passphrase.Create(PassphraseText);
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = ArchivesRoot, StateDirectory = StateDirectory },
-            passphrase, CancellationToken.None);
+            CancellationToken.None);
 
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
@@ -427,7 +427,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 

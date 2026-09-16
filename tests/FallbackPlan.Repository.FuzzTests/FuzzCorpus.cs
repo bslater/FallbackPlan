@@ -171,14 +171,13 @@ internal static class FuzzCorpus
             new("standalone-record", BuildStandaloneRecord(),
                 bytes => StandaloneRecordFraming.Parse(bytes)),
 
-            new("key-bundle", BuildKeyBundle(), bytes => Format.Keys.KeyBundleCodec.Decode(bytes).Dispose()),
-
-            // The write-only (format v2) parsers (ADR-0042): the 168-byte
-            // sealed envelope, the sidecar that carries a content key, and
-            // both recovery-kit body shapes.
+            // The sealed-content parsers (ADR-0042): the 168-byte sealed
+            // envelope and both recovery-kit body shapes. The format-1 kit
+            // shape still parses at the wire level — the opener refuses it
+            // by name — so its parser is fuzzed like any other.
             new("sealed-blob-envelope", BuildSealedEnvelope(), bytes => BlobEnvelope.Parse(bytes)),
-            new("recovery-kit-v1", BuildRecoveryKit(writeOnly: false), bytes => RecoveryKitCodec.Parse(bytes)),
-            new("recovery-kit-v2", BuildRecoveryKit(writeOnly: true), bytes => RecoveryKitCodec.Parse(bytes)),
+            new("recovery-kit-format-1", BuildRecoveryKit(formatOne: true), bytes => RecoveryKitCodec.Parse(bytes)),
+            new("recovery-kit", BuildRecoveryKit(formatOne: false), bytes => RecoveryKitCodec.Parse(bytes)),
         };
 
         return seeds;
@@ -187,7 +186,7 @@ internal static class FuzzCorpus
     private static byte[] BuildSealedEnvelope()
     {
         var envelope = new BlobEnvelope(
-            FormatLimits.SealedFormatVersion,
+            FormatLimits.FormatVersion,
             BlobClass.Data,
             new KeyGeneration(0),
             Blob16(0x2C),
@@ -200,13 +199,13 @@ internal static class FuzzCorpus
         return bytes;
     }
 
-    private static byte[] BuildRecoveryKit(bool writeOnly) => RecoveryKitCodec.Serialize(new RecoveryKit
+    private static byte[] BuildRecoveryKit(bool formatOne) => RecoveryKitCodec.Serialize(new RecoveryKit
     {
         KitFormatVersion = 1,
         MinimumToolVersion = "0.1.0",
         RepositoryId = Repo,
-        RepositoryFormatVersion = writeOnly ? FormatLimits.SealedFormatVersion : FormatLimits.FormatVersion,
-        KeyObject = writeOnly ? ReadOnlyMemory<byte>.Empty : "FBPKKEYS-fuzz-corpus-wrapped-key"u8.ToArray(),
+        RepositoryFormatVersion = formatOne ? (ushort)1 : FormatLimits.FormatVersion,
+        KeyObject = formatOne ? "FBPKKEYS-fuzz-corpus-wrapped-key"u8.ToArray() : ReadOnlyMemory<byte>.Empty,
         KdfMemoryKiB = 8 * 1024,
         KdfIterations = 1,
         KdfParallelism = 1,
@@ -215,7 +214,7 @@ internal static class FuzzCorpus
         IssuingDeviceId = Fill16(0x55),
         IssuedAt = 1_722_600_000_000,
         Instructions = "fuzz-corpus instructions",
-        SealingPublicKey = writeOnly ? Enumerable.Repeat((byte)0x9C, 32).ToArray() : ReadOnlyMemory<byte>.Empty,
+        SealingPublicKey = formatOne ? ReadOnlyMemory<byte>.Empty : Enumerable.Repeat((byte)0x9C, 32).ToArray(),
     });
 
     /// <summary>
@@ -253,16 +252,6 @@ internal static class FuzzCorpus
         }
     }
 
-    private static byte[] BuildKeyBundle()
-    {
-        using var bundle = new Format.Keys.KeyBundle(
-            [.. Enumerable.Range(0, 32).Select(value => (byte)value)],
-            currentDataGeneration: 0,
-            currentMetadataGeneration: 0,
-            createdAt: 1_722_600_000_000);
-        return Format.Keys.KeyBundleCodec.Encode(bundle);
-    }
-
     private static byte[] BuildCheckpoint()
     {
         var entries = new List<IndexEntry> { Entry(0x11, 1), Entry(0x22, 1) };
@@ -282,7 +271,7 @@ internal static class FuzzCorpus
 
     private static byte[] BuildStandaloneRecord()
     {
-        using var keys = RepositoryKeySet.FromMasterKey([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var keys = RepositoryKeySet.FromWriteCredential(TestSupport.TestAuthority.Shared.Credential);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
         var salt = new byte[32];
         Array.Fill(salt, (byte)0x5A);
@@ -292,22 +281,10 @@ internal static class FuzzCorpus
             ObjectType.IndexDelta, Object32(7), "fuzz-corpus payload"u8, salt);
     }
 
-    /// <summary>A valid serialized repository descriptor — the never-throws target.</summary>
+    /// <summary>A valid serialized repository descriptor — the never-throws target: key 9 and the required sealed-data-plane feature (ADR-0042).</summary>
     public static byte[] DescriptorSeed { get; } = RepositoryDescriptorCodec.Serialize(new RepositoryDescriptor(
         Repo,
-        FormatVersion: 1,
-        RequiredFeatures: [],
-        OptionalFeatures: [7],
-        new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },
-        KdfSalt: Fill16(0x0F),
-        CreatedAt: 1_722_600_000_000,
-        CreatedBy: "fallbackplan-fuzz/1.0",
-        UnstableFormat: true));
-
-    /// <summary>The v2 descriptor — key 9 and the required sealed-data-plane feature (ADR-0042).</summary>
-    public static byte[] DescriptorV2Seed { get; } = RepositoryDescriptorCodec.Serialize(new RepositoryDescriptor(
-        Repo,
-        FormatLimits.SealedFormatVersion,
+        FormatLimits.FormatVersion,
         RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
         OptionalFeatures: [],
         new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },

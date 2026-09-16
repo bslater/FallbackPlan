@@ -182,7 +182,6 @@ public sealed class DirectShipConvergeSpareTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             Timeout);
     }
 

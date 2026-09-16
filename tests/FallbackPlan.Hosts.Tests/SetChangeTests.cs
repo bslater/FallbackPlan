@@ -241,7 +241,6 @@ public sealed class SetChangeTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

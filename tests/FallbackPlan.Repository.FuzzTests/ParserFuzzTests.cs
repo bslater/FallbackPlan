@@ -1,7 +1,6 @@
 using FallbackPlan.TestSupport;
 using FallbackPlan.Repository.Format.Cbor;
 using FallbackPlan.Repository.Format.Descriptor;
-using FallbackPlan.Repository.Format.Keys;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 
@@ -32,8 +31,6 @@ public sealed class ParserFuzzTests
             blobLength: 1024)),
         ("blob-footer-header", bytes => BlobFooter.ParseHeader(bytes)),
         ("record-table", bytes => BlobFooter.DecodeRecordTable(bytes, declaredRecordCount: 1, blobLength: 1024)),
-        ("key-object", bytes => KeyObjectFraming.Parse(bytes)),
-        ("key-bundle", bytes => KeyBundleCodec.Decode(bytes).Dispose()),
         ("standalone-record", bytes => StandaloneRecordFraming.Parse(bytes)),
         .. FuzzCorpus.Seeds.Select(seed => (seed.Name, seed.Parse)),
     ];
@@ -47,7 +44,7 @@ public sealed class ParserFuzzTests
         catch (FormatException)
         {
             // CborFormatException, ManifestValidationException,
-            // RecordFormatException, KeyObjectFormatException,
+            // RecordFormatException,
             // BlobFormatException, IndexFormatException — the typed refusals
             // the callers are written to catch. Anything else escapes and
             // fails the test with the parser's name in the stack.
@@ -132,16 +129,15 @@ public sealed class ParserFuzzTests
         PropertyCheck.Holds(this, maxTest: 200);
 
     public static void RepositoryDescriptorParser_GivenAnyInput_ReturnsAResultAndNeverThrowsProperty(
-        byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations, bool useV2Seed)
+        byte[]? data, bool stampMagic, (int Offset, byte Mask)[]? mutations)
     {
-        // 01 §3.1: "not a repository", "damaged", and "unsupported" are
-        // RESULTS, not exceptions — for every input, including a mutated
-        // once-valid descriptor of EITHER format: key 9 and the required
-        // feature set widen the surface, never the contract (ADR-0042).
+        // 01 §3.1: "not a repository", "damaged", "unsupported" and "a
+        // withdrawn format" are RESULTS, not exceptions — for every input,
+        // including a mutated once-valid descriptor.
         byte[] candidate;
         if (stampMagic)
         {
-            candidate = (byte[])(useV2Seed ? FuzzCorpus.DescriptorV2Seed : FuzzCorpus.DescriptorSeed).Clone();
+            candidate = (byte[])FuzzCorpus.DescriptorSeed.Clone();
             foreach (var (offset, mask) in mutations ?? [])
             {
                 candidate[(int)((uint)offset % candidate.Length)] ^= (byte)(mask | 1);

@@ -108,11 +108,6 @@ public sealed class ValueSemanticsTests
             BlobId.FromBytes(Pattern(BlobId.Size, 2)));
 
         AssertValueSemantics(
-            KeyId.FromBytes(Pattern(KeyId.Size, 1)),
-            KeyId.FromBytes(Pattern(KeyId.Size, 1)),
-            KeyId.FromBytes(Pattern(KeyId.Size, 2)));
-
-        AssertValueSemantics(
             RepositoryId.FromBytes(Pattern(RepositoryId.Size, 1)),
             RepositoryId.FromBytes(Pattern(RepositoryId.Size, 1)),
             RepositoryId.FromBytes(Pattern(RepositoryId.Size, 2)));

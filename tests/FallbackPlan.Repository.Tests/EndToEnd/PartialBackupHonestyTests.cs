@@ -56,13 +56,19 @@ public sealed class PartialBackupHonestyTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "readable.txt"), "this one is fine");
     }
 
+    // The installation is set up and the "docs" archive created the way the
+    // service creates one on a set's first backup: from the installation
+    // credential, under the installation's salt (ADR-0044).
     private async Task CreateRepositoryAsync()
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var _ = await RepositoryLifecycle.CreateAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase,
-            Domain.Configuration.RepositoryCreationSettings.Default,
-            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+        Assert.IsNotNull(provisioning);
+        (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            new LocalFileSystemObjectStore(RepoPath), provisioning.Credential,
+            provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
+            createdBy: "fallbackplan-tests/1.0",
+            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None)).Dispose();
     }
 
     private void WriteConfiguration() => new ClientConfiguration
@@ -93,8 +99,18 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
     private async Task<AgentPassResult> RunPassAsync(DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        return await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        // A pass creates any missing archive from the installation credential
+        // (ADR-0044), so the installation is set up before the first pass
+        // whether or not a test created an archive by hand.
+        using (var provisioned = new InstallationCredentialStore(StateDirectory).TryLoad())
+        {
+            if (provisioned is null)
+            {
+                WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+            }
+        }
+
+        return await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
     }
 
     /// <summary>Makes one file genuinely unreadable, by removing every mode bit.</summary>
@@ -282,9 +298,9 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
         await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         using var catalogue = Repository.Catalogue.Catalogue.Open(
             Path.Combine(StateDirectory, $"catalogue-{repository.RepositoryId}.db"), repository.RepositoryId);
 

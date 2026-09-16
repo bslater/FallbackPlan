@@ -35,9 +35,11 @@ public sealed class RecoveryContainmentTests : IDisposable
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "repo"));
 
         using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.CreateAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
             store, passphrase, Domain.Configuration.RepositoryCreationSettings.Default,
             createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        using var _repository = repository;
+        using var _authority = authority;
 
         // The fake source will happily scan a tree whose first component is
         // '..' — the shape a tampered repository would publish on purpose.

@@ -6,8 +6,7 @@ namespace FallbackPlan.Repository.Crypto;
 /// <summary>
 /// Seals and opens record payloads under a per-blob key with AES-256-GCM
 /// (specification 04 §5–§6; FR-ARCH-009, NFR-SEC-003). The format layer
-/// assembles the nonce and AAD bytes; this type only encrypts, mirroring the
-/// <see cref="KeyWrapping"/> seam.
+/// assembles the nonce and AAD bytes; this type only encrypts.
 /// </summary>
 /// <remarks>
 /// A failed tag is an expected outcome the blob reader must survive per

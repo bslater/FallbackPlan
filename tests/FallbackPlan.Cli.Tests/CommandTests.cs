@@ -15,13 +15,13 @@ public sealed class CommandTests : IDisposable
     [TestMethod]
     public async Task Init_ANewDirectory_CreatesARepositoryThatOpensAgain()
     {
-        var init = await _cli.RunWithoutStateAsync("init");
+        var init = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
 
         Assert.AreEqual(0, init.ExitCode);
         Assert.IsTrue(Directory.Exists(_cli.RepositoryPath));
 
-        // A second init must refuse rather than overwrite keys.
-        var again = await _cli.RunWithoutStateAsync("init");
+        // A second init must refuse rather than overwrite the descriptor.
+        var again = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.AreNotEqual(0, again.ExitCode);
     }
 

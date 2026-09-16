@@ -187,7 +187,6 @@ public sealed class PeerRetrievalTests : IDisposable
                 ArchivesRoot = site.ArchivesRoot,
                 StateDirectory = site.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

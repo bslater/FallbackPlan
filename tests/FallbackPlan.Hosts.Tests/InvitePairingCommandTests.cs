@@ -157,7 +157,6 @@ public sealed class InvitePairingCommandTests : IDisposable
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
     }
 }

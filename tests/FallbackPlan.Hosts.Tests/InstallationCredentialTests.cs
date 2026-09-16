@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
@@ -155,9 +156,7 @@ public sealed class InstallationCredentialTests : IDisposable
         Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
 
         var descriptor = await ReadDescriptorAsync();
-        Assert.IsTrue(
-            RepositoryLifecycle.IsWriteOnly(descriptor),
-            $"the archive is format {descriptor.FormatVersion}, not write-only");
+        Assert.AreEqual(FormatLimits.FormatVersion, descriptor.FormatVersion);
     }
 
     [TestMethod]
@@ -221,30 +220,6 @@ public sealed class InstallationCredentialTests : IDisposable
 
         Assert.Contains("different passphrase", failure.Message, StringComparison.Ordinal);
         Assert.Contains("adopt", failure.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [TestMethod]
-    public async Task Runtime_AFormatOneArchiveThatPredatesSetup_KeepsOpeningWithThePassphrase()
-    {
-        // Write-only is chosen at creation (ADR-0042). Setting up an
-        // installation must not quietly change what an existing set is.
-        _harness.WriteSourceFile("notes.txt", "made before setup");
-        _harness.WriteConfiguration("every 1h");
-        await _harness.CreateFormatOneRepositoryAsync();
-
-        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
-        await using var runtime = await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
-            passphrase, _timeout.Token);
-        Save(Store());
-
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
-
-        var descriptor = await ReadDescriptorAsync();
-        Assert.IsFalse(
-            RepositoryLifecycle.IsWriteOnly(descriptor),
-            "the pre-existing format 1 archive must not have been migrated");
     }
 
     [TestMethod]
@@ -496,6 +471,5 @@ public sealed class InstallationCredentialTests : IDisposable
                 // told apart by name, the compliant shape ADR-0051 describes.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase: null,
             _timeout.Token);
 }

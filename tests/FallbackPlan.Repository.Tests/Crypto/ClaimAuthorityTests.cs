@@ -16,10 +16,9 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// ADR-0053 §1 derived it from the repository master key. Building the drill
 /// showed that unreachable: a machine claiming a replica has lost the
 /// repository, and what it holds is an <em>installation</em> kit, which names
-/// no repository and carries no key object. So the default derivation is the
-/// installation's — the passphrase and the installation's KDF salt, which is
-/// exactly what such a kit plus its owner supply. A per-repository kit still
-/// reaches one off the master key, on its own label.
+/// no repository. So the derivation is the installation's — the passphrase
+/// and the installation's KDF salt, which is exactly what such a kit plus
+/// its owner supply.
 /// </para>
 /// <para>
 /// This is not a weakening. One passphrase already stamps every archive an
@@ -78,23 +77,6 @@ public sealed class ClaimAuthorityTests
     }
 
     [TestMethod]
-    public void Claim_TheTwoRoots_AreSeparateDomainsOfTheSameBytes()
-    {
-        // The v1 label answers off a repository master key and the v2 label
-        // off an installation root. Feeding the SAME 32 bytes to both is the
-        // test that the labels, not the roots, are what separate them — if
-        // they ever agreed, a master key leaked from one repository would
-        // yield an installation's claim authority.
-        var bytes = RandomNumberGenerator.GetBytes(KeyHierarchy.MasterKeyLength);
-        using var repository = new KeyHierarchy(bytes);
-        using var installation = WriteOnlyDerivation.FromRoot(bytes);
-
-        Assert.IsFalse(
-            repository.DeriveClaimKeySeed().AsSpan().SequenceEqual(installation.ClaimKeySeed),
-            "fbp/claim/v1 and fbp/claim/v2 must not meet");
-    }
-
-    [TestMethod]
     public void Claim_IsNoOtherKeyUnderAnotherName()
     {
         using var authority = Derive("one long passphrase to rule them", Salt(0x54));
@@ -139,14 +121,14 @@ public sealed class ClaimAuthorityTests
         // It could not be generational anyway: an installation root knows
         // nothing of any one repository's generations, and the claimant has
         // no repository to ask.
-        var master = RandomNumberGenerator.GetBytes(KeyHierarchy.MasterKeyLength);
-        using var hierarchy = new KeyHierarchy(master);
+        using var authority = Derive("one long passphrase to rule them", Salt(0x57));
+        using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
+        using var reclaim = new ReclaimAuthority(authority.ReclaimKeySeed);
 
         SequenceAssert.AreEqual(hierarchy.ClaimPublicKey(), hierarchy.ClaimPublicKey());
         Assert.IsFalse(
-            hierarchy.ReclaimPublicKey(KeyGeneration.Zero).AsSpan()
-                .SequenceEqual(hierarchy.ReclaimPublicKey(new KeyGeneration(1))),
-            "the contrast is the point: the reclaim key does turn over, and can, because nothing pins it");
+            reclaim.SeedFor(KeyGeneration.Zero).AsSpan().SequenceEqual(reclaim.SeedFor(new KeyGeneration(1))),
+            "the contrast is the point: the reclaim seed does turn over, and can, because a grant names its generation");
     }
 
     [TestMethod]
@@ -177,34 +159,21 @@ public sealed class ClaimAuthorityTests
         }
 
         using var hierarchy = KeyHierarchy.ForWriteOnly(authority.Credential);
-        Assert.ThrowsExactly<InvalidOperationException>(() => hierarchy.DeriveClaimKeySeed());
+        Assert.IsNull(typeof(KeyHierarchy).GetMethod("DeriveClaimKeySeed"), "no hierarchy derives the claim seed");
         SequenceAssert.AreEqual(authority.Credential.ClaimPublicKey.ToArray(), hierarchy.ClaimPublicKey());
     }
 
     [TestMethod]
-    public void Claim_TheSeedAndThePublicHalf_AgreeAcrossBothRoots()
+    public void Claim_TheSeedAndThePublicHalf_Agree()
     {
-        // Whichever root a claimant reaches, the public key a destination
-        // recorded has to be the one the seed signs under — the destination
-        // neither knows nor cares which derivation produced it.
+        // The public key a destination recorded has to be the one the seed
+        // signs under — the destination neither knows nor cares how it was
+        // derived.
         using var installation = Derive("one long passphrase to rule them", Salt(0x56));
         using var installationSigner = RepositorySigner.FromSeed(
             installation.ClaimKeySeed.ToArray(), KeyGeneration.Zero);
         SequenceAssert.AreEqual(
             installation.Credential.ClaimPublicKey.ToArray(), installationSigner.PublicKey.ToArray());
-
-        var master = RandomNumberGenerator.GetBytes(KeyHierarchy.MasterKeyLength);
-        using var repository = new KeyHierarchy(master);
-        var seed = repository.DeriveClaimKeySeed();
-        try
-        {
-            using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
-            SequenceAssert.AreEqual(repository.ClaimPublicKey(), signer.PublicKey.ToArray());
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(seed);
-        }
     }
 
     [TestMethod]

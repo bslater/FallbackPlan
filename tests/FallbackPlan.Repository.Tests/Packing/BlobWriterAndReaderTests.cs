@@ -301,7 +301,7 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         var salt = new byte[BlobKeyDeriver.BlobSaltLength];
         var writer = new BlobWriter(
             new BlobEnvelope(
-                FormatLimits.FormatVersion, BlobClass.Data, KeyGeneration.Zero,
+                FormatLimits.SymmetricFormatVersion, BlobClass.Data, KeyGeneration.Zero,
                 BlobId.FromWriterCounter(Writer, 42), salt, 42, Writer),
             BlobWriteProfile.LocalDefault,
             EncryptionProfile.Aes256GcmV1,

@@ -52,8 +52,8 @@ public sealed class CopierListingCostTests
     [TestMethod]
     public async Task Copy_OverTheDependencyPhases_WalksEachObjectOnceRatherThanOncePerPhase()
     {
-        // Eight phases and one archive: listing everything per phase means the
-        // source is enumerated eight times to copy it once, so the cost of a
+        // Seven phases and one archive: listing everything per phase means the
+        // source is enumerated seven times to copy it once, so the cost of a
         // pass scales with the archive multiplied by the number of dependency
         // classes — a constant nobody chose and nobody can see.
         var inner = new LocalFileSystemObjectStore(_sourcePath);
@@ -63,7 +63,7 @@ public sealed class CopierListingCostTests
 
         var outcome = await StoreToStoreCopier.CopyAsync(source, replica, CancellationToken.None);
 
-        Assert.AreEqual(9L, outcome.Copied, "every seeded object must have crossed");
+        Assert.AreEqual(8L, outcome.Copied, "every seeded object must have crossed");
         Assert.IsLessThanOrEqualTo(
             (long)(outcome.Copied * 2),
             source.EntriesYielded,
@@ -140,7 +140,7 @@ public sealed class CopierListingCostTests
             source.Listings.Where(prefix => prefix.Length == 0),
             "an incremental pass must not walk the whole namespace");
         Assert.AreEqual(
-            8L, outcome.Copied,
+            7L, outcome.Copied,
             "everything under a named phase still crosses; only the stray waits for the reconciling pass");
 
         var stray = await replica.GetMetadataAsync(
@@ -155,16 +155,15 @@ public sealed class CopierListingCostTests
     }
 
     /// <summary>
-    /// Nine objects spread over the phases the copier orders by: two blobs,
-    /// the index plane, the journal, a snapshot, the descriptor, the keys, and
-    /// one object under a prefix the phase list has never heard of.
+    /// Eight objects spread over the phases the copier orders by: two blobs,
+    /// the index plane, the journal, a snapshot, the descriptor, and one
+    /// object under a prefix the phase list has never heard of.
     /// </summary>
     private static async Task SeedAsync(LocalFileSystemObjectStore source)
     {
         string[] keys =
         [
             "repository-format",
-            "keys/master",
             "blobs/data/0000/object-a",
             "blobs/meta/0000/object-b",
             "journal/writer-a/00000001",

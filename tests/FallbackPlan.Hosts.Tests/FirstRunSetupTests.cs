@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
@@ -278,7 +279,7 @@ public sealed class FirstRunSetupTests : IDisposable
 
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
             new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
-        Assert.IsTrue(RepositoryLifecycle.IsWriteOnly(descriptor));
+        Assert.AreEqual(FormatLimits.FormatVersion, descriptor.FormatVersion);
 
         using var passphrase = Passphrase.Create(PassphraseText);
         using var authority = WriteOnlyDerivation.Derive(
@@ -707,7 +708,6 @@ public sealed class FirstRunSetupTests : IDisposable
     private async Task<ServiceRuntime> StartWithoutPassphraseAsync() =>
         await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
-            passphrase: null,
             _timeout.Token);
     [TestMethod]
     public async Task SetupVerb_WithoutAFirstAccount_RefusesRatherThanFinishingWithoutAnOwner()

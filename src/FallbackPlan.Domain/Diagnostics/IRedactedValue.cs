@@ -18,9 +18,9 @@ namespace FallbackPlan.Domain.Diagnostics;
 /// everywhere do not implement it: a secret redacts in its own
 /// <see cref="object.ToString"/> at the declaration site, so it is already safe
 /// wherever it appears. <c>Passphrase</c>, <c>Kek</c>,
-/// <c>RepositoryWriteCredential</c>, <c>RepositoryReadAuthority</c>,
-/// <c>KeyBundle</c> and <see cref="Identifiers.ContentId"/> work that way and
-/// are deliberately untouched by this.
+/// <c>RepositoryWriteCredential</c>, <c>RepositoryReadAuthority</c> and
+/// <see cref="Identifiers.ContentId"/> work that way and are deliberately
+/// untouched by this.
 /// </para>
 /// <para>
 /// The boundary a record crosses decides which rendering applies: the

@@ -264,14 +264,13 @@ public sealed class InstallationKitDrillTests : IDisposable
     [TestMethod]
     public async Task RepositoryKit_ThroughOpenAsync_StillWorksUnchanged()
     {
-        // OpenAsync serves both formats so one call site can hold both.
-        var store = new LocalFileSystemObjectStore(Path.Combine(_root, "v1"));
+        // OpenAsync serves both kit shapes so one call site can hold both.
+        var store = new LocalFileSystemObjectStore(Path.Combine(_root, "per-repository"));
         using var passphrase = Passphrase.Create(PassphraseText);
-        using (var repository = await RepositoryLifecycle.CreateAsync(
-            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None))
-        {
-            Assert.IsNotNull(repository);
-        }
+        var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None);
+        repository.Dispose();
+        authority.Dispose();
 
         var kit = await RecoveryKitFactory.BuildAsync(
             store, passphrase, Enumerable.Repeat((byte)0x22, 16).ToArray(),

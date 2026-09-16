@@ -7,9 +7,9 @@ namespace FallbackPlan.Agent;
 /// <param name="ArchivesRoot">The root holding one staging archive per backup set (<c>--archives</c>, ADR-0034).</param>
 /// <param name="StateDirectory">The state directory it holds the writer role for (<c>--state</c>).</param>
 /// <param name="Account">
-/// The account the service runs as, or null for the platform default. The keystore
-/// entry the service self-unlocks from is scoped to this account, so it is the
-/// account the operator must run <c>unlock</c> as (ADR-0028 §9).
+/// The account the service runs as, or null for the platform default. The
+/// write credential <c>setup</c> stores is readable by this account, so it is
+/// the account the operator must run <c>setup</c> as (ADR-0042 §5, ADR-0044).
 /// </param>
 /// <param name="ServiceName">The service's name for systemd and the Windows SCM.</param>
 /// <param name="LaunchdLabel">The reverse-DNS label for the launchd job.</param>

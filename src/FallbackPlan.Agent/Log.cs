@@ -141,9 +141,9 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 3761, Level = LogLevel.Information,
-        Message = "Posture: poll {PollSeconds}s, backup pool {PoolWidth}, remote binding {RemoteBinding}, passphrase {PassphrasePosture}")]
+        Message = "Posture: poll {PollSeconds}s, backup pool {PoolWidth}, remote binding {RemoteBinding}")]
     internal static partial void StartupPosture(
-        ILogger logger, int pollSeconds, int poolWidth, string remoteBinding, string passphrasePosture);
+        ILogger logger, int pollSeconds, int poolWidth, string remoteBinding);
 
     [LoggerMessage(
         EventId = 3762, Level = LogLevel.Information,

@@ -46,7 +46,7 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
 
         // Site B: a live service with its listener, storing for site A.
         await _siteTwo.CreateRepositoryAsync();
-        await using var runtimeTwo = await StartV1Async(_siteTwo);
+        await using var runtimeTwo = await StartWriteOnlyAsync(_siteTwo);
         using var keypairTwo = PeerKeypairStore.Open(_siteTwo.StateDirectory);
         var grantsTwo = PeerGrantStore.Open(_siteTwo.StateDirectory);
         await using var listener = RemoteServiceListener.Start(
@@ -227,20 +227,8 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
         }
     }
 
-    private async Task<ServiceRuntime> StartV1Async(HostHarness site)
-    {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(site.PassphraseVariable)!);
-
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = site.ArchivesRoot, StateDirectory = site.StateDirectory },
-            passphrase,
-            _timeout.Token);
-    }
-
     private async Task<ServiceRuntime> StartWriteOnlyAsync(HostHarness site) =>
         await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = site.ArchivesRoot, StateDirectory = site.StateDirectory },
-            passphrase: null,
             _timeout.Token);
 }

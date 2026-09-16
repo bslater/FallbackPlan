@@ -151,6 +151,7 @@ public sealed class PeerReadBackVerificationTests : IDisposable
 
     private async Task SeedAsync()
     {
+        await _harness.SetupAsync();
         await StartDestinationAsync();
         WriteConfiguration();
         _harness.WriteSourceFile("docs/report.txt", new string('r', 200_000));
@@ -169,8 +170,8 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     {
         var sync = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory
+            );
         Assert.AreEqual(0, sync.ExitCode, sync.Error);
     }
 
@@ -179,7 +180,7 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
     }
 

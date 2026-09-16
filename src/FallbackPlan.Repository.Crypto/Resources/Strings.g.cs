@@ -66,17 +66,6 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, KekDerivation_KDFSaltExactlyBytesGot, arg0, arg1);
 
     /// <summary>
-    /// The master key is exactly {0} bytes.
-    /// </summary>
-    private static string KeyHierarchy_MasterKeyExactlyBytes => Get(nameof(KeyHierarchy_MasterKeyExactlyBytes));
-
-    /// <summary>
-    /// The master key is exactly {0} bytes.
-    /// </summary>
-    internal static string FormatKeyHierarchy_MasterKeyExactlyBytes(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, KeyHierarchy_MasterKeyExactlyBytes, arg0);
-
-    /// <summary>
     /// The device identifier is exactly 16 bytes.
     /// </summary>
     internal static string KeyedFileIdentity_DeviceIdentifierExactlyBytes => Get(nameof(KeyedFileIdentity_DeviceIdentifierExactlyBytes));
@@ -167,29 +156,9 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_RootExactlyBytes, arg0);
 
     /// <summary>
-    /// This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).
-    /// </summary>
-    internal static string KeyHierarchy_NotWriteOnly => Get(nameof(KeyHierarchy_NotWriteOnly));
-
-    /// <summary>
-    /// A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).
-    /// </summary>
-    internal static string KeyHierarchy_WriteOnlyHoldsNoDataKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoDataKey));
-
-    /// <summary>
-    /// A write-only service holds no reclaim key: it may publish but not authorise a deletion, and a collection run takes its reclaim authority from a grant (ADR-0055).
-    /// </summary>
-    internal static string KeyHierarchy_WriteOnlyHoldsNoReclaimKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoReclaimKey));
-
-    /// <summary>
     /// A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.
     /// </summary>
     internal static string RepositoryWriteCredential_ClaimNeedsReclaim => Get(nameof(RepositoryWriteCredential_ClaimNeedsReclaim));
-
-    /// <summary>
-    /// A write-only service holds no claim key: it may publish the public half but not author a claim, which belongs to whoever holds the passphrase and the installation kit (ADR-0053).
-    /// </summary>
-    internal static string KeyHierarchy_WriteOnlyHoldsNoClaimKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoClaimKey));
 
     /// <summary>
     /// A reclaim key seed is exactly {0} bytes.

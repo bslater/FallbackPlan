@@ -170,7 +170,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
 
         var envelope = new BlobEnvelope(
-            FormatLimits.FormatVersion,
+            FormatLimits.SymmetricFormatVersion,
             blobClass,
             keyGeneration,
             BlobId.FromWriterCounter(writerId, blobCounter),
@@ -244,7 +244,7 @@ public sealed class BlobWriter : IAsyncDisposable
         var sealedShare = SealedContentKey.Seal(sealingPublicKey, contentKey, repositoryId, blobId);
 
         var envelope = new BlobEnvelope(
-            FormatLimits.SealedFormatVersion,
+            FormatLimits.FormatVersion,
             BlobClass.Data,
             keyGeneration,
             blobId,
@@ -371,7 +371,7 @@ public sealed class BlobWriter : IAsyncDisposable
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
         SpoolPinnedConfiguration current,
-        ushort expectedFormatVersion = FormatLimits.FormatVersion,
+        ushort expectedFormatVersion = FormatLimits.SymmetricFormatVersion,
         ILogger? logger = null)
     {
         logger ??= NullLogger.Instance;
@@ -458,7 +458,7 @@ public sealed class BlobWriter : IAsyncDisposable
         // STRUCTURE (metadata) key the footer will seal under. A sealed
         // checkpoint without its content key is unreadable state.
         var sealedContent =
-            checkpoint.FormatVersion >= FormatLimits.SealedFormatVersion && checkpoint.BlobClass == BlobClass.Data;
+            checkpoint.FormatVersion >= FormatLimits.FormatVersion && checkpoint.BlobClass == BlobClass.Data;
         if (sealedContent && checkpoint.ContentKey is null)
         {
             return Discard("content_key_missing");

@@ -118,7 +118,6 @@ public sealed class AgentServiceLifetimeTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--poll-seconds", "3600",
         })
         {

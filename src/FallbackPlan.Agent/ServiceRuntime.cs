@@ -114,7 +114,6 @@ public sealed record ServiceOptions
 public sealed class ServiceRuntime : IAsyncDisposable
 {
     private readonly StateDirectoryLock _writerRole;
-    private readonly Passphrase? _passphrase;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
     private bool _disposed;
@@ -130,13 +129,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private ServiceRuntime(
         ServiceOptions options,
         StateDirectoryLock writerRole,
-        Passphrase? passphrase,
         LocalState state,
         JobStateStore jobs)
     {
         Options = options;
         _writerRole = writerRole;
-        _passphrase = passphrase;
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
@@ -231,16 +228,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
-
-    /// <summary>
-    /// The passphrase the runtime unlocks v1 archives with — the ADR-0028 §9
-    /// posture. Handed to the restore-source opens so a replica or peer
-    /// repository unlocks with the same secret its staging archive did;
-    /// never exposed on any contract surface (NFR-SEC-009). Null when the
-    /// service started passphrase-free — the ADR-0042 posture, where every
-    /// provisioned set opens with its write credential instead.
-    /// </summary>
-    internal Passphrase? ArchivePassphrase => _passphrase;
 
     /// <summary>The service's envelope recipient keypair (ADR-0042 §4).</summary>
     internal GrantRecipient GrantRecipient { get; }
@@ -467,11 +454,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// with the holder named — never worked around (FR-SVC-002).
     /// </summary>
     /// <param name="options">How to start.</param>
-    /// <param name="passphrase">Unlocks and creates archives. The runtime keeps its own copy for its lifetime.</param>
     /// <param name="cancellationToken">Cancels start-up.</param>
     /// <returns>The running service.</returns>
-    public static ValueTask<ServiceRuntime> StartAsync(
-        ServiceOptions options, Passphrase? passphrase, CancellationToken cancellationToken)
+    public static ValueTask<ServiceRuntime> StartAsync(ServiceOptions options, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -515,7 +500,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
 
             return ValueTask.FromResult(
-                new ServiceRuntime(options, writerRole, passphrase?.Clone(), state, jobs)
+                new ServiceRuntime(options, writerRole, state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
                     Notices = notices,
@@ -537,8 +522,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <param name="set">The set whose archive to resolve.</param>
     /// <param name="cancellationToken">Cancels an open or create.</param>
     /// <returns>The archive, held open by the runtime until disposal.</returns>
-    /// <exception cref="RepositoryOpenException">The archive on disk refused to open.</exception>
-    /// <exception cref="KeyUnwrapFailedException">The passphrase is wrong for an existing archive.</exception>
+    /// <exception cref="RepositoryOpenException">The archive on disk refused to open, or no credential this service holds opens it.</exception>
     public async ValueTask<ArchiveHandle> ArchiveForAsync(
         BackupSetConfiguration set, CancellationToken cancellationToken)
     {
@@ -688,10 +672,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 return null;
             }
 
-            // The first backup of a set on a set-up installation. This is
-            // what replaces the silent format-1 CreateAsync below: a set
-            // created after setup is write-only because the installation is,
-            // not because anybody remembered a dialog.
+            // The first backup of a set on a set-up installation: the set is
+            // created from the installation credential, under the
+            // installation's salt, because the installation is what holds a
+            // passphrase's authority — not because anybody remembered a
+            // dialog (ADR-0044).
             return await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
                     store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
                     createdBy: Environment.MachineName,
@@ -702,11 +687,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
             .ConfigureAwait(false);
-
-        if (!RepositoryLifecycle.IsWriteOnly(descriptor))
-        {
-            return null;
-        }
 
         if (!provisioning.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
         {
@@ -787,30 +767,16 @@ public sealed class ServiceRuntime : IAsyncDisposable
             {
                 repository = fromInstallation;
             }
-            else if (_passphrase is null)
-            {
-                throw new RepositoryOpenException(
-                    $"Set '{setId}' is not provisioned write-only and this service started without a "
-                    + "passphrase; run first-run setup to give this installation one, start the service "
-                    + "with a passphrase, or provision the set (ADR-0044, ADR-0042).");
-            }
-            else if (descriptorExists)
-            {
-                repository = await RepositoryLifecycle.OpenAsync(
-                        store, _passphrase, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
-                    .ConfigureAwait(false);
-            }
-            else if (createIfMissing)
-            {
-                repository = await RepositoryLifecycle.CreateAsync(
-                        store, _passphrase, RepositoryCreationSettings.Default,
-                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
-                        LoggerFor(typeof(RepositoryLifecycle)))
-                    .ConfigureAwait(false);
-            }
             else
             {
-                throw new RepositoryOpenException($"No staging archive exists for set '{setId}'.");
+                // No per-set credential and no installation credential: the
+                // service holds nothing that opens or creates an archive.
+                // A service never holds a passphrase (ADR-0042 §5), so the
+                // remedies are the two ceremonies that leave a credential
+                // behind, named here rather than guessed at.
+                throw new RepositoryOpenException(
+                    $"Set '{setId}' is not provisioned and this installation has not run first-run setup; run "
+                    + "setup to give this installation its passphrase, or provision the set (ADR-0044, ADR-0042 §10).");
             }
 
             ArchiveHandle archive;
@@ -970,7 +936,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
 
         _archives.Clear();
-        _passphrase?.Dispose();
         GrantRecipient.Dispose();
         _archivesGate.Dispose();
 

@@ -153,7 +153,7 @@ public sealed class BlobReader : IDisposable
         // (ADR-0042 §2): its footer key derives from the metadata class key,
         // and only its records need the sealed content key below.
         var sealedContent =
-            envelope.FormatVersion >= FormatLimits.SealedFormatVersion && envelope.BlobClass == BlobClass.Data;
+            envelope.FormatVersion >= FormatLimits.FormatVersion && envelope.BlobClass == BlobClass.Data;
         var structureClass = sealedContent ? BlobClass.Metadata : envelope.BlobClass;
 
         var classKey = classKeyProvider(structureClass, envelope.KeyGeneration);

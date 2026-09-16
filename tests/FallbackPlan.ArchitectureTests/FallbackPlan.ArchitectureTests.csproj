@@ -45,7 +45,6 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Web\FallbackPlan.Web.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Api\FallbackPlan.Api.csproj" />
-    <ProjectReference Include="..\..\src\FallbackPlan.Keystore\FallbackPlan.Keystore.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Application\FallbackPlan.Application.csproj" />
   </ItemGroup>
 

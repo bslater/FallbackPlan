@@ -173,16 +173,37 @@ public sealed class AgentHostTests : IDisposable
     public async Task AgentHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var result = await RunAsync(
-            "run",
+            "retention",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET");
+            "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET", "--apply");
 
         Assert.AreEqual(1, result.ExitCode);
 
         // The message must name the variable and must not carry the secret.
         Assert.Contains("FBP_VARIABLE_THAT_IS_NOT_SET", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("run")]
+    [DataRow("sync")]
+    [DataRow("verify-destination")]
+    public async Task AgentHost_AVerbThatHoldsNoPassphrase_RefusesTheFlagNamingWhereItBelongs(string verb)
+    {
+        // The service never holds the passphrase (ADR-0042 §5). A flag that
+        // used to mean "hold this for the run" is refused rather than
+        // ignored, so nobody believes the service holds what it does not.
+        var result = await RunAsync(
+            verb,
+            "--archives", _harness.ArchivesRoot,
+            "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("takes no --passphrase-env", result.Error, StringComparison.Ordinal);
+        Assert.Contains("setup", result.Error, StringComparison.Ordinal);
+        Assert.Contains("retention --apply", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -196,7 +217,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         Assert.AreEqual(0, result.ExitCode);
@@ -215,7 +235,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // An empty schedule means manual-only: nothing runs, and that is a
@@ -236,7 +255,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once",
         ];
 
@@ -261,7 +279,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // A failed set is exit code 2 — distinct from a usage error (1), so a
@@ -271,36 +288,28 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AgentHost_PassphraseIsWrong_FailsTheSetWithoutAStackTrace()
+    public async Task AgentHost_NoCredentialOpensASet_FailsTheSetNamingSetupWithoutAStackTrace()
     {
-        await _harness.CreateFormatOneRepositoryAsync();
+        // No setup, no provisioning: the service holds nothing that opens or
+        // creates this set's archive, and it never holds a passphrase
+        // (ADR-0042 §5).
         _harness.WriteSourceFile("notes.txt", "agent host");
         _harness.WriteConfiguration("every 4h");
 
-        const string variable = "FBP_HOST_TEST_WRONG_PASSPHRASE";
-        Environment.SetEnvironmentVariable(variable, "not the passphrase");
-        try
-        {
-            var result = await RunAsync(
-                "run",
-                "--archives", _harness.ArchivesRoot,
-                "--state", _harness.StateDirectory,
-                "--passphrase-env", variable,
-                "--once");
+        var result = await RunAsync(
+            "run",
+            "--archives", _harness.ArchivesRoot,
+            "--state", _harness.StateDirectory,
+            "--once");
 
-            // Archives open lazily, one per set on first use (ADR-0034), so a
-            // wrong passphrase surfaces where it is discovered: the set whose
-            // existing archive refused to unwrap fails permanently — exit 2, a
-            // failed set — rather than the whole invocation being refused up
-            // front. Still no stack trace: it is an operator message, not a
-            // crash.
-            Assert.AreEqual(2, result.ExitCode);
-            Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(variable, null);
-        }
+        // Archives open lazily, one per set on first use (ADR-0034), so the
+        // refusal surfaces where it is discovered: the set fails — exit 2, a
+        // failed set — rather than the whole invocation being refused up
+        // front. It names the remedy, and it is an operator message, not a
+        // crash.
+        Assert.AreEqual(2, result.ExitCode);
+        Assert.Contains("setup", result.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -310,7 +319,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--repo", _harness.RepositoryPath,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // Pre-1.0 breaks are sanctioned but never silent (ADR-0034): the old

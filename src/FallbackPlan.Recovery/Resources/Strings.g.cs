@@ -90,4 +90,9 @@ internal static class Strings
     /// The passphrase and kit agree with each other but not with this archive: this kit belongs to a different FallbackPlan installation.
     /// </summary>
     internal static string RecoverySession_KitBelongsToAnotherInstallation => Get(nameof(RecoverySession_KitBelongsToAnotherInstallation));
+
+    /// <summary>
+    /// This kit names a format-1 repository. Format 1 is withdrawn: its key object cannot be opened by this tool — recover from an archive a set-up installation wrote, with its installation kit.
+    /// </summary>
+    internal static string RecoverySession_FormatOneWithdrawn => Get(nameof(RecoverySession_FormatOneWithdrawn));
 }

@@ -8,15 +8,25 @@ namespace FallbackPlan.Domain;
 /// </summary>
 public static class FormatLimits
 {
-    /// <summary>The repository format version this implementation writes.</summary>
-    public const ushort FormatVersion = 1;
+    /// <summary>
+    /// The repository format version — the only one this implementation
+    /// writes or reads: file contents sealed to the repository's public key,
+    /// structure symmetric (ADR-0042). The descriptor carries it, and so does
+    /// every sealed data blob. Format 1 was withdrawn before any freeze; the
+    /// number is not renumbered, because it is bound into every descriptor
+    /// and every sealed blob's AAD already on disk.
+    /// </summary>
+    public const ushort FormatVersion = 2;
 
     /// <summary>
-    /// The write-only repository format version (ADR-0042): file contents
-    /// sealed to the repository's public key, structure symmetric. Chosen at
-    /// repository creation, never converted to or from.
+    /// The version stamped on a <b>symmetric</b> container — a metadata blob
+    /// or a standalone record — inside a format-2 repository. The symmetric
+    /// construction is the one format 1 defined and format 2 kept byte for
+    /// byte (specification 03 §9), and the stamp is AAD, so this is a fact
+    /// about bytes on disk rather than a choice: a reader deriving the wrong
+    /// value opens nothing.
     /// </summary>
-    public const ushort SealedFormatVersion = 2;
+    public const ushort SymmetricFormatVersion = 1;
 
     /// <summary>Maximum stored (ciphertext) length of one record: 64 MiB.</summary>
     public const int MaxRecordStoredLength = 64 * 1024 * 1024;
@@ -32,9 +42,6 @@ public static class FormatLimits
 
     /// <summary>Maximum CBOR body length of the repository descriptor: 65 536 bytes.</summary>
     public const int MaxDescriptorCborLength = 65_536;
-
-    /// <summary>Maximum CBOR length of the wrapped key bundle: 4 096 bytes.</summary>
-    public const int MaxKeyBundleCborLength = 4_096;
 
     /// <summary>Maximum segment references in one file-version manifest: 1 048 576.</summary>
     public const int MaxSegmentReferencesPerManifest = 1_048_576;

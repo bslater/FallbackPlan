@@ -3,6 +3,8 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Repository.Packing;
+using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
@@ -12,27 +14,25 @@ using FallbackPlan.Filesystem;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Verify-on-reuse and trust-domain gating (FR-DED-001, FR-DED-002,
-/// FR-DED-003, NFR-SEC-007; specification 09 §5;
+/// Trust-domain gating (FR-DED-001, FR-DED-002, FR-DED-003, NFR-SEC-007;
+/// specification 09 §5;
 /// [ADR-0006](../../../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)).
 ///
-/// Every other end-to-end suite has one writer, and with one writer all three
-/// domains behave identically — which is the requirement, not a gap. These
+/// Every other end-to-end suite has one writer, and with one writer every
+/// domain behaves identically — which is the requirement, not a gap. These
 /// tests are the ones that can tell them apart: a second writer publishes into
 /// a repository the first already filled, and what the second does with the
 /// first's segments is the whole of the decision.
+///
+/// The <b>repository</b> domain — confirm another writer's segment by reading
+/// its content back — is refused by name rather than exercised: a writer holds
+/// no content key (ADR-0042 §7), so the read it needs cannot happen, and the
+/// device domain is the default (ADR-0006, amended). What these establish
+/// about it is exactly that refusal.
 /// </summary>
 [TestClass]
 public sealed class DedupTrustDomainTests : ArchiveTestHarness
 {
-    // A master key rather than the harness's write-only bundle, on purpose:
-    // the repository trust domain verifies another writer's segments by
-    // READING their content, which a write-only holder cannot do, and these
-    // are the tests that can tell the domains apart. What becomes of the
-    // repository domain once every repository is write-only is decided when
-    // format v1 goes, not quietly here.
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private static readonly WriterId SecondWriter =
         WriterId.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"));
 
@@ -40,23 +40,22 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     public async Task DedupReuse_ASingleWritersOwnSegments_AreReusedWithNoVerificationRead()
     {
         var store = new CountingObjectStore(CreateStore());
-        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
         using var catalogue = OpenCatalogue("first");
 
         var source = OneFileSource();
 
-        await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Repository)
+        await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Device)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         var readsBefore = store.Reads;
 
         // The same writer, the same content, a second snapshot. Its segments
         // are already in the index and they are its own, so they are reused —
-        // and the fetch-and-decrypt the default domain performs for another
-        // writer's bytes is never issued, because FR-DED-002's acceptance
+        // and no fetch is issued for them, because FR-DED-002's acceptance
         // criterion says a fresh single-device repository performs none.
-        var second = await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Repository)
+        var second = await Publish(store, keys, hierarchy, catalogue, Writer, "first", DedupTrustDomain.Device)
             .PublishAsync(
                 Job(source, 0xA2, now: 1_722_600_000_001) with
                 {
@@ -74,14 +73,24 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task RepositoryDomain_AnotherWritersSegments_AreConfirmedThenReused()
+    public void RepositoryDomain_IsRefusedByNameWithTheRemedy()
     {
-        using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
+        // ADR-0042 §7: confirming another writer's segment means reading its
+        // content, and a writer holds no content key. The pipeline refuses to
+        // start rather than degrade every confirmation into "unavailable" and
+        // quietly re-archive; the message names the device domain.
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
+        var spool = Path.Combine(SpoolDirectory, "repository-domain");
+        Directory.CreateDirectory(spool);
 
-        // Confirmed, then referenced: no content record is written for bytes
-        // the repository already holds, and nothing was found wrong with them.
-        Assert.AreEqual(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.IsEmpty(second.Catalogue.Findings());
+        var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
+            SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
+            Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
+        Assert.Contains("device", refusal.Message, StringComparison.Ordinal);
+        Assert.AreEqual(DedupTrustDomain.Device, CapturePolicy.Default.DedupTrustDomain);
     }
 
     [TestMethod]
@@ -108,8 +117,8 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         var unacknowledged = SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.RepositoryUnverified };
 
         var store = CreateStore();
-        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
         var spool = Path.Combine(SpoolDirectory, "unacknowledged");
         Directory.CreateDirectory(spool);
 
@@ -130,78 +139,23 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             DedupTrustDomain.RepositoryUnverified, corruptFirstWritersData: true);
 
         // The segments are corrupt and referenced anyway, which is exactly
-        // what opting out of verification buys and costs. It is here as a
-        // control: it is the same corruption the default domain catches below,
-        // so the two tests together show the read is what makes the difference
-        // rather than something else about the fixture.
+        // what opting out of verification buys and costs: nothing read them,
+        // so nothing could have noticed.
         Assert.AreEqual(0, second.Published.ContentBlobs.Sum(blob => blob.RecordCount));
         Assert.IsEmpty(second.Catalogue.Findings());
     }
 
     [TestMethod]
-    public async Task RepositoryDomain_ASegmentFailsVerification_IsWrittenAgainAndReported()
-    {
-        using var second = await SecondWriterPublishes(
-            DedupTrustDomain.Repository, corruptFirstWritersData: true);
-
-        // T-10, caught at write time: the other writer's record does not
-        // decrypt to what its identifier claims, so it is not referenced. The
-        // backup still succeeds — this writer has the real bytes in front of it
-        // and stores them.
-        Assert.IsTrue(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
-
-        var findings = second.Catalogue.Findings();
-        Assert.Contains(finding => finding.Kind == DamageKind.CorruptRecord, findings);
-        Assert.Contains(finding => finding.Detail.Contains("offered for reuse", StringComparison.Ordinal), findings);
-    }
-
-    [TestMethod]
-    public async Task RepositoryDomain_ASegmentAlreadyConfirmed_IsNotReadAgain()
-    {
-        using var second = await SecondWriterPublishes(DedupTrustDomain.Repository);
-        var readsToVerify = second.Store.Reads;
-
-        // Corrupting the blob *after* it was confirmed is a probe, not a
-        // scenario: nothing that re-read it could still call it good. If the
-        // next publication reuses the segment anyway, the only explanation is
-        // that it did not read it — which is the claim under test, that the
-        // confirmation is paid once per object and not once per backup.
-        CorruptOneDataBlob();
-
-        var source = OneFileSource();
-        var third = await Publish(
-                second.Store, second.Keys, second.Hierarchy, second.Catalogue, SecondWriter, "second",
-                DedupTrustDomain.Repository)
-            .PublishAsync(
-                Job(source, 0xB3, now: 1_722_600_000_003) with
-                {
-                    PriorSnapshotId = Enumerable.Repeat((byte)0xB2, 16).ToArray(),
-                },
-                CancellationToken.None);
-
-        Assert.AreEqual(0, third.ContentBlobs.Sum(blob => blob.RecordCount));
-        Assert.IsEmpty(second.Catalogue.Findings());
-
-        // The measured shape of the cost ADR-0006 asked to see: the reads that
-        // confirmed the other writer's objects happened once, and the backup
-        // that followed issued fewer than that to publish the same tree.
-        Assert.IsTrue(
-            second.Store.Reads - readsToVerify < readsToVerify,
-            $"the confirming publication read {readsToVerify} times; the next read "
-            + $"{second.Store.Reads - readsToVerify}");
-    }
-
-    [TestMethod]
-    public async Task RepositoryDomain_ManySegmentsVerifiedConcurrently_ReusesThemAllWithoutRacing()
+    public async Task UnverifiedDomain_ManySegmentsReusedConcurrently_ReusesThemAllWithoutRacing()
     {
         var store = new CountingObjectStore(CreateStore());
-        using var keys = RepositoryKeySet.FromMasterKey(MasterKey);
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var keys = CreateKeys();
+        using var hierarchy = CreateHierarchy();
         var source = ManyFileSource();
 
         using (var first = OpenCatalogue("first"))
         {
-            await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Repository)
+            await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Device)
                 .PublishAsync(Job(source, 0xC1), CancellationToken.None);
         }
 
@@ -221,7 +175,8 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // inside the blob cache. Twenty-four files across many blobs at eight
         // workers is wide enough.
         var published = await Publish(
-                store, keys, hierarchy, second, SecondWriter, "second", DedupTrustDomain.Repository, concurrency: 8)
+                store, keys, hierarchy, second, SecondWriter, "second", DedupTrustDomain.RepositoryUnverified,
+                concurrency: 8)
             .PublishAsync(
                 Job(source, 0xC2, now: 1_722_600_000_002) with
                 {
@@ -229,9 +184,9 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
                 },
                 CancellationToken.None);
 
-        // Every segment verified and was referenced: nothing re-written, and
-        // nothing reported wrong. A race that lost a cache entry would show up
-        // here as content records the second writer should never have needed.
+        // Every segment was referenced: nothing re-written, and nothing
+        // reported wrong. A race that lost a cache entry would show up here
+        // as content records the second writer should never have needed.
         Assert.AreEqual(0, published.ContentBlobs.Sum(blob => blob.RecordCount));
         Assert.IsEmpty(second.Findings());
     }
@@ -245,8 +200,8 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         DedupTrustDomain domain, bool corruptFirstWritersData = false)
     {
         var store = new CountingObjectStore(CreateStore());
-        var keys = RepositoryKeySet.FromMasterKey(MasterKey);
-        var hierarchy = new KeyHierarchy(MasterKey);
+        var keys = CreateKeys();
+        var hierarchy = CreateHierarchy();
         CatalogueDb? secondCatalogue = null;
 
         // Nothing here is owned by the caller until the record is returned, so
@@ -260,7 +215,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
             using (var first = OpenCatalogue("first"))
             {
-                await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Repository)
+                await Publish(store, keys, hierarchy, first, Writer, "first", DedupTrustDomain.Device)
                     .PublishAsync(Job(source, 0xB1), CancellationToken.None);
             }
 
@@ -317,18 +272,19 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
     /// <summary>
     /// Flips a byte inside the sole data blob's first record ciphertext —
-    /// past the envelope and record header, well short of the footer — so the
-    /// blob still opens and the record no longer authenticates.
+    /// past the sealed envelope and record header, well short of the footer —
+    /// so the blob still opens and the record no longer authenticates.
     /// </summary>
     private void CorruptOneDataBlob()
     {
         var blob = Directory.EnumerateFiles(Path.Combine(StoreRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
             .Single();
 
+        var offset = BlobEnvelope.MaxLength + RecordHeader.Length + 8;
         using var handle = File.Open(blob, FileMode.Open, FileAccess.ReadWrite);
-        handle.Seek(200, SeekOrigin.Begin);
+        handle.Seek(offset, SeekOrigin.Begin);
         var original = handle.ReadByte();
-        handle.Seek(200, SeekOrigin.Begin);
+        handle.Seek(offset, SeekOrigin.Begin);
         handle.WriteByte((byte)(original ^ 0xFF));
     }
 

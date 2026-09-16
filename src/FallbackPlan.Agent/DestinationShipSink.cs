@@ -251,7 +251,7 @@ public sealed class DestinationShipSink : IObjectStore
         {
             try
             {
-                await SeedDescriptorAndKeysAsync(shipment, cancellationToken).ConfigureAwait(false);
+                await SeedDescriptorAsync(shipment, cancellationToken).ConfigureAwait(false);
                 seeded.Add(shipment);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -740,21 +740,15 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>
-    /// Ensures a destination holds the repository's descriptor and keys —
-    /// what makes its replica independently openable from its first byte.
-    /// Cheap and idempotent: two-ish tiny objects, put if absent.
+    /// Ensures a destination holds the repository's descriptor — what makes
+    /// its replica independently openable from its first byte: the salt,
+    /// the parameters and the sealing public key a passphrase re-derives
+    /// against (ADR-0042 §1). Cheap and idempotent: one tiny object, put if
+    /// absent.
     /// </summary>
-    private async ValueTask SeedDescriptorAndKeysAsync(Shipment target, CancellationToken cancellationToken)
-    {
-        await foreach (var entry in _metadata
-            .ListAsync(ObjectPrefix.Parse("keys/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
-        {
-            await CopyIfAbsentAsync(target, entry.Key, cancellationToken).ConfigureAwait(false);
-        }
-
+    private async ValueTask SeedDescriptorAsync(Shipment target, CancellationToken cancellationToken) =>
         await CopyIfAbsentAsync(target, Repository.RepositoryLifecycle.DescriptorKey, cancellationToken)
             .ConfigureAwait(false);
-    }
 
     private async ValueTask CopyIfAbsentAsync(Shipment target, ObjectKey key, CancellationToken cancellationToken)
     {

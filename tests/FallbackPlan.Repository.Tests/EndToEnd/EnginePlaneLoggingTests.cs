@@ -177,11 +177,20 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var store = CreateStore();
         using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
 
-        using var created = await RepositoryLifecycle.CreateAsync(
+        var (created, createdAuthority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
             store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None, log);
-        using var opened = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None, log);
+        using (created)
+        using (createdAuthority)
+        {
+        }
 
-        Assert.ContainsSingle(log.Records.Where(record => record.EventId == RepositoryOpened));
+        var (opened, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            store, passphrase, CancellationToken.None, log);
+        using (opened)
+        using (authority)
+        {
+            Assert.ContainsSingle(log.Records.Where(record => record.EventId == RepositoryOpened));
+        }
     }
 
     [TestMethod]
@@ -190,16 +199,16 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var log = new RecordingLogger();
         var store = CreateStore();
         using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
-        using (await RepositoryLifecycle.CreateAsync(
-            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None))
-        {
-            // Created without a logger on purpose: the refusal below must be
-            // recorded by the open, not carried over from the create.
-        }
+        // Created without a logger on purpose: the refusal below must be
+        // recorded by the open, not carried over from the create.
+        var (created, createdAuthority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None);
+        created.Dispose();
+        createdAuthority.Dispose();
 
         using var wrong = Passphrase.Create("not the passphrase at all!!!!");
         await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-            await RepositoryLifecycle.OpenAsync(store, wrong, CancellationToken.None, log));
+            await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, wrong, CancellationToken.None, log));
 
         Assert.ContainsSingle(
             log.Records.Where(record => record.EventId == 2032),

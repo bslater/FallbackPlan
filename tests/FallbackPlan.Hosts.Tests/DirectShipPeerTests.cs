@@ -213,6 +213,7 @@ public sealed class DirectShipPeerTests : IDisposable
     [TestMethod]
     public async Task DirectShipSet_AWholeSchedulerPass_LeavesThePeerHoldingWhatItWasSent()
     {
+        await _harness.SetupAsync();
         // Capture is only the first half of a pass: the fan-out and the
         // verification cadence run behind it, both of them written against a
         // source that holds the bytes. A peer-only direct-ship set has no such
@@ -227,7 +228,7 @@ public sealed class DirectShipPeerTests : IDisposable
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var replica = await ReplicaPathAsync();
@@ -367,7 +368,6 @@ public sealed class DirectShipPeerTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase: null,
             Timeout);
 
         var set = runtime.Configuration.BackupSets.Single();

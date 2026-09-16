@@ -3,10 +3,10 @@ using System.Text.RegularExpressions;
 namespace FallbackPlan.Cli.Tests;
 
 /// <summary>
-/// The CLI's write-only surface (ADR-0042): <c>init --write-only</c> behind
-/// its typed loss acknowledgement, and direct mode deriving the full read
-/// authority from <c>--passphrase-env</c> — the same commands as v1, a
-/// different open underneath, sealed content coming back byte-identical.
+/// The CLI's creation and direct-mode surface (ADR-0042): <c>init</c> behind
+/// its typed loss acknowledgement — the one creation path with no wizard in
+/// front of it — and direct mode deriving the full read authority from
+/// <c>--passphrase-env</c>, sealed content coming back byte-identical.
 /// </summary>
 [TestClass]
 public sealed class WriteOnlyCommandTests : IDisposable
@@ -16,9 +16,9 @@ public sealed class WriteOnlyCommandTests : IDisposable
     public void Dispose() => _cli.Dispose();
 
     [TestMethod]
-    public async Task Init_WriteOnlyWithoutTheAcknowledgement_IsRefusedNamingTheLoss()
+    public async Task Init_WithoutTheAcknowledgement_IsRefusedNamingTheLoss()
     {
-        var refused = await _cli.RunWithoutStateAsync("init", "--write-only");
+        var refused = await _cli.RunWithoutStateAsync("init");
 
         Assert.AreNotEqual(0, refused.ExitCode);
         Assert.Contains("unrecoverable", refused.All, StringComparison.Ordinal);
@@ -33,14 +33,13 @@ public sealed class WriteOnlyCommandTests : IDisposable
     {
         const string content = "sealed by the public key, back by the passphrase";
 
-        var init = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        var init = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.IsTrue(init.ExitCode == 0, init.All);
-        Assert.Contains("write-only", init.Output, StringComparison.Ordinal);
+        Assert.Contains("created repository", init.Output, StringComparison.Ordinal);
         Assert.Contains("losing it loses the backup", init.Output, StringComparison.Ordinal);
         Assert.IsFalse(
-            Directory.Exists(Path.Combine(_cli.RepositoryPath, "keys"))
-            && Directory.EnumerateFileSystemEntries(Path.Combine(_cli.RepositoryPath, "keys")).Any(),
-            "a write-only repository stores no key object (FR-WOR-001)");
+            Directory.Exists(Path.Combine(_cli.RepositoryPath, "keys")),
+            "a repository stores no key object (FR-WOR-001)");
 
         var source = _cli.WriteFile("sealed.txt", content);
         var archive = await _cli.RunAsync("archive", source);
@@ -59,7 +58,7 @@ public sealed class WriteOnlyCommandTests : IDisposable
     [TestMethod]
     public async Task WriteOnlyRepository_VerifyAndCheck_NameTheSealedPlaneAndReportNoDamage()
     {
-        var init = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        var init = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.IsTrue(init.ExitCode == 0, init.All);
 
         var source = _cli.WriteFile("sealed.txt", "counted sealed, not damaged");
@@ -81,12 +80,12 @@ public sealed class WriteOnlyCommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Init_WriteOnlyOverAnExistingRepository_IsACleanRefusalNotAStackTrace()
+    public async Task Init_OverAnExistingRepository_IsACleanRefusalNotAStackTrace()
     {
-        var first = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        var first = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.IsTrue(first.ExitCode == 0, first.All);
 
-        var refused = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        var refused = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.AreNotEqual(0, refused.ExitCode);
         Assert.DoesNotContain("   at ", refused.All, StringComparison.Ordinal);
     }
@@ -94,7 +93,7 @@ public sealed class WriteOnlyCommandTests : IDisposable
     [TestMethod]
     public async Task WriteOnlyRepository_TheWrongPassphrase_IsRefusedByDeriveAndCompare()
     {
-        var init = await _cli.RunWithoutStateAsync("init", "--write-only", "--acknowledge-loss");
+        var init = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.IsTrue(init.ExitCode == 0, init.All);
 
         var wrongVariable = "FBP_TEST_WRONG_" + Guid.NewGuid().ToString("N")[..8];

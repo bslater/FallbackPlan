@@ -50,7 +50,6 @@ public sealed class ConfigurationChangeLogTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 Logging = _logging,
             },
-            passphrase: null,
             _timeout.Token);
     }
 

@@ -103,7 +103,6 @@ public static class StoreToStoreCopier
     private static readonly string[] PhasePrefixes =
     [
         "repository-format",
-        "keys/",
         "blobs/",
         "journal/",
         "index/delta/",
@@ -385,12 +384,12 @@ public static class StoreToStoreCopier
 
             foreach (var key in present)
             {
-                // Identity and keys never go, whatever the filter says — a
-                // replica without its descriptor is not a repository at all.
-                // And nothing goes that the source does not list: a key only
-                // the destination holds may be a trimmed object's last copy.
+                // Identity never goes, whatever the filter says — a replica
+                // without its descriptor is not a repository at all. And
+                // nothing goes that the source does not list: a key only the
+                // destination holds may be a trimmed object's last copy.
                 if (!InPhase(key, phase) || keeps(key) || !sourceKeys.Contains(key)
-                    || key is "repository-format" || key.StartsWith("keys/", StringComparison.Ordinal))
+                    || key is "repository-format")
                 {
                     continue;
                 }

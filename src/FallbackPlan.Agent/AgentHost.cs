@@ -6,7 +6,6 @@ using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
-using FallbackPlan.Keystore;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -50,14 +49,12 @@ public static class AgentHost
                 FallbackPlan service — scheduled backups, and the command surface clients talk to
 
                 usage:
-                  fallbackplan-agent [run]  [--archives <root>] [--state <dir>] [--passphrase-env <VAR>]
+                  fallbackplan-agent [run]  [--archives <root>] [--state <dir>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
                                             --acknowledge-loss --kit-output <path>
                                             --user <name> --password-env <VAR>
-                  fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
-                  fallbackplan-agent lock   --state <dir>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
                                             [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]
                   fallbackplan-agent pairings --state <dir>
@@ -65,11 +62,10 @@ public static class AgentHost
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
-                  fallbackplan-agent sync   --archives <root> --state <dir> [--passphrase-env <VAR>]
+                  fallbackplan-agent sync   --archives <root> --state <dir>
                                             [--set <name>] [--destination <name>]
                   fallbackplan-agent verify-destination --archives <root> --state <dir>
-                                            [--passphrase-env <VAR>] [--set <name>]
-                                            [--destination <name>] [--probe | --full]
+                                            [--set <name>] [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
 
@@ -110,11 +106,10 @@ public static class AgentHost
                 binary form goes there and the printable form to '<path>.txt'. The
                 kit is ONE factor — store it apart from the passphrase.
 
-                `unlock` stores the passphrase in this account's platform keystore so
-                scheduled backups run with nobody present; `run` then needs no
-                --passphrase-env. `lock` removes it. Key export always takes a
-                passphrase per invocation and never reads the keystore
-                (ADR-0028 section 9).
+                The service never holds the passphrase (ADR-0042 §5): after
+                `setup` it opens every archive with the stored write credential,
+                which publishes and cannot read content back. Scheduled backups
+                therefore run with nobody present and nothing to unlock.
 
                 While it runs the service holds the writer role for <dir> exclusively,
                 and listens on a local socket or named pipe there. It listens on no
@@ -124,8 +119,9 @@ public static class AgentHost
                 `install` prints the definition that registers this agent with the
                 operating system's service manager — a systemd unit, a launchd job,
                 or the Windows `sc.exe` commands (default: this platform). It only
-                prints it; nothing is changed. Store the passphrase with `unlock`
-                first, as the account the service will run as (ADR-0033).
+                prints it; nothing is changed. Run `setup` first, as the account
+                the service will run as, so the credential it leaves behind is
+                readable at boot (ADR-0033).
 
                 `sync` converges declared destinations now, outside the schedule
                 (ADR-0034 §3): one pass per matching (set, destination) pair,
@@ -204,10 +200,21 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is "unlock" or "lock")
+        {
+            // Retired with the passphrase-holding service (ADR-0042 §5,
+            // ADR-0033 amended): a service opens archives with the credential
+            // setup leaves behind, so there is nothing to store or forget.
+            error.WriteLine(
+                $"error: `{args[0]}` was removed — the service never holds the passphrase. Run `setup` once; "
+                + "the stored write credential opens every archive afterwards (ADR-0042 §5).");
+            return 1;
+        }
+
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -300,8 +307,8 @@ public static class AgentHost
             return 1;
         }
 
-        // `install` opens neither the repository nor the keystore: it only prints
-        // the definition that would register this agent as a service (ADR-0033).
+        // `install` opens nothing: it only prints the definition that would
+        // register this agent as a service (ADR-0033).
         if (args[0] == "install")
         {
             return Install(
@@ -320,81 +327,33 @@ public static class AgentHost
             return string.IsNullOrEmpty(value) ? null : value;
         }
 
-        if (args[0] == "lock")
+        if (passphraseVariable is not null && args[0] is "run" or "sync" or "verify-destination")
         {
-            try
-            {
-                var store = PlatformKeystore.For(stateDirectory);
-                store.Delete(stateDirectory);
-                output.WriteLine($"removed the stored passphrase from {store.Description}.");
-                return 0;
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
-        }
-
-        if (args[0] == "unlock")
-        {
-            var supplied = FromEnvironment();
-            if (supplied is null)
-            {
-                error.WriteLine(
-                    "error: `unlock` needs --passphrase-env <VAR> naming a set environment variable — the "
-                    + "passphrase is passed by name, never on the command line.");
-                return 1;
-            }
-
-            try
-            {
-                var store = PlatformKeystore.For(stateDirectory);
-                store.Write(stateDirectory, supplied);
-                output.WriteLine($"stored the passphrase in {store.Description}.");
-                output.WriteLine(
-                    "an attacker who obtains this service account obtains the backups — see T-19 in the threat model.");
-                return 0;
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
+            // Not ignored: a flag that used to mean "hold this passphrase for
+            // the run" and now means nothing would let an operator believe
+            // the service holds something it does not (ADR-0042 §5).
+            error.WriteLine(
+                $"error: `{args[0]}` takes no --passphrase-env — the service never holds the passphrase; it opens "
+                + "every archive with the credential `setup` stored. The flag belongs to `setup` and to "
+                + "`retention --apply`, which derive an authority from it for one run.");
+            return 1;
         }
 
         if (passphraseVariable is not null && FromEnvironment() is null)
         {
-            // An explicitly named variable that is unset is a mistake, not an
-            // invitation to use the keystore instead: falling back would run
-            // the backup under a different passphrase than the operator asked
-            // for, and say nothing.
+            // An explicitly named variable that is unset is a mistake, and
+            // running on without it would silently do something other than
+            // what the operator asked.
             error.WriteLine(
                 $"error: environment variable '{passphraseVariable}' is unset — the passphrase is passed by name, never on the command line.");
             return 1;
         }
 
+        // Only `setup` and `retention --apply` read this: the first derives
+        // the installation's credential where the person typed, the second
+        // the reclaim grant for one run. A running service holds no
+        // passphrase at all (ADR-0042 §5).
         var passphraseValue = FromEnvironment();
-        if (passphraseValue is null)
-        {
-            // The keystore is what makes unattended scheduled backup possible
-            // at all (ADR-0028 section 9). An environment variable held for the
-            // life of the process, and inherited by every child, is the thing
-            // it replaces. Holding neither is a valid way to run since
-            // ADR-0042: a provisioned write-only set opens with its stored
-            // credential and no passphrase at all — a v1 set on such a start
-            // is refused per set, with the remedy named, when something
-            // actually tries to open it.
-            try
-            {
-                PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue);
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
-        }
 
         // A one-shot verb that speaks the service surface: its own runtime
         // (taking the writer role for its duration), one command, the lines
@@ -408,7 +367,6 @@ public static class AgentHost
         {
             try
             {
-                using var verbPassphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
                 await using var verbRuntime = await ServiceRuntime.StartAsync(
                     new ServiceOptions
                     {
@@ -416,7 +374,7 @@ public static class AgentHost
                         StateDirectory = stateDirectory,
                         Logging = logging,
                     },
-                    verbPassphrase, cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 // A null command is a refusal the factory already printed.
                 if (commandFor(verbRuntime) is not { } command)
@@ -457,11 +415,6 @@ public static class AgentHost
             catch (RepositoryOpenException exception)
             {
                 error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
-            catch (KeyUnwrapFailedException)
-            {
-                error.WriteLine("error: the passphrase does not open this repository.");
                 return 1;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -577,7 +530,7 @@ public static class AgentHost
                         StateDirectory = stateDirectory,
                         Logging = logging,
                     },
-                    passphrase: null, cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 var handler = new ServiceCommandHandler(setupRuntime, RemoteBindingState.Off, CallerScope.Local);
 
@@ -932,8 +885,7 @@ public static class AgentHost
 
             try
             {
-            using var passphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
-            await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, lifetime.Token)
+            await using var runtime = await ServiceRuntime.StartAsync(options, lifetime.Token)
                 .ConfigureAwait(false);
 
             // The remote binding, when enabled, is opened before the command
@@ -1018,12 +970,8 @@ public static class AgentHost
                         archivesWereExplicit, Api.InstallationDefaults.ArchivesVariable, archivesRoot!);
                     var poolWidth = ServiceRuntime.ConfiguredBackupPoolWidth(options);
                     var remoteBound = remoteListener is null ? "off" : remoteListener.Endpoint.ToString();
-                    var passphrasePosture = passphraseValue is null
-                        ? "none in the environment (write-only posture, ADR-0042)"
-                        : "held for this run";
-
                     Log.StartupLocations(hostLog, stateDirectory, stateProvenance, archivesRoot!, archivesProvenance);
-                    Log.StartupPosture(hostLog, pollSeconds, poolWidth, remoteBound, passphrasePosture);
+                    Log.StartupPosture(hostLog, pollSeconds, poolWidth, remoteBound);
                     foreach (var set in runtime.Configuration.BackupSets)
                     {
                         var schedule = set.Schedule ?? "manual-only";
@@ -1128,11 +1076,6 @@ public static class AgentHost
         catch (RepositoryOpenException exception)
         {
             error.WriteLine($"error: {exception.Message}");
-            return 1;
-        }
-        catch (KeyUnwrapFailedException)
-        {
-            error.WriteLine("error: the passphrase does not open this repository.");
             return 1;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -1555,11 +1498,12 @@ public static class AgentHost
 
         error.WriteLine($"# To apply: {apply}");
         error.WriteLine(
-            "# First, store the passphrase once as the SAME account the service runs as, so it self-unlocks "
-            + "at boot with nobody present (ADR-0028 §9):");
+            "# First, run `setup` once as the SAME account the service runs as, so the write credential it "
+            + "stores is readable at boot with nobody present (ADR-0042 §5, ADR-0044):");
         error.WriteLine(
-            $"#   \"{executablePath}\" unlock --archives \"{options.ArchivesRoot}\" "
-            + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR>");
+            $"#   \"{executablePath}\" setup --archives \"{options.ArchivesRoot}\" "
+            + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR> --acknowledge-loss "
+            + "--kit-output <path> --user <name> --password-env <VAR>");
         return 0;
     }
 

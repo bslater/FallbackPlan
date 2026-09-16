@@ -26,6 +26,7 @@ public sealed class PeerQuotaTests : IDisposable
     [TestMethod]
     public async Task FanOut_TheQuotaWouldBeCrossed_StopsAtTheBoundaryAndResumesWhenRaised()
     {
+        await _source.SetupAsync();
         _source.WriteSourceFile("notes.txt", "too big for a one-byte quota");
 
         // One byte: the first object's declared length already crosses it, so
@@ -38,7 +39,7 @@ public sealed class PeerQuotaTests : IDisposable
 
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once", "--poll-seconds", "1");
+            "--once", "--poll-seconds", "1");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         // The lender's policy said no: failed with the quota named, and a
@@ -84,7 +85,7 @@ public sealed class PeerQuotaTests : IDisposable
 
         var second = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once", "--poll-seconds", "1");
+            "--once", "--poll-seconds", "1");
         Assert.AreEqual(0, second.ExitCode, second.Error);
 
         var recovered = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
@@ -96,6 +97,7 @@ public sealed class PeerQuotaTests : IDisposable
     [TestMethod]
     public async Task FanOut_TheDestinationNarrowedItsTerms_AdoptsThemAndLeavesADurableNotice()
     {
+        await _source.SetupAsync();
         _source.WriteSourceFile("notes.txt", "small enough to converge");
 
         // The source recorded a megabyte at pairing; the destination's grant
@@ -108,7 +110,7 @@ public sealed class PeerQuotaTests : IDisposable
 
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         // Replication itself converged — the new ceiling still fits this set.
@@ -130,6 +132,7 @@ public sealed class PeerQuotaTests : IDisposable
     [TestMethod]
     public async Task FanOut_TheDestinationCannotStore_IsRecordedUnavailableForRetryNotAsPolicy()
     {
+        await _source.SetupAsync();
         _source.WriteSourceFile("notes.txt", "nowhere to put this");
 
         var destinationFingerprint = await StartDestinationAsync(
@@ -145,7 +148,7 @@ public sealed class PeerQuotaTests : IDisposable
 
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
@@ -172,6 +175,7 @@ public sealed class PeerQuotaTests : IDisposable
     [TestMethod]
     public async Task FanOut_ThePeersLoanIsNearlySpent_WarnsBeforeAPushRunsIntoTheCeiling()
     {
+        await _source.SetupAsync();
         // Until now the only news about capacity was the boundary stop
         // itself: exact, but delivered by the failure it was meant to
         // anticipate. The destination already had `quota − usage` in a local
@@ -184,7 +188,7 @@ public sealed class PeerQuotaTests : IDisposable
 
         var first = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, first.ExitCode, first.Error);
 
         // No quota, so nothing to be near the end of.
@@ -207,8 +211,8 @@ public sealed class PeerQuotaTests : IDisposable
         }
 
         var second = await RunAgentAsync(
-            "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable);
+            "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory
+            );
         Assert.AreEqual(0, second.ExitCode, second.Error);
 
         var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)

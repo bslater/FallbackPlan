@@ -110,20 +110,13 @@ public sealed class ArchiveSession : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _pinned = pinned;
         _intentScope = intentScope;
-        // A write-only repository has no data key: its data blobs seal their
-        // records under per-blob content keys, and the footer — the structure
-        // plane — derives from the METADATA class key (ADR-0042 §2). The
-        // session's class key is therefore the structure key there, and the
-        // sealing public key rides beside it for CreateSealed below.
-        if (keys.WriteOnly)
-        {
-            _classKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
-            _sealingPublicKey = keys.SealingPublicKey.ToArray();
-        }
-        else
-        {
-            _classKey = keys.DeriveClassKey(BlobClass.Data, generation);
-        }
+        // A repository has no data key: its data blobs seal their records
+        // under per-blob content keys, and the footer — the structure plane —
+        // derives from the METADATA class key (ADR-0042 §2). The session's
+        // class key is therefore the structure key, and the sealing public
+        // key rides beside it for CreateSealed below.
+        _classKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
+        _sealingPublicKey = keys.SealingPublicKey.ToArray();
 
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
@@ -1038,7 +1031,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             _policy.EncryptionProfile,
             _policy.BlobWriteProfile,
             _pinned,
-            _sealingPublicKey is null ? FormatLimits.FormatVersion : FormatLimits.SealedFormatVersion,
+            FormatLimits.FormatVersion,
             _logger);
 
         if (result is not ResumeResult.Resumed resumed)

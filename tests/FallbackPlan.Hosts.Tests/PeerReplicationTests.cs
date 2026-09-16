@@ -173,6 +173,7 @@ public sealed class PeerReplicationTests : IDisposable
     [TestMethod]
     public async Task FanOut_APeerDestination_ConvergesWithoutACommand()
     {
+        await _source.SetupAsync();
         // No sync command anywhere in this test: the set declares a peer
         // destination and the scheduler pass fans out to it (ADR-0034 §3,
         // FR-DEST-002) — the hub doing on schedule what `sync` does on demand.
@@ -208,7 +209,7 @@ public sealed class PeerReplicationTests : IDisposable
 
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         // The peer holds a byte-identical replica of the set's staging
@@ -267,6 +268,7 @@ public sealed class PeerReplicationTests : IDisposable
     [TestMethod]
     public async Task FanOut_ThePeerRevokedThisHub_RaisesADurableNoticeFromTheRefusal()
     {
+        await _source.SetupAsync();
         // The other delivery path (FR-DEST-008): the spoke ended the peering
         // while the hub was away, so the hub learns from the Revoked refusal
         // at its next sync — and keeps the fact durably.
@@ -312,7 +314,7 @@ public sealed class PeerReplicationTests : IDisposable
         // ledger's and the notice's to carry.
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
@@ -365,7 +367,7 @@ public sealed class PeerReplicationTests : IDisposable
         RunAgentAsync(
         [
             "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, .. extra,
+            .. extra,
         ]);
 
     /// <summary>

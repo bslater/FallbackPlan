@@ -185,10 +185,11 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// collection run's authority to author deletions on a write-only set —
     /// the derived reclaim sub-root, sealed end-to-end to this service's
     /// recipient key and rendered as hex, the same permitted shape under
-    /// NFR-SEC-009 as 1.x's restore grant. Null is correct for every v1 set,
-    /// which derives the key it already holds, and for a dry run, which
-    /// authors nothing. A write-only set applying without one is refused by
-    /// name rather than falling back to the key it publishes with. Additive:
+    /// NFR-SEC-009 as 1.x's restore grant. Null is correct for a dry run,
+    /// which authors nothing (and was, until format 1 went, for a set whose
+    /// service derived the key itself). A write-only set applying without one
+    /// is refused by name rather than falling back to the key it publishes
+    /// with. Additive:
     /// a pre-1.26 client's retention command still parses, and still reports.
     /// 1.27 adds `drill_limit` to each destination row (ADR-0054 Amendment
     /// 2): what a passing drill could not prove. A write-only set's replica

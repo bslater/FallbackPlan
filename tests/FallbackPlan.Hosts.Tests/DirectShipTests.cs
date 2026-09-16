@@ -945,7 +945,6 @@ public sealed class DirectShipTests : IDisposable
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 MaxConcurrentBackupsOverride = 2,
             },
-            passphrase: null,
             Timeout);
 
         var docs = runtime.Configuration.BackupSets.Single(set => set.Name == "docs");
@@ -1121,7 +1120,6 @@ public sealed class DirectShipTests : IDisposable
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 Logging = withLogging ? _logging : null,
             },
-            passphrase: null,
             Timeout);
     }
 

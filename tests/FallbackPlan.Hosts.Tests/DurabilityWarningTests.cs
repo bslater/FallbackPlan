@@ -48,7 +48,7 @@ public sealed class DurabilityWarningTests : IDisposable
     {
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
-            passphrase: null, _timeout.Token);
+            _timeout.Token);
 
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<SetDraftValidationResult>(

@@ -123,7 +123,7 @@ public sealed class SealedBlobTests : IDisposable
         // metadata key alone (the provider throws on a data-key ask), and
         // every record — content key unsealed by the grant — round-trips
         // through 04 §6 step 7 included.
-        Assert.AreEqual(FormatLimits.SealedFormatVersion, reader.Envelope.FormatVersion);
+        Assert.AreEqual(FormatLimits.FormatVersion, reader.Envelope.FormatVersion);
         Assert.AreEqual(FallbackPlan.Repository.Crypto.ContentSealing.SealedLength, reader.Envelope.SealedContentKey.Length);
         Assert.AreEqual(payloads.Count, reader.RecordTable.Count);
 
@@ -259,7 +259,7 @@ public sealed class SealedBlobTests : IDisposable
         var resumed = BlobWriter.TryResume(
             SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
             EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, pinned,
-            expectedFormatVersion: FormatLimits.SealedFormatVersion);
+            expectedFormatVersion: FormatLimits.FormatVersion);
         System.Security.Cryptography.CryptographicOperations.ZeroMemory(structureKey);
         Assert.IsInstanceOfType<ResumeResult.Resumed>(resumed, out var outcome);
 
@@ -374,7 +374,7 @@ public sealed class SealedBlobTests : IDisposable
             return BlobWriter.TryResume(
                 SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
                 EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, Pinned,
-                expectedFormatVersion: FormatLimits.SealedFormatVersion,
+                expectedFormatVersion: FormatLimits.FormatVersion,
                 logger: logger);
         }
         finally

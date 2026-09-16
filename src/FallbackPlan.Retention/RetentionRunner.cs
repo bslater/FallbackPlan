@@ -45,9 +45,9 @@ public static class RetentionRunner
     /// <param name="setName">The set's name, for the log alone — the runner is handed a store, not a set.</param>
     /// <param name="logger">Where the pass reports what it kept and what it took.</param>
     /// <param name="reclaim">
-    /// This run's authority to author deletions (ADR-0055 §6), or null when
-    /// the repository derives its own. A write-only set declaring
-    /// <c>reclaim-authority</c> needs one; a v1 set never does.
+    /// This run's authority to author deletions (ADR-0055 §6). A set
+    /// declaring <c>reclaim-authority</c> needs one; null is for a dry run,
+    /// and for a repository written before the feature.
     /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
