@@ -1934,6 +1934,246 @@ public static class CliApplication
             }));
         }
 
+        // ------------------------------------------------- discover and adopt
+
+        // Adopting a destination's archives after a rebuild (ADR-0061): both
+        // verbs are the service's to do — discovery reads the destination's
+        // descriptors, adoption writes the service's own state — so each
+        // speaks to the running service, locally or over --connect, and
+        // never touches a repository in this process.
+        async Task<int> WithServiceClientAsync(
+            ParseResult parse, Func<IFallbackPlanClient, Task<int>> work, CancellationToken cancellationToken)
+        {
+            if (ResolveRemote(parse, direct: false) is { } target)
+            {
+                await using var connection = await RemotePeer.ConnectAsync(
+                    target.Host, target.Port, target.State, target.Fingerprint, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+                error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                return await work(connection.Client).ConfigureAwait(false);
+            }
+
+            var state = parse.GetValue(stateOption) is { Length: > 0 } named ? named : InstallationDefaults.StateDirectory;
+            LocalServiceClient client;
+            try
+            {
+                client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException)
+            {
+                throw new CliFailureException(
+                    $"no service is listening for '{state}'. Start one (`fallbackplan-agent`): discovering and "
+                    + "adopting a destination's archives is the service's to do.");
+            }
+
+            await using (client.ConfigureAwait(false))
+            {
+                await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                error.WriteLine($"mode: service — the service holding the writer role for '{state}' answered this.");
+                return await work(client).ConfigureAwait(false);
+            }
+        }
+
+        static async Task<TResult> AskAsync<TResult>(
+            IFallbackPlanClient client, ServiceCommand command, CancellationToken cancellationToken)
+            where TResult : ServiceResult
+        {
+            var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            return result switch
+            {
+                TResult expected => expected,
+                ServiceError serviceError => throw new CliFailureException(serviceError.Message),
+                _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+            };
+        }
+
+        {
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "The declared destination to look in, by name.",
+                Required = true,
+            };
+            var command = new Command(
+                "discover",
+                "List the archives a declared destination holds, by descriptor alone — no credential involved "
+                + "(ADR-0061). What a rebuilt machine sees before it adopts anything.");
+            command.Options.Add(destinationOption);
+            command.Options.Add(stateOption);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => WithServiceClientAsync(parse, async client =>
+            {
+                var destination = parse.GetValue(destinationOption)!;
+                var listing = await AskAsync<ArchivesDiscoveredResult>(
+                    client, new DiscoverArchivesCommand(destination), cancellationToken).ConfigureAwait(false);
+
+                if (listing.Archives.Count == 0)
+                {
+                    output.WriteLine($"destination '{destination}' holds no archives.");
+                }
+
+                foreach (var archive in listing.Archives)
+                {
+                    var created = DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(archive.CreatedAt, long.MaxValue))
+                        .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                    var owner = archive.OwnedBySet is { } set
+                        ? $"set '{set}'"
+                        : archive.SameInstallation ? "this installation, unconfigured" : "nobody yet";
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                        $"{archive.RepositoryId}  {created}  {archive.SnapshotObjects,3} snapshot(s)  {archive.CreatedBy}  {owner}"));
+                }
+
+                foreach (var warning in listing.Warnings)
+                {
+                    error.WriteLine($"warning: {warning}");
+                }
+
+                return 0;
+            }, cancellationToken)));
+        }
+
+        {
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "The declared destination the archive was discovered at.",
+                Required = true,
+            };
+            var repositoryOption = new Option<string>("--repository")
+            {
+                Description = "The archive's repository id, thirty-two hex characters, as `discover` listed it.",
+                Required = true,
+            };
+            var nameOption = new Option<string?>("--name")
+            {
+                Description = "Adopt the set under this name instead of the one the archive recorded.",
+            };
+            var rootsOption = new Option<string[]>("--root")
+            {
+                Description = "A root folder to capture, instead of the ones the archive recorded. Repeatable.",
+                AllowMultipleArgumentsPerToken = false,
+            };
+            var scheduleOption = new Option<string?>("--schedule")
+            {
+                Description = "The set's schedule, instead of the one the archive recorded.",
+            };
+            var command = new Command(
+                "adopt",
+                "Take one of a destination's archives back under its original repository and set ids, with the "
+                + "passphrase it was written with (ADR-0061). The set is re-declared from the shape the archive "
+                + "records and its next backup is incremental. The passphrase is derived HERE against the archive's "
+                + "own salt, proved against its sealing key, and only a sealed envelope reaches the service.");
+            command.Options.Add(destinationOption);
+            command.Options.Add(repositoryOption);
+            command.Options.Add(passphraseEnvOption);
+            command.Options.Add(nameOption);
+            command.Options.Add(rootsOption);
+            command.Options.Add(scheduleOption);
+            command.Options.Add(stateOption);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
+            {
+                // Refused before anything dials: the mistakes a person makes on
+                // the worst morning of their computing life should each say
+                // what to do next.
+                var destination = parse.GetValue(destinationOption)!;
+                var repositoryId = parse.GetValue(repositoryOption)!.Trim().ToLowerInvariant();
+                if (repositoryId.Length != 32 || !repositoryId.All(Uri.IsHexDigit))
+                {
+                    throw new CliFailureException(
+                        $"'{repositoryId}' is not a repository id: thirty-two hex characters, as `discover --destination "
+                        + $"{destination}` lists them.");
+                }
+
+                if (parse.GetValue(passphraseEnvOption) is not { Length: > 0 } passphraseVariable)
+                {
+                    throw new CliFailureException(
+                        "name --passphrase-env <VAR>, the environment variable holding the passphrase this backup was "
+                        + "written with. It is derived here, on this machine, and never sent.");
+                }
+
+                return WithServiceClientAsync(parse, async client =>
+                {
+                    var description = await AskAsync<ServiceDescriptionResult>(
+                        client, new DescribeServiceCommand(), cancellationToken).ConfigureAwait(false);
+                    if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex)
+                    {
+                        throw new CliFailureException("the service does not publish a grant-recipient key; run first-run setup first.");
+                    }
+
+                    // The facts to derive against come from the service's own
+                    // discovery, exactly as the console's ceremony takes them.
+                    var listing = await AskAsync<ArchivesDiscoveredResult>(
+                        client, new DiscoverArchivesCommand(destination), cancellationToken).ConfigureAwait(false);
+                    var archive = listing.Archives.FirstOrDefault(candidate =>
+                        string.Equals(candidate.RepositoryId, repositoryId, StringComparison.OrdinalIgnoreCase))
+                        ?? throw new CliFailureException(
+                            $"destination '{destination}' holds no archive '{repositoryId}'; run `discover --destination "
+                            + $"{destination}` and pick one it lists.");
+
+                    string envelope;
+                    using (var passphrase = CliSession.ReadPassphrase(passphraseVariable))
+                    using (var authority = WriteOnlyDerivation.Derive(
+                        passphrase,
+                        new Argon2Parameters
+                        {
+                            MemoryKiB = archive.KdfMemoryKib, Iterations = archive.KdfIterations, Parallelism = archive.KdfParallelism,
+                        },
+                        Convert.FromHexString(archive.KdfSalt),
+                        KdfValidationMode.OpenRepository))
+                    {
+                        if (!authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(archive.SealingPublicKey)))
+                        {
+                            throw new CliFailureException(
+                                "the passphrase does not reproduce this archive's credential — it is not the passphrase "
+                                + "this backup was written with. Nothing was sent.");
+                        }
+
+                        envelope = Convert.ToHexStringLower(
+                            WriteOnlyProvisioning.SealProvision(
+                                Convert.FromHexString(recipientHex), authority, Convert.FromHexString(archive.KdfSalt),
+                                new Argon2Parameters
+                                {
+                                    MemoryKiB = archive.KdfMemoryKib, Iterations = archive.KdfIterations, Parallelism = archive.KdfParallelism,
+                                }));
+                    }
+
+                    var roots = parse.GetValue(rootsOption) is { Length: > 0 } given
+                        ? given.Select(path => new BackupRootDescriptor(path)).ToList()
+                        : null;
+                    var adopted = await AskAsync<ArchiveAdoptedResult>(
+                        client,
+                        new AdoptArchiveCommand(
+                            destination, archive.RepositoryId, envelope,
+                            SetName: parse.GetValue(nameOption), Roots: roots, Schedule: parse.GetValue(scheduleOption)),
+                        cancellationToken).ConfigureAwait(false);
+
+                    output.WriteLine(
+                        $"set '{adopted.SetName}' ({adopted.SetId}) {(adopted.AlreadyAdopted ? "was already configured against" : "adopted")} "
+                        + $"archive {adopted.RepositoryId} at '{destination}'");
+                    foreach (var root in adopted.Roots)
+                    {
+                        output.WriteLine($"  root      {root.Path}{(root.Label is { } label ? $"  [{label}]" : string.Empty)}");
+                    }
+
+                    output.WriteLine($"  schedule  {adopted.Schedule ?? "(manual)"}");
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                        $"  history   {adopted.SnapshotCount} snapshot(s); writer identity resumed: {(adopted.WriterIdentityResumed ? "yes" : "no")}"));
+                    foreach (var line in adopted.Lines)
+                    {
+                        output.WriteLine($"  {line}");
+                    }
+
+                    return adopted.MissingRoots.Count == 0 ? 0 : 2;
+                }, cancellationToken);
+            }));
+        }
+
         // ---------------------------------------------------------------- logs
 
         {

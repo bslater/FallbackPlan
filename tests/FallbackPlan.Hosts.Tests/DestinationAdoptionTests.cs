@@ -1,5 +1,7 @@
+using System.CommandLine;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository;
@@ -375,6 +377,89 @@ public sealed class DestinationAdoptionTests : IDisposable
             "ran", (await Scheduler.Enqueue(runtime, docs, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
         Assert.AreEqual(2, Directory.GetFiles(Path.Combine(docsReplica, "snapshots"), "*", SearchOption.AllDirectories).Length);
     }
+
+    [TestMethod]
+    public async Task Cli_DiscoversAdoptsBacksUpAndRestores_ThroughTheLocalService()
+    {
+        // The headless road back (ADR-0061 §6): the same drill the recovery
+        // script runs on the Release binaries, here against an in-process
+        // service. The CLI derives against the discovered archive's salt and
+        // sends only the sealed envelope; its routed restore then derives the
+        // grant PER SET (contract 1.30), because the adopted set's salt is
+        // not the rebuilt installation's.
+        _harness.WriteSourceFile("docs/notes.txt", "the first words");
+        WriteIncompressible("docs/big.bin");
+        var replica = await BackUpThenLoseTheMachineAsync();
+        var blobBytesBefore = BlobBytes(replica);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var discovered = await RunCliAsync("discover", "--destination", Vault, "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, discovered.ExitCode, discovered.All);
+        Assert.Contains(Path.GetFileName(replica), discovered.Output, StringComparison.Ordinal);
+        Assert.Contains("nobody yet", discovered.Output, StringComparison.Ordinal);
+
+        var wrong = "FBP_WRONG_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(wrong, "not the passphrase this archive was born from");
+        try
+        {
+            var refused = await RunCliAsync(
+                "adopt", "--destination", Vault, "--repository", Path.GetFileName(replica),
+                "--state", _harness.StateDirectory, "--passphrase-env", wrong);
+            Assert.AreEqual(1, refused.ExitCode, refused.All);
+            Assert.Contains("Nothing was sent", refused.Error, StringComparison.Ordinal);
+            Assert.IsEmpty(runtime.Configuration.BackupSets, "a refused derivation must reach the service with nothing");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(wrong, null);
+        }
+
+        var adopted = await RunCliAsync(
+            "adopt", "--destination", Vault, "--repository", Path.GetFileName(replica),
+            "--state", _harness.StateDirectory, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, adopted.ExitCode, adopted.All);
+        Assert.Contains($"set 'docs' ({_harness.DocsSetId}) adopted", adopted.Output, StringComparison.Ordinal);
+        Assert.Contains("writer identity resumed: yes", adopted.Output, StringComparison.Ordinal);
+        Assert.AreEqual(_harness.DocsSetId, Assert.ContainsSingle(runtime.Configuration.BackupSets).Id);
+
+        // The set descriptor now carries the archive's own derivation facts,
+        // which differ from the rebuilt installation's.
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), Timeout), out var description);
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), Timeout), out var sets);
+        var docs = Assert.ContainsSingle(sets.Sets);
+        Assert.IsNotNull(docs.KdfSalt);
+        Assert.AreNotEqual(description.KdfSalt, docs.KdfSalt, "an adopted set keeps the salt its archive was born under");
+
+        _harness.WriteSourceFile("docs/notes.txt", "the second words");
+        File.SetLastWriteTimeUtc(WriteIncompressible("docs/big.bin"), DateTime.UtcNow.AddMinutes(1));
+        var backedUp = await RunCliAsync("backup", "--set", "docs", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, backedUp.ExitCode, backedUp.All);
+        Assert.AreEqual(replica, Assert.ContainsSingle(Directory.GetDirectories(VaultPath)));
+        var grown = BlobBytes(replica) - blobBytesBefore;
+        Assert.IsTrue(grown < 64 * 1024, $"the incremental run shipped {grown} bytes");
+
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var newest = listed.Snapshots.MaxBy(snapshot => snapshot.CapturedAt)!.SnapshotId;
+        var output = Path.Combine(_harness.WorkPath, "restored-cli");
+        var restored = await RunCliAsync(
+            "restore", newest, "--output", output, "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, restored.ExitCode, restored.All);
+        var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "notes.txt", SearchOption.AllDirectories));
+        Assert.AreEqual("the second words", await File.ReadAllTextAsync(recovered, Timeout));
+    }
+
+    private static Task<HostHarness.Invocation> RunCliAsync(params string[] args) =>
+        HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            args);
 
     private static string PassphraseText => "The hosts-tests Passphrase 42 of this installation!";
 

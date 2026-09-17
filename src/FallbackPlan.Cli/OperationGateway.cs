@@ -566,35 +566,59 @@ internal sealed class ServiceGateway(
                 + "--passphrase-env <VAR> so the restore grant can be derived here (ADR-0042).");
         }
 
-        string envelope;
-        using (var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable))
-        using (var authority = WriteOnlyDerivation.Derive(
-            passphrase,
-            new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
-            Convert.FromHexString(description.KdfSalt),
-            KdfValidationMode.OpenRepository))
-        {
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(description.SealingPublicKey)))
-            {
-                throw new CliFailureException(
-                    "the passphrase does not reproduce this installation's credential — nothing was sent.");
-            }
-
-            envelope = Convert.ToHexStringLower(
-                WriteOnlyProvisioning.SealGrant(
-                    Convert.FromHexString(description.RestoreGrantRecipient), authority.SealingPrivateKey));
-        }
-
         // A restore source is opened by set, and the snapshot names no set
         // a client can rely on — a snapshot a direct-mode backup wrote
         // carries the archive's own identity, not the configured set's — so
         // the sets are tried in order and the first whose archive lists the
         // snapshot is the one. Every other source opened on the way is
         // closed again.
+        //
+        // The grant is derived PER SET (contract 1.30): a set's archive
+        // normally shares the installation's salt, but one adopted from a
+        // destination (ADR-0061) keeps the salt it was born under, and only a
+        // grant derived under that salt reproduces its sealing key. One
+        // derivation per distinct salt, so the ordinary installation still
+        // runs Argon2id once.
         var sets = await SendAsync<BackupSetsResult>(
             new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+        var envelopesBySalt = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var recipient = Convert.FromHexString(description.RestoreGrantRecipient);
+        using var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable);
+
+        string? EnvelopeFor(string saltHex, Argon2Parameters parameters, string sealingPublicKeyHex)
+        {
+            if (envelopesBySalt.TryGetValue(saltHex, out var known))
+            {
+                return known;
+            }
+
+            using var authority = WriteOnlyDerivation.Derive(
+                passphrase, parameters, Convert.FromHexString(saltHex), KdfValidationMode.OpenRepository);
+            var envelope = authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(sealingPublicKeyHex))
+                ? Convert.ToHexStringLower(WriteOnlyProvisioning.SealGrant(recipient, authority.SealingPrivateKey))
+                : null;
+            envelopesBySalt[saltHex] = envelope;
+            return envelope;
+        }
+
         foreach (var set in sets.Sets)
         {
+            var envelope = set is { KdfSalt.Length: > 0, KdfMemoryKib: { } setMemory, KdfIterations: { } setIterations, KdfParallelism: { } setLanes, SealingPublicKey.Length: > 0 }
+                ? EnvelopeFor(
+                    set.KdfSalt,
+                    new Argon2Parameters { MemoryKiB = setMemory, Iterations = setIterations, Parallelism = setLanes },
+                    set.SealingPublicKey)
+                : EnvelopeFor(
+                    description.KdfSalt,
+                    new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
+                    description.SealingPublicKey);
+            if (envelope is null)
+            {
+                // Not this set's passphrase; the next set may be adopted from
+                // elsewhere and answer to it.
+                continue;
+            }
+
             if (await client.ExecuteAsync(
                     new OpenRestoreSourceCommand(set.Name, Envelope: envelope), cancellationToken).ConfigureAwait(false)
                 is not RestoreSourceOpenedResult opened)
@@ -610,6 +634,12 @@ internal sealed class ServiceGateway(
 
             await client.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), CancellationToken.None)
                 .ConfigureAwait(false);
+        }
+
+        if (envelopesBySalt.Count > 0 && envelopesBySalt.Values.All(envelope => envelope is null))
+        {
+            throw new CliFailureException(
+                "the passphrase does not reproduce this installation's credential — nothing was sent.");
         }
 
         throw new CliFailureException($"no configured set's archive holds snapshot '{snapshotId}'.");
