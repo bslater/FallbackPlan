@@ -45,8 +45,10 @@ public sealed partial class ServiceCommandHandler
         {
             (credential, kdfSalt, kdfParameters) = runtime.GrantRecipient.OpenProvision(envelope);
         }
-        catch (SealedContentException)
+        catch (Exception malformed) when (malformed is SealedContentException or ArgumentException)
         {
+            // Too short to be an envelope at all, or sealed to someone else:
+            // both are "not an envelope this service can open".
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument,
                 "The provisioning envelope does not open — it was sealed to a different service's recipient key.");

@@ -51,53 +51,116 @@ public sealed partial class ServiceCommandHandler
             return refusal;
         }
 
-        var owners = OwnedRepositories();
-        var installationSealingKey = InstallationSealingPublicKey();
         var archives = new List<DiscoveredArchiveDescriptor>();
         var warnings = new List<string>();
 
-        foreach (var candidate in Directory.GetDirectories(destination!.Path!).Order(StringComparer.Ordinal))
+        if (destination!.Kind == DestinationKind.Peer)
+        {
+            // A peer's inventory names what THIS device owns there (07 §3.5)
+            // — after a claim (ADR-0053), the replicas the dead machine
+            // wrote. Each is opened over the retrieval session and read
+            // exactly as a directory would be.
+            try
+            {
+                foreach (var repositoryIdHex in await PeerInventoryAsync(destination, cancellationToken).ConfigureAwait(false))
+                {
+                    var client = await PeerRetrievalClient.DialAsync(
+                        runtime, destination, Convert.FromHexString(repositoryIdHex), cancellationToken)
+                        .ConfigureAwait(false);
+                    await using (client.ConfigureAwait(false))
+                    {
+                        await DescribeArchiveAsync(
+                            new PeerRetrievalObjectStore(client), repositoryIdHex, archives, warnings, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Protocol.PeerProtocolException refused)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed, $"Peer '{destination.Name}' refused the retrieval: {refused.Message}");
+            }
+            catch (Exception unreachable) when (unreachable is IOException or System.Net.Sockets.SocketException)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable, $"Peer '{destination.Name}' is not reachable: {unreachable.Message}");
+            }
+
+            return new ArchivesDiscoveredResult(destination.Name, archives, warnings);
+        }
+
+        foreach (var candidate in Directory.GetDirectories(destination.Path!).Order(StringComparer.Ordinal))
         {
             if (!File.Exists(Path.Combine(candidate, RepositoryLifecycle.DescriptorKey.Value)))
             {
                 continue;
             }
 
-            var store = new LocalFileSystemObjectStore(candidate);
-            RepositoryDescriptor descriptor;
-            try
-            {
-                descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (RepositoryOpenException damaged)
-            {
-                // Named, not fatal: one damaged directory must not hide the
-                // archives beside it from the person looking for them.
-                warnings.Add($"'{Path.GetFileName(candidate)}' looks like an archive but its descriptor does not read: {damaged.Message}");
-                continue;
-            }
-
-            var survey = await FanOut.PublicationSurveyAsync(store, cancellationToken).ConfigureAwait(false);
-            var repositoryId = descriptor.RepositoryId.ToString();
-            archives.Add(new DiscoveredArchiveDescriptor(
-                repositoryId,
-                descriptor.FormatVersion,
-                descriptor.CreatedAt,
-                descriptor.CreatedBy,
-                Convert.ToHexStringLower(descriptor.KdfSalt.Span),
-                descriptor.KdfParameters.MemoryKiB,
-                descriptor.KdfParameters.Iterations,
-                descriptor.KdfParameters.Parallelism,
-                Convert.ToHexStringLower(descriptor.SealingPublicKey.Span),
-                survey.SnapshotObjects,
-                survey.Sequence,
-                owners.GetValueOrDefault(repositoryId),
-                installationSealingKey is not null
-                    && descriptor.SealingPublicKey.Span.SequenceEqual(installationSealingKey)));
+            await DescribeArchiveAsync(
+                new LocalFileSystemObjectStore(candidate), Path.GetFileName(candidate), archives, warnings, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         return new ArchivesDiscoveredResult(destination.Name, archives, warnings);
+    }
+
+    /// <summary>
+    /// One discovery row from one candidate store: the descriptor and the
+    /// cleartext snapshot survey, nothing keyed. A descriptor that does not
+    /// read becomes a warning, not a failure — one damaged archive must not
+    /// hide the ones beside it from the person looking for them.
+    /// </summary>
+    private async ValueTask DescribeArchiveAsync(
+        IObjectStore store,
+        string candidateName,
+        List<DiscoveredArchiveDescriptor> archives,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        RepositoryDescriptor descriptor;
+        try
+        {
+            descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RepositoryOpenException damaged)
+        {
+            warnings.Add($"'{candidateName}' looks like an archive but its descriptor does not read: {damaged.Message}");
+            return;
+        }
+
+        var survey = await FanOut.PublicationSurveyAsync(store, cancellationToken).ConfigureAwait(false);
+        var repositoryId = descriptor.RepositoryId.ToString();
+        var installationSealingKey = InstallationSealingPublicKey();
+        archives.Add(new DiscoveredArchiveDescriptor(
+            repositoryId,
+            descriptor.FormatVersion,
+            descriptor.CreatedAt,
+            descriptor.CreatedBy,
+            Convert.ToHexStringLower(descriptor.KdfSalt.Span),
+            descriptor.KdfParameters.MemoryKiB,
+            descriptor.KdfParameters.Iterations,
+            descriptor.KdfParameters.Parallelism,
+            Convert.ToHexStringLower(descriptor.SealingPublicKey.Span),
+            survey.SnapshotObjects,
+            survey.Sequence,
+            OwnedRepositories().GetValueOrDefault(repositoryId),
+            installationSealingKey is not null
+                && descriptor.SealingPublicKey.Span.SequenceEqual(installationSealingKey)));
+    }
+
+    /// <summary>The repository ids this device owns at a peer (07 §3.5), lowercase hex.</summary>
+    private async ValueTask<List<string>> PeerInventoryAsync(
+        DestinationConfiguration destination, CancellationToken cancellationToken)
+    {
+        var inventory = await PeerRetrievalClient.DialAsync(
+            runtime, destination, new byte[Protocol.RetrieveOpen.RepositoryIdLength], cancellationToken)
+            .ConfigureAwait(false);
+        await using (inventory.ConfigureAwait(false))
+        {
+            var page = await inventory.ListPageAsync(string.Empty, string.Empty, cancellationToken)
+                .ConfigureAwait(false);
+            return [.. page.Keys.Select(key => key.ToLowerInvariant()).Order(StringComparer.Ordinal)];
+        }
     }
 
     private async ValueTask<ServiceResult> AdoptArchiveAsync(
@@ -116,12 +179,41 @@ public sealed partial class ServiceCommandHandler
         }
 
         var repositoryIdHex = command.RepositoryId.ToLowerInvariant();
-        var replicaRoot = Path.Combine(destination!.Path!, repositoryIdHex);
-        if (!File.Exists(Path.Combine(replicaRoot, RepositoryLifecycle.DescriptorKey.Value)))
+        var replicaRoot = destination!.Kind == DestinationKind.LocalPath ? Path.Combine(destination.Path!, repositoryIdHex) : null;
+        if (replicaRoot is not null && !File.Exists(Path.Combine(replicaRoot, RepositoryLifecycle.DescriptorKey.Value)))
         {
             return new ServiceError(
                 ServiceErrorReason.NotFound,
                 $"Destination '{destination.Name}' holds no archive '{repositoryIdHex}' — run discovery and pick one it lists.");
+        }
+
+        if (replicaRoot is null)
+        {
+            // A peer: the replica must be this device's there — claimed
+            // (ADR-0053) — which the owner inventory says before any
+            // envelope is looked at, as the directory's existence does for
+            // a local path.
+            try
+            {
+                var inventory = await PeerInventoryAsync(destination, cancellationToken).ConfigureAwait(false);
+                if (!inventory.Contains(repositoryIdHex, StringComparer.Ordinal))
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.NotFound,
+                        $"Peer '{destination.Name}' holds no replica '{repositoryIdHex}' attributed to this machine — "
+                        + "claim it first (ADR-0053), then run discovery and pick one it lists.");
+                }
+            }
+            catch (Protocol.PeerProtocolException refused)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed, $"Peer '{destination.Name}' refused the retrieval: {refused.Message}");
+            }
+            catch (Exception unreachable) when (unreachable is IOException or System.Net.Sockets.SocketException)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable, $"Peer '{destination.Name}' is not reachable: {unreachable.Message}");
+            }
         }
 
         if (ScheduleDefect(command.Schedule) is { } scheduleDefect)
@@ -144,8 +236,11 @@ public sealed partial class ServiceCommandHandler
         {
             (credential, _, _) = runtime.GrantRecipient.OpenProvision(envelope);
         }
-        catch (SealedContentException)
+        catch (Exception malformed) when (malformed is SealedContentException or ArgumentException)
         {
+            // Too short to be an envelope at all, or sealed to someone else:
+            // both are "not an envelope this service can open", and neither
+            // is this verb's crash to report.
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument,
                 "The provisioning envelope does not open — it was sealed to a different service's recipient key.");
@@ -153,10 +248,56 @@ public sealed partial class ServiceCommandHandler
 
         using (credential)
         {
-            // Typed as the abstraction on purpose: everything below the
-            // resolve step reads through IObjectStore, so the peer half of
-            // ADR-0061 adds a store and an enumerator and nothing else.
-            IObjectStore replicaStore = new LocalFileSystemObjectStore(replicaRoot, runtime.LoggerFor<LocalFileSystemObjectStore>());
+            if (replicaRoot is null)
+            {
+                // Read over the retrieval session through the same steps a
+                // directory takes.
+                try
+                {
+                    var client = await PeerRetrievalClient.DialAsync(
+                        runtime, destination, Convert.FromHexString(repositoryIdHex), cancellationToken)
+                        .ConfigureAwait(false);
+                    await using (client.ConfigureAwait(false))
+                    {
+                        return await AdoptFromStoreAsync(
+                            command, destination, new PeerRetrievalObjectStore(client), repositoryIdHex, credential,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Protocol.PeerProtocolException refused)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.Failed, $"Peer '{destination.Name}' refused the retrieval: {refused.Message}");
+                }
+                catch (Exception unreachable) when (unreachable is IOException or System.Net.Sockets.SocketException)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.Unavailable, $"Peer '{destination.Name}' is not reachable: {unreachable.Message}");
+                }
+            }
+
+            return await AdoptFromStoreAsync(
+                command, destination,
+                new LocalFileSystemObjectStore(replicaRoot, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+                repositoryIdHex, credential, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Everything below the resolve step reads through <see cref="IObjectStore"/>:
+    /// a directory at a local path and a replica at a peer take the same road
+    /// from here, which is what let the peer half of ADR-0061 add an
+    /// enumerator and a store and nothing else.
+    /// </summary>
+    private async ValueTask<ServiceResult> AdoptFromStoreAsync(
+        AdoptArchiveCommand command,
+        DestinationConfiguration destination,
+        IObjectStore replicaStore,
+        string repositoryIdHex,
+        RepositoryWriteCredential credential,
+        CancellationToken cancellationToken)
+    {
+        {
             RepositoryDescriptor descriptor;
             try
             {
@@ -343,7 +484,8 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
         }
 
-        if (LocalDestinationPlacement.Judge(
+        if (destination.Kind == DestinationKind.LocalPath
+            && LocalDestinationPlacement.Judge(
                 [.. resolvedRoots.Select(root => root.Path)], destination.Path!, runtime.VolumeIdOf, runtime.DiskIdOf)
             is { } conflict)
         {
@@ -608,9 +750,9 @@ public sealed partial class ServiceCommandHandler
         IReadOnlyList<string> OtherSetIds);
 
     /// <summary>
-    /// The destination adoption can read from: declared, a local path, and
-    /// reachable. A peer destination is refused by name until the peer half
-    /// of ADR-0061 lands.
+    /// The destination adoption can read from: declared, and either a
+    /// reachable local path or a peer. A peer's reachability is learned by
+    /// dialling it, where the refusal can name what the peer said.
     /// </summary>
     private (DestinationConfiguration? Destination, ServiceError? Refusal) ResolveAdoptableDestination(string name)
     {
@@ -629,12 +771,16 @@ public sealed partial class ServiceCommandHandler
             return (null, new ServiceError(ServiceErrorReason.NotFound, $"No destination named '{name}' is declared."));
         }
 
+        if (destination.Kind == DestinationKind.Peer)
+        {
+            return (destination, null);
+        }
+
         if (destination.Kind != DestinationKind.LocalPath)
         {
             return (null, new ServiceError(
                 ServiceErrorReason.Refused,
-                $"Destination '{name}' is a peer — adopting from a peer is not built yet: claim the replica "
-                + "(ADR-0053), then adopt from a local copy, or wait for the peer half of ADR-0061."));
+                $"Destination '{name}' is of a kind this service cannot read archives from."));
         }
 
         if (string.IsNullOrWhiteSpace(destination.Path) || !Directory.Exists(destination.Path))

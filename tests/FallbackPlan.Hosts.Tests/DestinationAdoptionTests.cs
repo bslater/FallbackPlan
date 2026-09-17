@@ -257,7 +257,7 @@ public sealed class DestinationAdoptionTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Adopt_APeerDestination_IsRefusedByName()
+    public async Task Discover_AnUnreachablePeer_IsUnavailableNotACrash()
     {
         Directory.CreateDirectory(VaultPath);
         var path = Path.Combine(_harness.StateDirectory, "config.json");
@@ -277,10 +277,13 @@ public sealed class DestinationAdoptionTests : IDisposable
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
+        // Declared but never paired, and at an address nothing answers: the
+        // peer half of ADR-0061 dials, and what it learns is said as
+        // unavailability rather than surfacing as an exception.
         Assert.IsInstanceOfType<ServiceError>(
             await handler.ExecuteAsync(new DiscoverArchivesCommand("friend"), Timeout), out var refused);
-        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
-        Assert.Contains("peer", refused.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.AreEqual(ServiceErrorReason.Unavailable, refused.Reason);
+        Assert.Contains("friend", refused.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]
