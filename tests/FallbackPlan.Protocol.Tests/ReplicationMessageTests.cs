@@ -107,38 +107,181 @@ public sealed class ReplicationMessageTests
     }
 
     [TestMethod]
-    public void Claim_RoundTripsTheKeyAndTheSignature()
+    public void ClaimOpen_CarriesNothing_AndSkipsWhatALaterVersionAdds()
+    {
+        // A claimant that has lost everything has nothing to say yet: no
+        // repository id, no salt, no key. The open is the question "what
+        // should I derive against?", and its body is empty by design.
+        var open = new ReplicationClaimOpen();
+        Assert.AreEqual(0, open.BodyEntryCount);
+        _ = RoundTrip(open, ReplicationClaimOpen.Read);
+
+        var writer = new System.Formats.Cbor.CborWriter(System.Formats.Cbor.CborConformanceMode.Canonical);
+        writer.WriteStartMap(1);
+        writer.WriteInt32(7);
+        writer.WriteTextString("something a later version says");
+        writer.WriteEndMap();
+        _ = ReplicationClaimOpen.Read(new System.Formats.Cbor.CborReader(writer.Encode()));
+    }
+
+    [TestMethod]
+    public void ClaimParameters_RoundTripTheSaltsAndCosts_SortedBySalt()
+    {
+        // Four parallel arrays and no room for anything else: a salt and
+        // three public Argon2id costs per claimable derivation. The order is
+        // the salts' own, so the answer says nothing about when each
+        // attribution was recorded.
+        var first = Enumerable.Repeat((byte)0x10, ReplicationClaimParameters.SaltLength).ToArray();
+        var second = Enumerable.Repeat((byte)0x20, ReplicationClaimParameters.SaltLength).ToArray();
+        var parameters = new ReplicationClaimParameters(
+            [first, second], [65_536, 262_144], [3, 4], [4, 1]);
+
+        var read = RoundTrip(parameters, ReplicationClaimParameters.Read);
+
+        Assert.AreEqual(parameters, read);
+        Assert.AreEqual(4, parameters.BodyEntryCount);
+        Assert.IsTrue(read.Salts[0].Span.SequenceEqual(first));
+        Assert.AreEqual(262_144u, read.MemoryKiB[1]);
+        Assert.AreEqual(4u, read.Iterations[1]);
+        Assert.AreEqual(1, read.Parallelism[1]);
+    }
+
+    [TestMethod]
+    public void ClaimParameters_Empty_RoundTrips()
+    {
+        // "Nothing here is claimable" is an answer, not a refusal: it is what
+        // a destination says to a paired peer whose replicas were all
+        // attributed before the claim key existed. The claimant reads it and
+        // stops, rather than being told a key it never sent was wrong.
+        var read = RoundTrip(new ReplicationClaimParameters([], [], [], []), ReplicationClaimParameters.Read);
+
+        Assert.IsEmpty(read.Salts);
+    }
+
+    [TestMethod]
+    public void ClaimParameters_UnsortedOrRepeatedSalts_AreMalformed()
+    {
+        var low = Enumerable.Repeat((byte)0x10, ReplicationClaimParameters.SaltLength).ToArray();
+        var high = Enumerable.Repeat((byte)0x20, ReplicationClaimParameters.SaltLength).ToArray();
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([high, low], [1, 1], [1, 1], [1, 1]), ReplicationClaimParameters.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([low, low], [1, 1], [1, 1], [1, 1]), ReplicationClaimParameters.Read));
+    }
+
+    [TestMethod]
+    public void ClaimParameters_UnequalArraysOrAWrongSaltWidth_AreMalformed()
+    {
+        // Pairing a salt with somebody else's costs is not a derivation.
+        var salt = new byte[ReplicationClaimParameters.SaltLength];
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([salt], [1, 2], [1], [1]), ReplicationClaimParameters.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([new byte[8]], [1], [1], [1]), ReplicationClaimParameters.Read));
+    }
+
+    [TestMethod]
+    public void ClaimParameters_CostsOutsideTheCaps_AreMalformedNotClamped()
+    {
+        // The claimant runs Argon2id on parameters the destination chose. A
+        // destination naming a terabyte of memory is naming a denial of
+        // service; a reader that clamped would run a derivation the
+        // destination never recorded and then be refused for it.
+        var salt = new byte[ReplicationClaimParameters.SaltLength];
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([salt], [ReplicationClaimParameters.MaximumMemoryKiB + 1], [1], [1]),
+            ReplicationClaimParameters.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([salt], [1], [ReplicationClaimParameters.MaximumIterations + 1], [1]),
+            ReplicationClaimParameters.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([salt], [1], [1], [ReplicationClaimParameters.MaximumParallelism + 1]),
+            ReplicationClaimParameters.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters([salt], [0], [1], [1]), ReplicationClaimParameters.Read));
+
+        // And the caps themselves are inside.
+        _ = RoundTrip(
+            new ReplicationClaimParameters(
+                [salt],
+                [ReplicationClaimParameters.MaximumMemoryKiB],
+                [ReplicationClaimParameters.MaximumIterations],
+                [ReplicationClaimParameters.MaximumParallelism]),
+            ReplicationClaimParameters.Read);
+    }
+
+    [TestMethod]
+    public void ClaimParameters_MoreEntriesThanTheBound_AreMalformed()
+    {
+        var count = ReplicationClaimParameters.MaximumEntries + 1;
+        var salts = Enumerable.Range(0, count)
+            .Select(index => (ReadOnlyMemory<byte>)Enumerable.Repeat((byte)index, ReplicationClaimParameters.SaltLength).ToArray())
+            .ToList();
+        var ones = Enumerable.Repeat(1u, count).ToList();
+        var parallelism = Enumerable.Repeat((byte)1, count).ToList();
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(
+            new ReplicationClaimParameters(salts, ones, ones, parallelism), ReplicationClaimParameters.Read));
+    }
+
+    [TestMethod]
+    public void Claim_RoundTripsOneEntryPerServedDerivation()
     {
         // The claim names no repository, and that is the decision rather than
-        // an omission. A machine that has lost everything holds an
-        // installation kit, which carries no repository id at all — so it
-        // could not name one if the message asked. The claim public key IS
-        // the selector: the destination re-attributes whatever it recorded
-        // that key against, which for one installation may be several
-        // repositories at once.
-        var key = new byte[ReplicationClaim.ClaimPublicKeyLength];
-        key.AsSpan().Fill(0xC1);
-        var signature = new byte[ReplicationClaim.SignatureLength];
-        signature.AsSpan().Fill(0xD2);
+        // an omission. A machine that has lost everything holds a passphrase
+        // and nothing else — so it could not name one if the message asked.
+        // The claim public key IS the selector: the destination re-attributes
+        // whatever it recorded that key against. One entry per derivation the
+        // destination served, because the claimant cannot tell which salt is
+        // its own.
+        var first = Enumerable.Repeat((byte)0xC1, ReplicationClaim.ClaimPublicKeyLength).ToArray();
+        var second = Enumerable.Repeat((byte)0xC2, ReplicationClaim.ClaimPublicKeyLength).ToArray();
+        var signature = Enumerable.Repeat((byte)0xD2, ReplicationClaim.SignatureLength).ToArray();
 
-        var claim = new ReplicationClaim(key, signature);
+        var claim = new ReplicationClaim([first, second], [signature, signature]);
         var read = RoundTrip(claim, ReplicationClaim.Read);
 
-        Assert.IsTrue(read.ClaimPublicKey.Span.SequenceEqual(key));
-        Assert.IsTrue(read.Signature.Span.SequenceEqual(signature));
+        Assert.HasCount(2, read.ClaimPublicKeys);
+        Assert.IsTrue(read.ClaimPublicKeys[1].Span.SequenceEqual(second));
+        Assert.IsTrue(read.Signatures[0].Span.SequenceEqual(signature));
         Assert.AreEqual(2, claim.BodyEntryCount);
     }
 
     [TestMethod]
-    public void Claim_AKeyOrSignatureOfTheWrongWidth_IsMalformed()
+    public void Claim_WithNoEntries_IsMalformed()
+    {
+        // A claim under no key is not a claim that matched nothing — it is
+        // not a claim. Refused as a shape so it never reaches the ledger.
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaim([], []), ReplicationClaim.Read));
+    }
+
+    [TestMethod]
+    public void Claim_UnequalArraysOrTheWrongWidths_AreMalformed()
     {
         var key = new byte[ReplicationClaim.ClaimPublicKeyLength];
         var signature = new byte[ReplicationClaim.SignatureLength];
 
         Assert.ThrowsExactly<PeerProtocolException>(
-            () => RoundTrip(new ReplicationClaim(new byte[16], signature), ReplicationClaim.Read));
+            () => RoundTrip(new ReplicationClaim([key, key], [signature]), ReplicationClaim.Read));
         Assert.ThrowsExactly<PeerProtocolException>(
-            () => RoundTrip(new ReplicationClaim(key, new byte[16]), ReplicationClaim.Read));
+            () => RoundTrip(new ReplicationClaim([new byte[16]], [signature]), ReplicationClaim.Read));
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaim([key], [new byte[16]]), ReplicationClaim.Read));
+    }
+
+    [TestMethod]
+    public void Claim_MoreEntriesThanTheDestinationCouldHaveServed_IsMalformed()
+    {
+        var count = ReplicationClaim.MaximumEntries + 1;
+        var keys = Enumerable.Repeat((ReadOnlyMemory<byte>)new byte[ReplicationClaim.ClaimPublicKeyLength], count).ToList();
+        var signatures = Enumerable.Repeat((ReadOnlyMemory<byte>)new byte[ReplicationClaim.SignatureLength], count).ToList();
+
+        Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationClaim(keys, signatures), ReplicationClaim.Read));
     }
 
     [TestMethod]
@@ -190,7 +333,13 @@ public sealed class ReplicationMessageTests
     [TestMethod]
     public void ClaimTypes_ArePermittedOnlyWhenOpen()
     {
-        foreach (var type in new[] { PeerMessageType.ReplicationClaim, PeerMessageType.ReplicationClaimAccepted })
+        foreach (var type in new[]
+        {
+            PeerMessageType.ReplicationClaimOpen,
+            PeerMessageType.ReplicationClaimParameters,
+            PeerMessageType.ReplicationClaim,
+            PeerMessageType.ReplicationClaimAccepted,
+        })
         {
             Assert.IsTrue(PeerAuthenticator.Permits(PeerSessionState.Open, type));
             Assert.IsFalse(PeerAuthenticator.Permits(PeerSessionState.Authenticated, type));

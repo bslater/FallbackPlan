@@ -239,6 +239,23 @@ public sealed class ReplicaOwnerStore
     }
 
     /// <summary>
+    /// Every repository whose attribution carries a claim public key, with
+    /// that key — what the claim ceremony's first answer is built from
+    /// (peer-protocol 03 §6): the destination reads each such replica's
+    /// descriptor for the salt and parameters a claimant must derive under.
+    /// </summary>
+    /// <returns>Repository ids, lower-hex, each with its recorded claim public key, in no particular order.</returns>
+    public IReadOnlyList<(string RepositoryIdHex, string ClaimPublicKey)> WithClaimKey()
+    {
+        lock (_gate)
+        {
+            return [.. _owners
+                .Where(pair => pair.Value.ClaimPublicKey is { Length: > 0 })
+                .Select(pair => (pair.Key, pair.Value.ClaimPublicKey!))];
+        }
+    }
+
+    /// <summary>
     /// Points a replica at a new device identity, the claim ceremony having
     /// proved the claimant is the same owner (ADR-0053 §2).
     /// </summary>

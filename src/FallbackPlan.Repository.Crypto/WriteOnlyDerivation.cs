@@ -91,9 +91,9 @@ public static class WriteOnlyDerivation
         // The claim key, on the same terms and for the same reason
         // ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
         // Derived from the INSTALLATION root rather than any repository's
-        // master key, because a machine claiming a replica has lost the
-        // repository: what it still holds is an installation kit, which names
-        // no repository and carries no key object, so a repository-derived
+        // key material, because a machine claiming a replica has lost the
+        // repository: what it still holds is the passphrase, and the salt
+        // the peer serves it (ADR-0053 Amendment 2), so a repository-derived
         // claim key would be unreachable at exactly the moment it is needed.
         //
         // Not expanded per generation, unlike every other key here. A
@@ -288,8 +288,7 @@ public sealed class RepositoryReadAuthority : IDisposable
     /// <remarks>
     /// Deliberately not grantable. A claim re-points which device a peer will
     /// serve a replica to, and the person who may decide that is the one
-    /// holding the passphrase and the installation kit — not a service, and
-    /// not a run.
+    /// holding the passphrase — not a service, and not a run.
     /// </remarks>
     public ReadOnlySpan<byte> ClaimKeySeed => _claimKeySeed;
 

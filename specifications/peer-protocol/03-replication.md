@@ -159,20 +159,43 @@ The agreement is deliberately weak in one direction: the destination's claim bin
 
 ## 6 The claim
 
-A machine rebuilt after total loss proves a replica is its own and has the attribution follow it to the device identity it now has ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)). Gated by the `replica-claim` feature ([02 §6](02-session.md#6-feature-negotiation)).
+A machine rebuilt after total loss proves a replica is its own and has the attribution follow it to the device identity it now has ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) Amendment 2). Gated by the `replica-claim` feature ([02 §6](02-session.md#6-feature-negotiation)).
 
-A claim is the **first payload frame** of its own session; a session that carries a claim carries nothing else. The claimant pairs first, as any new peer does ([01](01-identity-and-pairing.md)) — pairing establishes who is speaking and nothing more.
+The claimant holds the **passphrase and nothing else** — no repository id, no salt, no kit. The claim key derives from the passphrase and the installation's KDF salt ([repository format 03 §4](../repository-format/03-keys.md)), and the salt is inside the replica, behind the attribution gate the claimant is trying to pass. So the ceremony is two phases in one session: the destination first says which derivations to run, then checks the claim. A session that carries a claim carries nothing else; the open is the **first payload frame**. The claimant pairs first, as any new peer does ([01](01-identity-and-pairing.md)) — pairing establishes who is speaking and nothing more.
+
+### 6.1 ReplicationClaimOpen and ReplicationClaimParameters
+
+**`ReplicationClaimOpen`** — claimant → destination. No keys: a claimant that has lost everything has nothing to say yet. A reader skips any key a later version adds.
+
+**`ReplicationClaimParameters`** — destination → claimant
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| 1 | `array` of `bytes[16]` | KDF salts, one per distinct derivation, **sorted by byte value** |
+| 2 | `array` of `uint` | Argon2id memory in KiB, parallel to key 1 |
+| 3 | `array` of `uint` | Argon2id iterations, parallel to key 1 |
+| 4 | `array` of `uint` | Argon2id parallelism, parallel to key 1 |
+
+The entries are the **distinct** `(salt, parameters)` pairs behind every replica this destination holds whose attribution carries a claim public key ([05 §2](05-quotas.md#2-ownership)), read from each replica's own descriptor ([repository format 01 §3.3](../repository-format/01-object-layout.md)). A replica whose descriptor cannot be read is skipped, not fatal. Sorted by salt, so the answer says nothing about the order attributions were recorded in; distinct, so one installation storing several sets here costs the claimant one derivation. At most 16 entries; the first 16 in salt order when there are more.
+
+Arrays of unequal length, a salt that is not 16 bytes, an unsorted or repeated salt, more than 16 entries, or a cost of zero is `malformed`. So is a cost above the caps — memory above 1 GiB, iterations above 64, parallelism above 64 — and a reader MUST refuse such an entry rather than clamp it: the claimant is about to run Argon2id on parameters the destination chose, and a destination naming a terabyte of memory is naming a denial of service.
+
+An **empty** answer is an answer, not a refusal: nothing here is claimable, which is what a paired peer whose replicas were all attributed before key 5 existed is told. The claimant stops there.
+
+**What this hands a paired peer, and what it does not.** It learns how many installations have claimable replicas here, their public salts and their KDF costs — exactly what it would learn by holding any one of those replicas, since a descriptor is served unencrypted within an authorised retrieval ([07 §4](07-retrieval.md#4-authorization)). It does **not** learn repository ids, sealing public keys, or which fingerprint each pair belongs to. A salt without a verifier beside it is no offline oracle for the passphrase; the only oracle is the claim itself, one per session, refusing identically. The sealing public key, which *is* an offline wrong-passphrase verifier, is deliberately not served, which is why the parameters are not simply the descriptor.
+
+### 6.2 ReplicationClaim and ReplicationClaimAccepted
 
 **`ReplicationClaim`** — claimant → destination
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| 1 | `bytes[32]` | The claim public key, the same 32 bytes its predecessor published as §3.1's key 5 |
-| 2 | `bytes[64]` | Ed25519 over the signed material below |
+| 1 | `array` of `bytes[32]` | Claim public keys, one per served derivation, each the 32 bytes its predecessor published as §3.1's key 5 |
+| 2 | `array` of `bytes[64]` | Ed25519 over the signed material below, parallel to key 1, each under the private half of that entry's key |
 
-Either key absent, or present with the wrong width, is `malformed`.
+One entry per served derivation, because the claimant cannot tell which salt is its own: every pair it was given yields a well-formed key under its passphrase, and only the destination knows which one it recorded. No entries, arrays of unequal length, more than 16 entries, or an entry of the wrong width is `malformed`. A claim arriving as the first payload frame — the shape this ceremony replaced — is `malformed` too: there is nothing for it to have been derived against.
 
-**The claim names no repository**, and that is deliberate. A claimant that has lost everything holds a recovery kit, which for the provisioned shape names no repository at all; nor can it ask, because the owner inventory ([07 §3.5](07-retrieval.md)) is itself gated on attribution and answers an unrecognised device with an empty page. The claim public key is therefore the selector: the destination acts on every repository it recorded that key against.
+**The claim names no repository**, and that is deliberate. A claimant that has lost everything cannot supply one; nor can it ask, because the owner inventory ([07 §3.5](07-retrieval.md#35-owner-inventory)) is itself gated on attribution and answers an unrecognised device with an empty page. The claim public key is therefore the selector: the destination acts on every repository it recorded any presented key against.
 
 The signed material is the concatenation, all fields fixed-length so no separator is needed ([00 §4](00-conventions.md#4-domain-separation)):
 
@@ -180,7 +203,7 @@ The signed material is the concatenation, all fields fixed-length so no separato
 "fbp-peer-v1:replica-claim" ‖ session_id ‖ claimant_fingerprint
 ```
 
-where `session_id` is [02 §3.5](02-session.md#35-the-session-identifier)'s 32 bytes and `claimant_fingerprint` is the claimant's peer fingerprint as lower-hex text. Binding to the session is what makes a recorded claim verify against nothing in a later connection — the same reason [06 §4.1](06-retention.md#41-retentionoffer) binds a retention instruction, and it matters more here, because a replayed claim re-points ownership rather than deleting one page.
+where `session_id` is [02 §3.5](02-session.md#35-the-session-identifier)'s 32 bytes and `claimant_fingerprint` is the claimant's peer fingerprint as lower-hex text. The same bytes are signed under every entry's key; the entries differ by key, not by statement. Binding to the session is what makes a recorded claim verify against nothing in a later connection — the same reason [06 §4.1](06-retention.md#41-retentionoffer) binds a retention instruction, and it matters more here, because a replayed claim re-points ownership rather than deleting one page.
 
 **`ReplicationClaimAccepted`** — destination → claimant
 
@@ -190,13 +213,13 @@ where `session_id` is [02 §3.5](02-session.md#35-the-session-identifier)'s 32 b
 
 An entry that is not 16 bytes, or an array longer than the limit, is `malformed`. The answer exists because the claimant could not have known to ask: it named no repository, and this is the list it then opens for retrieval.
 
-A destination MUST verify the signature against the claim public key **it recorded**, never against the key the claim presents as if it were authoritative — the presented key is a claim about identity, and the recorded key is what makes it checkable. On success it re-points each matching attribution at the claimant's fingerprint, replacing the old one rather than duplicating it: one repository, one owner here. The recorded keys are unchanged; the same passphrase re-derives them.
+A destination MUST verify **every** signature against the key its entry presents, and MUST act only on entries whose key matches one **it recorded** — the presented key is a claim about identity, and the recorded key is what makes it checkable. On success it re-points each matching attribution at the claimant's fingerprint, replacing the old one rather than duplicating it: one repository, one owner here. The recorded keys are unchanged; the same passphrase re-derives them.
 
-A claim whose key matches nothing recorded here, and one whose signature does not verify, MUST refuse **identically**, with `terms_refused` and the same text. This is [07 §4](07-retrieval.md)'s reconnaissance rule in the place it matters most: distinguishable refusals would make this a way to ask a stranger's peer whether it holds a given installation's replicas. A destination SHOULD compute both answers before acting on either, so the two do not time differently.
+A claim in which no key matches anything recorded here, and one in which any signature does not verify, MUST refuse **identically**, with `terms_refused` and the same text. This is [07 §4](07-retrieval.md#4-authorization)'s reconnaissance rule in the place it matters most: distinguishable refusals would make this a way to ask a stranger's peer whether it holds a given installation's replicas. A destination MUST check every entry and collect every match before acting on any, so the two do not time differently. The stated cost: at a peer, a wrong passphrase reads as *nothing here is claimable*, not *wrong passphrase*. A claimant can only be told the latter with one of its own archives mounted.
 
-A destination that does not offer `replica-claim` MUST refuse a claim with `feature_unsupported` naming the feature, rather than letting it fall through to the offer reader. The claimant is mid-recovery, and "expected a replication offer" is true and no use at all.
+A destination that does not offer `replica-claim` MUST refuse the open with `feature_unsupported` naming the feature, rather than letting it fall through to the offer reader. The claimant is mid-recovery, and "expected a replication offer" is true and no use at all.
 
-**A replica attributed before key 5 existed has nothing to check against.** It becomes claimable the moment an updated source makes one more offer, because a destination fills an absence — but if the machine died before that offer, there is nothing, and the remedy is the destination's own operator re-pointing the attribution out of band. That verb is not specified here.
+**A replica attributed before key 5 existed has nothing to check against**, and is not in the parameters. It becomes claimable the moment an updated source makes one more offer, because a destination fills an absence — but if the machine died before that offer, there is nothing, and the remedy is the destination's own operator re-pointing the attribution out of band. That verb is not specified here.
 
 ## 7 Framing and limits
 
@@ -211,14 +234,16 @@ Frames are as [02 §7](02-session.md#7-framing) defines them. This document occu
 | 260 | `ReplicationComplete` | §3.4 |
 | 261 | `ReplicationAck` | §3.4 |
 | 266 | `ReplicationPartial` | §3.3.1 |
-| 267 | `ReplicationClaim` | §6 |
-| 268 | `ReplicationClaimAccepted` | §6 |
+| 267 | `ReplicationClaim` | §6.2 |
+| 268 | `ReplicationClaimAccepted` | §6.2 |
+| 269 | `ReplicationClaimOpen` | §6.1 |
+| 270 | `ReplicationClaimParameters` | §6.1 |
 
 The per-message body limits are in [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own). The one that constrains the wire design is the chunk limit: an object larger than it is sent as several chunks, none of which — with its CBOR framing — may push a frame past the 16 MiB cap.
 
 ## 8 Refusal
 
-Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse` and its codes; it defines no error mechanism of its own. The codes this document uses: `not_paired` (a grant that does not permit storing here, §1), `feature_unsupported` (an unimplemented format capability, §3.1, or a claim where `replica-claim` is not offered, §6), `terms_refused` (a claim that proves nothing, §6), and `malformed` (a chunk out of order, a scope not understood, or any body that violates this document). A refusal closes the session, as everywhere in this protocol; there is no partial transfer left half-open.
+Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse` and its codes; it defines no error mechanism of its own. The codes this document uses: `not_paired` (a grant that does not permit storing here, §1), `feature_unsupported` (an unimplemented format capability, §3.1, or a claim opened where `replica-claim` is not offered, §6), `terms_refused` (a claim that proves nothing, §6.2), and `malformed` (a chunk out of order, a scope not understood, a claim sent before its open or served parameters outside the caps, §6, or any body that violates this document). A refusal closes the session, as everywhere in this protocol; there is no partial transfer left half-open.
 
 ## 9 What replication does not carry
 

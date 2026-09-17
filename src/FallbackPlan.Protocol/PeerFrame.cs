@@ -76,13 +76,29 @@ public enum PeerMessageType : ushort
 
     /// <summary>
     /// A rebuilt machine proves a replica is its own and asks for the
-    /// attribution to follow it (03 §6; feature-gated as "replica-claim";
+    /// attribution to follow it — one entry per derivation the destination
+    /// served, each a claim public key and a signature (03 §6; feature-gated
+    /// as "replica-claim";
     /// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
     /// </summary>
     ReplicationClaim = 267,
 
     /// <summary>What the claim re-attributed (03 §6).</summary>
     ReplicationClaimAccepted = 268,
+
+    /// <summary>
+    /// A claimant opens the claim ceremony: it holds a passphrase and
+    /// nothing else, and asks the destination which derivations to run
+    /// (03 §6).
+    /// </summary>
+    ReplicationClaimOpen = 269,
+
+    /// <summary>
+    /// The distinct KDF salt-and-parameter pairs behind every replica here
+    /// that carries a claim key — what the claimant derives its keys under
+    /// (03 §6).
+    /// </summary>
+    ReplicationClaimParameters = 270,
 
     /// <summary>An owner asks to read back its replica (07 §3.1; feature-gated as "retrieval").</summary>
     RetrieveOpen = 272,

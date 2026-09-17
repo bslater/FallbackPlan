@@ -152,17 +152,7 @@ internal static class Strings
     internal static string RepositoryLifecycle_PassphraseDoesNotReproduce => Get(nameof(RepositoryLifecycle_PassphraseDoesNotReproduce));
 
     /// <summary>
-    /// The passphrase does not open this recovery kit (ADR-0042): the derived public key disagrees with the kit's, so no claim could be made under it.
-    /// </summary>
-    internal static string RecoveryKitClaim_PassphraseDoesNotReproduce => Get(nameof(RecoveryKitClaim_PassphraseDoesNotReproduce));
-
-    /// <summary>
     /// A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.
     /// </summary>
     internal static string RepositoryKeySet_NoDataClassKey => Get(nameof(RepositoryKeySet_NoDataClassKey));
-
-    /// <summary>
-    /// This kit names a format-1 repository. Format 1 is withdrawn: its key object cannot be opened and no peer holds a replica of one — use the installation kit made by first-run setup.
-    /// </summary>
-    internal static string RecoveryKitClaim_FormatOneWithdrawn => Get(nameof(RecoveryKitClaim_FormatOneWithdrawn));
 }

@@ -371,8 +371,21 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 // instead of it: the claimant asks for the attribution to
                 // follow it to the device identity it now has (03 §6,
                 // ADR-0053), after which the ordinary retrieval gate lets it
-                // read. A rebuilt machine dials, claims, and dials again.
+                // read. A rebuilt machine dials, claims, and dials again. The
+                // ceremony opens with an empty frame; the claim itself comes
+                // only after this side has said which derivations to run, so
+                // a claim arriving first is a peer speaking the wrong shape.
                 if (payload.Value.Type == PeerMessageType.ReplicationClaim)
+                {
+                    var wrongShape = new PeerProtocolException(
+                        PeerRefusalReason.Malformed,
+                        "A claim opens with ReplicationClaimOpen and follows the destination's parameters (03 §6); "
+                        + "a claim sent first has nothing to be derived against.");
+                    await ReplicationWire.TryRefuseAsync(session.Stream, wrongShape).ConfigureAwait(false);
+                    throw wrongShape;
+                }
+
+                if (payload.Value.Type == PeerMessageType.ReplicationClaimOpen)
                 {
                     // Named rather than left to fall through to the offer
                     // reader, which would refuse with "expected a replication
@@ -396,8 +409,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     }
 
                     var claimed = await ClaimResponder.ServeAsync(
-                        session.Stream, session.Peer, _owners!, session.Binding,
-                        ReplicationClaim.Read(payload.Value.Body), _stopping.Token)
+                        _replicasRoot, session.Stream, session.Peer, _owners!, session.Binding, _stopping.Token)
                         .ConfigureAwait(false);
                     Log.ReplicaClaimed(_log, peer, claimed.Count);
                     return;

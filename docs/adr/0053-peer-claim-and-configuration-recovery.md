@@ -1,6 +1,6 @@
 # ADR-0053 — A rebuilt machine claims its peer replica, and its backup set's shape survives with it
 
-**Status:** Amended (2026-09) — decisions 1–3 built; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message)
+**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) and [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)
 **Date:** 2026-09
 **Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership), [peer-protocol 07 §4](../../specifications/peer-protocol/07-retrieval.md)
@@ -135,6 +135,16 @@ themselves.
 > The identical-refusal rule of step 3 is unchanged and is what
 > `Agent/ClaimResponder` implements.
 
+> **Amended again (2026-09): the ceremony is two phases, because the
+> claimant holds the passphrase and nothing else.** With the recovery kit
+> withdrawn ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)), the claimant has no salt to derive the claim
+> key with — the salt is inside the replica, behind the attribution gate it
+> is trying to pass. So the destination speaks first: an empty
+> `ReplicationClaimOpen` is answered by `ReplicationClaimParameters`, the
+> distinct KDF salt-and-cost pairs behind every claimable replica here, and
+> the claimant sends one `ReplicationClaim` entry per pair. Signed material,
+> selector and refusal rule are as the paragraph above says.
+
 ### 3 A replica attributed before this exists is claimed by a person
 
 A destination running an older build, or one that accepted a repository before
@@ -149,6 +159,13 @@ call to a friend is a poor recovery; a recovery that is impossible is worse,
 and this is the one case where the poor one is all that is available.
 
 ### 4 The set's shape travels in the recovery kit
+
+> **Closed as will-not-do (2026-09).** There is no recovery kit to carry it:
+> the passphrase is the whole recovery credential ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)). The
+> set is re-declared after a rebuild, and the flow the owner's recovery model
+> implies — add an existing destination, discover its archives by descriptor,
+> adopt them under their original ids — is the named follow-up, not this
+> record's.
 
 Name, roots, schedule, retention, and the destinations it shipped to go into
 the recovery kit ([ADR-0013](0013-recovery-kit.md)), which is already the
@@ -243,6 +260,10 @@ the person holding the kit should not have to know which kind they were given
 and the destination cannot tell either — it recorded a public key and nothing
 about where it came from.
 
+> **Amended 2026-09.** That class is gone with the kit. The claimant derives
+> in the `claim` verb itself, from the passphrase and each salt the
+> destination serves ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)).
+
 **The key takes no generation**, alone among the derived keys, and the reason
 is its carrier rather than its cryptography. `Application/ReplicaOwnerStore`
 records it at first attribution and never replaces it — the same
@@ -303,6 +324,87 @@ the product rotates a passphrase today, so this costs nothing now. It is a
 constraint on whoever adds one: rotation must re-publish the claim key, or
 claims made before it stop verifying.
 
+## Amendment 2 (2026-09) — the claim takes the passphrase and nothing else
+
+Slice 12's decision is that the passphrase is the recovery credential and the
+recovery kit is withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)
+took format 1 first; the kit follows). Amendment 1's ceremony rested on the kit
+in one place: the claimant derived its claim key from the passphrase and *the
+kit's* salt. Without a kit, a rebuilt machine holds a passphrase and nothing
+else, and the salt it needs is inside the replica — behind the very
+attribution gate the claim exists to pass.
+
+### The destination serves the derivations
+
+The ceremony becomes two phases in one session
+([03 §6](../../specifications/peer-protocol/03-replication.md#6-the-claim)):
+
+1. The claimant sends an empty `ReplicationClaimOpen`.
+2. The destination answers `ReplicationClaimParameters`: the **distinct**
+   `(salt, Argon2id costs)` pairs behind every replica it holds whose
+   attribution carries a claim public key, read from each replica's own
+   descriptor, sorted by salt, at most 16.
+3. The claimant derives one claim key per pair — Argon2id runs after the
+   dial, because the inputs came over it — and sends one `ReplicationClaim`
+   with one entry per pair, all over the same session-bound bytes.
+4. The destination verifies every entry, collects every match, and only then
+   decides: re-attribute all matches and answer `ReplicationClaimAccepted`,
+   or refuse identically for "nothing matched" and "a signature is wrong".
+
+The `replica-claim` feature is **redefined, not versioned**: nothing outside
+this repository ever spoke the one-message shape, which was unreleased. A
+claim arriving as the first payload frame is refused as `malformed`, so a
+peer speaking the old shape learns that rather than being told its key is
+unknown.
+
+### What this hands a paired peer, for the record
+
+To a peer that is **paired** — and only such a peer, since the parameters are
+a payload of an authenticated session — the destination reveals how many
+installations have claimable replicas here, their public salts and their KDF
+costs. That is exactly what such a peer could learn by holding any one of
+those replicas: a descriptor is served unencrypted within an authorised
+retrieval. It does **not** reveal repository ids, sealing public keys, or
+which fingerprint each pair belongs to. A salt without a verifier beside it is
+no offline oracle for the passphrase; the only oracle is the claim, one per
+session, refusing identically.
+
+The cost, stated: at a peer, a wrong passphrase reads as *no replica here is
+claimable*, not *wrong passphrase*. Nothing on the claimant's side can tell
+the two apart, and the destination must not. A claimant can only be told the
+latter with one of its own archives mounted, where the sealing public key in
+the descriptor verifies the passphrase offline.
+
+The reader caps what the destination may ask for — memory to 1 GiB,
+iterations and parallelism to 64 — and refuses an entry outside them as
+`malformed` rather than clamping it. The claimant runs Argon2id on parameters
+the destination chose, and a destination naming a terabyte of memory would be
+naming a denial of service.
+
+### Alternatives considered here
+
+**Serve `repository-format` through retrieval to a paired peer**, so the
+claimant reads each descriptor itself. Rejected: the descriptor carries the
+sealing public key, which is a real offline wrong-passphrase verifier, and it
+would hand every tenant's to a non-storing pair.
+
+**A constant-salt claim key**, derived from the passphrase alone so no salt
+is needed. Rejected: a product-wide precomputation target for the one key that
+re-points ownership.
+
+**Keep a kit for the claim alone.** Rejected by the owner's decision: one
+credential, and the product does not ask a person to keep an artefact whose
+only purpose is to carry sixteen public bytes the peer already holds.
+
+### Decision 4 closes
+
+The set's shape was to travel in the kit. There is no kit; the set is
+re-declared after a rebuild, and the flow that would make that cheap — add an
+existing destination, discover its archives by descriptor, adopt them under
+their original ids with the passphrase — is the named follow-up. §4 is
+**will not do** as written, and the *Negative* consequence about a kit that
+goes stale goes with it.
+
 ## Consequences
 
 **Positive**
@@ -318,8 +420,11 @@ claims made before it stop verifying.
 
 - A destination now stores one more durable fact per attribution, and a
   destination that has never seen a claim key must fall back to its operator.
-- The kit gains state that goes stale. A kit is a snapshot of configuration as
-  well as of key material now, and the second ages faster than the first.
+- ~~The kit gains state that goes stale.~~ Closed with §4
+  ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)): there is no kit.
+- A paired peer learns the salts and KDF costs of every claimable installation
+  here, and a wrong passphrase at a peer reads as "nothing claimable"
+  ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)).
 - Losing the passphrase now loses the claim as well as the plaintext. That was
   already total loss; it is stated because the claim key makes it look like a
   separate capability and it is not.
@@ -347,6 +452,7 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (passphrase only) | [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else): the kit is withdrawn, so the claimant holds the passphrase and nothing else. The ceremony is two phases in one session — `ReplicationClaimOpen`, `ReplicationClaimParameters` (the destination serves the distinct KDF salts and costs behind its claimable replicas), a multi-entry `ReplicationClaim`, `ReplicationClaimAccepted` — with `replica-claim` redefined rather than versioned. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder` and `Cli/CliApplication` carry it; `Hosts.Tests/PeerClaimTests` runs the drill with the state directory destroyed. §4 closes as will-not-do |
 | 2026-09 | Amended | The `fbp/claim/v1` root went with format 1 ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); the installation's claim key is the only one |
 | 2026-09 | Amended (derivation and ceremony) | Decisions 1–3 built. [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) records two changes the attempt forced: §1's repository-derived claim key is unreachable by a claimant that has lost the repository, so the key is derived from the **installation** (`fbp/claim/v2`, with `fbp/claim/v1` for a format-v1 kit); and §2's nonce round trip is replaced by the session identifier from [ADR-0059](0059-session-bound-deletion-authority.md), with the claim naming no repository because the claimant holds no repository id. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Repository/RecoveryKitClaim` and `Application/ReplicaOwnerStore` carry it; `Hosts.Tests/PeerClaimTests` runs the drill. §3's operator re-attribution and §4 remain unbuilt |
 | 2026-09 | Proposed | In response to the 2026-09 architecture review's R2. Nothing is built: decisions 1–3 need a peer-protocol message, a new derivation and a ledger field; decision 4 was attempted and found to need the *installation* kit to carry a shape per set, because the per-repository builder has one caller and no configuration to read. The attempt did land one fix — `Repository.Format/RecoveryKit` — where the kit's version number doubled as its shape discriminator and would have misread the next version as an installation kit |

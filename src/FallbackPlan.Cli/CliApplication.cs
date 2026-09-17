@@ -1830,9 +1830,9 @@ public static class CliApplication
             // The morning the machine is gone
             // ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
             // A protocol verb like `pair`, not a gateway verb: the claimant
-            // has no service, no configuration and no repository — the two
-            // things it has are the kit and the passphrase, and everything
-            // here is derived from those.
+            // has no service, no configuration and no repository — the one
+            // thing it has is the passphrase, and everything here is derived
+            // from that and what the peer serves.
             var connectArgument = new Argument<string>("host:port")
             {
                 Description = "The peer holding the replica, as host:port.",
@@ -1840,11 +1840,6 @@ public static class CliApplication
             var stateArgOption = new Option<string>("--state")
             {
                 Description = "This machine's state directory (its peer identity and the pairing with the peer).",
-                Required = true,
-            };
-            var kitOption = new Option<string>("--kit")
-            {
-                Description = "Path of the recovery kit, framed or printed.",
                 Required = true,
             };
             var claimFingerprintOption = new Option<string?>("--fingerprint")
@@ -1855,11 +1850,10 @@ public static class CliApplication
 
             var command = new Command(
                 "claim",
-                "Prove a peer's replica is this installation's and have the attribution follow this machine "
-                + "(ADR-0053). Pair with the peer first.");
+                "Prove a peer's replica is this installation's — with the passphrase and nothing else — and have "
+                + "the attribution follow this machine (ADR-0053). Pair with the peer first.");
             command.Arguments.Add(connectArgument);
             command.Options.Add(stateArgOption);
-            command.Options.Add(kitOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(claimFingerprintOption);
             root.Subcommands.Add(command);
@@ -1876,31 +1870,70 @@ public static class CliApplication
                 using var keypair = PeerKeypairStore.Open(state);
                 var grants = PeerGrantStore.Open(state);
                 var expected = ResolveClaimPeer(grants, parse.GetValue(claimFingerprintOption));
-
-                // Argon2id runs here, before the dial, so a wrong passphrase
-                // is a local refusal rather than a refusal from the peer —
-                // which would have been "no replica here is claimable under
-                // that key", true and the wrong diagnosis entirely.
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
-                var kitBytes = File.ReadAllBytes(parse.GetValue(kitOption)!);
-                var kit = RecoveryKitCodec.Parse(
-                    kitBytes.Length >= 8 && kitBytes.AsSpan(0, 8).SequenceEqual(RecoveryKitCodec.Magic)
-                        ? kitBytes
-                        : RecoveryKitText.ParseToFramed(System.Text.Encoding.UTF8.GetString(kitBytes)));
 
-                var seed = RecoveryKitClaim.SeedFrom(kit, passphrase);
-                ReplicationClaimAccepted accepted;
-                try
+                await using var connection = await PeerTlsConnection.DialAsync(
+                    host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+                var session = await PeerSessionDriver.DialAsync(
+                    connection, keypair, grants, expected, "fallbackplan-cli",
+                    terms: null, requiredFeatures: null, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Phase one: ask which derivations to run. The salt lives in
+                // the replica, behind the attribution gate, so the peer is
+                // the only party that can say — and it says only salts and
+                // public parameters, never which is whose.
+                await PeerFrame.WriteAsync(session.Stream, new ReplicationClaimOpen(), cancellationToken)
+                    .ConfigureAwait(false);
+                var parameters = await ReadClaimAnswerAsync(
+                    session.Stream, PeerMessageType.ReplicationClaimParameters, ReplicationClaimParameters.Read,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (parameters.Salts.Count == 0)
                 {
-                    accepted = await ClaimAsync(seed).ConfigureAwait(false);
+                    throw new CliFailureException(
+                        "the peer holds no replica that can be claimed: no attribution there carries a claim key. "
+                        + "A replica recorded before this installation published one is the destination "
+                        + "operator's to re-point (ADR-0053 §3).");
                 }
-                finally
+
+                // Phase two: one claim per served derivation. Argon2id runs
+                // here, after the dial, because the inputs came over it; the
+                // claimant cannot tell which salt is its own, and every seed
+                // is zeroed as soon as it has signed.
+                var signed = ReplicationClaim.EncodeForSigning(session.Binding.Span, keypair.Identity.Fingerprint);
+                var keys = new List<ReadOnlyMemory<byte>>(parameters.Salts.Count);
+                var signatures = new List<ReadOnlyMemory<byte>>(parameters.Salts.Count);
+                for (var index = 0; index < parameters.Salts.Count; index++)
                 {
-                    // Zeroed however the dial went. A seed left in a
-                    // recovering machine's memory after a failed attempt is a
-                    // seed somebody will retry around.
-                    System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+                    using var authority = WriteOnlyDerivation.Derive(
+                        passphrase,
+                        new Domain.Configuration.Argon2Parameters
+                        {
+                            MemoryKiB = parameters.MemoryKiB[index],
+                            Iterations = parameters.Iterations[index],
+                            Parallelism = parameters.Parallelism[index],
+                        },
+                        parameters.Salts[index].Span,
+                        Domain.Configuration.KdfValidationMode.OpenRepository);
+                    var seed = authority.ClaimKeySeed.ToArray();
+                    try
+                    {
+                        using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
+                        keys.Add(signer.PublicKey.ToArray());
+                        signatures.Add(signer.Sign(signed));
+                    }
+                    finally
+                    {
+                        System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+                    }
                 }
+
+                await PeerFrame.WriteAsync(session.Stream, new ReplicationClaim(keys, signatures), cancellationToken)
+                    .ConfigureAwait(false);
+                var accepted = await ReadClaimAnswerAsync(
+                    session.Stream, PeerMessageType.ReplicationClaimAccepted, ReplicationClaimAccepted.Read,
+                    cancellationToken).ConfigureAwait(false);
 
                 if (accepted.RepositoryIds.Count == 0)
                 {
@@ -1918,46 +1951,31 @@ public static class CliApplication
 
                 return 0;
 
-                async Task<ReplicationClaimAccepted> ClaimAsync(byte[] claimSeed)
+                static async Task<T> ReadClaimAnswerAsync<T>(
+                    Stream stream, PeerMessageType expected, Func<System.Formats.Cbor.CborReader, T> read,
+                    CancellationToken cancellationToken)
                 {
-                    await using var connection = await PeerTlsConnection.DialAsync(
-                        host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
-                    var session = await PeerSessionDriver.DialAsync(
-                        connection, keypair, grants, expected, "fallbackplan-cli",
-                        terms: null, requiredFeatures: null, cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-
-                    byte[] publicKey;
-                    byte[] signature;
-                    using (var signer = RepositorySigner.FromSeed(claimSeed, KeyGeneration.Zero))
-                    {
-                        publicKey = signer.PublicKey.ToArray();
-                        signature = signer.Sign(ReplicationClaim.EncodeForSigning(
-                            session.Binding.Span, keypair.Identity.Fingerprint));
-                    }
-
-                    await PeerFrame.WriteAsync(
-                        session.Stream, new ReplicationClaim(publicKey, signature), cancellationToken)
-                        .ConfigureAwait(false);
-                    var answer = await PeerFrame.ReadAsync(session.Stream, cancellationToken).ConfigureAwait(false)
+                    var answer = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
                         ?? throw new CliFailureException("the peer closed the connection without answering.");
 
                     if (answer.Type == PeerMessageType.SessionRefuse)
                     {
                         // The refusal is the whole diagnosis, and it is the
                         // peer's words rather than ours: "no replica here is
-                        // claimable under that key", or that this destination
-                        // is too old to offer the ceremony at all.
+                        // claimable under that key" — which is also what a
+                        // wrong passphrase reads as, since nothing on this
+                        // machine can tell the two apart — or that this
+                        // destination is too old to offer the ceremony.
                         throw new CliFailureException(
                             $"the peer refused the claim: {SessionRefuse.Read(answer.Body).Text}");
                     }
 
-                    if (answer.Type != PeerMessageType.ReplicationClaimAccepted)
+                    if (answer.Type != expected)
                     {
                         throw new CliFailureException($"the peer answered a claim with a {answer.Type}.");
                     }
 
-                    return ReplicationClaimAccepted.Read(answer.Body);
+                    return read(answer.Body);
                 }
             }));
         }

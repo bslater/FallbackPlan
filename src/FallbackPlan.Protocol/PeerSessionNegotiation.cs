@@ -107,6 +107,13 @@ public static class PeerSessionNegotiation
     /// make the destination refuse. A party that omits it is asking for less
     /// authority, not more, so there is nothing for an attacker to gain by
     /// declining to offer it.
+    /// <para>
+    /// Redefined rather than versioned when the ceremony became two-phase —
+    /// open, parameters, claim, accepted ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// Amendment 2): nothing outside this repository ever spoke the
+    /// one-message shape, so a second token would have named a peer that
+    /// does not exist.
+    /// </para>
     /// </remarks>
     public const string ReplicaClaimFeature = "replica-claim";
 

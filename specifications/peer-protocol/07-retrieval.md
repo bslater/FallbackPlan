@@ -94,7 +94,9 @@ inventory**: `retrieve_list` pages then answer the repository ids (lowercase
 hex, as listing keys with length 0) the destination's attribution ledger
 assigns to the dialling identity — and nothing else. This is how a hub with no
 local content — its staging lost, or none by design — learns what to ask for. `retrieve_read` is refused
-`malformed` in an inventory session.
+`malformed` in an inventory session. A rebuilt machine's new identity is assigned nothing here until it has
+claimed ([03 §6](03-replication.md#6-the-claim)), which is why the claim asks the destination which
+derivations to run rather than asking this page which repositories to name.
 
 ## 4 Authorization
 

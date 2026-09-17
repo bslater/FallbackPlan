@@ -205,7 +205,7 @@ The features defined so far:
 | `session-bound-retention` | The peer verifies a `RetentionOffer` signature over the session identifier as well as the page ([§3.5](#35-the-session-identifier); [06 §4.1](06-retention.md#41-retentionoffer)). Tells a **commander how to sign**; a spoke requires whichever form it offered |
 | `retrieval` | An owner may read its own replica back over the session ([07](07-retrieval.md)) |
 | `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
-| `replica-claim` | A machine rebuilt after total loss may prove a replica is its own and have the attribution follow it ([03 §6](03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)). A gate is safe here because withholding it can only make the destination refuse |
+| `replica-claim` | A machine rebuilt after total loss may prove a replica is its own and have the attribution follow it, holding the passphrase and nothing else: the destination serves the KDF salts and costs to derive against, then checks one claim per derivation ([03 §6](03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) Amendment 2). A gate is safe here because withholding it can only make the destination refuse |
 
 `signed-retention` is separate from `retention-instruction` rather than folded into it, because the two say different things: one is *I accept deletion instructions at all*, the other is *and I will not act on one I cannot prove came from the repository's reclaim authority*. It tells a commander at the hello what it will be held to, rather than leaving it refused mid-exchange after the objects have already crossed.
 
@@ -242,8 +242,8 @@ frame = u32(payload_length) ‖ payload
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
 | 264–265 | Verification | [04](04-verification.md#4-messages) |
 | 266 | Partial-object declaration | [03 §3.3.1](03-replication.md#331-replicationpartial) |
-| 267–268 | Replica claim | [03 §6](03-replication.md#6-the-claim) |
-| 269–271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 267–270 | Replica claim | [03 §6](03-replication.md#6-the-claim) |
+| 271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 | 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
 | 278+ | Reserved for later payload documents | — |
 

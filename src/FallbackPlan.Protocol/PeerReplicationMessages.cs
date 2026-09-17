@@ -1263,20 +1263,302 @@ public sealed record VerificationProof(bool Held, ReadOnlyMemory<byte> Proof) : 
 }
 
 /// <summary>
-/// A machine rebuilt after total loss proving a replica is its own
+/// A claimant opens the claim ceremony (specification peer-protocol 03 §6;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// Amendment 2): it holds the passphrase and nothing else — no kit, no
+/// repository id, no salt — and asks the destination which derivations to
+/// run. Empty by design: there is nothing a claimant could say yet.
+/// </summary>
+public sealed record ReplicationClaimOpen : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationClaimOpen;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 0;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer) => ThrowHelper.ThrowIfNull(writer);
+
+    /// <summary>Reads an open — which carries nothing, and skips anything a later version adds.</summary>
+    /// <param name="reader">The body reader.</param>
+    public static ReplicationClaimOpen Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+        PeerCbor.ReadEntries(reader, _ => reader.SkipValue());
+        return new ReplicationClaimOpen();
+    }
+}
+
+/// <summary>
+/// The derivations a claimant may prove itself under (specification
+/// peer-protocol 03 §6): the distinct KDF salt-and-parameter pairs behind
+/// every replica this destination holds whose attribution carries a claim
+/// key, read from each replica's own descriptor.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A claim key derives from the passphrase and the installation's salt, and
+/// a claimant that has lost everything holds only the passphrase. The salt is
+/// inside the replica, behind the attribution gate, so the destination hands
+/// it over: to a <em>paired</em> peer, and only what a paired peer could
+/// learn anyway by holding a replica — a salt and public parameters are not
+/// secrets, and without a verifier beside them they are not an oracle either.
+/// What is deliberately <b>not</b> here: repository ids, sealing public keys
+/// (a real offline wrong-passphrase verifier), and which fingerprint each
+/// pair belongs to.
+/// </para>
+/// <para>
+/// Sorted by salt, so the answer says nothing about the order attributions
+/// were recorded in; distinct, so one installation storing many sets here
+/// costs the claimant one derivation. The caps are for the claimant's sake:
+/// it runs Argon2id on parameters the destination chose, so a destination
+/// that named a terabyte of memory would be naming a denial of service, and
+/// the reader refuses such an entry as malformed rather than attempting it.
+/// </para>
+/// </remarks>
+/// <param name="Salts">Each 16-byte KDF salt.</param>
+/// <param name="MemoryKiB">Argon2id memory per entry, parallel to <paramref name="Salts"/>.</param>
+/// <param name="Iterations">Argon2id iterations per entry, parallel to <paramref name="Salts"/>.</param>
+/// <param name="Parallelism">Argon2id parallelism per entry, parallel to <paramref name="Salts"/>.</param>
+public sealed record ReplicationClaimParameters(
+    IReadOnlyList<ReadOnlyMemory<byte>> Salts,
+    IReadOnlyList<uint> MemoryKiB,
+    IReadOnlyList<uint> Iterations,
+    IReadOnlyList<byte> Parallelism) : IPeerMessage
+{
+    /// <summary>A KDF salt is 16 bytes (repository-format 01 §3.3).</summary>
+    public const int SaltLength = 16;
+
+    /// <summary>
+    /// The most derivations one answer may name. One installation is one
+    /// pair; the bound is for a destination that stores for many and a
+    /// claimant that must run each.
+    /// </summary>
+    public const int MaximumEntries = 16;
+
+    /// <summary>The most memory an entry may ask the claimant to spend: 1 GiB.</summary>
+    public const uint MaximumMemoryKiB = 1024 * 1024;
+
+    /// <summary>The most iterations an entry may ask for.</summary>
+    public const uint MaximumIterations = 64;
+
+    /// <summary>The most parallelism an entry may ask for.</summary>
+    public const byte MaximumParallelism = 64;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.ReplicationClaimParameters;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 4;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Salts.Count != MemoryKiB.Count || Salts.Count != Iterations.Count || Salts.Count != Parallelism.Count)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A claim-parameters answer's four arrays are not the same length.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteStartArray(Salts.Count);
+        foreach (var salt in Salts)
+        {
+            writer.WriteByteString(salt.Span);
+        }
+
+        writer.WriteEndArray();
+
+        writer.WriteInt32(2);
+        writer.WriteStartArray(MemoryKiB.Count);
+        foreach (var memory in MemoryKiB)
+        {
+            writer.WriteUInt32(memory);
+        }
+
+        writer.WriteEndArray();
+
+        writer.WriteInt32(3);
+        writer.WriteStartArray(Iterations.Count);
+        foreach (var iterations in Iterations)
+        {
+            writer.WriteUInt32(iterations);
+        }
+
+        writer.WriteEndArray();
+
+        writer.WriteInt32(4);
+        writer.WriteStartArray(Parallelism.Count);
+        foreach (var parallelism in Parallelism)
+        {
+            writer.WriteUInt32(parallelism);
+        }
+
+        writer.WriteEndArray();
+    }
+
+    /// <summary>Reads a claim-parameters answer.</summary>
+    /// <param name="reader">The body reader.</param>
+    /// <exception cref="PeerProtocolException">The body is not the shape 03 §6 defines, or an entry exceeds the caps.</exception>
+    public static ReplicationClaimParameters Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        List<ReadOnlyMemory<byte>>? salts = null;
+        List<uint>? memory = null;
+        List<uint>? iterations = null;
+        List<byte>? parallelism = null;
+
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    salts = ReadSalts(reader);
+                    break;
+                case 2:
+                    memory = ReadBounded(reader, MaximumMemoryKiB, "memory");
+                    break;
+                case 3:
+                    iterations = ReadBounded(reader, MaximumIterations, "iterations");
+                    break;
+                case 4:
+                    parallelism = [.. ReadBounded(reader, MaximumParallelism, "parallelism").Select(value => (byte)value)];
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        salts ??= [];
+        memory ??= [];
+        iterations ??= [];
+        parallelism ??= [];
+
+        if (salts.Count != memory.Count || salts.Count != iterations.Count || salts.Count != parallelism.Count)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A claim-parameters answer carried {salts.Count} salt(s), {memory.Count} memory value(s), "
+                + $"{iterations.Count} iteration count(s) and {parallelism.Count} parallelism value(s).");
+        }
+
+        // Sorted by salt is part of the shape, not a courtesy: an unsorted
+        // answer would let a destination encode the order attributions were
+        // recorded in, and a reader that quietly sorted would hide that.
+        for (var index = 1; index < salts.Count; index++)
+        {
+            if (salts[index - 1].Span.SequenceCompareTo(salts[index].Span) >= 0)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "A claim-parameters answer is not sorted by salt, or repeats one.");
+            }
+        }
+
+        return new ReplicationClaimParameters(salts, memory, iterations, parallelism);
+    }
+
+    private static int ArrayLength(CborReader reader)
+    {
+        var length = reader.ReadStartArray();
+        if (length is null || length > MaximumEntries)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A claim-parameters answer carried more than the {MaximumEntries} entries this protocol permits.");
+        }
+
+        return length.Value;
+    }
+
+    private static List<ReadOnlyMemory<byte>> ReadSalts(CborReader reader)
+    {
+        var count = ArrayLength(reader);
+        var salts = new List<ReadOnlyMemory<byte>>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var salt = reader.ReadByteString();
+            if (salt.Length != SaltLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, "A claim-parameters answer named a salt that is not 16 bytes.");
+            }
+
+            salts.Add(salt);
+        }
+
+        reader.ReadEndArray();
+        return salts;
+    }
+
+    private static List<uint> ReadBounded(CborReader reader, uint maximum, string what)
+    {
+        var count = ArrayLength(reader);
+        var values = new List<uint>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var value = reader.ReadUInt32();
+
+            // Refused rather than clamped: the claimant is about to run
+            // Argon2id on this, and a value it did not choose is a cost it did
+            // not agree to. Zero is refused for the other reason — the
+            // primitive will not accept it, and a reader that passed it on
+            // would fail later with a worse message.
+            if (value == 0 || value > maximum)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A claim-parameters answer names Argon2id {what} of {value}, outside 1–{maximum}.");
+            }
+
+            values.Add(value);
+        }
+
+        reader.ReadEndArray();
+        return values;
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationClaimParameters? other) =>
+        other is not null
+        && Salts.Count == other.Salts.Count
+        && Salts.Select((salt, index) => salt.Span.SequenceEqual(other.Salts[index].Span)).All(same => same)
+        && MemoryKiB.SequenceEqual(other.MemoryKiB)
+        && Iterations.SequenceEqual(other.Iterations)
+        && Parallelism.SequenceEqual(other.Parallelism);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => Salts.Count;
+}
+
+/// <summary>
+/// A machine rebuilt after total loss proves a replica is its own
 /// (specification peer-protocol 03 §6;
-/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)):
+/// one entry per derivation the destination served in
+/// <see cref="ReplicationClaimParameters"/>, each a claim public key and a
+/// signature under its private half over the session-bound material.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>It names no repository, and that is the decision.</b> ADR-0053 §2 had
 /// the claimant sign over a repository id, which a claimant cannot supply: a
-/// machine that lost everything holds an <em>installation</em> kit, and such
-/// a kit carries no repository id and no key object — every key re-derives
-/// from the passphrase and the kit's public salt. So the claim public key is
-/// the selector. The destination re-attributes whatever it recorded that key
-/// against, which for one installation may be several repositories at once,
-/// and says which in its answer.
+/// machine that lost everything holds a passphrase and nothing else. So the
+/// claim public key is the selector. The destination re-attributes whatever it
+/// recorded that key against, which for one installation may be several
+/// repositories at once, and says which in its answer.
+/// </para>
+/// <para>
+/// One entry per served derivation, because the claimant cannot tell which
+/// salt is its own — every pair it was given yields a well-formed key, and
+/// only the destination knows which one it recorded. The entries the
+/// destination recognises re-point their attributions; the rest are simply
+/// keys nobody here has heard of. A claim that recognises nothing refuses
+/// exactly as one whose signature is wrong.
 /// </para>
 /// <para>
 /// §2 also had the destination answer with a fresh random nonce for the
@@ -1284,25 +1566,27 @@ public sealed record VerificationProof(bool Held, ReadOnlyMemory<byte> Proof) : 
 /// session identifier ([02 §3.5](../../specifications/peer-protocol/02-session.md))
 /// is already fresh per connection, already derived from both sides'
 /// contributions including both TLS keys, and already known to both ends
-/// before the claim — so the ceremony is one message and its answer.
+/// before the claim — so the signed material is the session's.
 /// </para>
 /// </remarks>
-/// <param name="ClaimPublicKey">
-/// The claimant's Ed25519 claim public key — the same 32 bytes its
-/// predecessor published on every <see cref="ReplicationOffer"/>.
-/// </param>
-/// <param name="Signature">
-/// Ed25519 over <see cref="EncodeForSigning"/>, under the private half the
-/// claimant derived from the passphrase and its installation kit's salt.
+/// <param name="ClaimPublicKeys">The claimant's Ed25519 claim public keys, one per served derivation.</param>
+/// <param name="Signatures">
+/// Ed25519 over <see cref="EncodeForSigning"/>, parallel to
+/// <paramref name="ClaimPublicKeys"/>, each under the private half the
+/// claimant derived from the passphrase and that entry's salt.
 /// </param>
 public sealed record ReplicationClaim(
-    ReadOnlyMemory<byte> ClaimPublicKey, ReadOnlyMemory<byte> Signature) : IPeerMessage
+    IReadOnlyList<ReadOnlyMemory<byte>> ClaimPublicKeys,
+    IReadOnlyList<ReadOnlyMemory<byte>> Signatures) : IPeerMessage
 {
     /// <summary>An Ed25519 public key is 32 bytes.</summary>
     public const int ClaimPublicKeyLength = 32;
 
     /// <summary>An Ed25519 signature is 64 bytes.</summary>
     public const int SignatureLength = 64;
+
+    /// <summary>The most entries a claim may carry — one per served derivation, so the same bound.</summary>
+    public const int MaximumEntries = ReplicationClaimParameters.MaximumEntries;
 
     private static ReadOnlySpan<byte> SigningLabel => "fbp-peer-v1:replica-claim"u8;
 
@@ -1335,6 +1619,8 @@ public sealed record ReplicationClaim(
     /// <para>
     /// Both fields are fixed-length, so the concatenation is unambiguous
     /// without a separator ([00 §4](../../specifications/peer-protocol/00-conventions.md)).
+    /// The same bytes are signed under every entry's key: the entries differ
+    /// by key, not by statement.
     /// </para>
     /// </remarks>
     /// <param name="sessionId">This session's 32-byte identifier (02 §3.5).</param>
@@ -1356,10 +1642,29 @@ public sealed record ReplicationClaim(
     {
         ThrowHelper.ThrowIfNull(writer);
 
+        if (ClaimPublicKeys.Count != Signatures.Count)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A claim's two arrays are not the same length.");
+        }
+
         writer.WriteInt32(1);
-        writer.WriteByteString(ClaimPublicKey.Span);
+        writer.WriteStartArray(ClaimPublicKeys.Count);
+        foreach (var key in ClaimPublicKeys)
+        {
+            writer.WriteByteString(key.Span);
+        }
+
+        writer.WriteEndArray();
+
         writer.WriteInt32(2);
-        writer.WriteByteString(Signature.Span);
+        writer.WriteStartArray(Signatures.Count);
+        foreach (var signature in Signatures)
+        {
+            writer.WriteByteString(signature.Span);
+        }
+
+        writer.WriteEndArray();
     }
 
     /// <summary>Reads a claim.</summary>
@@ -1369,18 +1674,18 @@ public sealed record ReplicationClaim(
     {
         ThrowHelper.ThrowIfNull(reader);
 
-        byte[]? key = null;
-        byte[]? signature = null;
+        List<ReadOnlyMemory<byte>>? keys = null;
+        List<ReadOnlyMemory<byte>>? signatures = null;
 
         PeerCbor.ReadEntries(reader, entry =>
         {
             switch (entry)
             {
                 case 1:
-                    key = reader.ReadByteString();
+                    keys = ReadFixed(reader, ClaimPublicKeyLength, "claim public key");
                     break;
                 case 2:
-                    signature = reader.ReadByteString();
+                    signatures = ReadFixed(reader, SignatureLength, "signature");
                     break;
                 default:
                     reader.SkipValue();
@@ -1388,23 +1693,58 @@ public sealed record ReplicationClaim(
             }
         });
 
-        if (key is not { Length: ClaimPublicKeyLength } || signature is not { Length: SignatureLength })
+        keys ??= [];
+        signatures ??= [];
+
+        // Refused rather than trimmed, for the partial declaration's reason:
+        // pairing a key with somebody else's signature is not a claim.
+        if (keys.Count == 0 || keys.Count != signatures.Count)
         {
             throw new PeerProtocolException(
-                PeerRefusalReason.Malformed, "A claim is not the shape 03 §6 defines.");
+                PeerRefusalReason.Malformed,
+                $"A claim carried {keys.Count} key(s) and {signatures.Count} signature(s); it needs at least one of each, matched.");
         }
 
-        return new ReplicationClaim(key, signature);
+        return new ReplicationClaim(keys, signatures);
+    }
+
+    private static List<ReadOnlyMemory<byte>> ReadFixed(CborReader reader, int length, string what)
+    {
+        var count = reader.ReadStartArray();
+        if (count is null || count > MaximumEntries)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A claim carried more than the {MaximumEntries} entries this protocol permits.");
+        }
+
+        var values = new List<ReadOnlyMemory<byte>>(count.Value);
+        for (var index = 0; index < count.Value; index++)
+        {
+            var value = reader.ReadByteString();
+            if (value.Length != length)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed, $"A claim carried a {what} that is not {length} bytes.");
+            }
+
+            values.Add(value);
+        }
+
+        reader.ReadEndArray();
+        return values;
     }
 
     /// <inheritdoc/>
     public bool Equals(ReplicationClaim? other) =>
         other is not null
-        && ClaimPublicKey.Span.SequenceEqual(other.ClaimPublicKey.Span)
-        && Signature.Span.SequenceEqual(other.Signature.Span);
+        && ClaimPublicKeys.Count == other.ClaimPublicKeys.Count
+        && Signatures.Count == other.Signatures.Count
+        && ClaimPublicKeys.Select((key, index) => key.Span.SequenceEqual(other.ClaimPublicKeys[index].Span)).All(same => same)
+        && Signatures.Select((signature, index) => signature.Span.SequenceEqual(other.Signatures[index].Span)).All(same => same);
 
     /// <inheritdoc/>
-    public override int GetHashCode() => HashCode.Combine(ClaimPublicKey.Length, Signature.Length);
+    public override int GetHashCode() => HashCode.Combine(ClaimPublicKeys.Count, Signatures.Count);
 }
 
 /// <summary>
