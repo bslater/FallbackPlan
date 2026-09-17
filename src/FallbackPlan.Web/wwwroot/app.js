@@ -71,6 +71,7 @@ const S = {
   snapshotFilter: "",
   destinations: [],         // DestinationDescriptor[]
   pairings: [],             // PairingDescriptor[]
+  attributions: [],         // ReplicaAttributionDescriptor[] — replicas stored here (contract 1.31); [] where the service predates it
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
@@ -2260,6 +2261,54 @@ const actions = {
     });
   },
 
+  // The operator's re-attribution (ADR-0053 §3, contract 1.31): hand a
+  // replica stored here to a different paired device. Only devices that
+  // store here are offered — a destination we store at holds nothing here —
+  // and never the current owner.
+  "reattribute-open"(el) {
+    const repository = el.dataset.repository;
+    const owner = el.dataset.owner;
+    const candidates = S.pairings.filter(pairing =>
+      pairing.role !== "stores-for-us" && pairing.fingerprint !== owner);
+    openDialog(`
+      <h3>Re-point replica ${esc(repository.slice(0, 12))}…</h3>
+      <p class="dlg-sub">This replica was recorded before its owner published a claim key, so the passphrase
+      alone cannot claim it back: the machine it belonged to is gone, and only you can say which paired device
+      is that owner's rebuilt one. From then on the old identity's offers and retrievals for it are refused,
+      and the new device reads it under its own pairing. Nothing at rest changes.</p>
+      <p class="sub">Currently attributed to <b>${esc(el.dataset.label)}</b> <span class="mono">${esc(owner.slice(0, 10))}…</span></p>
+      ${candidates.length ? `
+      <label class="field" for="reattribute-to">Now belongs to</label>
+      <select id="reattribute-to">
+        ${candidates.map(pairing => `<option value="${esc(pairing.fingerprint)}">${esc(pairing.label)} — ${esc(pairing.fingerprint.slice(0, 12))}…</option>`).join("")}
+      </select>
+      <label class="field" for="confirm-word">Type <b>re-point</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="re-point" data-enables="reattribute-go">`
+      : `<p class="sub">No other paired device stores here. Pair the rebuilt machine first — as one that stores here — then re-point.</p>`}
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        ${candidates.length ? `<button type="button" class="btn danger" id="reattribute-go" data-action="reattribute-go" data-repository="${esc(repository)}" disabled>Re-point the replica</button>` : ""}
+      </div>`);
+    document.getElementById("confirm-word")?.focus();
+  },
+
+  async "reattribute-go"(el) {
+    const fingerprint = document.getElementById("reattribute-to").value;
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "reattribute_replica",
+        repositoryId: el.dataset.repository,
+        fingerprint: fingerprint,
+      }, { errToast: "The service refused to re-point the replica" });
+      if (result?.result === "configuration_change") {
+        closeDialog();
+        reportDialog("Replica re-pointed", result.lines);
+        refreshConfigData(); refreshNotices(); refreshStatus();
+      }
+    });
+  },
+
   async "notice-ack"(el) {
     await withBusy(el, async () => {
       const result = await run(
@@ -2340,6 +2389,12 @@ async function refreshConfigData() {
   if (destinations?.result === "destinations") S.destinations = destinations.destinations;
   if (pairings?.result === "pairings") S.pairings = pairings.pairings;
   if (invites?.result === "pairing_invites") S.invites = invites.invites;
+  // The replicas stored here (contract 1.31, ADR-0053 §3). Asked for
+  // directly rather than through run(): a service that predates the verb,
+  // or a paired remote one, refuses it by name, and that is an empty table
+  // — not a toast on every refresh.
+  const attributions = await api({ command: "list_replica_attributions" }).catch(() => null);
+  S.attributions = attributions?.result === "replica_attributions" ? attributions.attributions : [];
   await refreshSets();
   if (S.view === "config") renderConfigBody();
 }
@@ -2407,6 +2462,24 @@ function renderConfigBody() {
             data-fingerprint="${esc(pairing.fingerprint)}" data-label="${esc(pairing.label)}">Unpair…</button></td>
     </tr>`).join("");
 
+  // Whose each stored replica is, and whether its owner's passphrase can
+  // move it. The Re-point control is the operator's override (ADR-0053 §3):
+  // for the Owner alone, and only on a replica recorded without a claim
+  // key — one that carries a key is its owner's to claim, and the service
+  // refuses the override for it anyway.
+  const attributions = S.attributions.map(row => `
+    <tr>
+      <td class="mono" title="${esc(row.repositoryId)}">${esc(row.repositoryId.slice(0, 12))}…</td>
+      <td>${row.ownerLabel ? esc(row.ownerLabel) : `<span class="detail">no pairing</span>`}
+          <span class="mono detail" title="${esc(row.ownerFingerprint)}">${esc(row.ownerFingerprint.slice(0, 10))}…</span></td>
+      <td class="detail">${row.claimable ? "its owner, with the passphrase" : "the operator only — no claim key on record"}</td>
+      <td>${S.signedInRole === "Owner" && row.claimable === false
+        ? `<button type="button" class="btn small" data-action="reattribute-open"
+             data-repository="${esc(row.repositoryId)}" data-owner="${esc(row.ownerFingerprint)}"
+             data-label="${esc(row.ownerLabel ?? row.ownerFingerprint.slice(0, 10))}">Re-point…</button>`
+        : ""}</td>
+    </tr>`).join("");
+
   const invites = S.invites.map(invite => `
     <tr>
       <td class="mono">${esc(invite.inviteId)}</td>
@@ -2447,6 +2520,14 @@ function renderConfigBody() {
       <div class="card"><div class="table-wrap"><table class="data">
         <thead><tr><th>Fingerprint</th><th>Label</th><th>Role</th><th>Paired</th><th></th></tr></thead>
         <tbody>${pairings}</tbody></table></div></div>
+    </div>` : ""}
+
+    ${S.attributions.length ? `<div class="cfg-section">
+      <div class="cfg-head"><h3>Replicas stored here</h3></div>
+      <p class="sub">What paired devices keep on this machine, and who may claim each back after losing theirs.</p>
+      <div class="card"><div class="table-wrap"><table class="data">
+        <thead><tr><th>Repository</th><th>Belongs to</th><th>Reclaimable by</th><th></th></tr></thead>
+        <tbody>${attributions}</tbody></table></div></div>
     </div>` : ""}
 
     ${S.invites.length ? `<div class="cfg-section">

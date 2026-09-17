@@ -62,6 +62,38 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task ReplicaAttributions_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.31 (ADR-0053 §3): the operator's listing and the
+        // re-point ride the generic relay — the listing's rows reach the
+        // page camelCased, and the command arrives typed with both fields.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ListReplicaAttributionsCommand
+            ? new ReplicaAttributionsResult(
+                [new ReplicaAttributionDescriptor(new string('c', 32), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "laptop", false)])
+            : new ConfigurationChangeResult(["moved"]);
+
+        using var list = harness.Command("""{"command":"list_replica_attributions"}""");
+        using var listed = await harness.Http.SendAsync(list);
+        Assert.AreEqual(HttpStatusCode.OK, listed.StatusCode);
+        using (var body = JsonDocument.Parse(await listed.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("replica_attributions", body.RootElement.GetProperty("result").GetString());
+            var row = body.RootElement.GetProperty("attributions")[0];
+            Assert.AreEqual("laptop", row.GetProperty("ownerLabel").GetString());
+            Assert.IsFalse(row.GetProperty("claimable").GetBoolean());
+        }
+
+        using var rePoint = harness.Command(
+            $$"""{"command":"reattribute_replica","repositoryId":"{{new string('c', 32)}}","fingerprint":"ABCDEF"}""");
+        using var moved = await harness.Http.SendAsync(rePoint);
+        Assert.AreEqual(HttpStatusCode.OK, moved.StatusCode);
+        Assert.IsInstanceOfType<ReattributeReplicaCommand>(harness.Clients.Client.Received[^1], out var command);
+        Assert.AreEqual(new string('c', 32), command.RepositoryId);
+        Assert.AreEqual("ABCDEF", command.Fingerprint);
+    }
+
+    [TestMethod]
     public async Task JobRunStats_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.22's job-row stats ride the same generic relay: the
