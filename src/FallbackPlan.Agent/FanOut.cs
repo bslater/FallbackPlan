@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Replication;
+using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
@@ -761,6 +762,31 @@ public static class FanOut
                 .ConfigureAwait(false);
             var replica = new LocalFileSystemObjectStore(replicaRoot);
 
+            // The destination as the rollback witness (ADR-0062). A state
+            // directory restored from an older copy rolls the catalogue, the
+            // sequence file, this ledger and a direct-ship set's metadata
+            // store back together, so nothing local can notice — but the
+            // destination still holds what was published, and its journal
+            // keys carry this writer's sequence in the clear. The allocator
+            // is the detector: numbers are handed out before anything is
+            // written, so a destination attesting a number the writer has
+            // not yet allocated is a rollback of the allocation state and
+            // nothing else. Per writer, so a second device writing the same
+            // repository never reads as this one's rollback. Asked before
+            // the gate below, which reads a ledger that rolled back too.
+            var rolledBack = false;
+            if (!replicaRootMissing)
+            {
+                var attested = await ObservedHead.JournalHeadAsync(replica, runtime.Writer, cancellationToken)
+                    .ConfigureAwait(false);
+                if (archive.Sequence.AdoptObservedHead(attested) is SequenceAdoption.Adopted ahead)
+                {
+                    rolledBack = true;
+                    ReportDestinationAhead(
+                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, nowMs);
+                }
+            }
+
             // Filling a destination volume to zero is a harm to the machine,
             // not just to this backup: logs stop, temp files fail, and on the
             // source's own volume the next capture cannot even stage. The copy
@@ -790,8 +816,14 @@ public static class FanOut
             // "Keeps everything" is a keep-set and has a rendering of its own:
             // null would mean "nobody computed one", which is what the ledger
             // carries forward rather than compares (ADR-0056).
+            // A keep-set computed from rolled-back metadata would converge
+            // the destination down to the history the rollback can see,
+            // deleting the newest backup from the only place that holds it.
+            // The detecting pass therefore keeps everything: CopyAsync never
+            // deletes, only ConvergeAsync does, and no keeps means no
+            // converge (and no spares, which only a keep-set needs).
             var keepFingerprint = KeepsEverything;
-            if (Retention.DestinationConvergence.HasRules(effective))
+            if (!rolledBack && Retention.DestinationConvergence.HasRules(effective))
             {
                 var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
@@ -816,9 +848,14 @@ public static class FanOut
                 && File.Exists(Path.Combine(
                     runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
 
-            var scope = ReconciliationGate.Decide(
-                previous, syncedSequence, keepFingerprint, nowMs,
-                ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
+            // The gate's ledger rolled back with everything else, so its
+            // "nothing to look at" would be the rollback's own opinion of
+            // itself: a detecting pass reads through.
+            var scope = rolledBack
+                ? SyncScope.Reconcile
+                : ReconciliationGate.Decide(
+                    previous, syncedSequence, keepFingerprint, nowMs,
+                    ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
 
             // Samples come from the pre-copy listing, filtered like the copy
             // itself: everything sampled is carried by the copy below, so a
@@ -1106,6 +1143,36 @@ public static class FanOut
             + $"previous sync had succeeded against it. {copied} object(s) were copied back, so the destination is "
             + "current again, but it discarded a backup once and may do so again: check the device, the filesystem, "
             + "and anything else that writes there before counting on it.",
+            nowMs);
+    }
+
+    /// <summary>
+    /// Says that a destination attests writer history this machine's state
+    /// has never heard of (ADR-0062): the state directory was restored from
+    /// an older copy or rolled back wholesale. Never auto-resolved, on the
+    /// shortfall notice's posture — the next pass is quiet because the
+    /// writer moved, not because the rollback did not happen.
+    /// </summary>
+    private static void ReportDestinationAhead(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        SequenceAdoption.Adopted ahead, bool staging, ulong nowMs)
+    {
+        var attested = ahead.To - 1;
+        Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
+
+        var consequence = staging
+            ? "This is a staging set, so its staging archive is behind the destination as well and is not "
+              + "healed from it: the destination's newer history is only at the destination, and the next "
+              + "converging pass will trim the destination to the staging archive's keep-set — restore or copy "
+              + "that history aside first if it matters."
+            : "The set's local metadata store and catalogue are behind what the destination holds.";
+        runtime.Notices.Raise(
+            $"destination-ahead:{set.Id}:{destinationName}",
+            $"destination '{destinationName}' of set '{set.Name}' attests writer sequence {attested}; this machine's "
+            + $"state said {ahead.From}. The state directory was restored from an older copy or rolled back "
+            + "wholesale, and the destination holds history the local state has never heard of. The writer has "
+            + $"moved past {attested}, so the next backup will not collide with it; nothing at the destination was "
+            + $"deleted on this pass and its retention policy was not applied. {consequence}",
             nowMs);
     }
 

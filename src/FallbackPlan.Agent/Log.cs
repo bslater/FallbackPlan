@@ -285,4 +285,11 @@ internal static partial class Log
         Message = "The destination staged {Offset} bytes of {Key} that do not match this copy; "
             + "the object is being sent whole instead")]
     internal static partial void ObjectResumeRefused(ILogger logger, ObjectKey key, ulong offset);
+
+    [LoggerMessage(
+        EventId = 3773, Level = LogLevel.Warning,
+        Message = "Set {SetName}: destination {Destination} attests writer sequence {Attested} but local state said {Local} — "
+            + "the state directory was rolled back; the writer moved past the destination's head and this pass deletes nothing there")]
+    internal static partial void DestinationAhead(
+        ILogger logger, string setName, string destination, ulong attested, ulong local);
 }
