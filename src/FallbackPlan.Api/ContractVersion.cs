@@ -232,8 +232,16 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// the archive's own public derivation parameters and sealing key, so a
     /// client derives a restore grant per set: an adopted set keeps the salt
     /// its archive was born under, which is not the installation's. Additive.
+    /// 1.31 adds the operator's re-attribution (ADR-0053 §3):
+    /// `list_replica_attributions` answers every replica stored here with
+    /// its owner's fingerprint and label and whether a claim key is on
+    /// record — never the key — and `reattribute_replica` points one at a
+    /// different paired device, for the replica attributed before the claim
+    /// key existed by a machine that died before publishing one. Owner-only
+    /// and local callers only, like `restart_service`; refused by name for a
+    /// replica its owner can claim with the passphrase. Additive.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 30);
+    public static ContractVersion Current { get; } = new(1, 31);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

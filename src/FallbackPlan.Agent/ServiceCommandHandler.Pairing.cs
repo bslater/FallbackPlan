@@ -252,4 +252,37 @@ public sealed partial class ServiceCommandHandler
         lines.Add("Objects already stored at the peer are theirs to keep or evict — revocation deletes nothing anywhere.");
         return new ConfigurationChangeResult(lines);
     }
+
+    /// <summary>The operator's view of the replicas stored here (contract 1.31; ADR-0053 §3).</summary>
+    private ServiceResult ListReplicaAttributions() =>
+        Scope == CallerScope.Remote
+            ? NotARemoteDecision("see which replicas this service stores and for whom")
+            : ReplicaReattribution.List(runtime.ReplicaOwners, PeerGrantStore.Open(runtime.Options.StateDirectory));
+
+    /// <summary>
+    /// The operator's override (contract 1.31; ADR-0053 §3), shared with the
+    /// agent's <c>reattribute</c> verb through <see cref="ReplicaReattribution"/>
+    /// so the two cannot drift.
+    /// </summary>
+    private ServiceResult ReattributeReplica(ReattributeReplicaCommand command) =>
+        Scope == CallerScope.Remote
+            ? NotARemoteDecision("re-point a replica this service stores")
+            : ReplicaReattribution.Apply(
+                runtime.ReplicaOwners,
+                PeerGrantStore.Open(runtime.Options.StateDirectory),
+                runtime.Notices,
+                command.RepositoryId,
+                command.Fingerprint,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+    /// <summary>
+    /// Whose replica a machine stores is that machine's operator's decision
+    /// (ADR-0053 §3): a paired console may watch this service but not hand
+    /// out what it holds for others — the same line restart_service draws
+    /// (ADR-0028 §6).
+    /// </summary>
+    private static ServiceError NotARemoteDecision(string verb) => new(
+        ServiceErrorReason.Refused,
+        $"Only a local caller may {verb} — whose replica this machine holds is its own operator's decision "
+        + "(ADR-0053 §3), not a paired console's.");
 }

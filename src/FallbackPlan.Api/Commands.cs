@@ -22,6 +22,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
 [JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
+[JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
+[JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
 [JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
@@ -303,6 +305,27 @@ public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
 /// it here, exactly as the agent verb's <c>--to</c> does.
 /// </param>
 public sealed record UnpairCommand(string Fingerprint, bool Notify = true, string? Endpoint = null) : ServiceCommand;
+
+/// <summary>
+/// Every replica stored here and whose it is (contract 1.31;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// §3) — the operator's view of the attribution ledger. Local callers only.
+/// </summary>
+public sealed record ListReplicaAttributionsCommand : ServiceCommand;
+
+/// <summary>
+/// Points a replica stored here at a different paired device (contract 1.31;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// §3): the operator's override for the one replica the passphrase-only
+/// claim cannot reach — one attributed before the claim key existed, by a
+/// machine that died before any later offer could publish one. Owner-only,
+/// local callers only, and refused by name for a replica that carries a
+/// claim key: its owner proves ownership with the passphrase, and the
+/// override must not stand in for that proof.
+/// </summary>
+/// <param name="RepositoryId">The replica's repository id, lower-hex — the name of its directory under <c>replicas</c>.</param>
+/// <param name="Fingerprint">The new owner's fingerprint, or an unambiguous prefix of it; it must be paired here as a device that stores here.</param>
+public sealed record ReattributeReplicaCommand(string RepositoryId, string Fingerprint) : ServiceCommand;
 
 /// <summary>Runs a backup now, outside the schedule.</summary>
 /// <param name="SetName">The set to run; null runs the default set.</param>

@@ -130,6 +130,34 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheReplicaAttributionWireNames_AreThePublishedOnes()
+    {
+        // Contract 1.31 (ADR-0053 §3): the operator's view of the replicas
+        // stored here, pinned on the bytes. `claimable` is the whole
+        // decision — whether the passphrase can move a replica or only the
+        // operator can — and the key itself never crosses.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new ReplicaAttributionsResult(
+                [new ReplicaAttributionDescriptor(new string('c', 32), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "laptop", true)]),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"replica_attributions\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"repository_id\":\"cccc", listed, StringComparison.Ordinal);
+        Assert.Contains("\"owner_fingerprint\":\"ABCDEFGHIJ", listed, StringComparison.Ordinal);
+        Assert.Contains("\"owner_label\":\"laptop\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"claimable\":true", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("claim_public_key", listed, StringComparison.Ordinal);
+
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new ReattributeReplicaCommand(new string('c', 32), "ABCDEF"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"reattribute_replica\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"fingerprint\":\"ABCDEF\"", command, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"command\":\"list_replica_attributions\"",
+            JsonSerializer.Serialize<ServiceCommand>(new ListReplicaAttributionsCommand(), FrameCodec.SerializerOptions),
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheAdoptionWireNames_AreThePublishedOnes()
     {
         // Contract 1.30 (ADR-0061): the discovery row and the adoption

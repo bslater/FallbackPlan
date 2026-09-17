@@ -127,6 +127,15 @@ public sealed class AuthenticatingService : IFallbackPlanService
             {
                 return NotTheOwner("restart the service");
             }
+
+            // The third (ADR-0053 §3): re-pointing which paired device owns
+            // a replica stored here hands somebody's backup to a device.
+            // The listing beside it is any account's — it names owners and
+            // labels, which the pairings verb already does.
+            if (command is ReattributeReplicaCommand && !_users.MayManageAccounts(session.User))
+            {
+                return NotTheOwner("re-point a replica stored here");
+            }
         }
         else if (command is ListUsersCommand or CreateUserCommand or DeleteUserCommand or ChangePasswordCommand)
         {
@@ -146,6 +155,14 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 ServiceErrorReason.Refused,
                 "The installation has no accounts yet, so nobody owns a restart. Finish setup — the "
                 + "first account is the owner — and restart as that account.");
+        }
+        else if (command is ReattributeReplicaCommand)
+        {
+            // Same rule, same reason: an Owner-only verb has no owner yet.
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "The installation has no accounts yet, so nobody owns the replicas stored here. Finish "
+                + "setup — the first account is the owner — and re-point the replica as that account.");
         }
 
         return await _inner.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);

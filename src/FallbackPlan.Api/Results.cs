@@ -62,6 +62,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
 [JsonDerivedType(typeof(DestinationsResult), "destinations")]
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
+[JsonDerivedType(typeof(ReplicaAttributionsResult), "replica_attributions")]
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
@@ -254,6 +255,22 @@ public sealed record PairingDescriptor(string Fingerprint, string Label, string 
 /// <summary>This device's paired peers.</summary>
 /// <param name="Pairings">The grants, oldest first.</param>
 public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) : ServiceResult;
+
+/// <summary>One replica stored here, and whose it is (contract 1.31).</summary>
+/// <param name="RepositoryId">The replica's repository id, lower-hex.</param>
+/// <param name="OwnerFingerprint">The fingerprint of the peer it is attributed to.</param>
+/// <param name="OwnerLabel">What this device calls that peer, or null when no pairing with it remains.</param>
+/// <param name="Claimable">
+/// Whether a claim public key is on record for it — in which case its owner
+/// can claim it with the passphrase alone (peer-protocol 03 §6) and the
+/// operator's override is refused. The key itself never crosses.
+/// </param>
+public sealed record ReplicaAttributionDescriptor(
+    string RepositoryId, string OwnerFingerprint, string? OwnerLabel, bool Claimable);
+
+/// <summary>The replicas stored here, ids ascending.</summary>
+/// <param name="Attributions">One row per attributed repository.</param>
+public sealed record ReplicaAttributionsResult(IReadOnlyList<ReplicaAttributionDescriptor> Attributions) : ServiceResult;
 
 /// <summary>One directory on the service's machine, for a folder picker.</summary>
 /// <param name="Name">The directory's name.</param>

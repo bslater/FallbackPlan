@@ -366,6 +366,46 @@ public sealed class AuthenticationGateTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ReattributeReplica_IsTheOwnersAlone()
+    {
+        // The third Owner-only privilege (ADR-0053 §3): re-pointing which
+        // paired device owns a replica stored here hands somebody else's
+        // backup to a device — the operator's own machine, the owner's call.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var command = new ReattributeReplicaCommand(new string('c', 32), "ABCDEF");
+        var refused = (ServiceError)await operatorConnection.ExecuteAsync(command, CancellationToken.None);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("owner", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        // The listing is any signed-in account's; only the re-point is gated.
+        var before = _inner.Executed;
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await operatorConnection.ExecuteAsync(new ListReplicaAttributionsCommand(), CancellationToken.None));
+        Assert.IsInstanceOfType<AcknowledgedResult>(await owner.ExecuteAsync(command, CancellationToken.None));
+        Assert.AreEqual(before + 2, _inner.Executed, "the listing and the owner's re-point must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task ReattributeReplica_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
+    {
+        // As for restart: nobody owns the override until the first account
+        // exists, and the bootstrap window admits only the verbs that create it.
+        var refused = (ServiceError)await Connect().ExecuteAsync(
+            new ReattributeReplicaCommand(new string('c', 32), "ABCDEF"), CancellationToken.None);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.AreEqual(0, _inner.Executed, "the inner service was never reached");
+    }
+
+    [TestMethod]
     public async Task RestartService_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
     {
         // The bootstrap window admits exactly the verbs that create the

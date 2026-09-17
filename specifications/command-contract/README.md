@@ -40,12 +40,13 @@ touches a byte already written.
 - Who may call what: the local binding is authenticated by the operating
   system; the remote binding by pinned pairing; person-identity rides inside
   either as a session ([ADR-0045](../../docs/adr/0045-client-authentication.md)).
-  Some verbs are local-only (`set_log_level`, `provision_installation`) and
+  Some verbs are local-only (`set_log_level`, `provision_installation`,
+  `restart_service`, `list_replica_attributions`, `reattribute_replica`) and
   say so when refused.
 
 ## Verbs, by area
 
-The register as of 1.30 — 52 commands. One line each; parameters, results
+The register as of 1.31 — 54 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -85,7 +86,9 @@ machine cause and the set's `last_completed_at`).
 
 **Pairing and peers** — `list_pairings`, `create_pairing_invite` /
 `list_pairing_invites` / `revoke_pairing_invite` / `pair_with_invite`,
-`unpair` (ADR-0030/0039).
+`unpair` (ADR-0030/0039); `list_replica_attributions` /
+`reattribute_replica` (1.31, ADR-0053 §3 — the operator's view of the
+replicas stored here, and the override for one the passphrase cannot claim).
 
 **Notices and diagnostics** — `list_notices` / `acknowledge_notice`
 (ADR-0039), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043).
@@ -115,6 +118,7 @@ verification, status) and predate the per-version changelog convention.
 | 1.21 | `restart_service`: an in-process recycle of the running service — Owner-only, local callers only, refused before setup and under `--once`; the acknowledgement is flushed before teardown and the restart signs every session out ([ADR-0049](../../docs/adr/0049-service-lifecycle-hygiene.md)) |
 | 1.22 | The completed-run record and drill-down: the job row carries the run's terminal numbers (nullable, additive — a pre-1.22 row reads "not recorded", never zero) and `list_jobs` takes an optional newest-N bound; `job_changes` and `job_failures` answer one run's diff and failure listing from the repository with exact counts and bounded samples; the progress stream names the `current_file` being processed; and the status matrix carries each demotion's `reason` plus the set's `last_completed_at` — all additive with null defaults ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)) |
 | 1.24 | A completion figure on each destination row: `held_bytes`, `owed_bytes` and `measured_at`, counted by the sync pass rather than by the status poll. Owed is by the destination's own retention policy, so a narrow override reads complete when it holds its own keep-set. Additive with defaults; `measured_at` is what separates "holds none of it" from "nobody has counted", and a client without it must not draw an empty gauge |
+| 1.31 | The operator's re-attribution ([ADR-0053 §3](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)): `list_replica_attributions` answers every replica stored here as `replica_attributions` — `repository_id`, `owner_fingerprint`, `owner_label` and `claimable`, which says whether a claim key is on record and never carries the key — and `reattribute_replica {repository_id, fingerprint}` points one at a different paired device, answering `configuration_change`. Owner-only and local callers only, like `restart_service`; a fingerprint prefix resolves as `unpair`'s does; refused by name for a device paired only as a destination we store at, and for a replica its owner can claim with the passphrase — the override exists only for a replica recorded before the claim key was published. Additive |
 | 1.30 | Adopting a destination's archives (ADR-0061): `discover_archives` lists what a declared destination holds by descriptor alone — `repository_id`, `format_version`, `created_at`, `created_by`, the public `kdf_salt` / `kdf_memory_kib` / `kdf_iterations` / `kdf_parallelism` and `sealing_public_key`, `snapshot_objects`, `highest_publication_sequence`, `owned_by_set` and `same_installation` — with no credential involved; `adopt_archive` takes one back under its original repository id and set id with the same sealed provisioning envelope `provision_write_only_set` carries, derived against the **discovered** archive's salt, and answers `archive_adopted`: the set as re-declared from the shape the archive records (`roots`, `set_name`, `schedule`, rules), each overridable on the command, `missing_roots` reported rather than refused, `writer_identity_resumed`, `already_adopted`. The set descriptor gains the archive's own `kdf_salt`, costs and `sealing_public_key`, so a client derives a restore grant per set — an adopted set keeps the salt its archive was born under. Additive with defaults |
 | 1.29 | The recovery kit withdrawn (ADR-0060): `confirm_recovery_kit` is gone, `describe_service` no longer carries `kit_status` or `kit_confirmed_at`, and `setup_state` is two-valued again — `setup_required` or `ready`. A minor with removals, admitted under the pre-release rule: the only clients are this repository's, a client reads a missing `kit_status` exactly as it read one from a pre-1.15 service, and a client that still knows `kit_required` treats it as an unfinished ceremony |
 | 1.28 | The installation's public derivation parameters on `describe_service`: `kdf_salt`, `kdf_memory_kib`, `kdf_iterations`, `kdf_parallelism` and `sealing_public_key` — every one public by construction (each archive's descriptor records the same facts), null until first-run setup has run. What lets a client holding the passphrase derive the restore grant a set-up installation's restore needs ([ADR-0042 §5](../../docs/adr/0042-write-only-repositories.md)) without holding the archive: the CLI's `restore`, locally and over `--connect`, derives it from `--passphrase-env`, proves it against `sealing_public_key` before sending anything, opens a restore source under it and restores through that source. Additive with defaults |
