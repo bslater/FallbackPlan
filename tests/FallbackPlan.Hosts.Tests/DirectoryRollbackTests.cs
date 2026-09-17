@@ -6,7 +6,8 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The destination as the rollback witness
-/// (ADR-0062; FR-DEST-018, NFR-SEC-005): a whole state directory restored from an older
+/// ([ADR-0062](../../docs/adr/0062-the-destination-is-the-rollback-witness.md);
+/// FR-DEST-018, NFR-SEC-005): a whole state directory restored from an older
 /// copy rolls the catalogue, the sequence file, the sync ledger and a
 /// direct-ship set's metadata store back together, so nothing local can
 /// notice — but the destination still holds the newer history, and the next

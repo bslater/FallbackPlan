@@ -101,5 +101,6 @@ Merging is then safe for the reason that actually holds: the winner is a propert
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Built (witness extended) | The rollback witness read at archive open reaches only the plane the writer publishes into, and for a direct-ship set that plane is the state directory itself; [ADR-0062](0062-the-destination-is-the-rollback-witness.md) reads the same journal keys at the destination on every fan-out pass (`Repository.Index/ObservedHead`'s `JournalHeadAsync`), which is the one copy a state directory rolled back whole does not take with it |
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Commutativity justification withdrawn as false and replaced by explicit generation precedence (PT-2, critical). Void deltas added for gap closure (PT-6); retirement now requires uncontested coverage (PT-7). Chain mechanism itself unchanged. |

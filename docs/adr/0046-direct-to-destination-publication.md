@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-08
 **Requirements:** FR-DEST-002, FR-DEST-003, FR-DEST-013, FR-DEST-015, FR-DEST-016, NFR-PERF-001
-**Related:** [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0042](0042-write-only-repositories.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md)
+**Related:** [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0062](0062-the-destination-is-the-rollback-witness.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md)
 
 ---
 
@@ -243,6 +243,7 @@ a disk that had filled.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Qualified (rollback witness) | [ADR-0062](0062-the-destination-is-the-rollback-witness.md): a direct-ship set's metadata plane is the state directory, so a state directory rolled back whole takes every local witness with it; the destination is the witness on every fan-out pass, the detecting pass deletes nothing there, and the set is healed from the destination in place. `Agent/FanOut`, `Agent/ServiceRuntime`; `Hosts.Tests/DirectoryRollbackTests` |
 | 2026-08 | Accepted | The owner's direction, recorded with the exploration of every store interaction the pipeline makes |
 | 2026-08 | Built (first slice) | The ship sink, the metadata store, run scoping with ADR-0047's ledger, sibling catch-up through the existing fan-out, the no-destination refusal, and the `direct_ship` flag — default off until restore/retention/verification read destination-side |
 | 2026-08 | Built (read paths) | Restore, destination verification and the retention traversal proven THROUGH the sink, unchanged: a restore of a direct-ship set comes back byte-identical (blobs read from whichever destination holds them), verify-destination re-reads each replica against its seals with zero damage, and the retention report walks closures out of destination-held metadata blobs. The staging trim's blob deletes are ignored by the sink by design — per-destination convergence is the deleting half. Outstanding before the flag flips: the peer write adapter, the migration record, and a full retention-with-trimming drill on aged direct-ship snapshots |

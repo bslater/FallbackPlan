@@ -56,6 +56,7 @@ This document is **normative for terminology**. Where any other document, code i
 | **Priority** | An optional integer on a set, a destination, or a set's destination reference ([ADR-0047](../adr/0047-backup-pool-and-priorities.md) §4). Orders waiting work beneath user-initiation — a person always outranks any priority — and orders which destinations a run ships to first. |
 | **Baseline** | The fact that a destination holds a full backup of a set, recorded in the sync ledger as `baseline_completed_at`; a pair owed one is `needs_full` — skipped by incrementals and seeded by catch-up (ADR-0047 §§5–6, ADR-0046 §3). |
 | **Pause gate** | A run's cooperative suspension point ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)): the capture pipeline checks it between scan events, so a preempted run parks at a file boundary with its state held in memory and resumes without re-scanning. |
+| **Rollback witness** | Whatever attests how far a writer had got when the writer's own allocation state cannot be trusted: at archive open, the repository's signed checkpoints, deltas and journal keys ([ADR-0008](../adr/0008-index-generations-and-checkpoints.md)); on a fan-out pass, the destination's journal keys for this writer, which are the one copy that outlives a state directory rolled back whole ([ADR-0062](../adr/0062-the-destination-is-the-rollback-witness.md)). A witness only ever raises the sequence. |
 
 ## 2. Terms we do not use
 

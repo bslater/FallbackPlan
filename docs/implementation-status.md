@@ -32,7 +32,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0005](adr/0005-aead-suite-and-nonce-construction.md) | AEAD suite and nonce construction | **Built** | `Repository.Crypto/RecordCipher`, `Repository.Crypto/BlobKeyDeriver` · six requirements, all traced |
 | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Built** | `Repository/DedupTrustGate` · [notes](#0006--the-integrity-guard-is-built-and-one-thing-is-deliberately-not) |
 | [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*`, `Repository.Format/Manifests/SourceIdentityHint`, `Repository/SourceIdentityLookup` · `Repository.Tests/Index/IndexPrecedenceTests`, `Repository.Tests/Format/SourceIdentityHintCodecTests` · [notes](#0007--device-specific-facts-live-outside-the-manifest-and-one-of-the-two-is-built) |
-| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence`, `Repository.Index/ObservedHead` — the watermarks the decision put in checkpoints are now also read back as a rollback witness, so a writer whose allocation state fell behind its own published history adopts the repository's head at archive open (`Hosts.Tests/ObservedHeadAdoptionTests`) |
+| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence`, `Repository.Index/ObservedHead` — the watermarks the decision put in checkpoints are now also read back as a rollback witness, so a writer whose allocation state fell behind its own published history adopts the repository's head at archive open (`Hosts.Tests/ObservedHeadAdoptionTests`); and where the whole state directory rolled back, the destination's journal keys are the witness ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md), `Hosts.Tests/DirectoryRollbackTests`) |
 | [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Partly built** | `Repository.Index/Journal/IntentLifecycle`, `Retention/StagingSweep` · `Retention.Tests/RetentionCycleTests` · [notes](#0009--the-collector-is-built-compaction-is-not) |
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
@@ -85,6 +85,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0058--what-the-adapter-does-not-carry) |
 | [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
 | [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the policy manifest records the set's shape, `discover_archives` / `adopt_archive` take an archive back under its original repository and set ids with the passphrase, the writer identity is resumed, the next backup is incremental; console, CLI and peers; contract 1.30 | Built | `Repository.Format/Manifests/PolicyManifest` · `Agent/ServiceCommandHandler.Adoption.cs` · `Application/LocalState` · `Web/ConsoleRestoreGate` · `Cli/CliApplication` · `Cli/OperationGateway` · `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests`, `Cli.Tests/AdoptVerbValidationTests`, `Repository.Tests/ManifestCodecTests` · [notes](#0061--the-rebuilt-machine-resumes) |
+| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer, moves the sequence past it, deletes nothing there, and heals a direct-ship set's metadata store and catalogue in place from the destination | Built | `Agent/FanOut` · `Agent/ServiceRuntime` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -491,7 +492,7 @@ Three limits worth stating:
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
 | [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims). For a `direct_ship` set the staging half of this arc is replaced by the direct-to-destination row below |
-| Direct-to-destination arc | Partly built ([ADR-0046](adr/0046-direct-to-destination-publication.md), [ADR-0047](adr/0047-backup-pool-and-priorities.md)): the ship sink and metadata store, destination-backed restore/verify/retention reads, migration and staging retirement, the pool with priorities and true suspend/resume, and the kill sweep — the trimming drill run, the flag on the contract and console, and new local-path sets born direct-ship — the peer write adapter landed as [ADR-0058](adr/0058-peer-write-adapter.md), and a rebuilt machine adopts a destination's archives back under their original ids ([ADR-0061](adr/0061-adopt-a-destinations-archives.md)); see [0046](#0046--the-set-that-never-stages) |
+| Direct-to-destination arc | Partly built ([ADR-0046](adr/0046-direct-to-destination-publication.md), [ADR-0047](adr/0047-backup-pool-and-priorities.md)): the ship sink and metadata store, destination-backed restore/verify/retention reads, migration and staging retirement, the pool with priorities and true suspend/resume, and the kill sweep — the trimming drill run, the flag on the contract and console, and new local-path sets born direct-ship — the peer write adapter landed as [ADR-0058](adr/0058-peer-write-adapter.md), and a rebuilt machine adopts a destination's archives back under their original ids ([ADR-0061](adr/0061-adopt-a-destinations-archives.md)), and a whole state directory rolled back is witnessed, protected and healed from the destination ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md)); see [0046](#0046--the-set-that-never-stages) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
 | 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
 | 5 — Legacy archive import | Not started, gated on legal review |
@@ -662,6 +663,45 @@ retrieval session the store; nothing below the resolve step changed for it.
 Not recorded, on purpose: retention, priority and destinations
 (FR-DEST-006). Not guessed at: a recorded root missing on this machine is
 reported and left for the person to edit.
+
+
+### 0062 — the destination is the witness
+
+Built over four commits. The row this closes had been Unproved since the
+proof-obligation table was written: for a direct-ship set the catalogue, the
+sequence file, the sync ledger and the metadata store all live in the state
+directory, so a rollback of the whole directory rolled the witness slice 3.2
+built back with it. The destination did not roll back, and its journal keys
+carry this writer's sequence in the clear.
+
+The allocator is the detector (`Agent/FanOut`): once the replica store
+exists, the pass reads the destination's journal head for this writer
+(`Repository.Index/ObservedHead`'s `JournalHeadAsync` — one listing, no
+reads, no key) and offers it to the writer sequence, which only ever rises
+and answers `Adopted` only for a number the writer has not yet allocated.
+Per writer, so a second device's progress never reads as this one's
+rollback; before the reconciliation gate, whose ledger rolled back too. A
+detecting pass computes no keep-set — so nothing is converged or spared —
+reads through, and raises `destination-ahead:<set>:<destination>`, never
+auto-resolved.
+
+A direct-ship set is then healed in place (`Agent/ServiceRuntime`'s
+`HealFromDestinationAsync`): the destination's metadata copied back with the
+if-absent copy adoption uses, the catalogue rebuilt over the live handle
+(`Agent/CatalogueRebuild`, whose every write is an upsert), and the writer
+moved past what the healed archive attests. The trigger is the metadata
+plane — the destination's journal head above the local store's — so a heal
+that failed is retried on every pass, which a trigger keyed on the
+already-moved sequence never would be. A staging set is protected and told,
+not healed: what it lacks is content, and the notice says where it is and
+what the next converging pass will do.
+
+`Hosts.Tests/DirectoryRollbackTests` is the drill, with the state directory
+copied aside between two backups and put back; one fixture fact is worth
+keeping — a backup run stamps the ledger with its scheduled time, so a sync
+stamped with the real clock records an earlier success and the sink refuses
+the destination as one that missed a run. Peers are the stated limit: the
+same head read over a retrieval session is the follow-up.
 
 ### 0044 — the ceremony that two requirements have been waiting for
 
