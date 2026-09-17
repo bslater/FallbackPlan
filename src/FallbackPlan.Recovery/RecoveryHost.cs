@@ -1,7 +1,6 @@
 using Bodu;
 using System.Globalization;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Recovery.Resources;
 using Microsoft.Extensions.Logging;
@@ -10,7 +9,7 @@ namespace FallbackPlan.Recovery;
 
 /// <summary>
 /// The standalone recovery tool's command line, as a callable unit. This is
-/// the last line of defence (architecture 08 §5; FR-KIT-006), so the case
+/// the last line of defence (architecture 08 §5; FR-KIT-006; ADR-0060), so the case
 /// for testing it is the strongest in the codebase — and until now every
 /// command lived in <c>Main</c>, where only launching a process could reach
 /// one.
@@ -34,10 +33,10 @@ public static class RecoveryHost
         ThrowHelper.ThrowIfNull(args);
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(error);
-        // The standalone recovery tool (architecture 08 §5; FR-KIT-006): opens a
-        // repository with nothing but a store location, a recovery kit, and the
-        // passphrase. Argument parsing is by hand on purpose — the smallest
-        // possible dependency closure is the point of this executable.
+        // The standalone recovery tool (architecture 08 §5; ADR-0060): opens a
+        // repository with nothing but a store location and the passphrase.
+        // Argument parsing is by hand on purpose — the smallest possible
+        // dependency closure is the point of this executable.
 
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
@@ -45,13 +44,15 @@ public static class RecoveryHost
                 FallbackPlan standalone recovery tool
 
                 usage:
-                  fallbackplan-recover open      --repo <path> --kit <file> --passphrase-env <VAR>
-                  fallbackplan-recover snapshots --repo <path> --kit <file> --passphrase-env <VAR>
-                  fallbackplan-recover restore   --repo <path> --kit <file> --passphrase-env <VAR>
+                  fallbackplan-recover open      --repo <path> --passphrase-env <VAR>
+                  fallbackplan-recover snapshots --repo <path> --passphrase-env <VAR>
+                  fallbackplan-recover restore   --repo <path> --passphrase-env <VAR>
                                                  --snapshot <hex> --output <dir>
 
-                The kit file may be the binary form (FBPKRKIT) or the transcribable
-                text form. The kit is one factor; the passphrase is the other.
+                The passphrase is the whole credential: the archive's own descriptor
+                carries everything else the derivation needs, so one passphrase opens
+                every archive it wrote, wherever that archive is now — a destination
+                folder, a drive, or a replica copied back from a peer.
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads FALLBACKPLAN_LOG_LEVEL. Logs
@@ -89,8 +90,15 @@ public static class RecoveryHost
         {
             var command = args[0];
 
+            // A flag from the kit era is refused by name rather than
+            // ignored: somebody following an old note must learn the
+            // ceremony changed, not wonder why the file was never read.
+            if (args.Contains("--kit", StringComparer.Ordinal))
+            {
+                throw new RecoveryFailureException(Strings.RecoveryHost_KitWithdrawn);
+            }
+
             var repoPath = Require("--repo");
-            var kitPath = Require("--kit");
             var passphraseVariable = Require("--passphrase-env");
 
             var passphraseValue = Environment.GetEnvironmentVariable(passphraseVariable);
@@ -99,34 +107,23 @@ public static class RecoveryHost
                 throw new RecoveryFailureException(Strings.FormatRecoveryHost_EnvironmentVariableUnset(passphraseVariable));
             }
 
-            // The kit: binary or transcribed text, detected by content.
-            var kitBytes = File.ReadAllBytes(kitPath);
-            var framed = kitBytes.Length >= 8 && kitBytes.AsSpan(0, 8).SequenceEqual(RecoveryKitCodec.Magic)
-                ? kitBytes
-                : RecoveryKitText.ParseToFramed(System.Text.Encoding.UTF8.GetString(kitBytes));
-            var kit = RecoveryKitCodec.Parse(framed);
-            Log.KitRead(log, kit.RepositoryFormatVersion, kit.Destinations.Count);
-
             using var passphrase = Passphrase.Create(passphraseValue);
-            // OpenAsync serves both kit formats: a repository kit is
-            // delegated to the synchronous path unchanged, and an
-            // installation kit reads the archive's own identity from its
-            // descriptor first (recovery-kit §6).
             using var session = await RecoverySession.OpenAsync(
-                kit, passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
+                passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
                 .ConfigureAwait(false);
+            var repositoryHex = Convert.ToHexString(session.RepositoryId.ToArray()).ToLowerInvariant();
+            Log.DescriptorRead(log, repositoryHex, session.FormatVersion);
             Log.KeysDerived(log);
 
             switch (command)
             {
                 case "open":
                 {
-                    output.WriteLine($"repository     {Convert.ToHexString(session.RepositoryId.ToArray()).ToLowerInvariant()}");
-                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"kit version    {kit.KitFormatVersion} (issued {DateTimeOffset.FromUnixTimeMilliseconds((long)kit.IssuedAt):yyyy-MM-dd})"));
-                    output.WriteLine(kit.IsInstallationKit
-                        ? "derivation     reproduced — this kit and passphrase open this archive, and every "
-                            + "other archive this installation wrote"
-                        : "key object     unwrapped — the kit and passphrase open this repository");
+                    output.WriteLine($"repository     {repositoryHex}");
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"format         {session.FormatVersion}"));
+                    output.WriteLine(
+                        "derivation     reproduced — this passphrase opens this archive, and every other "
+                        + "archive this installation wrote");
                     var (blobs, notes) = await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"blobs          {blobs} readable"));
                     foreach (var note in notes)
@@ -195,7 +192,9 @@ public static class RecoveryHost
         catch (KeyUnwrapFailedException)
         {
             Log.PassphraseRefused(log);
-            error.WriteLine("error: the passphrase does not open this kit's key object — wrong passphrase or wrong kit.");
+            error.WriteLine(
+                "error: the passphrase does not reproduce this archive's keys — wrong passphrase, or an archive "
+                + "another installation wrote.");
             return 1;
         }
         catch (FormatException exception)

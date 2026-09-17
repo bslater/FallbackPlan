@@ -38,10 +38,10 @@ public sealed class PeerReplicationTests : IDisposable
         _source.WriteSourceFile("notes.txt", "hello from the source");
         await _source.BackUpAsync();
 
-        // The recovery kit is how a source destroyed and rebuilt from its
-        // destination opens the replica — the bare store carries the objects,
-        // the kit carries the wrapped keys (architecture 08 §5).
-        var kit = await _source.ExportKitAsync();
+        // The passphrase is how a source destroyed and rebuilt from its
+        // destination opens the replica — the bare store carries the objects
+        // and its own descriptor carries everything the derivation needs
+        // (architecture 08 §5; ADR-0060).
 
         // The backup ran before any destination was declared, so nothing has
         // fanned out yet — the on-demand sync is what closes the gap.
@@ -64,11 +64,11 @@ public sealed class PeerReplicationTests : IDisposable
         }
 
         // The headline: the standalone recovery tool restores from the replica —
-        // a repository the destination holds but cannot read — with only the kit
-        // and the passphrase, no catalogue and no state. This is the Phase-2 peer
+        // a repository the destination holds but cannot read — with only the
+        // passphrase, no catalogue and no state. This is the Phase-2 peer
         // criterion: a source destroyed and recovered from its destination.
         var listing = await RunRecoveryAsync(
-            "snapshots", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _source.PassphraseVariable);
+            "snapshots", "--repo", replicaPath, "--passphrase-env", _source.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshot = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
@@ -76,7 +76,7 @@ public sealed class PeerReplicationTests : IDisposable
 
         var destination = Path.Combine(_source.WorkPath, "recovered");
         var restore = await RunRecoveryAsync(
-            "restore", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _source.PassphraseVariable,
+            "restore", "--repo", replicaPath, "--passphrase-env", _source.PassphraseVariable,
             "--snapshot", snapshot, "--output", destination);
         Assert.AreEqual(0, restore.ExitCode, restore.Error);
 

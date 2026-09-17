@@ -8,7 +8,6 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 
@@ -21,12 +20,12 @@ public sealed record RecoveredSnapshot(SnapshotManifest Manifest, bool Signature
 public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped, IReadOnlyList<string> Notes);
 
 /// <summary>
-/// The last line of defence (architecture 08 §5; FR-KIT-006): opens a
-/// repository from a recovery kit and a passphrase — no state directory,
-/// no catalogue, no engine — and restores from recovery footers alone.
-/// The kit supplies the KDF parameters and the verbatim wrapped key
-/// object; the passphrase is the second factor; everything else is read
-/// from the store.
+/// The last line of defence (architecture 08 §5; FR-KIT-006; ADR-0060):
+/// opens a repository from the passphrase and the archive alone — no state
+/// directory, no catalogue, no engine, no kit — and restores from recovery
+/// footers alone. The archive's descriptor supplies the KDF salt and
+/// parameters and the sealing public key that proves the passphrase;
+/// everything else is read from the store.
 /// </summary>
 public sealed class RecoverySession : IDisposable
 {
@@ -54,7 +53,7 @@ public sealed class RecoverySession : IDisposable
         }
     }
 
-    /// <summary>The repository identity the kit names.</summary>
+    /// <summary>The repository identity the archive's descriptor names.</summary>
     public RepositoryId RepositoryId { get; }
 
     /// <summary>
@@ -70,86 +69,65 @@ public sealed class RecoverySession : IDisposable
     private static readonly ObjectKey DescriptorKey = ObjectKey.Parse("repository-format");
 
     /// <summary>
-    /// Opens a session, reading the repository's own identity from the
-    /// archive when the kit does not carry one (specifications/recovery-kit
-    /// §2.2, §6; FR-KIT-006).
+    /// Opens a session from the passphrase and the archive
+    /// ([ADR-0060](../../docs/adr/0060-the-passphrase-is-the-recovery-credential.md);
+    /// FR-KIT-006).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// An <b>installation kit</b> names no repository, because one opens
-    /// every archive its passphrase wrote. The repository id is nonetheless
-    /// load-bearing — it is associated data for every record and every
-    /// sealed blob — so it comes from the descriptor of whichever archive
-    /// the operator pointed at. The kit supplies the keys; the archive
-    /// supplies its name.
+    /// Everything the derivation needs is in the archive's own descriptor,
+    /// which is unencrypted by design: the KDF salt and parameters, the
+    /// sealing public key that proves the passphrase reproduced the root,
+    /// and the repository id — load-bearing, because it is associated data
+    /// for every record and every sealed blob. So one passphrase opens every
+    /// archive it wrote, from wherever that archive is now.
     /// </para>
     /// <para>
-    /// The derivation is proved <b>twice</b>, and the two failures are
-    /// different questions with different answers. Against the kit's copy:
-    /// this is not the passphrase that made this kit. Against the
-    /// descriptor's: this kit belongs to a different installation than this
-    /// archive. Collapsing them into one message would leave somebody
-    /// retyping a passphrase that was right all along.
-    /// </para>
-    /// <para>
-    /// A <b>repository kit</b> is delegated to <see cref="Open"/> unchanged,
-    /// so one call site serves both and neither has to ask which it holds.
+    /// There are exactly two refusals. The passphrase does not reproduce
+    /// this archive's sealing public key — a wrong passphrase, or another
+    /// installation's archive, deliberately indistinguishable
+    /// (<see cref="KeyUnwrapFailedException"/>). Or the path does not hold an
+    /// archive at all, which is a different thing to tell a person than
+    /// "wrong passphrase" (<see cref="RecoveryFailureException"/>).
     /// </para>
     /// </remarks>
-    /// <param name="kit">The kit, of either format.</param>
-    /// <param name="passphrase">The repository passphrase.</param>
+    /// <param name="passphrase">The installation's passphrase.</param>
     /// <param name="store">The archive to open.</param>
     /// <param name="cancellationToken">Abandons the descriptor read.</param>
     /// <returns>The opened session.</returns>
-    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce the kit's keys.</exception>
-    /// <exception cref="RecoveryKitFormatException">The archive has no readable descriptor, or belongs to another installation.</exception>
+    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this archive's keys.</exception>
+    /// <exception cref="RecoveryFailureException">The store has no readable descriptor.</exception>
     public static async ValueTask<RecoverySession> OpenAsync(
-        RecoveryKit kit, Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken)
+        Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken)
     {
-        ThrowHelper.ThrowIfNull(kit);
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNull(store);
 
-        if (!kit.IsInstallationKit)
-        {
-            return Open(kit, passphrase, store);
-        }
-
         var descriptor = await ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
 
-        var authority = WriteOnlyDerivation.Derive(
-            passphrase,
-            new Argon2Parameters
-            {
-                MemoryKiB = kit.KdfMemoryKiB,
-                Iterations = kit.KdfIterations,
-                Parallelism = kit.KdfParallelism,
-            },
-            kit.KdfSalt.Span,
-            KdfValidationMode.OpenRepository);
+        if (!WriteOnlyDerivation.TryDeriveVerified(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, descriptor.SealingPublicKey.Span,
+            out var authority))
+        {
+            throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+        }
 
         try
         {
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
+            return new RecoverySession(store, descriptor.RepositoryId, authority!.Credential.Clone(), authority)
             {
-                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
-            }
-
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
-            {
-                throw new RecoveryKitFormatException(
-                    Resources.Strings.RecoverySession_KitBelongsToAnotherInstallation);
-            }
-
-            return new RecoverySession(
-                store, descriptor.RepositoryId, authority.Credential.Clone(), authority);
+                FormatVersion = descriptor.FormatVersion,
+            };
         }
         catch
         {
-            authority.Dispose();
+            authority!.Dispose();
             throw;
         }
     }
+
+    /// <summary>The archive's format version, from its descriptor.</summary>
+    public int FormatVersion { get; private init; }
 
     /// <summary>Reads and parses the archive's descriptor.</summary>
     private static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(
@@ -160,92 +138,29 @@ public sealed class RecoverySession : IDisposable
 
         if (read.Outcome != OpenReadOutcome.Found)
         {
-            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor);
+            throw new RecoveryFailureException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor);
         }
 
         using var memory = new MemoryStream();
         await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
 
         // Every non-Ok outcome is the same answer here — this is not an
-        // archive this kit can open — but the tool still says which, because
-        // "not a repository" and "digest does not verify" send an operator
-        // to completely different places.
+        // archive this passphrase can open — but the tool still says which,
+        // because "not a repository" and "digest does not verify" send an
+        // operator to completely different places.
         return RepositoryDescriptorCodec.Parse(memory.ToArray()) switch
         {
             DescriptorParseResult.Ok ok => ok.Descriptor,
             DescriptorParseResult.NotARepository =>
-                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor),
+                throw new RecoveryFailureException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor),
             DescriptorParseResult.IntegrityFailure =>
-                throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead),
+                throw new RecoveryFailureException(Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead),
             DescriptorParseResult.FormatViolation violation =>
-                throw new RecoveryKitFormatException(violation.Message),
+                throw new RecoveryFailureException(violation.Message),
             var other =>
-                throw new RecoveryKitFormatException(
+                throw new RecoveryFailureException(
                     Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead + " (" + other.GetType().Name + ")"),
         };
-    }
-
-    /// <summary>
-    /// Opens a session from a repository kit: the whole authority re-derived
-    /// from the passphrase and the kit's public salt and parameters, proven
-    /// against the kit's copy of the sealing public key (ADR-0042 §8).
-    /// </summary>
-    /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this kit's keys.</exception>
-    /// <exception cref="RecoveryKitFormatException">The kit is an installation kit, or names a format-1 repository, which is withdrawn.</exception>
-    public static RecoverySession Open(RecoveryKit kit, Passphrase passphrase, IObjectStore store)
-    {
-        ThrowHelper.ThrowIfNull(kit);
-        ThrowHelper.ThrowIfNull(passphrase);
-        ThrowHelper.ThrowIfNull(store);
-
-        if (kit.IsInstallationKit)
-        {
-            // An installation kit names no repository, and the repository id
-            // is AAD for every record and every sealed blob — so it has to
-            // come from the archive's own descriptor, which this synchronous
-            // overload cannot read. OpenAsync is that path.
-            throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_InstallationKitNeedsTheArchive);
-        }
-
-        var parameters = new Argon2Parameters
-        {
-            MemoryKiB = kit.KdfMemoryKiB,
-            Iterations = kit.KdfIterations,
-            Parallelism = kit.KdfParallelism,
-        };
-
-        // The kit carries no key object at all — the passphrase and the
-        // kit's public salt and parameters re-derive everything, proven by
-        // comparing the derived public key against the kit's copy
-        // (ADR-0042 §8). The session keeps the authority: its scalar is what
-        // opens each sealed blob's content key.
-        if (kit.RepositoryFormatVersion >= FormatLimits.FormatVersion)
-        {
-            var authority = WriteOnlyDerivation.Derive(
-                passphrase, parameters, kit.KdfSalt.Span, KdfValidationMode.OpenRepository);
-
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(kit.SealingPublicKey.Span))
-            {
-                authority.Dispose();
-                throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
-            }
-
-            try
-            {
-                return new RecoverySession(
-                    store, kit.RepositoryId!.Value, authority.Credential.Clone(), authority);
-            }
-            catch
-            {
-                authority.Dispose();
-                throw;
-            }
-        }
-
-        // A format-1 kit carried the master key inside a wrapped key object.
-        // Format 1 is withdrawn: nothing here can unwrap it, and nothing it
-        // could open still exists to be recovered.
-        throw new RecoveryKitFormatException(Resources.Strings.RecoverySession_FormatOneWithdrawn);
     }
 
     /// <summary>

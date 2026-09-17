@@ -427,18 +427,9 @@ public static class RepositoryLifecycle
         ThrowHelper.ThrowIfNull(descriptor);
         ThrowHelper.ThrowIfNull(passphrase);
 
-        var derived = WriteOnlyDerivation.Derive(
-            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, KdfValidationMode.OpenRepository);
-
-        if (!derived.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
-        {
-            derived.Dispose();
-            authority = null;
-            return false;
-        }
-
-        authority = derived;
-        return true;
+        return WriteOnlyDerivation.TryDeriveVerified(
+            passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, descriptor.SealingPublicKey.Span,
+            out authority);
     }
 
     private static RepositoryDescriptor ParseDescriptorOrThrow(byte[] descriptorBytes) =>

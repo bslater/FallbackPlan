@@ -8,15 +8,15 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The standalone recovery tool's command line (architecture 08 §5;
-/// FR-KIT-006), driven against a repository built the ordinary way: the kit
-/// plus the passphrase open it, list its snapshots, and restore its files —
-/// with no catalogue, no state directory and no Agent.
+/// FR-KIT-006; ADR-0060), driven against a repository built the ordinary
+/// way: the passphrase alone opens it, lists its snapshots, and restores its
+/// files — with no catalogue, no state directory, no kit and no Agent.
 /// </summary>
 /// <remarks>
 /// This is the last line of defence, so its failure modes matter as much as
-/// its success: a wrong passphrase, a damaged kit and an unknown snapshot
-/// must each produce a stated reason and a non-zero exit, never a stack
-/// trace an operator has to interpret during a disaster.
+/// its success: a wrong passphrase, a folder that is not an archive and an
+/// unknown snapshot must each produce a stated reason and a non-zero exit,
+/// never a stack trace an operator has to interpret during a disaster.
 /// </remarks>
 [TestClass]
 public sealed class RecoveryHostTests : IDisposable
@@ -26,20 +26,18 @@ public sealed class RecoveryHostTests : IDisposable
     private static Task<HostHarness.Invocation> RunAsync(params string[] args) =>
         HostHarness.RunAsync(RecoveryHost.RunAsync, args);
 
-    private async Task<string> PrepareAsync()
+    private async Task PrepareAsync()
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "recovery drill");
         _harness.WriteSourceFile("nested/data.bin", new string('x', 4_000));
         await _harness.BackUpAsync();
-        return await _harness.ExportKitAsync();
     }
 
-    private string[] KitArguments(string command, string kit) =>
+    private string[] Arguments(string command) =>
     [
         command,
         "--repo", _harness.RepositoryPath,
-        "--kit", kit,
         "--passphrase-env", _harness.PassphraseVariable,
     ];
 
@@ -52,57 +50,60 @@ public sealed class RecoveryHostTests : IDisposable
         var result = await RunAsync(flag);
 
         Assert.AreEqual(0, result.ExitCode);
-        Assert.Contains("--kit", result.Output, StringComparison.Ordinal);
+        Assert.Contains("--passphrase-env", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("--kit", result.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Open_ARecoveryKit_ReportsTheRepositoryItBelongsTo()
+    public async Task Open_ThePassphrase_ReportsTheRepositoryItOpens()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var result = await RunAsync(KitArguments("open", kit));
+        var result = await RunAsync(Arguments("open"));
 
         Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("repository", result.Output, StringComparison.Ordinal);
-        Assert.Contains("unwrapped", result.Output, StringComparison.Ordinal);
+        Assert.Contains("reproduced", result.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Open_TheTranscribableTextKit_OpensTheRepositoryToo()
+    public async Task Open_OfferedAKit_RefusesByNameRatherThanIgnoringIt()
     {
-        var kit = await PrepareAsync();
+        // The kit is withdrawn (ADR-0060). A flag from that era is refused
+        // with the remedy, not silently skipped: somebody following an old
+        // note must learn the ceremony changed.
+        await PrepareAsync();
 
-        // FR-KIT-003: the text form is what survives a printer and a
-        // keyboard, so it must be accepted wherever the binary form is.
-        var result = await RunAsync(KitArguments("open", kit + ".txt"));
+        var result = await RunAsync([.. Arguments("open"), "--kit", Path.Combine(_harness.WorkPath, "kit.bin")]);
 
-        Assert.AreEqual(0, result.ExitCode);
-        Assert.Contains("unwrapped", result.Output, StringComparison.Ordinal);
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("--kit", result.Error, StringComparison.Ordinal);
+        Assert.Contains("passphrase", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]
-    public async Task Snapshots_AKitAndItsStore_ListsWhatTheStoreHolds()
+    public async Task Snapshots_ThePassphraseAndItsStore_ListsWhatTheStoreHolds()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var result = await RunAsync(KitArguments("snapshots", kit));
+        var result = await RunAsync(Arguments("snapshots"));
 
         Assert.AreEqual(0, result.ExitCode);
         Assert.Contains("verified", result.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Restore_TheKitAlone_WritesTheFilesBack()
+    public async Task Restore_ThePassphraseAlone_WritesTheFilesBack()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var listing = await RunAsync(KitArguments("snapshots", kit));
+        var listing = await RunAsync(Arguments("snapshots"));
         var snapshot = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
         var destination = Path.Combine(_harness.WorkPath, "recovered");
-        var result = await RunAsync([.. KitArguments("restore", kit), "--snapshot", snapshot, "--output", destination]);
+        var result = await RunAsync([.. Arguments("restore"), "--snapshot", snapshot, "--output", destination]);
 
         Assert.IsTrue(result.ExitCode == 0, result.All);
         Assert.AreEqual("recovery drill", File.ReadAllText(Path.Combine(destination, "notes.txt")));
@@ -114,14 +115,14 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task Open_PassphraseIsWrong_RefusesWithAStatedReason()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
         const string variable = "FBP_RECOVERY_WRONG_PASSPHRASE";
         Environment.SetEnvironmentVariable(variable, "not the passphrase");
         try
         {
             var result = await RunAsync(
-                "open", "--repo", _harness.RepositoryPath, "--kit", kit, "--passphrase-env", variable);
+                "open", "--repo", _harness.RepositoryPath, "--passphrase-env", variable);
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("passphrase", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -153,9 +154,9 @@ public sealed class RecoveryHostTests : IDisposable
         // second implementation of the same promise. A spelling the service
         // accepts and this tool rejects is a difference nobody would find
         // until the day it matters.
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var result = await RunAsync([.. KitArguments("open", kit), "--log-level", level]);
+        var result = await RunAsync([.. Arguments("open"), "--log-level", level]);
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
     }
@@ -177,14 +178,15 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_AtInformation_WritesItsProgressToStandardError()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var result = await RunAsync([.. KitArguments("open", kit), "--log-level", "information"]);
+        var result = await RunAsync([.. Arguments("open"), "--log-level", "information"]);
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
 
-        // Event ids, not prose: 3100 is the kit read and 3101 the keys
-        // derived, and those are what an operator quotes back down a phone.
+        // Event ids, not prose: 3100 is the descriptor read and 3101 the
+        // keys derived, and those are what an operator quotes back down a
+        // phone.
         Assert.Contains("3100", result.Error, StringComparison.Ordinal);
         Assert.Contains("3101", result.Error, StringComparison.Ordinal);
 
@@ -196,12 +198,12 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_AtTheDefaultLevel_KeepsInformationToItself()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
         // Warning is the floor when nobody asks (ADR-0043 §6): the tool's own
         // report is its output, and a wall of Information on top of it during
         // a recovery is noise at the worst moment.
-        var result = await RunAsync(KitArguments("open", kit));
+        var result = await RunAsync(Arguments("open"));
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
         Assert.DoesNotContain("3100", result.Error, StringComparison.Ordinal);
@@ -210,7 +212,7 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_AtNone_SaysNothingEvenWhenSomethingIsWrong()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
         var variable = "FBP_RECOVERY_WRONG_" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(variable, "not the passphrase at all");
 
@@ -219,7 +221,6 @@ public sealed class RecoveryHostTests : IDisposable
             var result = await RunAsync(
                 "open",
                 "--repo", _harness.RepositoryPath,
-                "--kit", kit,
                 "--passphrase-env", variable,
                 "--log-level", "none");
 
@@ -237,7 +238,7 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_AWrongPassphraseAtWarning_RecordsTheRefusal()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
         var variable = "FBP_RECOVERY_WRONG_" + Guid.NewGuid().ToString("N");
         Environment.SetEnvironmentVariable(variable, "not the passphrase at all");
 
@@ -248,7 +249,6 @@ public sealed class RecoveryHostTests : IDisposable
             var result = await RunAsync(
                 "open",
                 "--repo", _harness.RepositoryPath,
-                "--kit", kit,
                 "--passphrase-env", variable);
 
             Assert.AreEqual(1, result.ExitCode);
@@ -263,10 +263,10 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
         var result = await RunAsync(
-            "open", "--repo", _harness.RepositoryPath, "--kit", kit,
+            "open", "--repo", _harness.RepositoryPath,
             "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET");
 
         Assert.AreEqual(1, result.ExitCode);
@@ -279,52 +279,36 @@ public sealed class RecoveryHostTests : IDisposable
         var result = await RunAsync("open", "--repo", _harness.RepositoryPath);
 
         Assert.AreEqual(1, result.ExitCode);
-        Assert.Contains("--kit", result.Error, StringComparison.Ordinal);
+        Assert.Contains("--passphrase-env", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Open_TheKitIsDamaged_RefusesRatherThanReadingItHalfway()
+    public async Task Open_AFolderThatIsNotAnArchive_SaysSoRatherThanBlamingThePassphrase()
     {
-        var kit = await PrepareAsync();
-
-        // Flip a byte in the middle of the transcribed text: the kit's own
-        // checksums must catch it (FR-KIT-003).
-        var text = File.ReadAllText(kit + ".txt").ToCharArray();
-        var index = Array.FindIndex(text, text.Length / 2, character => char.IsAsciiLetterLower(character));
-        text[index] = text[index] == 'a' ? 'b' : 'a';
-        var damaged = Path.Combine(_harness.WorkPath, "damaged.txt");
-        File.WriteAllText(damaged, new string(text));
+        // The two refusals a person can meet are different questions: "not
+        // an archive" sends them to check the path, "wrong passphrase" to
+        // retype. Collapsing them would leave somebody retyping a
+        // passphrase that was right all along.
+        var empty = Path.Combine(_harness.WorkPath, "not-an-archive");
+        Directory.CreateDirectory(empty);
 
         var result = await RunAsync(
-            "open", "--repo", _harness.RepositoryPath, "--kit", damaged,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "open", "--repo", empty, "--passphrase-env", _harness.PassphraseVariable);
 
         Assert.AreEqual(1, result.ExitCode);
-        Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task Open_TheKitFileDoesNotExist_RefusesWithAMessage()
-    {
-        await _harness.CreateRepositoryAsync();
-
-        var result = await RunAsync(
-            "open", "--repo", _harness.RepositoryPath,
-            "--kit", Path.Combine(_harness.WorkPath, "absent.bin"),
-            "--passphrase-env", _harness.PassphraseVariable);
-
-        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("archive", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("wrong passphrase", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
     public async Task Restore_SnapshotIsUnknown_RefusesWithAMessage()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
         var result = await RunAsync(
         [
-            .. KitArguments("restore", kit),
+            .. Arguments("restore"),
             "--snapshot", new string('f', 32),
             "--output", Path.Combine(_harness.WorkPath, "nothing"),
         ]);
@@ -336,9 +320,9 @@ public sealed class RecoveryHostTests : IDisposable
     [TestMethod]
     public async Task RecoveryHost_VerbIsUnknown_RefusesWithNonZeroExit()
     {
-        var kit = await PrepareAsync();
+        await PrepareAsync();
 
-        var result = await RunAsync(KitArguments("liberate", kit));
+        var result = await RunAsync(Arguments("liberate"));
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("liberate", result.Error, StringComparison.Ordinal);
@@ -366,6 +350,8 @@ public sealed class RecoveryHostTests : IDisposable
         var vault = Path.Combine(_harness.WorkPath, "vault");
         var kit = Path.Combine(_harness.WorkPath, "installation-kit.bin");
         Directory.CreateDirectory(vault);
+        // The setup verb still writes a kit until the verb itself is cut
+        // over; the recovery below never reads it.
 
         try
         {
@@ -403,7 +389,7 @@ public sealed class RecoveryHostTests : IDisposable
             // person typing this path, and it used to make every key resolve
             // "outside the store root" — found by the recovery drill.
             var listed = await RunAsync(
-                "snapshots", "--repo", replica + Path.DirectorySeparatorChar, "--kit", kit,
+                "snapshots", "--repo", replica + Path.DirectorySeparatorChar,
                 "--passphrase-env", _harness.PassphraseVariable);
             Assert.AreEqual(0, listed.ExitCode, listed.Error);
             Assert.DoesNotContain("SIGNATURE-FAILED", listed.Output, StringComparison.Ordinal);
@@ -411,7 +397,7 @@ public sealed class RecoveryHostTests : IDisposable
             var snapshot = listed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Split(' ')[0];
             var output = Path.Combine(_harness.WorkPath, "recovered");
             var restored = await RunAsync(
-                "restore", "--repo", replica, "--kit", kit,
+                "restore", "--repo", replica,
                 "--passphrase-env", _harness.PassphraseVariable,
                 "--snapshot", snapshot, "--output", output);
 

@@ -2,7 +2,6 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Recovery;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
@@ -19,8 +18,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// anywhere in the store, backed up through the real publication pipeline
 /// with the write bundle alone, browsed and planned write-only, honest about
 /// sealed content without a grant, restored byte-identically with the
-/// re-derived authority — and recovered on a clean machine from a kit that
-/// carries no key material at all.
+/// re-derived authority — and recovered on a clean machine from the
+/// passphrase and the archive alone.
 /// </summary>
 [TestClass]
 public sealed class WriteOnlyRepositoryTests : IDisposable
@@ -359,7 +358,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     }
 
     [TestMethod]
-    public async Task RecoveryKit_AWriteOnlyRepository_CarriesNoKeyMaterialAndStillRestoresEverything()
+    public async Task RecoverySession_AWriteOnlyRepository_RestoresEverythingFromThePassphraseAlone()
     {
         var store = CreateStore();
         var (opened, authority, catalogue, files) = await CreateAndBackUpAsync(store);
@@ -368,25 +367,18 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         using var db = catalogue;
 
         using var passphrase = Right();
-        var kit = await RecoveryKitFactory.BuildAsync(
-            store, passphrase, Enumerable.Repeat((byte)0x22, 16).ToArray(),
-            issuedAt: 1_722_600_000_002, destinations: [], CancellationToken.None);
 
-        // The kit is pure "where and how to derive": no key object, the
-        // public key as the verifier — and it survives its own text form,
-        // which is what a printed page holds (ADR-0042 §8).
-        Assert.IsTrue(kit.KeyObject.IsEmpty);
-        Assert.AreEqual(32, kit.SealingPublicKey.Length);
-        var reparsed = RecoveryKitCodec.Parse(
-            RecoveryKitText.ParseToFramed(RecoveryKitText.Render(RecoveryKitCodec.Serialize(kit))));
-
+        // The archive's descriptor is the whole of "where and how to
+        // derive": the salt, the parameters, and the public key as the
+        // verifier. Nothing else has to be kept (ADR-0042 §8; ADR-0060).
         using (var wrong = Passphrase.Create("not the passphrase at all!!"))
         {
             var wrongPassphrase = wrong;
-            Assert.ThrowsExactly<KeyUnwrapFailedException>(() => RecoverySession.Open(reparsed, wrongPassphrase, store));
+            await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
+                async () => await RecoverySession.OpenAsync(wrongPassphrase, store, CancellationToken.None));
         }
 
-        using var session = RecoverySession.Open(reparsed, passphrase, store);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
         var (blobs, notes) = await session.LoadBlobsAsync(CancellationToken.None);
         Assert.IsTrue(blobs > 0);
         Assert.IsEmpty(notes);
@@ -394,7 +386,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
         Assert.IsTrue(snapshot.SignatureVerified, "the v2 signing seed derives from the bundle and must verify");
 
-        var output = Path.Combine(_root, "kit-out");
+        var output = Path.Combine(_root, "recovered");
         var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
         Assert.AreEqual(0, report.Failed);
         Assert.AreEqual(files.Count, report.Restored);

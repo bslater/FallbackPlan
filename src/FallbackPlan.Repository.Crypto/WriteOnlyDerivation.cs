@@ -52,6 +52,47 @@ public static class WriteOnlyDerivation
     }
 
     /// <summary>
+    /// Derives the full read authority and proves it by public-key equality
+    /// — the derive-and-compare gate every reader runs where the person
+    /// typed (ADR-0042 §1, §4; ADR-0060). False means the passphrase does
+    /// not reproduce the expected sealing public key: the authority is
+    /// disposed and nulled, and nothing was decrypted to find out.
+    /// </summary>
+    /// <remarks>
+    /// Lives here rather than in the engine because three readers need it
+    /// and one of them, the standalone recovery tool, deliberately links
+    /// no engine: its closure is format, crypto, packing and storage, so the
+    /// gate has to sit in one of those. The expected key is whatever the
+    /// caller trusts — a descriptor's, a stored credential's — and the
+    /// comparison is the whole verifier (specification 03 §4).
+    /// </remarks>
+    /// <param name="passphrase">The passphrase.</param>
+    /// <param name="parameters">The Argon2id parameters the root was made under.</param>
+    /// <param name="salt">The 16-byte KDF salt the root was made under.</param>
+    /// <param name="expectedSealingPublicKey">The sealing public key the derivation must reproduce.</param>
+    /// <param name="authority">The authority, or null when the passphrase does not reproduce the key.</param>
+    /// <returns>Whether the derivation reproduced <paramref name="expectedSealingPublicKey"/>.</returns>
+    public static bool TryDeriveVerified(
+        Passphrase passphrase,
+        KdfParameters parameters,
+        ReadOnlySpan<byte> salt,
+        ReadOnlySpan<byte> expectedSealingPublicKey,
+        out RepositoryReadAuthority? authority)
+    {
+        var derived = Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository);
+
+        if (!derived.Credential.SealingPublicKey.SequenceEqual(expectedSealingPublicKey))
+        {
+            derived.Dispose();
+            authority = null;
+            return false;
+        }
+
+        authority = derived;
+        return true;
+    }
+
+    /// <summary>
     /// Expands an already-derived 32-byte root into the full authority —
     /// the second half of <see cref="Derive"/>, exposed so conformance
     /// vectors (which pin the root, Argon2id having no independent

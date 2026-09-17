@@ -19,7 +19,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// possession proven by the wire challenge, never assumed; and the claim that
 /// justifies all of it — the source machine's archive can be destroyed and the
 /// data still comes back, byte-identical and point-in-time, from the other
-/// site plus the recovery kit alone.
+/// site plus the passphrase alone.
 /// </summary>
 /// <remarks>
 /// One long test rather than nine small ones, deliberately: "an alternative
@@ -50,7 +50,6 @@ public sealed class AlternateSiteTests : IDisposable
         _siteOne.WriteSourceFile("notes.txt", originalNotes);
         _siteOne.WriteSourceFile("nested/data.bin", new string('é', 4_096) + "binary-ish payload");
         _siteOne.WriteSourceFile("photos/beach.jpg", new string('p', 64_000));
-        var kit = await _siteOne.ExportKitAsync();
 
         // ---- Site B: the other household — a full live service, its listener
         // serving invites, commands and replication on one socket.
@@ -148,14 +147,14 @@ public sealed class AlternateSiteTests : IDisposable
         await AssertReplicaMatchesAsync(replicaPath);
 
         // ---- The drill that justifies the feature: site A is gone. Its
-        // runtime stops and its archive is deleted; what remains is the kit
-        // and the other site.
+        // runtime stops and its archive is deleted; what remains is the
+        // passphrase and the other site.
         await runtimeOne.DisposeAsync();
         Directory.Delete(_siteOne.ArchivesRoot, recursive: true);
 
         var listing = await HostHarness.RunAsync(
             RecoveryHost.RunAsync,
-            "snapshots", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _siteOne.PassphraseVariable);
+            "snapshots", "--repo", replicaPath, "--passphrase-env", _siteOne.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshots = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -165,8 +164,8 @@ public sealed class AlternateSiteTests : IDisposable
 
         // Newest first or oldest first — decide from the content itself:
         // restore both and let notes.txt say which snapshot each one is.
-        var restoredA = await RestoreFromReplicaAsync(replicaPath, kit, snapshots[0], "recovered-a");
-        var restoredB = await RestoreFromReplicaAsync(replicaPath, kit, snapshots[1], "recovered-b");
+        var restoredA = await RestoreFromReplicaAsync(replicaPath, snapshots[0], "recovered-a");
+        var restoredB = await RestoreFromReplicaAsync(replicaPath, snapshots[1], "recovered-b");
         var (latest, earliest) = File.Exists(FindFile(restoredA, "added-later.txt"))
             ? (restoredA, restoredB)
             : (restoredB, restoredA);
@@ -358,12 +357,12 @@ public sealed class AlternateSiteTests : IDisposable
         return objects;
     }
 
-    private async Task<string> RestoreFromReplicaAsync(string replicaPath, string kit, string snapshot, string name)
+    private async Task<string> RestoreFromReplicaAsync(string replicaPath, string snapshot, string name)
     {
         var output = Path.Combine(_siteOne.WorkPath, name);
         var restore = await HostHarness.RunAsync(
             RecoveryHost.RunAsync,
-            "restore", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _siteOne.PassphraseVariable,
+            "restore", "--repo", replicaPath, "--passphrase-env", _siteOne.PassphraseVariable,
             "--snapshot", snapshot, "--output", output);
         Assert.AreEqual(0, restore.ExitCode, restore.Error);
         return output;

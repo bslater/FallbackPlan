@@ -231,21 +231,6 @@ public sealed class HostHarness : IDisposable
         Assert.AreEqual(0, exitCode);
     }
 
-    /// <summary>Exports a recovery kit through the CLI and returns its path.</summary>
-    public async Task<string> ExportKitAsync()
-    {
-        Directory.CreateDirectory(WorkPath);
-        var kit = Path.Combine(WorkPath, "kit.bin");
-
-        var exitCode = await Cli.CliApplication.RunAsync(
-        [
-            "key-export", "--output", kit,
-            "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable, "--state", StateDirectory,
-        ]);
-        Assert.AreEqual(0, exitCode);
-        return kit;
-    }
-
     /// <summary>Writes a source file the backup set will capture.</summary>
     public string WriteSourceFile(string relativePath, string content)
     {

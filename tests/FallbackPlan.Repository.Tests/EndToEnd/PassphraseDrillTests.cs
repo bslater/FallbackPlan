@@ -4,7 +4,6 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Recovery;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -12,23 +11,24 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The installation-kit drill (FR-KIT-004, FR-KIT-006; recovery-kit §2.2,
-/// §6): one kit, generated from the passphrase alone before any archive
-/// existed, restores from an archive it never saw — and from a
-/// <em>second</em> archive it never saw either, which is the whole claim of
-/// one kit per installation.
+/// The passphrase drill (FR-KIT-006; ADR-0060): one passphrase, and
+/// nothing else kept anywhere, restores from an archive it created — and
+/// from a <em>second</em> archive of the same installation — because every
+/// archive's own descriptor carries the salt, the parameters and the
+/// verifier the derivation needs. Does not establish FR-KIT-004, which
+/// named a kit this drill no longer holds.
 /// </summary>
 [TestClass]
-public sealed class InstallationKitDrillTests : IDisposable
+public sealed class PassphraseDrillTests : IDisposable
 {
     private const string PassphraseText = "the one long passphrase of this installation";
 
     private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "fbp-installation-kit", Guid.NewGuid().ToString("n"));
+        Path.Combine(Path.GetTempPath(), "fbp-passphrase-drill", Guid.NewGuid().ToString("n"));
 
     private readonly byte[] _salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
 
-    public InstallationKitDrillTests() => Directory.CreateDirectory(_root);
+    public PassphraseDrillTests() => Directory.CreateDirectory(_root);
 
     public void Dispose()
     {
@@ -36,22 +36,6 @@ public sealed class InstallationKitDrillTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
-    }
-
-    /// <summary>
-    /// The kit setup would produce: derived from the passphrase and the
-    /// installation's salt, with no archive in existence.
-    /// </summary>
-    private RecoveryKit InstallationKit()
-    {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var authority = WriteOnlyDerivation.Derive(
-            passphrase, RepositoryCreationSettings.Default.KdfParameters, _salt,
-            KdfValidationMode.CreateRepository);
-
-        return RecoveryKitFactory.BuildForInstallation(
-            authority.Credential, _salt, RepositoryCreationSettings.Default.KdfParameters,
-            Enumerable.Repeat((byte)0x22, 16).ToArray(), issuedAt: 1_722_600_000_000);
     }
 
     /// <summary>Creates one archive from the installation's root and backs a tree up into it.</summary>
@@ -67,7 +51,7 @@ public sealed class InstallationKitDrillTests : IDisposable
 
         using var repository = await RepositoryLifecycle.CreateAsync(
             store, authority.Credential, _salt, RepositoryCreationSettings.Default.KdfParameters,
-            createdBy: "installation-kit-drill", 1_722_600_000_000, CancellationToken.None);
+            createdBy: "passphrase-drill", 1_722_600_000_000, CancellationToken.None);
 
         var files = new Dictionary<string, byte[]>
         {
@@ -87,15 +71,7 @@ public sealed class InstallationKitDrillTests : IDisposable
         Directory.CreateDirectory(spool);
 
         var orchestrator = new PublicationOrchestrator(
-            CapturePolicy.Default with
-            {
-                SegmentSize = SegmentSize.Create(64 * 1024),
-
-                // A write-only repository cannot read another writer's
-                // segments to verify reuse, so the device domain is its
-                // default and its only unacknowledged choice (ADR-0042).
-                DedupTrustDomain = DedupTrustDomain.Device,
-            },
+            CapturePolicy.Default with { SegmentSize = SegmentSize.Create(64 * 1024) },
             repository.RepositoryId,
             Domain.Identifiers.WriterId.FromBytes(Enumerable.Repeat((byte)0xA0, 16).ToArray()),
             repository.CurrentDataGeneration,
@@ -116,7 +92,7 @@ public sealed class InstallationKitDrillTests : IDisposable
                 NowUnixMilliseconds = 1_722_600_000_001,
                 DeclaredMaxDurationMs = 3_600_000,
                 ExpiryGeneration = 5,
-                ClientVersion = "installation-kit-drill/1.0",
+                ClientVersion = "passphrase-drill/1.0",
             },
             CancellationToken.None);
 
@@ -148,43 +124,36 @@ public sealed class InstallationKitDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task InstallationKit_AndItsPassphraseAlone_RestoreAnArchiveTheKitNeverSaw()
+    public async Task ThePassphraseAlone_RestoresAnArchive_WithNothingKeptAnywhereElse()
     {
-        // The kit is minted before the archive exists and never told about
-        // it afterwards. Everything the restore needs beyond the passphrase
-        // comes from the archive's own descriptor.
-        var kit = InstallationKit();
+        // Nothing was written down but the passphrase. Everything the
+        // restore needs beyond it comes from the archive's own descriptor.
         var (store, files) = await BackUpArchiveAsync("documents", seed: 21);
 
-        // Through the printed form, as a person would hold it.
-        var reparsed = RecoveryKitCodec.Parse(
-            RecoveryKitText.ParseToFramed(RecoveryKitText.Render(RecoveryKitCodec.Serialize(kit))));
-
         using var passphrase = Passphrase.Create(PassphraseText);
-        using var session = await RecoverySession.OpenAsync(
-            reparsed, passphrase, store, CancellationToken.None);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
 
+        Assert.AreEqual(FormatLimits.FormatVersion, session.FormatVersion);
         await RestoreAndCompareAsync(session, Path.Combine(_root, "restored-documents"), files);
     }
 
     [TestMethod]
-    public async Task InstallationKit_TheSameKit_OpensASecondArchiveToo()
+    public async Task ThePassphrase_OpensASecondArchiveOfTheSameInstallationToo()
     {
-        // The claim that makes one kit per installation worth having. Two
-        // archives, two repository identities, one passphrase, one kit.
-        var kit = InstallationKit();
+        // The claim that makes one passphrase per installation worth
+        // having. Two archives, two repository identities, one passphrase.
         var (documents, documentFiles) = await BackUpArchiveAsync("documents", seed: 21);
         var (photos, photoFiles) = await BackUpArchiveAsync("photos", seed: 77);
 
         using var passphrase = Passphrase.Create(PassphraseText);
 
-        using (var first = await RecoverySession.OpenAsync(kit, passphrase, documents, CancellationToken.None))
-        using (var second = await RecoverySession.OpenAsync(kit, passphrase, photos, CancellationToken.None))
+        using (var first = await RecoverySession.OpenAsync(passphrase, documents, CancellationToken.None))
+        using (var second = await RecoverySession.OpenAsync(passphrase, photos, CancellationToken.None))
         {
             Assert.AreNotEqual(
                 Convert.ToHexString(first.RepositoryId.ToArray()),
                 Convert.ToHexString(second.RepositoryId.ToArray()),
-                "two archives are two repositories; the kit is what they share");
+                "two archives are two repositories; the passphrase is what they share");
 
             await RestoreAndCompareAsync(first, Path.Combine(_root, "r1"), documentFiles);
             await RestoreAndCompareAsync(second, Path.Combine(_root, "r2"), photoFiles);
@@ -192,24 +161,24 @@ public sealed class InstallationKitDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task InstallationKit_TheWrongPassphrase_IsRefusedAsAWrongPassphrase()
+    public async Task TheWrongPassphrase_IsRefusedAsAWrongPassphrase()
     {
-        var kit = InstallationKit();
         var (store, _) = await BackUpArchiveAsync("documents", seed: 21);
 
         using var wrong = Passphrase.Create("an entirely different installation's passphrase");
 
         await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
-            async () => await RecoverySession.OpenAsync(kit, wrong, store, CancellationToken.None));
+            async () => await RecoverySession.OpenAsync(wrong, store, CancellationToken.None));
     }
 
     [TestMethod]
-    public async Task InstallationKit_AnArchiveFromAnotherInstallation_FailsDifferentlyFromAWrongPassphrase()
+    public async Task AnotherInstallationsArchive_IsRefusedExactlyAsAWrongPassphraseIs()
     {
-        // The two failures are different questions. Collapsing them would
-        // leave somebody retyping a passphrase that was right all along.
-        var kit = InstallationKit();
-
+        // With no kit there is no second copy of the verifier to check the
+        // passphrase against first, so "another installation's archive" and
+        // "wrong passphrase" are the same refusal — deliberately
+        // indistinguishable, since the descriptor's sealing public key is the
+        // only verifier and equality is the whole check (specification 03 §4).
         var strangerSalt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
         var strangerStore = new LocalFileSystemObjectStore(Path.Combine(_root, "stranger"));
         using (var strangerPassphrase = Passphrase.Create("some other machine's long passphrase"))
@@ -224,60 +193,28 @@ public sealed class InstallationKitDrillTests : IDisposable
         }
 
         using var passphrase = Passphrase.Create(PassphraseText);
-        var failure = await Assert.ThrowsExactlyAsync<RecoveryKitFormatException>(
-            async () => await RecoverySession.OpenAsync(
-                kit, passphrase, strangerStore, CancellationToken.None));
+        var (own, _) = await BackUpArchiveAsync("documents", seed: 21);
+        using var wrong = Passphrase.Create("not this installation's passphrase either");
 
-        Assert.Contains("different FallbackPlan installation", failure.Message, StringComparison.Ordinal);
+        var stranger = await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
+            async () => await RecoverySession.OpenAsync(passphrase, strangerStore, CancellationToken.None));
+        var mistyped = await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
+            async () => await RecoverySession.OpenAsync(wrong, own, CancellationToken.None));
+
+        Assert.AreEqual(mistyped.Message, stranger.Message);
     }
 
     [TestMethod]
-    public async Task InstallationKit_AFolderThatIsNotAnArchive_SaysSoRatherThanFailingOnKeys()
+    public async Task AFolderThatIsNotAnArchive_SaysSoRatherThanFailingOnKeys()
     {
-        var kit = InstallationKit();
         var empty = Path.Combine(_root, "not-an-archive");
         Directory.CreateDirectory(empty);
 
         using var passphrase = Passphrase.Create(PassphraseText);
-        var failure = await Assert.ThrowsExactlyAsync<RecoveryKitFormatException>(
+        var failure = await Assert.ThrowsExactlyAsync<RecoveryFailureException>(
             async () => await RecoverySession.OpenAsync(
-                kit, passphrase, new LocalFileSystemObjectStore(empty), CancellationToken.None));
+                passphrase, new LocalFileSystemObjectStore(empty), CancellationToken.None));
 
         Assert.Contains("not a FallbackPlan archive", failure.Message, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task InstallationKit_TheSynchronousOpen_RefusesItByName()
-    {
-        // Open cannot read a descriptor, and the repository id is AAD for
-        // every record — so it refuses rather than inventing one.
-        var kit = InstallationKit();
-        var (store, _) = await BackUpArchiveAsync("documents", seed: 21);
-
-        using var passphrase = Passphrase.Create(PassphraseText);
-        var failure = Assert.ThrowsExactly<RecoveryKitFormatException>(
-            () => RecoverySession.Open(kit, passphrase, store));
-
-        Assert.Contains("asynchronous overload", failure.Message, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task RepositoryKit_ThroughOpenAsync_StillWorksUnchanged()
-    {
-        // OpenAsync serves both kit shapes so one call site can hold both.
-        var store = new LocalFileSystemObjectStore(Path.Combine(_root, "per-repository"));
-        using var passphrase = Passphrase.Create(PassphraseText);
-        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
-            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None);
-        repository.Dispose();
-        authority.Dispose();
-
-        var kit = await RecoveryKitFactory.BuildAsync(
-            store, passphrase, Enumerable.Repeat((byte)0x22, 16).ToArray(),
-            issuedAt: 1_722_600_000_002, destinations: [], CancellationToken.None);
-
-        using var session = await RecoverySession.OpenAsync(kit, passphrase, store, CancellationToken.None);
-
-        SequenceAssert.AreEqual(kit.RepositoryId!.Value.ToArray(), session.RepositoryId.ToArray());
     }
 }

@@ -32,7 +32,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <para>
 /// The assertion that matters is the last one in each test: the standalone
 /// recovery tool restores the captured file from the replica, with only the
-/// kit and the passphrase. A replica that merely has the right object count
+/// passphrase. A replica that merely has the right object count
 /// is not a backup.
 /// </para>
 /// </remarks>
@@ -153,9 +153,8 @@ public sealed class DirectShipPeerTests : IDisposable
             Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories),
             "the peer holds one snapshot, so the second capture shipped nothing or replaced the first");
 
-        var kit = await ExportKitAsync();
         var listing = await RunRecoveryAsync(
-            "snapshots", "--repo", replica, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable);
+            "snapshots", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshots = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -169,7 +168,7 @@ public sealed class DirectShipPeerTests : IDisposable
         {
             var into = Path.Combine(_harness.WorkPath, "recovered-" + snapshot[..8]);
             var restore = await RunRecoveryAsync(
-                "restore", "--repo", replica, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable,
+                "restore", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable,
                 "--snapshot", snapshot, "--output", into);
             Assert.AreEqual(0, restore.ExitCode, restore.Error);
             drafts.Add(await File.ReadAllTextAsync(
@@ -283,9 +282,8 @@ public sealed class DirectShipPeerTests : IDisposable
     /// <summary>The headline: the standalone tool restores the file from this repository alone.</summary>
     private async Task AssertRestoresFromAsync(string repositoryPath, string relativePath, string expected)
     {
-        var kit = await ExportKitAsync();
         var listing = await RunRecoveryAsync(
-            "snapshots", "--repo", repositoryPath, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable);
+            "snapshots", "--repo", repositoryPath, "--passphrase-env", _harness.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshot = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
@@ -293,31 +291,12 @@ public sealed class DirectShipPeerTests : IDisposable
 
         var into = Path.Combine(_harness.WorkPath, "recovered-" + Guid.NewGuid().ToString("n")[..8]);
         var restore = await RunRecoveryAsync(
-            "restore", "--repo", repositoryPath, "--kit", kit, "--passphrase-env", _harness.PassphraseVariable,
+            "restore", "--repo", repositoryPath, "--passphrase-env", _harness.PassphraseVariable,
             "--snapshot", snapshot, "--output", into);
         Assert.AreEqual(0, restore.ExitCode, restore.Error);
         Assert.AreEqual(
             expected,
             await File.ReadAllTextAsync(Path.Combine(into, relativePath.Replace('/', Path.DirectorySeparatorChar)), Timeout));
-    }
-
-    /// <summary>
-    /// A kit exported from the planning copy: a direct-ship set has no staging
-    /// archive for the harness's own exporter to aim at, and the wrapped keys
-    /// are the same keys wherever the repository is read from.
-    /// </summary>
-    private async Task<string> ExportKitAsync()
-    {
-        Directory.CreateDirectory(_harness.WorkPath);
-        var kit = Path.Combine(_harness.WorkPath, "kit-" + Guid.NewGuid().ToString("n")[..8] + ".bin");
-        var exit = await Cli.CliApplication.RunAsync(
-        [
-            "key-export", "--output", kit,
-            "--repo", MetadataRoot, "--passphrase-env", _harness.PassphraseVariable,
-            "--state", _harness.StateDirectory,
-        ]);
-        Assert.AreEqual(0, exit);
-        return kit;
     }
 
     private async Task<byte[]?> ReadAsync(LocalFileSystemObjectStore store, ObjectKey key)
