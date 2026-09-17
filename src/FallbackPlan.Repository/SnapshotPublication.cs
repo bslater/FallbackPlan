@@ -49,6 +49,16 @@ public sealed record SnapshotJob
     /// <summary>rules-v1 exclude rules.</summary>
     public IReadOnlyList<string> ExcludeRules { get; init; } = [];
 
+    /// <summary>
+    /// The backup set's configured name, recorded in the policy manifest
+    /// (ADR-0061) so an archive can re-declare the set that wrote it; null
+    /// records nothing.
+    /// </summary>
+    public string? SetName { get; init; }
+
+    /// <summary>The set's schedule text, recorded beside the name; null records nothing.</summary>
+    public string? Schedule { get; init; }
+
     /// <summary>The claiming device (snapshot key 2), 16 bytes.</summary>
     public required ReadOnlyMemory<byte> DeviceId { get; init; }
 
@@ -419,6 +429,13 @@ public sealed partial class PublicationOrchestrator
                 DedupTrustDomain = (byte)_policy.DedupTrustDomain,
                 IncludeRules = job.IncludeRules,
                 ExcludeRules = job.ExcludeRules,
+                // The shape as configured (ADR-0061): the roots' paths and
+                // labels, the set's name and schedule, so a destination's
+                // archive can re-declare the set after the configuration
+                // that wrote it is gone.
+                Roots = [.. job.Roots.Select(root => new RecordedRoot(root.Path, root.Label))],
+                SetName = job.SetName,
+                Schedule = job.Schedule,
             };
             var policyId = await builder.AppendManifestAsync(
                 ObjectType.PolicyManifest, PolicyManifestCodec.Encode(policy), cancellationToken).ConfigureAwait(false);

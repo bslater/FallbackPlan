@@ -222,8 +222,13 @@ Object type `0x05`. Records the effective configuration a snapshot was captured 
 | 7 | u8 | `dedup_trust_domain` — 1 device, 2 repository, 3 repository-unverified |
 | 8 | array | `include_rules` — array of text strings, `rules-v1` (§7.1) |
 | 9 | array | `exclude_rules` — array of text strings, `rules-v1` (§7.1) |
+| 10 | array | `roots` — OPTIONAL; the capture roots as configured, one map each: `1` `label` (text, OPTIONAL — absent for a single root, whose tree is the folder itself; present for every root of a multi-root snapshot, and equal to the tree entry it names) and `2` `path` (text, REQUIRED — the path on the machine that captured it). At most 4 096 roots; a root carrying any other key is invalid |
+| 11 | text | `set_name` — OPTIONAL; the backup set's configured name |
+| 12 | text | `schedule` — OPTIONAL; the set's schedule text, absent when the set runs by hand only |
 
 This exists so that a snapshot can always answer "what settings produced this?" years later, without those settings having to still exist in anyone's configuration file. It is also what makes a benchmark comparing two profiles interpretable.
+
+Keys 10–12 record the **set's shape** — what a configuration file says about a set that the tree does not: where its roots sit on the source machine, what the set is called, and when it runs. They exist so that a destination's archive is enough to re-declare the set that wrote it after the machine and its configuration are gone (ADR-0061). All three are OPTIONAL: a writer that has no set (a single-file archive, a direct `backup --repo` invocation) omits them, and a manifest that omits all three is byte-identical to one written before they were assigned. Text values are bounded at 4 096 UTF-8 bytes each. A reader MUST NOT fail to decode a manifest because a recorded path does not exist where it runs; the shape is informational at read time, as the rules are.
 
 > **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them. Phase 1 extends `source_filesystem` with optional keys 4 `max_path_bytes` (u32), 5 `max_component_bytes` (u32), and 6 `reserved_names` (bool) — the filesystem capability record of [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 7; absence means "limits unknown". The snapshot manifest's `capture_status` triggers are pinned by the same ADR §Decision 3: 2 (partial) iff key 9 references a non-empty error manifest; 3 (aborted) is never published by this implementation.
 

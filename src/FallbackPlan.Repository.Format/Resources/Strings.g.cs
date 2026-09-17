@@ -347,9 +347,19 @@ internal static class Strings
     internal static string PolicyManifestCodec_BlobWriteProfileCarriesUnknown => Get(nameof(PolicyManifestCodec_BlobWriteProfileCarriesUnknown));
 
     /// <summary>
-    /// The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-9 only.
+    /// The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-12 only.
     /// </summary>
     internal static string PolicyManifestCodec_PolicyManifestCarriesUnknownKey => Get(nameof(PolicyManifestCodec_PolicyManifestCarriesUnknownKey));
+
+    /// <summary>
+    /// A recorded root carries an unknown key; specification 06 §7 assigns a root keys 1 (label) and 2 (path) only.
+    /// </summary>
+    internal static string PolicyManifestCodec_RecordedRootCarriesUnknownKey => Get(nameof(PolicyManifestCodec_RecordedRootCarriesUnknownKey));
+
+    /// <summary>
+    /// A recorded root omits its path (specification 06 §7 key 10).
+    /// </summary>
+    internal static string PolicyManifestCodec_RecordedRootOmitsPath => Get(nameof(PolicyManifestCodec_RecordedRootOmitsPath));
 
     /// <summary>
     /// The policy manifest is not canonical CBOR: {0}

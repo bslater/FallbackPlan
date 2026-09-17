@@ -154,9 +154,21 @@ as the single-root top level always has.
   the single root today; starting to record several would be new normative
   surface for something the tree already expresses better.
 
+  > **Amended 2026-09.** A reader for the recorded roots now exists:
+  > adoption of a destination's archives after a rebuild (ADR-0061) needs
+  > the set's shape — root paths, labels, name, schedule — to re-declare
+  > the set the archive was written by, and the tree expresses none of the
+  > paths. The roots are recorded on the **policy** manifest
+  > ([06 §7](../../specifications/repository-format/06-manifests.md#7-policy-manifest)
+  > keys 10–12), the object that already answers "what settings produced
+  > this?", not on the snapshot manifest; a single-root set's tree shape is
+  > unchanged. The sentence in Context that the format never records the
+  > root path was true when written and is no longer.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written after the exploration that found the single root absent from the format and the five sharp constraints above |
 | 2026-08 | Accepted | Built end to end: engine adapter and intersection, schema 3, contract 1.10 with draft preview, upsert labels and re-anchoring, refusing runner, conservative domain, and the console's machine-wide tree with its compiler and live feedback |
+| 2026-09 | Amended | The policy manifest now records the roots' paths and labels, the set's name and its schedule (06 §7 keys 10–12) so a destination's archive can re-declare the set after a rebuild — ADR-0061; the rejected "`roots` array" alternative is annotated in place |

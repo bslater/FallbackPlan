@@ -256,6 +256,43 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task TreePublication_RecordsTheSetsShapeInThePolicyManifest()
+    {
+        // ADR-0061: the roots as configured (path and label), the set's name
+        // and its schedule ride in the policy manifest, so an archive can
+        // re-declare the set that wrote it after the configuration is gone.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/a.bin", Deterministic(4_000, 3));
+        source.AddFile("pics/b.bin", Deterministic(4_000, 5));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        var job = Job(source) with
+        {
+            Roots = [new ScanRoot("/docs", "Documents"), new ScanRoot("/pics", "Pictures")],
+            SetName = "home",
+            Schedule = "every 6h",
+        };
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
+        var policy = PolicyManifestCodec.Decode(policyRead.Plaintext!);
+
+        Assert.AreEqual("home", policy.SetName);
+        Assert.AreEqual("every 6h", policy.Schedule);
+        Assert.HasCount(2, policy.Roots);
+        Assert.AreEqual("/docs", policy.Roots[0].Path);
+        Assert.AreEqual("Documents", policy.Roots[0].Label);
+        Assert.AreEqual("/pics", policy.Roots[1].Path);
+        Assert.AreEqual("Pictures", policy.Roots[1].Label);
+    }
+
+    [TestMethod]
     public async Task TreePublication_IncludeRules_CaptureOnlyTheIncludedSubtree()
     {
         // Include rules are 06 §7.1 semantics, not decoration: a set that says

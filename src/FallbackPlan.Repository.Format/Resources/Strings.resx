@@ -182,7 +182,13 @@
     <value>blob_write_profile carries an unknown key (ADR-0022 §Decision 6).</value>
   </data>
   <data name="PolicyManifestCodec_PolicyManifestCarriesUnknownKey" xml:space="preserve">
-    <value>The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-9 only.</value>
+    <value>The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-12 only.</value>
+  </data>
+  <data name="PolicyManifestCodec_RecordedRootCarriesUnknownKey" xml:space="preserve">
+    <value>A recorded root carries an unknown key; specification 06 §7 assigns a root keys 1 (label) and 2 (path) only.</value>
+  </data>
+  <data name="PolicyManifestCodec_RecordedRootOmitsPath" xml:space="preserve">
+    <value>A recorded root omits its path (specification 06 §7 key 10).</value>
   </data>
   <data name="PolicyManifestCodec_PolicyManifestNotCanonicalCBOR" xml:space="preserve">
     <value>The policy manifest is not canonical CBOR: {0}</value>

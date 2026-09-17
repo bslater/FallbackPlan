@@ -196,3 +196,4 @@ One engine-side property is recorded here so it is not rediscovered as a surpris
 |------|--------|------|
 | 2026-08 | Accepted | Phase-0 resolutions for the specification gaps blocking 06/07/08 implementation |
 | 2026-09 | Amended | Decision 3 is moot and Decision 5 loses its key-bundle terms: format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
+| 2026-09 | Amended | The policy manifest gains optional keys 10 `roots`, 11 `set_name` and 12 `schedule` (ADR-0061); key 10's inner map is assigned in [06 §7](../../specifications/repository-format/06-manifests.md#7-policy-manifest) directly rather than pinned here as Decision 6 pins keys 2 and 6 |

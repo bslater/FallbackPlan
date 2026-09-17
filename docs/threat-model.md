@@ -96,6 +96,7 @@ An honest-but-curious store learns from what it is legitimately given:
 Compressing before encrypting is correct for efficiency and is what creates the length channel — a deliberate trade, stated rather than hidden.
 **Mitigation:** an optional record-padding policy (padding stored lengths to size buckets) for high-sensitivity backup sets, at a storage cost.
 **Residual:** padding narrows the length channel; it does not close the timing or volume channels. A store always learns *when* you back up and *roughly how much*.
+The policy manifest records the set's root paths, name and schedule since ADR-0061; it sits in the metadata plane, so a store or peer sees ciphertext, while the structure plane a write-credential holder can read (FR-WOR-003) now names *where on the source disk* a root sat as well as what its tree is called.
 
 ### T-12 Dedup confirmation by a repository member
 In any trust domain other than `device`, a member can determine whether another member has backed up a *known* file by observing whether deduplication hits.

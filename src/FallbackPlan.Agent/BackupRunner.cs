@@ -160,6 +160,8 @@ public static class BackupRunner
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,
+                    SetName = set.Name,
+                    Schedule = set.Schedule,
                     DeviceId = runtime.State.DeviceId,
                     BackupSetId = backupSetId,
                     SnapshotId = snapshotId,

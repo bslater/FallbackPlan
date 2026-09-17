@@ -389,6 +389,128 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void PolicyManifest_WithRecordedShape_RoundTripsCanonically()
+    {
+        // ADR-0061: the set's shape travels in the archive so a rebuilt
+        // machine can re-declare the set from it. Keys 10-12 are optional;
+        // a label is absent for a single root and present for several.
+        var policy = NinePolicyKeys() with
+        {
+            Roots =
+            [
+                new RecordedRoot("/home/ben/Documents", "Documents"),
+                new RecordedRoot("/mnt/photos", "Photos"),
+            ],
+            SetName = "docs",
+            Schedule = "every 1h",
+        };
+
+        var bytes = PolicyManifestCodec.Encode(policy);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+
+        SequenceAssert.AreEqual(bytes, PolicyManifestCodec.Encode(decoded));
+        Assert.HasCount(2, decoded.Roots);
+        Assert.AreEqual("/home/ben/Documents", decoded.Roots[0].Path);
+        Assert.AreEqual("Documents", decoded.Roots[0].Label);
+        Assert.AreEqual("docs", decoded.SetName);
+        Assert.AreEqual("every 1h", decoded.Schedule);
+
+        var unlabelled = NinePolicyKeys() with { Roots = [new RecordedRoot("/srv/data", null)] };
+        var decodedUnlabelled = PolicyManifestCodec.Decode(PolicyManifestCodec.Encode(unlabelled));
+        Assert.IsNull(Assert.ContainsSingle(decodedUnlabelled.Roots).Label);
+        Assert.IsNull(decodedUnlabelled.SetName);
+        Assert.IsNull(decodedUnlabelled.Schedule);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_WithoutRecordedShape_EncodesTheNineKeyMapUnchanged()
+    {
+        // Every archive written before ADR-0061 carries the nine-key map, and
+        // a manifest that records no shape must still produce exactly it: the
+        // optional keys are absent, not empty. 0xA9 is a definite-length CBOR
+        // map of nine entries.
+        var bytes = PolicyManifestCodec.Encode(NinePolicyKeys());
+
+        Assert.AreEqual((byte)0xA9, bytes[0]);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+        Assert.IsEmpty(decoded.Roots);
+        Assert.IsNull(decoded.SetName);
+        Assert.IsNull(decoded.Schedule);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_ARootCarryingAnUnknownKey_IsRejected()
+    {
+        // The recorded root's inner map is pinned to keys 1 (label) and
+        // 2 (path); a third key is refused as every other unknown key is.
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(10);
+        WriteNinePolicyKeys(writer);
+        writer.WriteKey(10);
+        writer.WriteStartArray(1);
+        writer.WriteStartMap(2);
+        writer.WriteKey(2);
+        writer.WriteTextString("/srv/data");
+        writer.WriteKey(3);
+        writer.WriteTextString("smuggled");
+        writer.WriteEndMap();
+        writer.WriteEndArray();
+        writer.WriteEndMap();
+
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
+            PolicyManifestCodec.Decode(writer.Encode()));
+        Assert.Contains("root", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static PolicyManifest NinePolicyKeys() => new()
+    {
+        SegmentationProfile = 0x0001,
+        SegmentSizeOrTarget = 1024 * 1024,
+        CompressionProfile = 0x0001,
+        CompressionThresholdPermille = 50,
+        EncryptionProfile = 0x0001,
+        BlobTargetSize = 64 * 1024 * 1024,
+        BlobMaxSize = 256 * 1024 * 1024,
+        BlobMaxRecordCount = 65_536,
+        DedupTrustDomain = 1,
+        ExcludeRules = ["**/.cache/**"],
+    };
+
+    private static void WriteNinePolicyKeys(FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter writer)
+    {
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(2);
+        writer.WriteStartMap(1);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(1024 * 1024);
+        writer.WriteEndMap();
+        writer.WriteKey(3);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(4);
+        writer.WriteUnsignedInteger(50);
+        writer.WriteKey(5);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(6);
+        writer.WriteStartMap(3);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(64 * 1024 * 1024);
+        writer.WriteKey(2);
+        writer.WriteUnsignedInteger(256 * 1024 * 1024);
+        writer.WriteKey(3);
+        writer.WriteUnsignedInteger(65_536);
+        writer.WriteEndMap();
+        writer.WriteKey(7);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(8);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+        writer.WriteKey(9);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+    }
+
+    [TestMethod]
     public void ErrorManifest_EncodedAndDecoded_RoundTrips()
     {
         var manifest = new ErrorManifest(
