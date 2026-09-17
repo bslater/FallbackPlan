@@ -157,16 +157,21 @@ public sealed record DestinationConfiguration
 
     /// <summary>
     /// How often a restore drill brings a sampled file back out of this
-    /// destination's replica, in days; absent takes the default
-    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// destination's replica, in days. For a local path, absent takes the
+    /// default; for a peer, absent means <b>never</b> — a peer is drilled
+    /// only on a cadence written here, because the drill reads over the
+    /// peer's link ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md),
+    /// Amendment 3).
     /// </summary>
     /// <remarks>
     /// Much longer than the sweep's interval because a drill is much more
     /// expensive — it rebuilds a catalogue from the replica's own index plane
     /// and writes real bytes — and because what it watches for changes far
     /// more slowly than rot does. Zero or negative is refused at load rather
-    /// than silently meaning "never": a destination nobody drills is a
+    /// than silently meaning "never": a local path nobody drills is a
     /// decision, and it has to be spelled out somewhere a reader can see it.
+    /// A peer's drill is the opposite default for the opposite reason — its
+    /// bandwidth is somebody else's — so there the absence is the decision.
     /// </remarks>
     [JsonPropertyName("drill_interval_days")]
     public int? DrillIntervalDays { get; init; }

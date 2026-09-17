@@ -326,12 +326,14 @@ public static class Scheduler
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Only local-path destinations drill. A peer's replica is behind the
-    /// wire, and restoring a file from one costs a retrieval session and the
-    /// peer's bandwidth — the challenge already proves it holds the bytes,
-    /// and what the drill adds needs the whole read path, which is peer-
-    /// protocol work rather than a cadence. Stated rather than silently
-    /// skipped.
+    /// A local path drills on a default cadence. A peer drills only on a
+    /// cadence the source's operator wrote down for it: its replica is
+    /// behind the wire, and a drill reads it over the retrieval session the
+    /// peer granted and spends the peer's bandwidth — a standing cost this
+    /// service must not put on somebody else's link by default
+    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
+    /// Amendment 3). Absent means never, and the bytes one drill may pull
+    /// are capped in <see cref="RecoveryDrillJob"/>.
     /// </para>
     /// <para>
     /// A pair nothing has ever reached is not due one: there is nothing there
@@ -342,10 +344,21 @@ public static class Scheduler
     private static bool ShouldDrill(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
     {
-        if (runtime.Configuration.FindDestination(destinationName) is not
-            { Kind: DestinationKind.LocalPath } destination)
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination)
         {
             return false;
+        }
+
+        switch (destination.Kind)
+        {
+            case DestinationKind.LocalPath:
+                break;
+
+            case DestinationKind.Peer when destination.DrillIntervalDays is not null:
+                break;
+
+            default:
+                return false;
         }
 
         var record = runtime.DestinationSync.Find(set.Id, destinationName);

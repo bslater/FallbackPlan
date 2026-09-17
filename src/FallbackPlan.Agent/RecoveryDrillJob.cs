@@ -51,6 +51,34 @@ internal static class RecoveryDrillJob
     /// <summary>How deep the random descent will go looking for a file.</summary>
     private const int MaximumDepth = 24;
 
+    /// <summary>The most one sampled file may weigh when the replica is a peer's.</summary>
+    /// <remarks>
+    /// A local path is this machine's own disk and is not capped. A peer's
+    /// replica is read over somebody else's link, and a drill that happened
+    /// to sample a disk image would spend hours of it on a schedule the peer
+    /// never saw. A file over the cap is not chosen and the descent tries
+    /// again; the drill says how many it left ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
+    /// Amendment 3).
+    /// </remarks>
+    public const long PeerSampleFileCap = 64L * 1024 * 1024;
+
+    /// <summary>The most one drill may pull from a peer in total.</summary>
+    /// <remarks>
+    /// Below <see cref="SampleFiles"/> times the per-file cap on purpose: a
+    /// total that could never bite would be a number that says nothing. Two
+    /// files at the per-file cap fit; a third does not, and is left.
+    /// </remarks>
+    public const long PeerSampleTotalCap = 128L * 1024 * 1024;
+
+    /// <summary>What one drill may read: the largest file, and the most in total.</summary>
+    /// <param name="FileCap">A file longer than this is not sampled.</param>
+    /// <param name="TotalCap">Once the chosen files reach this, no more are chosen.</param>
+    public sealed record SampleBudget(long FileCap, long TotalCap)
+    {
+        /// <summary>The budget a peer's replica is drilled under.</summary>
+        public static SampleBudget Peer { get; } = new(PeerSampleFileCap, PeerSampleTotalCap);
+    }
+
     /// <summary>What one drill found.</summary>
     /// <param name="Files">Files restored whole — or, under <paramref name="Limit"/>, proved as far as the sealed content.</param>
     /// <param name="Bytes">What they amounted to; zero under a limit, since nothing was written.</param>
@@ -70,6 +98,29 @@ internal static class RecoveryDrillJob
         + "content drill is the recovery tool with the passphrase (ADR-0054).";
 
     /// <summary>
+    /// Drills one (set, destination) pair and records the result, under the
+    /// budget the destination's kind implies: none for a local path, the
+    /// peer budget for a peer.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Cancels the drill.</param>
+    public static Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        CancellationToken cancellationToken)
+    {
+        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+            ? SampleBudget.Peer
+            : null;
+        return RunAsync(runtime, set, destinationName, nowMs, budget, cancellationToken);
+    }
+
+    /// <summary>
     /// Drills one (set, destination) pair and records the result. Never
     /// throws: a drill is a check, and a check that takes the scheduler down
     /// is worse than the condition it was looking for.
@@ -78,12 +129,14 @@ internal static class RecoveryDrillJob
     /// <param name="set">The set whose replica to read.</param>
     /// <param name="destinationName">The destination holding it.</param>
     /// <param name="nowMs">The clock.</param>
+    /// <param name="budget">What the sample may read, or null for no cap.</param>
     /// <param name="cancellationToken">Cancels the drill.</param>
     public static async Task<DrillOutcome> RunAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
         ulong nowMs,
+        SampleBudget? budget,
         CancellationToken cancellationToken)
     {
         var scratch = Path.Combine(
@@ -94,7 +147,7 @@ internal static class RecoveryDrillJob
         try
         {
             var outcome = await DrillAsync(
-                handler, set, destinationName, scratch, id => sourceId = id, cancellationToken)
+                handler, set, destinationName, scratch, budget, id => sourceId = id, cancellationToken)
                 .ConfigureAwait(false);
 
             runtime.DestinationSync.RecordDrill(
@@ -162,6 +215,7 @@ internal static class RecoveryDrillJob
         BackupSetConfiguration set,
         string destinationName,
         string scratch,
+        SampleBudget? budget,
         Action<string> keepSourceId,
         CancellationToken cancellationToken)
     {
@@ -194,15 +248,23 @@ internal static class RecoveryDrillJob
             return new DrillOutcome(0, 0, "the replica holds no snapshot of this set.");
         }
 
-        var paths = await SampleAsync(handler, source.SourceId, newest.SnapshotId, cancellationToken)
-            .ConfigureAwait(false);
+        var (paths, skipped) = await SampleAsync(
+            handler, source.SourceId, newest.SnapshotId, budget, cancellationToken).ConfigureAwait(false);
         if (paths.Count == 0)
         {
             // A snapshot of an empty tree is not a failure to restore from —
             // there is nothing in it to bring back, and calling that a broken
             // recovery would raise an alarm about a set that captured nothing.
-            return newest.Files == 0
-                ? new DrillOutcome(0, 0, null)
+            // Nor is a snapshot whose every reached file is over the budget:
+            // the replica opened and listed over the wire, and what was not
+            // read is stated as a limit rather than blamed on the peer.
+            if (newest.Files == 0)
+            {
+                return new DrillOutcome(0, 0, null);
+            }
+
+            return skipped > 0
+                ? new DrillOutcome(0, 0, null, CapLimit(skipped, budget!))
                 : new DrillOutcome(0, 0, $"snapshot {newest.SnapshotId} lists {newest.Files} file(s), and none could be sampled.");
         }
 
@@ -276,10 +338,29 @@ internal static class RecoveryDrillJob
             }
         }
 
-        return sealedFiles > 0
-            ? new DrillOutcome(files + sealedFiles, bytes, null, SealedContentLimit)
-            : new DrillOutcome(files, bytes, null);
+        var limits = new List<string>(2);
+        if (sealedFiles > 0)
+        {
+            limits.Add(SealedContentLimit);
+        }
+
+        if (skipped > 0)
+        {
+            limits.Add(CapLimit(skipped, budget!));
+        }
+
+        return new DrillOutcome(files + sealedFiles, bytes, null, limits.Count == 0 ? null : string.Join(" ", limits));
     }
+
+    /// <summary>
+    /// The limit a drill states when the budget left files unsampled: how
+    /// many, and what the budget was, so a reader can tell a small archive
+    /// from a capped one.
+    /// </summary>
+    private static string CapLimit(int skipped, SampleBudget budget) =>
+        $"{skipped} file(s) the descent reached were not sampled under the peer drill's byte cap "
+        + $"({budget.FileCap / (1024 * 1024)} MiB per file, {budget.TotalCap / (1024 * 1024)} MiB per drill); "
+        + "a file over the cap is proved by the manual drill, not on a cadence over a peer's link (ADR-0054 Amendment 3).";
 
     /// <summary>
     /// Whether a restore failed for no reason other than sealed content:
@@ -303,11 +384,17 @@ internal static class RecoveryDrillJob
     /// replica could survive for ever — the same reason the possession
     /// challenge draws its record at random.
     /// </remarks>
-    private static async Task<List<string>> SampleAsync(
-        ServiceCommandHandler handler, string sourceId, string snapshotId, CancellationToken cancellationToken)
+    private static async Task<(List<string> Paths, int Skipped)> SampleAsync(
+        ServiceCommandHandler handler,
+        string sourceId,
+        string snapshotId,
+        SampleBudget? budget,
+        CancellationToken cancellationToken)
     {
         var chosen = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var skipped = new HashSet<string>(StringComparer.Ordinal);
+        var chosenBytes = 0L;
 
         for (var attempt = 0; attempt < SampleFiles * 3 && chosen.Count < SampleFiles; attempt++)
         {
@@ -333,16 +420,29 @@ internal static class RecoveryDrillJob
                 // Only a file proves anything: a symlink or a device node
                 // restores its record, not content, so a drill that sampled
                 // one would pass without reading a segment.
-                if (entry.Kind == "file" && seen.Add(next))
+                if (entry.Kind != "file" || seen.Contains(next))
                 {
-                    chosen.Add(next);
+                    break;
                 }
 
+                // Under a budget, a file that would overrun it is left where
+                // it is and the descent tries again — counted once, so the
+                // limit names files and not attempts.
+                if (budget is not null
+                    && (entry.Length > budget.FileCap || chosenBytes + entry.Length > budget.TotalCap))
+                {
+                    skipped.Add(next);
+                    break;
+                }
+
+                seen.Add(next);
+                chosen.Add(next);
+                chosenBytes += entry.Length;
                 break;
             }
         }
 
-        return chosen;
+        return (chosen, skipped.Count);
     }
 
     private static long BytesUnder(string directory)
