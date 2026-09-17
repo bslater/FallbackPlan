@@ -68,6 +68,43 @@ public sealed class ObservedHeadTests : IDisposable
         Assert.AreEqual(0UL, await ObservedHead.JournalHeadAsync(store, Writer, CancellationToken.None));
     }
 
+    [TestMethod]
+    public void JournalHeadOf_ReadsTheHeadFromKeysAlreadyInHand()
+    {
+        // The inventory a peer declares at the start of a push already names
+        // every journal key it holds: the head is a fold over those strings,
+        // no listing and no session.
+        var keys = new[]
+        {
+            MetadataStoreKeys.Journal(Writer, 5).Value,
+            "snapshots/aaaa/bbbb/cccc",
+            MetadataStoreKeys.Journal(Writer, 12).Value,
+            "blobs/data/abcd/abcdefgh",
+            MetadataStoreKeys.Journal(Writer, 7).Value,
+        };
+
+        Assert.AreEqual(12UL, ObservedHead.JournalHeadOf(keys, Writer));
+    }
+
+    [TestMethod]
+    public void JournalHeadOf_AnotherWritersKeys_AreNotThisWriters()
+    {
+        var keys = new[] { MetadataStoreKeys.Journal(Other, 40).Value, MetadataStoreKeys.Journal(Writer, 3).Value };
+
+        Assert.AreEqual(3UL, ObservedHead.JournalHeadOf(keys, Writer));
+        Assert.AreEqual(40UL, ObservedHead.JournalHeadOf(keys, Other));
+    }
+
+    [TestMethod]
+    public void JournalHeadOf_AKeyThatDoesNotParse_IsSkippedNotGuessed()
+    {
+        var prefix = MetadataStoreKeys.Journal(Writer, 0).Value[..^MetadataStoreKeys.Decimal16Length];
+        var keys = new[] { MetadataStoreKeys.Journal(Writer, 9).Value, prefix + "not-a-sequence" };
+
+        Assert.AreEqual(9UL, ObservedHead.JournalHeadOf(keys, Writer));
+        Assert.AreEqual(0UL, ObservedHead.JournalHeadOf([], Writer));
+    }
+
     private static async Task PutAsync(LocalFileSystemObjectStore store, ObjectKey key)
     {
         var result = await store.PutAsync(

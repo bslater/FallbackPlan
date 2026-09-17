@@ -102,20 +102,38 @@ public static class ObservedHead
     {
         ThrowHelper.ThrowIfNull(store);
 
+        var keys = new List<string>();
+        await foreach (var entry in store.ListAsync(JournalPrefixOf(writer), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            keys.Add(entry.Key.Value);
+        }
+
+        return JournalHeadOf(keys, writer);
+    }
+
+    /// <summary>
+    /// <see cref="JournalHeadAsync"/> over keys already in hand — the whole
+    /// inventory a peer declares at the start of a push (peer-protocol 03
+    /// §3.2), which already names every journal key it holds, so the
+    /// question costs no second session there (ADR-0062 Amendment 1).
+    /// </summary>
+    /// <param name="keys">Object keys, from any prefix; only this writer's journal keys count.</param>
+    /// <param name="writer">The writer to ask about.</param>
+    /// <returns>The highest journal sequence among <paramref name="keys"/> for the writer, or zero.</returns>
+    public static ulong JournalHeadOf(IEnumerable<string> keys, WriterId writer)
+    {
+        ThrowHelper.ThrowIfNull(keys);
+
         var head = 0UL;
+        var prefix = JournalPrefixOf(writer).Value;
 
         // The journal key's last segment IS the sequence, zero-padded to a
         // fixed width so ordinal listing order is numeric order. Reading it
         // from the key rather than the record is what keeps this a listing.
-        var prefix = ObjectPrefix.Parse(
-            $"{MetadataStoreKeys.Journal(writer, 0).Value[..^MetadataStoreKeys.Decimal16Length]}");
-
-        await foreach (var entry in store.ListAsync(prefix, ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
+        foreach (var key in keys)
         {
-            var key = entry.Key.Value;
-            var separator = key.LastIndexOf('/');
-            if (separator < 0)
+            if (!key.StartsWith(prefix, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -124,7 +142,7 @@ public static class ObservedHead
             // report; the index loader and the journal store both name it,
             // and guessing a sequence from it would be worse than ignoring it.
             if (ulong.TryParse(
-                    key.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var sequence))
+                    key.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var sequence))
             {
                 head = Math.Max(head, sequence);
             }
@@ -132,4 +150,8 @@ public static class ObservedHead
 
         return head;
     }
+
+    /// <summary>The prefix under which one writer's journal keys live: <c>journal/&lt;writer&gt;/</c>.</summary>
+    private static ObjectPrefix JournalPrefixOf(WriterId writer) =>
+        ObjectPrefix.Parse(MetadataStoreKeys.Journal(writer, 0).Value[..^MetadataStoreKeys.Decimal16Length]);
 }
