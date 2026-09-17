@@ -21,6 +21,14 @@ The third point is not a drafting slip to be worded away. It is a real design fo
 
 ### 1. The derived bytes are an RFC 8032 seed
 
+> **Amended 2026-09.** With format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) the seed is
+> `HKDF-Expand(signing_root, "fbp/signing-generation/v2" ‖ u32(g), 32)`,
+> the signing root itself an HKDF domain of the passphrase-derived root
+> ([03 §4](../../specifications/repository-format/03-keys.md#4-derived-keys)).
+> The interpretation below — a seed, not a scalar — is unchanged, and so
+> is everything §2 says about scope: "a holder of the master key" reads
+> "a holder of the repository's write credential".
+
 The 32 bytes of `HKDF-Expand(master_key, "fbp/signing/v1" ‖ u32(g), 32)` are the Ed25519 **private-key seed** of RFC 8032 §5.1.5 — the value that is SHA-512-expanded and clamped inside the algorithm. Not a pre-clamped scalar.
 
 Chosen because it is the only interpretation mainstream APIs accept directly (`Ed25519.KeyPair.FromSeed` and equivalents), and because the scalar reading would force every implementation to perform clamping manually — an invitation to get it wrong in exactly the way that is hard to test.
@@ -117,4 +125,5 @@ chance to get it wrong.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Seed interpretation and repository scope fixed for v1; device attribution deferred to Q13 |
+| 2026-09 | Amended | The derivation moves to the format-2 signing root; the seed interpretation and the repository scope are unchanged. Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
 | 2026-09 | Accepted (amended) | §3 narrowed and §2 refined by [ADR-0055](0055-reclaim-authority.md): a keyless destination cannot derive a public key, so one is published beside its attribution; and a tombstone signs under its own reclaim domain, so its signature proves a narrower authority than a publication's. §1 unchanged |

@@ -88,7 +88,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| FR-KIT-001 **[new]** | The kit shall contain kit format version, minimum recovery-tool version, repository ID, format profile, **wrapped** repository master key, KDF parameters, destination descriptors, issuing device public identity, issue timestamp, embedded instructions, and an integrity checksum. | A conformance fixture kit parses and opens a fixture repository. |
+| FR-KIT-001 **[amended]** | The kit shall contain kit format version, minimum recovery-tool version, repository ID, format profile, the sealing public key, KDF parameters, destination descriptors, issuing device public identity, issue timestamp, embedded instructions, and an integrity checksum — and no key material of any kind, because a repository stores none ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze); the *wrapped master key* this row once named belonged to the withdrawn format 1). | A conformance fixture kit parses and opens a fixture repository. |
 | FR-KIT-002 **[new]** | The kit shall never contain the passphrase, store credentials, or the device private key. | Format validation rejects a kit containing any of them. |
 | FR-KIT-003 **[new]** | The kit shall be produced in printable (QR plus checksummed transcribable text) and machine-readable representations with identical content. | A hand-transcribed printable kit opens the repository; a transcription error is detected by the checksum. |
 | FR-KIT-004 **[new]** | Kit generation shall occur during first-run setup and require explicit confirmation that it has been saved before setup completes. | Setup cannot complete without the confirmation. |
@@ -98,11 +98,11 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 
 ## Write-only repositories
 
-A format-v2 repository ([ADR-0042](../adr/0042-write-only-repositories.md)) severs writing from reading: the service seals file contents to an asymmetric public key and holds nothing that opens them.
+Every repository ([ADR-0042](../adr/0042-write-only-repositories.md); the only format since [ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) severs writing from reading: the service seals file contents to an asymmetric public key and holds nothing that opens them.
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| FR-WOR-001 **[new]** | A repository may be created write-only (format v2): every key derives from one user passphrase via a memory-hard KDF and one-way domains; file contents are sealed to the derived X25519 public key; the service holds only the write bundle and can add to history but never read file contents back. | A service holding a v2 set's complete state cannot produce a byte of restored file content; backup, browse, plan, trim and replication all succeed without the passphrase. |
+| FR-WOR-001 **[amended]** | Every repository is write-only (format 2, the only format): every key derives from one user passphrase via a memory-hard KDF and one-way domains; file contents are sealed to the derived X25519 public key; the service holds only the write bundle and can add to history but never read file contents back. | A service holding a v2 set's complete state cannot produce a byte of restored file content; backup, browse, plan, trim and replication all succeed without the passphrase. |
 | FR-WOR-002 **[new]** | The passphrase shall be entered only at setup, at adoption of an existing repository onto a new service instance, and at restore. It shall never be persisted anywhere, and shall never transit any channel: derivation runs in the admin client, and only envelopes sealed to the service's published recipient key cross to the service. | No durable state on any machine contains the passphrase; the command surface carries only sealed envelopes on the two named verbs. |
 | FR-WOR-003 **[new]** | The structure plane — metadata records, blob footers and record tables — shall remain readable to the write-bundle holder, so browsing, planning, dedup bookkeeping, retention and structural verification work without the passphrase. | Every blob's record table opens under the write bundle while its record payloads do not; the restore wizard reaches its review step without a grant. |
 | FR-WOR-004 **[new]** | Restoring from a v2 repository shall require re-deriving the private key from the passphrase; the resulting grant shall live only in memory, bounded to a restore-source handle, and be zeroed on close or idle expiry. | A restore without a grant is refused naming the grant; after close or expiry the service again cannot produce content. |
@@ -216,7 +216,7 @@ A password is never a new way to reach a service —
 | FR-GOV-001 **[new]** | The repository shall carry an OSI-approved licence before the first public release. | `LICENSE` exists and [ADR-0001](../adr/0001-licence-and-contribution-model.md) is Accepted. |
 | FR-GOV-002 **[new]** | The contribution model — DCO or CLA — shall be documented before accepting external contributions. | `CONTRIBUTING.md` states it. |
 | FR-GOV-003 **[new]** | A security disclosure policy with a contact and response commitment shall be published before the first beta. | `SECURITY.md` exists. |
-| FR-GOV-004 **[new]** | The repository format specification and conformance fixtures shall be public before format v1 freeze. | Published under `specifications/`. |
+| FR-GOV-004 **[new]** | The repository format specification and conformance fixtures shall be public before the format freezes. | Published under `specifications/`. |
 
 ## Legacy archive import
 

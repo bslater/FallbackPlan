@@ -117,7 +117,7 @@ template in any case. Exception messages keep using resx exactly as before.
 | 2000–2499 | `Repository` |
 | 2500–2799 | `Storage.*`, `Filesystem.*` |
 | 2800–3199 | `Restore`, `Retention`, `Replication`, `Recovery` |
-| 3200–3399 | `Protocol`, `Keystore` |
+| 3200–3399 | `Protocol` (3300–3399 were the platform keystore's, retired with it — amended 2026-09, [ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md)) |
 | 3400–3599 | `Application` |
 | 3600–3699 | `Api` transport |
 | 3700–3999 | `Agent` |
@@ -464,3 +464,4 @@ and a retention drill over an applied pass.
 
 
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |
+| 2026-09 | Amended | Range 3300–3399 retired with the platform keystore (format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); `Protocol` keeps 3200–3299 |

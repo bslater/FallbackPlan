@@ -13,9 +13,8 @@ The repository format must be documented · append-oriented · content-addressed
 ## 2. Object classes
 
 ```text
-/repository-format                                  format profile, repository ID, feature set
-/keys/<key-id>                                      wrapped key material
-/blobs/data/<shard>/<store-blob-key>                segment records
+/repository-format                                  format profile, repository ID, feature set, KDF salt and parameters, sealing public key
+/blobs/data/<shard>/<store-blob-key>                segment records (content sealed to the public key)
 /blobs/meta/<shard>/<store-blob-key>                manifest and tree records
 /index/delta/<generation>/<delta-id>                immutable writer index deltas
 /index/checkpoint/<generation>/<checkpoint-id>      compacted index generations
@@ -112,7 +111,7 @@ Sizing comes from a versioned write profile:
 
 Supported range is 8 MiB to the provider-safe limit reported by the store's capability record. Metadata blobs use smaller independent targets. Maximum open-blob age exists so a low-churn backup set still commits within a bounded time rather than waiting indefinitely to fill a blob.
 
-A segment record is **never split across blobs** in format v1. When the open blob cannot hold the next complete record within its maximum, it is sealed and the record starts a new blob.
+A segment record is **never split across blobs**. When the open blob cannot hold the next complete record within its maximum, it is sealed and the record starts a new blob.
 
 ### 5.2 Layout
 

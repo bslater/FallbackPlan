@@ -203,9 +203,9 @@ Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a m
 
 ### 6.1 Signature
 
-Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the master key, so the reader computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.
+Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the signing root, so any holder of the write credential computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.
 
-In format version 1 a signature is **repository-scoped**: it proves the snapshot was produced by a holder of the master key at that generation, and no more. It does not attribute the snapshot to a particular device — `device_id` and `writer_id` fields are attribution **by claim**. Per-device signing keys are a considered and deferred extension. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md), [Q13](../../docs/open-questions.md#q13--device-level-signature-attribution)
+A signature is **repository-scoped**: it proves the snapshot was produced by a holder of the repository's signing key at that generation, and no more. It does not attribute the snapshot to a particular device — `device_id` and `writer_id` fields are attribution **by claim**. Per-device signing keys are a considered and deferred extension. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md), [Q13](../../docs/open-questions.md#q13--device-level-signature-attribution)
 
 ## 7 Policy manifest
 
@@ -229,7 +229,7 @@ This exists so that a snapshot can always answer "what settings produced this?" 
 
 ### 7.1 Rule dialect (rules-v1)
 
-In format v1, every string in `include_rules` and `exclude_rules` is a
+Every string in `include_rules` and `exclude_rules` is a
 **rules-v1** rule ([ADR-0024](../../docs/adr/0024-include-exclude-rule-dialect.md)).
 No dialect field exists; a future dialect requires a new policy-manifest key
 assigned by a future format revision. Rules are evaluated **at capture** —

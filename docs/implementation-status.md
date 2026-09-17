@@ -38,7 +38,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
 | [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local` · `Storage.ContractTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
 | [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Built** | `FallbackPlan.Recovery`, [`specifications/recovery-kit/`](../specifications/recovery-kit/README.md) · `Repository.ConformanceTests/RecoveryKitConformanceTests` |
-| [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture | **Built** | `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests` |
+| [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture; format 1 withdrawn before freeze (Amendment 1) | **Built** | `Domain/FormatLimits` · `Repository.Format/Descriptor/RepositoryDescriptorCodec` · `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests` · [notes](#0014--one-format-and-a-refusal-by-name) |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated | **Built** | `Domain/Identifiers/BlobId`, `Domain/IBlobCounterAllocator` · `InterruptionTests/SequenceRollbackTests` holds the refusal when an identifier is ever reused |
 | [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence | **Built** | `Repository.Index/IndexEntry`, `Repository.Index/IndexLoader` · `Repository.Tests/Index/IndexPrecedenceTests` |
@@ -66,7 +66,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
-| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
+| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) — since 2026-09 the only format | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Packing/SealedContentKey` · `Repository/RepositoryLifecycle` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for). Provisioning also records the derivation's public half (`Api/InstallationParameters`, written by `Agent/WriteOnlyServiceState` and healed at startup by `Agent/ServiceRuntime`), so an interrupted ceremony rebuilds its kit before any archive exists — a local file, never a contract field, because the device id is already published and the two together would make a session sufficient to assemble a kit |
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
@@ -129,6 +129,27 @@ The decision that a snapshot commits per destination rather than globally is in 
 
 It is still one provider. A contract with a single implementation has not yet been tested by the thing it exists for — the second implementation that disagrees with it. Azure and S3 are phase 3, and `NFR-PORT-002` is traced against the architecture tests and the contract suite rather than against a provider that proves portability by being different.
 
+
+### 0014 — one format, and a refusal by name
+
+Format 1 was withdrawn before any freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), with no installed base
+to migrate: the one live installation went through setup and only ever wrote
+format 2. `Domain/FormatLimits` names one format version, and
+`Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a descriptor
+stamped `1` as its own finding — *refuse, never misread* — naming re-seeding as
+the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
+`Repository.Tests/Format/RepositoryDescriptorCodecTests` hold both halves.
+The freeze gate's items are unchanged and read against format 2.
+
+One fact is recorded because it looks like an error until it is explained:
+format 2's symmetric containers — metadata blobs and standalone records —
+still stamp `1` in their envelopes and associated data. The symmetric
+construction is the one format 1 defined and format 2 kept byte for byte, and
+the stamp is authenticated data over bytes already on disk, so
+`Domain/FormatLimits` carries it as `SymmetricFormatVersion` beside the format
+version proper. The committed `fixture-repository-v2` is the guard: change
+either and it stops opening.
+
 ### 0015 — the seam is the decision, and the seam is built
 
 ADR-0015's decision was to isolate a legacy importer behind a boundary, not to write one. `FallbackPlan.Import.Abstractions` is that boundary, and phase 0's exit criteria proved it with a synthetic adapter feeding an arbitrary byte stream through the same pipeline ([roadmap](roadmap.md#phase-0--archive-engine-vertical-slice)).
@@ -151,7 +172,7 @@ The **decision** that half of it depended on is now made rather than pending: wh
 
 ### 0028 — the local binding, not the remote one
 
-Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, keystore unlock, per-job progress, and a CLI that asks a running service and falls back to direct mode. The remote binding — once a terminal refusal that bound nothing — now binds a real socket once an administrator names an interface; see [0030](#0030--the-socket-exists) for the transport it waited on.
+Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, per-job progress, and a CLI that asks a running service and falls back to direct mode. The keystore unlock of §9 is retired ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the service holds the write credential setup stores and nothing else. The remote binding — once a terminal refusal that bound nothing — now binds a real socket once an administrator names an interface; see [0030](#0030--the-socket-exists) for the transport it waited on.
 
 The [restore pipeline review](review/2026-08-restore-pipeline-review.md) closed the gap that "falls back to direct mode" had hidden: the direct-mode restore was a second, uncontained implementation of the read path, and it now routes through the same `RestorePlanner`/`RestoreExecutor` the service uses — so ADR-0028 §3's "the same operation performs identically through either path" is enforced rather than asserted. The service also now carries the restore outcome across the contract and namespaces each run's displaced store.
 
@@ -231,12 +252,13 @@ compaction is decrypt-and-reseal. ADR-0052 scopes the record key to the object
 identifier, makes the nonce constant and drops the ordinal from the AAD, for
 format v3 only.
 
-**Nothing implements it and nothing should yet.** `Domain/FormatLimits` still
-carries versions 1 and 2, `Repository.Crypto/BlobKeyDeriver` still mixes the
-blob's salt, writer and counter, and
-`Repository.Format/Records/RecordNonce` still writes the ordinal. v1 and v2
-repositories are read in place forever, so there is no migration waiting to be
-run and no half-state to be in.
+**Nothing implements it and nothing should yet.** `Domain/FormatLimits`
+carries version 2 (and the symmetric containers' stamp of 1, which is a fact
+about bytes on disk rather than a second format — [ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)),
+`Repository.Crypto/BlobKeyDeriver` still mixes the blob's salt, writer and
+counter, and `Repository.Format/Records/RecordNonce` still writes the ordinal.
+Format-2 repositories are read in place forever, so there is no migration
+waiting to be run and no half-state to be in.
 
 What makes the timing the argument: [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet)
 is *Specified only*, so nothing compacts, so reversing its decision costs a
@@ -260,9 +282,10 @@ that gets re-derived:
 repository's master key, and a claimant that has lost the repository holds an
 installation kit — no repository id, no key object, every key re-derived from
 the passphrase and the kit's public salt. So the key is the *installation's*,
-`fbp/claim/v2`, with `fbp/claim/v1` off the master key for a claimant holding a
-format-v1 kit. `Repository/RecoveryKitClaim` answers both, and takes no store,
-because there is no archive to open.
+`fbp/claim/v2`. (`fbp/claim/v1`, off a format-1 repository's master key, went
+with format 1 — [ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze).) `Repository/RecoveryKitClaim` derives it, refuses
+a format-1 kit by name, and takes no store, because there is no archive to
+open.
 
 **The claim can name no repository either**, for the same reason, and the owner
 inventory cannot tell it one because that path is itself gated on attribution.
@@ -349,10 +372,11 @@ signature the destination checks against it.
 
 Three limits, stated because the alternative is a reader inferring more:
 
-- **An ordinary v1 service gains nothing.** It holds the master key and
-  derives both keys from it. The split defends the write-only shape; against a
-  fully compromised v1 device the destination retention floor is still the only
-  safeguard that holds ([ADR-0055](adr/0055-reclaim-authority.md) §3).
+- **The limit ADR-0055 §3 stated — an ordinary format-1 service gains
+  nothing, because it holds the master key — has closed** with format 1
+  ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): no service derives the reclaim key now, and the split defends
+  every repository. The destination retention floor stays the safeguard that
+  holds against a compromised *grant*.
 - **A page signature does not bind the session.** Forgery and editing are
   closed; replay of a page captured inside an authenticated session is not, and
   [06 §4.1](../specifications/peer-protocol/06-retention.md#41-retentionoffer)
@@ -733,9 +757,9 @@ reopen, second root, wall, save, backup, labelled browse.
 Contract 1.11, receipt schema 4. Restore became a guided wizard — passphrase,
 source, effective date, files, target, run — and every step landed as engine
 or contract surface rather than page logic. The passphrase gate runs **in the
-console process** against the staging archive's own key files
-(`Web/ConsoleRestoreGate.cs`, a real KEK derivation), so NFR-SEC-009's wall
-stands untouched; the console dependency rule gained exactly one named
+console process** against the archive's own descriptor
+(`Web/ConsoleRestoreGate.cs`, a real Argon2id derivation compared against the
+sealing public key), so NFR-SEC-009's wall stands untouched; the console dependency rule gained exactly one named
 exception for that class. Restore **sources** are server-side handles
 (`open_restore_source`): the staging archive, a local-path destination's
 replica, or a **paired peer's replica over the wire** — the latter via the
@@ -774,9 +798,8 @@ ceremonies as sealed envelopes to the service's published recipient key
 — the one permitted transit shape (NFR-SEC-009 as amended, fenced both
 ways by `KeyMaterialConfinementTests`) — and the service starts without
 a passphrase when its sets are provisioned. The CLI creates with
-`init --write-only --acknowledge-loss` and derives its direct-mode
-authority from `--passphrase-env`; the console runs both ceremonies in
-its own process. Proven by the end-to-end drills in
+`init --acknowledge-loss` and derives its direct-mode authority from
+`--passphrase-env`; the console runs both ceremonies in its own process. Proven by the end-to-end drills in
 `WriteOnlyRepositoryTests` (repository), `WriteOnlySetTests` (service —
 including the machine-migration adoption: metadata unreadable on the new
 machine until the passphrase re-enters, wrong passphrase refused by
@@ -784,8 +807,19 @@ public-key mismatch), `WriteOnlyCommandTests` (CLI),
 `WriteOnlyCeremonyTests` (console), the committed
 `fixture-repository-v2` read contract, and a live Playwright walk from
 the provisioning dialog to byte-identical restored files. Losing the
-passphrase loses the backup, acknowledged at setup; v2 has no
+passphrase loses the backup, acknowledged at setup; there is no
 passphrase change (03 §7).
+
+**Since 2026-09 this is the only format.** Format 1 was withdrawn before any
+freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the opt-in at creation is gone, `Domain/FormatLimits`
+names one format version, `Repository/RepositoryLifecycle` has one create
+from a credential, one create from a passphrase, one open with the credential
+and one open for reading, and `Repository.Crypto/RepositoryWriteCredential` is
+the hierarchy — `KeyHierarchy` and the master-key half of `Repository.Crypto`
+are deleted. The service's passphrase mode, its keystore and the
+`unlock`/`lock` verbs went with the only archive they could open;
+`Repository.Tests/EndToEnd/RepositoryLifecycleTests` holds the refusal of a
+format-1 descriptor by name.
 
 A restore routed through a set-up service — the CLI's `restore` in
 client mode and over `--connect` — runs the same ceremony the console

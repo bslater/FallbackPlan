@@ -34,6 +34,13 @@ structure of what exists, plus the ability to keep writing".
 This is **repository format v2**, opt-in at creation. v1 repositories
 are untouched, remain fully supported, and never convert implicitly.
 
+> **Amended 2026-09.** Format 1 is withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze))
+> and the opt-in is gone: this record's derivation is the only format the
+> product writes or reads. "Write-only" names every repository now, and
+> `init --write-only` is `init`. Every sentence below that contrasts v2
+> with v1 describes a contrast that no longer exists in the code; the
+> decisions themselves stand unchanged.
+
 ## Decision
 
 1. **The passphrase is the key material's sole source — literal
@@ -237,4 +244,5 @@ reader of the derivation should not have to infer it.
 | 2026-08 | Proposed | Written with the derivation, sealing, adoption and confinement-amendment decisions fixed by the user; build sequenced as crypto core → format v2 → repository layer → service and contract 1.12 → clients → docs |
 | 2026-08 | Accepted | Built end to end: the derivation tree and content sealing in Repository.Crypto (conformance vectors cross-checked against an independent pure-python X25519), the v2 descriptor/envelope/footer re-key with sealed spool resume, derived lifecycle opens, contract 1.12's provisioning and grant ceremonies with the service's recipient keypair and per-set credential store, passphrase-free service start, the CLI's `init --write-only` and derived direct mode, the console's setup ceremony and v2 wizard gate — proven by service-level drills including the machine-migration adoption, a committed v2 conformance fixture, and a live Playwright walk from provisioning to byte-identical restore |
 | 2026-08 | Amended | Decision 10's per-set provisioning is joined by an installation-level credential for first-run setup ([ADR-0044](0044-first-run-setup.md)); the per-set verb keeps the adopt ceremony, where the descriptor already fixes the salt |
+| 2026-09 | Amended | Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the opt-in is gone and this derivation is the only format. `init --write-only` became `init`; the service's passphrase mode, which existed to open format-1 archives, went with it, and every set opens with the stored credential. Decision 7's device-domain rule became the default ([ADR-0006](0006-object-identifiers-and-dedup-trust-domains.md) amended) |
 | 2026-08 | Amended | This record's device-trust posture is generalised by [ADR-0046](0046-direct-to-destination-publication.md) §6: direct-ship sets run `device` trust on any format version — not because the private key is absent, as here, but because verify-on-reuse through the sink would pay a destination round trip per reuse — with the destination presence probe as the stale-catalogue guard in both cases. "Each set's staging archive is then created from it" reads "each set's repository" now that a direct-ship set's is a metadata store plus destinations; the derivation is indifferent to which. |

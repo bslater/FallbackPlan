@@ -15,7 +15,7 @@ A device MUST hold exactly one long-lived **peer keypair**, generated on first u
 
 The public key **is** the identity. A peer is never identified by a name, an address, or a `device_id`; those are labels displayed beside the key and carry no authority. → [ADR-0030 §1](../../docs/adr/0030-peer-identity-and-pairing.md#1-a-peer-is-a-public-key-held-per-device-unrelated-to-the-repository)
 
-The peer keypair MUST NOT be derived from, or derivable from, the repository master key or any key in the repository hierarchy. It is generated independently and is unrelated to repository membership: a destination holds one without holding any repository key at all.
+The peer keypair MUST NOT be derived from, or derivable from, the repository root or any key in the repository hierarchy. It is generated independently and is unrelated to repository membership: a destination holds one without holding any repository key at all.
 
 **Peer fingerprint.** Where a key must be shown to a human or used as a map key, it is rendered as the base32 form ([00 §6](../repository-format/00-conventions.md#6-object-identifiers-in-paths)) of
 

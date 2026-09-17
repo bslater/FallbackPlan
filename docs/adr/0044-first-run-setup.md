@@ -381,7 +381,7 @@ the three facts on the contract would have been the smaller change and the
 wrong one. The only other field a v2 kit carries is the issuing device id,
 which that result already publishes — so any client holding a session could
 have assembled a complete kit without the passphrase, and both NFR-SEC-009's
-acceptance clause and [threat model T-19](../threat-model.md#t-19-unlocked-key-material-at-rest-in-the-service-account)
+acceptance clause and [threat model T-19](../threat-model.md#t-19-key-material-at-rest-in-the-service-account)
 turn on holding a running service *not* being sufficient to produce one. A
 local file changes nothing about that: a paired remote console cannot read
 it, and a local attacker who can is one who already holds the sealed

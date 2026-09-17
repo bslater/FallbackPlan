@@ -1,6 +1,6 @@
 # ADR-0014 — Format versioning and pre-1.0 stability posture
 
-**Status:** Proposed · Implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Proposed (amended 2026-09) · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-COMP-001..004, NFR-COMP-006, NFR-COMP-007, NFR-REL-008
 **Review finding:** [M6](../review/2026-08-architecture-review.md#m6--no-stability-posture-for-pre-10-repositories)
@@ -44,6 +44,8 @@ Each versions independently. A reader advertises a **feature set**, not a single
 
 ### Freeze gate
 
+> **Amended 2026-09.** Format 1 was withdrawn before this gate was reached ([Amendment 1](#amendment-1-2026-09--format-1-withdrawn-before-freeze)). The gate below now reads against **format 2**, the only format the product writes or reads; its items are unchanged.
+
 Format v1 freezes only when all of the following pass ([`../roadmap.md`](../roadmap.md#format-v1-freeze-gate)):
 
 1. Segmentation benchmark published — `fixed-v1` versus `cdc-v1` ([ADR-0002](0002-segmentation-strategy.md)).
@@ -75,8 +77,21 @@ Format v1 freezes only when all of the following pass ([`../roadmap.md`](../road
 
 **Version by a single integer.** Rejected. Cannot express partial capability, so a reader supporting most of a version has no way to say so and must refuse everything.
 
+## Amendment 1 (2026-09) — format 1 withdrawn before freeze
+
+**What changed.** Repository format 1 — a random master key wrapped under a passphrase-derived key-encryption key at `/keys/<key-id>`, with a symmetric data-key family beneath it — is withdrawn. Format 2 ([ADR-0042](0042-write-only-repositories.md)), which had been an opt-in beside it, is the only format the product writes or reads. Nothing that opened a format-1 repository remains in the code, and nothing that could hold a service passphrase for one remains either: the service opens every archive with the write credential first-run setup stores ([ADR-0044](0044-first-run-setup.md)), and the passphrase is present only where a person is.
+
+**Why this is allowed.** The pre-1.0 posture above says a breaking change ships either a migration tool or an explicit statement that re-seeding is required. This is the second kind, and the honest reason it costs nothing is that there is no installed base: the product is pre-release, and the one live installation went through setup and has only ever written format 2. A migration would have moved nobody's data.
+
+**What the number does.** Format 1's number is **not reused**. The descriptor's `format_version` and every sealed data blob's envelope and associated data carry `2`; a reader that meets `1` refuses it by name — *refuse, never misread*, exactly as this record requires — and names re-seeding from a live installation as the remedy. One consequence is recorded because it would otherwise look like an error: format 2's **symmetric** containers — metadata blobs and standalone records — still stamp `1` in their envelopes and associated data, because the symmetric construction is the one format 1 defined and format 2 kept byte for byte, and the stamp is authenticated data over bytes already on disk ([04 §4](../../specifications/repository-format/04-record.md#4-associated-data)).
+
+**What the gate means now.** The freeze gate's six items are unchanged and read against format 2. The conformance vectors and the committed fixture are format 2's ([conformance](../../specifications/repository-format/conformance/README.md)); the independent-reader criterion is a reader of format 2.
+
+**What was given up.** The choice at creation between two formats, and with it the service's passphrase mode, its platform keystore and the `unlock`/`lock` verbs ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md), [ADR-0033](0033-hosting-under-an-os-service-manager.md), both amended). A format-1 recovery kit still parses — its wire shape is pinned until the kit itself goes — but cannot be opened.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
+| 2026-09 | Amended | Format 1 withdrawn before freeze; the gate reads against format 2 ([Amendment 1](#amendment-1-2026-09--format-1-withdrawn-before-freeze)). |

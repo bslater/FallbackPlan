@@ -18,67 +18,45 @@
 ## 2. Key hierarchy
 
 ```text
-User passphrase                          Hardware / OS key store
-       |                                          |
-       +--------> Argon2id (memory-hard) <--------+
-                          |
-                    Key Encryption Key (KEK)
-                          |
-                    wraps
-                          |
-                  Repository Master Key
-                          |
-        +-----------------+------------------+------------------+------------------+
-        |                 |                  |                  |                  |
-  Content-ID key    Data key gen(s)   Metadata key gen(s)   Signing key gen(s)  Key-ID key
-        |                 |                  |                  |                  |
-        |            per-blob keys      per-blob keys      snapshot &         store blob
-        |            (§3.1)             (§3.1)             journal records    keys (02 §4.3)
-        |
-   object identifiers (§4)
-```
-
-Five derived keys, not four — the key-ID key is easy to forget and is what every blob's store key is derived from, so a hierarchy that omits it describes a repository whose objects cannot be named.
-
-Requirements:
-
-- **AEAD suite**: AES-256-GCM where hardware AES is available, XChaCha20-Poly1305 otherwise. Both are permitted profiles; the profile is recorded per record. Unsupported or unsafe combinations are rejected at configuration time, not at write time.
-- **Password KDF**: Argon2id with parameters recorded in `/repository-format` so a future reader can reproduce them.
-- **Key generations** support cryptographic agility: new generations can be introduced without invalidating old records.
-- **Wrapping-key rotation** (changing the passphrase) rewrites only `/keys/*` — no repository data is touched. This is the common operation and it must be cheap.
-- **Data-key rotation** is a separate, explicitly invoked background rewrite. Conflating the two is a lesson from the prior art ([`00-overview.md` §5.4](00-overview.md#54-layered-repositories-over-a-minimal-blob-store)); users routinely believe changing a password re-encrypts their data, and the UI must say plainly that it does not.
-- Unattended agents may protect the KEK with an OS key store.
-
-### 2.1 The write-only hierarchy (format v2)
-
-A write-only repository ([ADR-0042](../adr/0042-write-only-repositories.md);
-format spec [03 §9](../../specifications/repository-format/03-keys.md)) has
-no master key, no KEK, no wrap step and no `/keys/` object. Everything
-derives from the passphrase:
-
-```text
 User passphrase  +  KDF salt & parameters (recorded in /repository-format)
        |
   Argon2id  →  root (never stored, never wrapped)
        |
        +── HKDF "fbp/seal/v2"        → X25519 scalar → sealing PUBLIC key (in the descriptor)
        +── HKDF "fbp/metadata/v2"    ─┐
-       +── HKDF "fbp/signing/v2"      ├─ the WRITE BUNDLE: what the service
+       +── HKDF "fbp/signing/v2"      ├─ the WRITE CREDENTIAL: what the service
        +── HKDF "fbp/content-id/v2"   │  holds — browse, plan, dedup, trim,
        +── HKDF "fbp/key-id/v2"      ─┘  replicate, verify structure, and write
+       +── HKDF "fbp/reclaim/v2"     → the reclaim authority (deletion), withheld; public half in the credential
+       +── HKDF "fbp/claim/v2"       → the claim key (replica ownership), withheld; public half in the credential
+
+  metadata key[g]  = HKDF(metadata sub-root, "fbp/metadata-generation/v2" ‖ g)   → per-blob keys (§3.1), store blob keys (02 §4.3)
+  signing seed[g]  = HKDF(signing  sub-root, "fbp/signing-generation/v2"  ‖ g)   → snapshot, index and journal signatures
+  content-ID key                                                                 → object identifiers (§4)
 ```
+
+Every repository derives its whole key material from one passphrase ([ADR-0042](../adr/0042-write-only-repositories.md); format spec [03](../../specifications/repository-format/03-keys.md)). There is no master key, no key-encryption key, no wrap step and no stored key object: the descriptor's salt, parameters and public key plus the passphrase reproduce everything, and the machine that writes backups holds nothing that opens them. Format 1 — a random master key wrapped under a passphrase-derived key, with a symmetric data-key family beneath it — was withdrawn before any freeze ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)).
 
 Data blobs seal their records under a fresh random per-blob content key,
 wrapped to the sealing public key; their footers — the record tables, the
 structure plane — derive from the **metadata** class key, so the write
-bundle still reads every blob's own structure. The private scalar exists
-only while a passphrase entry is alive: setup, adoption of a moved
-archive, or a restore grant inside a source handle. Each HKDF domain is
-independently one-way (NFR-SEC-010): the whole write bundle in hand yields
-neither the root, the passphrase, the scalar, nor any sibling key. The
-descriptor's public-key copy is the passphrase verifier — derive and
-compare, no decryption — and rule 6 above is load-bearing at setup: a v2
+credential still reads every blob's own structure. The private scalar exists
+only while a passphrase entry is alive: setup, adoption of a moved archive,
+a direct-mode command, or a restore grant inside a source handle. Each HKDF
+domain is independently one-way (NFR-SEC-010): the whole write credential
+in hand yields neither the root, the passphrase, the scalar, nor any sibling
+key. The descriptor's public-key copy is the passphrase verifier — derive
+and compare, no decryption — and rule 6 above is load-bearing at setup: the
 passphrase can never change, and losing it loses the backup.
+
+Requirements:
+
+- **AEAD suite**: AES-256-GCM, the one admitted record profile ([03 §6](../../specifications/repository-format/03-keys.md#6-aead-suites)); the sealed content key uses the same suite over an X25519 agreement. Unsupported or unsafe combinations are rejected at configuration time, not at write time.
+- **Password KDF**: Argon2id with parameters recorded in `/repository-format` so a future reader can reproduce them.
+- **Key generations** support cryptographic agility: new generations can be introduced without invalidating old records.
+- **There is no passphrase change.** The passphrase is the root; changing it would orphan every sealed blob. The UI says so at creation rather than letting a user discover it later.
+- **Full rotation** is a separate, explicitly invoked background rewrite of every blob.
+- Unattended services hold the write credential and nothing else; no OS key store is involved ([ADR-0028 §9](../adr/0028-service-boundary-and-deployment-topologies.md), retired).
 
 ## 3. Nonce and key construction
 

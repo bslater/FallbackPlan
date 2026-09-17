@@ -21,7 +21,7 @@ Encrypted output is indistinguishable from random, so compressing after encrypti
 
 It has a consequence worth stating plainly rather than burying: because stored lengths reflect compressed sizes, they leak information about content. Compressed size fingerprints file types and, for some inputs, individual files. A store operator sees this legitimately — it is not a leak through a mistake, it is the price of compressing at all. → [T-11](../../docs/threat-model.md#t-11-metadata-side-channels)
 
-An optional record-padding policy for high-sensitivity backup sets is under consideration ([Q10](../../docs/open-questions.md#q10--padding-policy)); it is not part of format v1. Where padding matters more than storage, the honest answer today is to disable compression for that backup set, which removes the channel entirely at a cost in space.
+An optional record-padding policy for high-sensitivity backup sets is under consideration ([Q10](../../docs/open-questions.md#q10--padding-policy)); it is not part of the format. Where padding matters more than storage, the honest answer today is to disable compression for that backup set, which removes the channel entirely at a cost in space.
 
 ## 3 The storage threshold
 

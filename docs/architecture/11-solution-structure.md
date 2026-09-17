@@ -38,7 +38,6 @@ FallbackPlan.slnx
 │   │                                         gate live here — see §2
 │   ├── FallbackPlan.Api/                     ✓ command contract + local transport,
 │   │                                         hosted by Agent, consumed by clients
-│   ├── FallbackPlan.Keystore/                ✓ platform unlock (ADR-0028 §9)
 │   ├── FallbackPlan.Web/                     ✓ local web console (ADR-0036)
 │   ├── FallbackPlan.Desktop/
 │   ├── FallbackPlan.Cli/                     ✓

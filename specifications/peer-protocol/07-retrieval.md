@@ -111,9 +111,9 @@ repository by name. The exit is the claim ([03 §6](03-replication.md#6-the-clai
 which re-points the attribution before retrieval is attempted; the claim
 refuses in these same identical terms and for this same reason.
 
-Within an authorised replica every key is servable, `keys/` included: the
-key objects are the owner's own passphrase-wrapped bytes, indistinguishable
-in sensitivity from every other object the destination already holds for it.
+Within an authorised replica every key is servable, the descriptor
+included: it carries only public parameters, indistinguishable in
+sensitivity from every other object the destination already holds for it.
 
 ## 5 Flow and termination
 

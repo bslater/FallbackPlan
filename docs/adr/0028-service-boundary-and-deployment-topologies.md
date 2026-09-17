@@ -281,6 +281,20 @@ neither is known.
 
 ### 9. Unlock: the service holds key material, released by the OS keystore
 
+> **Amended 2026-09 — retired.** The service holds no passphrase and no
+> keystore entry. Format 1 was withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) and with it the
+> only archive a passphrase could open; every set opens with the write
+> credential first-run setup stores ([ADR-0044](0044-first-run-setup.md)),
+> which publishes and cannot read content back ([ADR-0042 §5](0042-write-only-repositories.md)).
+> The `unlock` and `lock` verbs and the platform keystore project are
+> gone, and `--passphrase-env` on `run`, `sync` and `verify-destination`
+> is refused by name rather than ignored, so nobody is left believing the
+> service holds what it does not. The three bounding rules below hold
+> more strongly than before: key material that never enters the process
+> cannot cross its boundary. The consequence this section stated plainly
+> — *an attacker who obtains the service account obtains the backups* —
+> is no longer true; T-19 in the threat model records what is.
+
 The service obtains the repository passphrase or wrapped key material from the
 platform keystore — **DPAPI** (Windows), **Keychain** (macOS), **kernel keyring
 or an equivalent** (Linux) — scoped to the service account, and unlocks itself
@@ -568,4 +582,5 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Amended | §5's "no password, no token file, no port" is scoped explicitly to the connection: [ADR-0045](0045-client-authentication.md) adds person-identity inside the already-authenticated channel, with no new listener and a session that is never written to disk |
 | 2026-08 | Amended | A connection's death cancels its in-flight command: the pump reads ahead while a command runs, end of stream fires the command's token — the one the reader lane already registers — and the abandonment is one log line (3606) instead of a seven-hour "success" and an unrelated-looking broken pipe |
 | 2026-08 | Amended | The several-archives amendment is qualified for direct-ship sets ([ADR-0046](0046-direct-to-destination-publication.md)): the writer role attaches to the set's metadata store, whose local path is deliberately not an openable repository — the destination copies are, and "a repository path is a repository path" narrows to them |
+| 2026-09 | Amended | §9 retired: the service holds no passphrase and no keystore entry, `unlock`/`lock` are gone, and the verbs that ran under a passphrase refuse the flag by name. Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
 | 2026-09 | Conformance fix | §3's rule — "the CLI connects to the service when one is running" — did not hold for the verb it matters most for. The backup verb, given a set name, demanded --repo, which means direct mode, which that same running service refuses because it holds the writer role; --connect reached only a *remote* service. So asking your own service to run your own configured set had no route, and the console's run_backup had no CLI equal. The machinery was already there: the read verbs route through `OperationGateway.OpenServiceOnlyAsync`, and backup now takes the same branch when no repository is named. An ad-hoc root with a service running is refused by name rather than by missing flag, and with nothing listening the refusal states both ways forward, as §4 requires |

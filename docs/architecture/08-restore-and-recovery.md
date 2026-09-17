@@ -63,7 +63,7 @@ A displaced file goes into a directory namespaced by the restore run. A single s
 
 ## 4. Recovery kit
 
-The recovery kit is what makes clean-machine recovery possible, and it is a release gate ([`../requirements/functional.md`](../requirements/functional.md#recovery-kit)). The original proposal defined it in a single sentence and left its most important property — whether it contains key material or *wrapped* key material — open. Those have completely different consequences if a kit is stolen.
+The recovery kit is what makes clean-machine recovery possible, and it is a release gate ([`../requirements/functional.md`](../requirements/functional.md#recovery-kit)). The original proposal defined it in a single sentence and left its most important property — whether it contains key material or *wrapped* key material — open. Those have completely different consequences if a kit is stolen. The answer, since format 1 went ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), is *neither*: a kit carries no key material of any kind, because a repository stores none.
 
 ### 4.1 Contents
 
@@ -73,8 +73,8 @@ The recovery kit is what makes clean-machine recovery possible, and it is a rele
 | Minimum recovery-tool version | Refuse rather than misread | No |
 | Repository ID | Identifies which repository this opens | Low |
 | Repository format profile | Lets the tool check compatibility before starting | No |
-| **Wrapped** repository master key | The key material, encrypted under the KEK | Yes — but useless without the passphrase |
-| KDF parameters (Argon2id salt, memory, iterations, parallelism) | Reproduces the KEK from the passphrase | No |
+| Sealing public key | The wrong-passphrase verifier: derive from the passphrase, compare | No |
+| KDF parameters (Argon2id salt, memory, iterations, parallelism) | Reproduces the root from the passphrase | No |
 | Destination descriptors | Where the repository lives — endpoint, bucket/container, prefix. For a direct-ship set this list is the **only** road back: there is no local archive behind it, so a stale list costs the address of the backup, not merely convenience ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) | Low |
 | Issuing device identity (public) | Names the device that created the kit | No |
 | Issue timestamp | Detects an outdated kit | No |
@@ -97,7 +97,7 @@ Both carry identical content. Both embed their own instructions, on the assumpti
 
 ### 4.5 The write-only kit (format v2)
 
-A write-only repository's kit ([ADR-0042](../adr/0042-write-only-repositories.md)) carries **no key material at all** — not even wrapped: no key object exists to carry. It holds the repository id, format 2, the sealing public key, the KDF salt and parameters, and the destinations — purely "where the repository is and how to re-derive". The passphrase is the one factor; `RecoverySession` derives the whole authority from it against the kit's recorded parameters and proves it by public-key equality. A stolen v2 kit yields strictly less than a stolen v1 kit (which at least carried a wrapped key to attack offline): it yields an address and a public key.
+Every kit is this kit ([ADR-0042](../adr/0042-write-only-repositories.md)): it carries **no key material at all** — no key object exists to carry. It holds the repository id, the format version, the sealing public key, the KDF salt and parameters, and the destinations — purely "where the repository is and how to re-derive". The passphrase is the one factor; `RecoverySession` derives the whole authority from it against the kit's recorded parameters and proves it by public-key equality. A stolen kit yields an address and a public key, nothing to attack offline.
 
 ### 4.6 Restore grants (format v2)
 

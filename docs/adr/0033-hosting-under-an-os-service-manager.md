@@ -31,6 +31,8 @@ Two things ADR-0028 already settled make this a small piece of work rather than 
 
 **Provisioning stays an explicit, out-of-band step.** The generated artifact names the account the service runs as, and the printed guidance states the rule ADR-0028 §9 already implies: run `unlock` once *as that same account* before the service starts, or the boot-started process exits 1 with no passphrase. The keystore is scoped to the account, so the operator seeding it and the service reading it must be the same identity.
 
+> **Amended 2026-09.** The step is `setup`, not `unlock` ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md) retired; format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). The rule is the same shape: run first-run setup once *as the account the service runs as*, so the write credential it stores is readable at boot with nobody present. `install`'s printed guidance says so.
+
 The generated unit uses `Type=simple` (systemd) / a plain LaunchDaemon (launchd) / `start= auto` (Windows). There is no `sd_notify` readiness protocol and no shutdown deadline: the run loop has no readiness handshake to report, and the writer lock is released by the OS on death, so a manager that kills a slow stop loses nothing it needs a heuristic to recover.
 
 ## Consequences
@@ -52,3 +54,4 @@ The generated unit uses `Type=simple` (systemd) / a plain LaunchDaemon (launchd)
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | The agent hosts under systemd, launchd and the Windows SCM over the existing cancellation token; `install` generates the registration artifact for each. ADR-0028 stopped at the boundary; this carries the process across it. |
+| 2026-09 | Amended | The out-of-band provisioning step is `setup`, not `unlock`; the printed guidance names it |

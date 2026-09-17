@@ -233,6 +233,11 @@ and "whoever can open this repository" name the same person.
 | An installation kit (the provisioned default) | `WriteOnlyDerivation`'s installation root | `fbp/claim/v2` |
 | A per-repository kit (format v1) | the repository master key | `fbp/claim/v1` |
 
+> **Amended 2026-09.** The second row is gone with format 1
+> ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): `fbp/claim/v2` off the installation root is the only
+> claim key, and a format-1 kit is refused by name rather than yielding
+> one. The single-entry-point remark below now describes one shape.
+
 `Repository/RecoveryKitClaim` answers both through one entry point, because
 the person holding the kit should not have to know which kind they were given
 and the destination cannot tell either — it recorded a public key and nothing
@@ -342,5 +347,6 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | The `fbp/claim/v1` root went with format 1 ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); the installation's claim key is the only one |
 | 2026-09 | Amended (derivation and ceremony) | Decisions 1–3 built. [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) records two changes the attempt forced: §1's repository-derived claim key is unreachable by a claimant that has lost the repository, so the key is derived from the **installation** (`fbp/claim/v2`, with `fbp/claim/v1` for a format-v1 kit); and §2's nonce round trip is replaced by the session identifier from [ADR-0059](0059-session-bound-deletion-authority.md), with the claim naming no repository because the claimant holds no repository id. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Repository/RecoveryKitClaim` and `Application/ReplicaOwnerStore` carry it; `Hosts.Tests/PeerClaimTests` runs the drill. §3's operator re-attribution and §4 remain unbuilt |
 | 2026-09 | Proposed | In response to the 2026-09 architecture review's R2. Nothing is built: decisions 1–3 need a peer-protocol message, a new derivation and a ledger field; decision 4 was attempted and found to need the *installation* kit to carry a shape per set, because the per-repository builder has one caller and no configuration to read. The attempt did land one fix — `Repository.Format/RecoveryKit` — where the kit's version number doubled as its shape discriminator and would have misread the next version as an installation kit |

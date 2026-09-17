@@ -1,6 +1,6 @@
 # FallbackPlan repository format — specification
 
-**Format version:** 1 (draft) · **Status:** unfrozen — see [stability](#stability)
+**Format version:** 2 (draft) · **Status:** unfrozen — see [stability](#stability)
 
 ---
 
@@ -8,7 +8,7 @@
 
 The normative on-disk and on-store format for a FallbackPlan repository. It is written to be implementable by someone who has never read the project's architecture documents, in a language other than C#, without access to the reference implementation.
 
-That is not an aspiration. It is a release gate: NFR-COMP-004 and item 2 of the [format v1 freeze gate](../../docs/roadmap.md#format-v1-freeze-gate) require a reader written from this specification alone, by an author who did not write the format, to pass the conformance suite. If you find yourself unable to implement something from what is written here, that is a defect in this specification — please report it.
+That is not an aspiration. It is a release gate: NFR-COMP-004 and item 2 of the [format freeze gate](../../docs/roadmap.md#format-v1-freeze-gate) require a reader written from this specification alone, by an author who did not write the format, to pass the conformance suite. If you find yourself unable to implement something from what is written here, that is a defect in this specification — please report it.
 
 ## Authority
 
@@ -27,7 +27,7 @@ Where this specification and an architecture document disagree about **format**,
 | — | [Conventions](00-conventions.md) | Notation, byte order, primitive encodings, versioning and feature negotiation |
 | 01 | [Object layout](01-object-layout.md) | Store namespace, the `/repository-format` bootstrap object |
 | 02 | [Identifiers](02-identifiers.md) | Content identifiers, keyed object identifiers, blob identifiers |
-| 03 | [Keys](03-keys.md) | Key hierarchy, derivation, wrapping, generations |
+| 03 | [Keys](03-keys.md) | The root, the derivation tree, the write credential, generations |
 | 04 | [Records](04-record.md) | Record framing, AEAD, nonce and AAD construction |
 | 05 | [Blobs](05-blob.md) | Cleartext envelope, record sequence, recovery footer, digest |
 | 06 | [Manifests](06-manifests.md) | Segment references, file-version, tree, snapshot, policy, error |
@@ -60,7 +60,9 @@ These shape almost every decision in the documents that follow. Each links to it
 
 ## Stability
 
-Format version 1 is **not frozen**. Repositories created by pre-1.0 builds carry **no forward-compatibility guarantee** — a later build may be unable to read them, and may or may not ship a migration path.
+Format version 2 is **not frozen**. Repositories created by pre-1.0 builds carry **no forward-compatibility guarantee** — a later build may be unable to read them, and may or may not ship a migration path.
+
+Format version 1 — a random master key wrapped under a passphrase-derived key at `/keys/<key-id>` — was **withdrawn before any freeze**, with no installed base ([ADR-0014 amendment](../../docs/adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). The number is not reused: a reader that meets `format_version = 1` refuses it by name and says re-seeding is the remedy. The symmetric constructions format 1 defined ([03 §5](03-keys.md#5-per-blob-keys), [04](04-record.md), [05 §2](05-blob.md#2-cleartext-envelope)) survive unchanged as format 2's structure plane, which is why metadata blobs and standalone records still stamp `1` in their envelopes and associated data.
 
 Builds MUST warn at repository creation while this remains true. The format version is always recorded, so a build that cannot read a repository refuses it rather than misreading it.
 

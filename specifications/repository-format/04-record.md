@@ -53,9 +53,9 @@ A reader MUST validate `stored_length` against the limit **before allocating**, 
 nonce = 12-byte big-endian encoding of `ordinal`
 ```
 
-Format version 1 has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
+The format has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
 
-Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track. In a format-v2 data blob the record key is the blob's random sealed content key rather than a derived one ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); everything else in this document — nonce, AAD, framing, the read sequence — applies to it unchanged.
+Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track. In a data blob the record key is the blob's random sealed content key rather than a derived one ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); everything else in this document — nonce, AAD, framing, the read sequence — applies to it unchanged.
 
 ## 4 Associated data
 
@@ -64,6 +64,8 @@ AAD = repository_id ‖ u16(format_version) ‖ u8(object_type) ‖ object_id �
 ```
 
 Total: 16 + 2 + 1 + 32 + 4 = **55 bytes**.
+
+`format_version` here is the **container's** stamp, not the descriptor's: a sealed data blob carries `2`, and a symmetric container — a metadata blob, or a standalone record ([ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) Decision 1) — carries `1`, because the symmetric construction is the one format 1 defined and format 2 kept byte for byte. The stamp is authenticated data, so this is a fact about bytes already on disk rather than a choice: a reader deriving the other value opens nothing.
 
 This binds each record to its exact context. A record cannot be moved to a different ordinal, a different object type, a different repository, or replayed under a different format version without authentication failing. It is what defends against the substitution and splicing attacks in [T-3](../../docs/threat-model.md#t-3-object-substitution-and-splicing).
 
@@ -129,7 +131,7 @@ It MUST NOT substitute zeroes, skip the segment silently, or emit a partial file
 
 ## 8 Records are never split
 
-A record MUST be wholly contained in one blob in format version 1. When the open blob cannot accommodate a complete record within its maximum size, the writer seals it and starts the record in a new blob ([05 §5](05-blob.md#5-sealing)).
+A record MUST be wholly contained in one blob. When the open blob cannot accommodate a complete record within its maximum size, the writer seals it and starts the record in a new blob ([05 §5](05-blob.md#5-sealing)).
 
 This costs some blob-size variance and buys a great deal: recovery scanning never has to reassemble a record across objects, and a single fetched blob is always self-sufficient for the records it contains.
 

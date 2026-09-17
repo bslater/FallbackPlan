@@ -89,6 +89,15 @@ anything by itself.
 
 ### 3 An ordinary v1 service gains nothing, and the record says so
 
+> **Amended 2026-09.** There is no such service any more: format 1 was
+> withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), so every service holds a write credential
+> that deliberately carries no reclaim domain, and the limit this section
+> states plainly has closed. The split now defends every repository. The
+> retention floor stays the safeguard that holds against a compromised
+> *grant* — a run's authority is still a run's — which is why
+> [architecture 07 §5](../architecture/07-retention-and-gc.md#5-destructive-change-safeguards)
+> still calls it the most valuable of its measures.
+
 A v1 service holds the master key. It can derive the reclaim key as easily as
 the signing key, so against a fully compromised v1 service this decision
 defends nothing at all.
@@ -304,4 +313,5 @@ nothing about cloud IAM.
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R4, the last of its P0 findings. Narrows [ADR-0020 §3](0020-ed25519-signing-key-semantics.md) for keyless destinations and gives FR-GC-008 its first mechanism |
 | 2026-09 | Amended (gate and scope) | Amendment at §5: the peer half's requirement to sign was gated on the negotiated `signed-retention` feature, which the party it defends against decides whether to offer — so an unsigned, freshly composed drop-list was obeyed by a spoke that had simply been told not to ask. §4 of this record had already rejected exactly that shape of gate on the repository plane. [ADR-0059](0059-session-bound-deletion-authority.md) moves the gate to the reclaim public key the spoke recorded, extends the signature to cover the session identifier, and states the general rule in [02 §6](../../specifications/peer-protocol/02-session.md#6-feature-negotiation). `Hosts.Tests/PeerRetentionReplayTests` holds both |
+| 2026-09 | Amended | §3's limit closed: format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), so no service derives the reclaim key and the split defends every repository |
 | 2026-09 | Amended (the peer instruction rides the grant) | [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant): a write-only set's scheduled sync sent its peer instruction unsigned and was refused whole on every pass. The instruction now rides the granted retention run, and the scheduled sync pushes whole copies and names the grant it waits on. `Retention.Tests/PeerRetentionTests` |

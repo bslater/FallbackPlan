@@ -1,5 +1,7 @@
 # FallbackPlan recovery kit — formats v1 and v2
 
+> **Repository format 1 is withdrawn** ([ADR-0014 amendment](../../docs/adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). A kit for a format-1 repository — one whose key 5 carries a `FBPKKEYS` key object — still **parses** under §2 and §3, because the wire shape is pinned by the conformance vectors, but nothing can **open** it: the tool refuses it by name. The sentences below that describe unwrapping that key object describe a shape that no longer exists on disk and are kept only for the parser's sake.
+
 **Normative.** Decision record: [ADR-0013](../../docs/adr/0013-recovery-kit.md) (contents and representations), [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) (phase-1 wave G2). Conventions — deterministic CBOR, base32 rendering, length limits — are inherited from [repository-format 00](../repository-format/00-conventions.md).
 
 The kit is the artefact a user holds when everything else is gone: it must survive a printer, a filing cabinet, a decade, and a person typing it back in ([ADR-0013](../../docs/adr/0013-recovery-kit.md)). Together with the passphrase — which the kit **never** contains — it opens the repository on a clean machine.
@@ -27,7 +29,7 @@ The body is one deterministic-CBOR map ([repository-format 00 §4](../repository
 | 2 | text | `minimum_tool_version` — lowest recovery-tool version able to process this kit, `major.minor.patch` |
 | 3 | bytes[16] | `repository_id` |
 | 4 | u16 | `repository_format_version` |
-| 5 | bytes | `key_object` — the **verbatim `FBPKKEYS` key object** ([repository-format 03 §3](../repository-format/03-keys.md#3-the-key-object)), byte-identical to the repository's `/keys/<key-id>` object |
+| 5 | bytes | `key_object` — the **verbatim `FBPKKEYS` key object** ([repository-format 03 §3](../repository-format/03-keys.md#3-the-key-object)), byte-identical to the format-1 repository's `/keys/<key-id>` object — withdrawn with format 1 |
 | 6 | map | `kdf_parameters` — `{1: memory_kib u32, 2: iterations u32, 3: parallelism u8, 4: salt bytes[16]}`, from the repository descriptor |
 | 7 | array | `destinations` — array of maps `{1: kind text, 2: endpoint text, 3: container text, 4: prefix text}`; informational, says *where*, never *how to authenticate* |
 | 8 | bytes[16] | `issuing_device_id` — public identity of the device that generated the kit |
@@ -123,7 +125,7 @@ The QR representation encodes the framed binary (§3) directly in **byte mode**,
 ## 6 Using a kit
 
 1. Parse (§3/§4); verify checksum, version, and field constraints.
-2. Derive the KEK from the passphrase and key 6's parameters ([03 §2](../repository-format/03-keys.md#2-key-encryption-key)).
+2. Derive the KEK from the passphrase and key 6's parameters (the Argon2id of [03 §2](../repository-format/03-keys.md#2-the-root)).
 3. Unwrap key 5 exactly as repository-open step 3 ([03 §3](../repository-format/03-keys.md#3-the-key-object)). A wrong passphrase and a tampered key object are indistinguishable, by design.
 4. Reach the store named by key 7 (credentials come from the operator, never the kit), then proceed as an ordinary reader — including catalogue rebuild and forensic rebuild if the index plane is gone.
 
