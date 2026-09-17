@@ -58,6 +58,7 @@ public static class AgentHost
                                             [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]
+                  fallbackplan-agent reattribute --state <dir> --repository <hex> --to <fingerprint>
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
@@ -129,6 +130,14 @@ public static class AgentHost
                 --passphrase-env: the service holds the key that publishes, not
                 the key that authorises a deletion, and the passphrase derives
                 that authority for the one run (ADR-0055).
+
+                `reattribute` is this machine's operator re-pointing a replica a
+                peer stores here at a different paired device (ADR-0053 §3) —
+                for a replica attributed before its owner's claim key was
+                published, which the passphrase alone cannot claim back. A
+                replica that carries a claim key is refused: its owner claims it
+                with the passphrase. Through the running service when one is
+                listening; directly on the ledger otherwise.
                 """);
             return 0;
         }
@@ -209,10 +218,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -273,6 +282,16 @@ public static class AgentHost
         if (args[0] == "notices")
         {
             return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // `reattribute` re-points a replica stored here (ADR-0053 §3), routed
+        // like `notices`: the live service's ledger when one is listening,
+        // the file when none is — never both, which is the one thing that
+        // would make the override silently undone.
+        if (args[0] == "reattribute")
+        {
+            return await ReattributeAsync(stateDirectory, Get("--repository"), Get("--to"), output, error, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1267,6 +1286,79 @@ public static class AgentHost
             output,
             [.. notices.Unacknowledged.Select(notice => (notice.Id, notice.RaisedAt, notice.Message))]);
         return 0;
+    }
+
+    private static async Task<int> ReattributeAsync(
+        string stateDirectory,
+        string? repositoryId,
+        string? to,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || string.IsNullOrWhiteSpace(to))
+        {
+            error.WriteLine("error: usage is `reattribute --state <dir> --repository <hex> --to <fingerprint>`.");
+            return 1;
+        }
+
+        ServiceResult result;
+        try
+        {
+            // The running service's ledger is the one its listener serves
+            // from (ADR-0053 §3): a second writer on replica-owners.json
+            // beside it would move the file while the live gate went on
+            // refusing from what it read at start — and the next offer the
+            // service recorded would write the override away again.
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+            result = await client.ExecuteAsync(new ReattributeReplicaCommand(repositoryId, to), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (result is ServiceError { Reason: ServiceErrorReason.Refused } gate
+                && gate.Message.Contains("signed in", StringComparison.Ordinal))
+            {
+                // The service's socket wants a signed-in owner and this verb
+                // carries no session. Said plainly, with the two honest ways
+                // on — and never the file, which is the race above.
+                error.WriteLine($"error: {gate.Message}");
+                error.WriteLine(
+                    "The running service answers this verb only to a signed-in owner. Re-point the replica from "
+                    + "the console (Pairings → Replicas stored here), or stop the service and run this verb again: "
+                    + "with no service listening it edits the ledger directly.");
+                return 1;
+            }
+        }
+        catch (ServiceConnectionException)
+        {
+            // No service holds the state directory; the ledger is ours to touch.
+            result = ReplicaReattribution.Apply(
+                FallbackPlan.Application.ReplicaOwnerStore.Open(stateDirectory),
+                PeerGrantStore.Open(stateDirectory),
+                FallbackPlan.Application.NoticeStore.Open(stateDirectory),
+                repositoryId,
+                to,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
+        switch (result)
+        {
+            case ConfigurationChangeResult changed:
+                foreach (var line in changed.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+
+            case ServiceError refusal:
+                error.WriteLine($"error: {refusal.Message}");
+                return 1;
+
+            default:
+                error.WriteLine($"error: the service answered a re-attribution with {result.GetType().Name}.");
+                return 1;
+        }
     }
 
     private static void WriteNotices(TextWriter output, IReadOnlyList<(string Id, ulong RaisedAt, string Message)> pending)

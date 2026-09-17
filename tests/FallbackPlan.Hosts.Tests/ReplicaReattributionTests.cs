@@ -200,6 +200,60 @@ public sealed class ReplicaReattributionTests : IDisposable
         Assert.IsTrue(claimable.Claimable);
     }
 
+    [TestMethod]
+    public async Task TheAgentVerb_AServiceIsListening_GoesThroughItsLiveStore()
+    {
+        // The verb's routed arm (the `notices` shape): with a service
+        // holding the state directory, the re-point reaches the service's
+        // own ledger — the one its listener serves from — and never the
+        // file beside it, which a second writer would race.
+        _ = await StartServiceAsync();
+        var rebuilt = PairPeer("rebuilt");
+        await using var socket = FallbackPlan.Api.Transport.LocalServiceListener.Start(_local!, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync, "reattribute", "--state", _harness.StateDirectory,
+            "--repository", RepositoryIdHex, "--to", rebuilt.Identity.Fingerprint);
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.Contains("rebuilt", result.Output, StringComparison.Ordinal);
+
+        // Served by the live listener without a restart — the proof that
+        // the verb went through the service and not around it.
+        await OpenReplicaAsync(rebuilt);
+        Assert.IsTrue(_runtime!.Notices.Unacknowledged.Any(
+            notice => notice.Key == $"replica-reattributed:{RepositoryIdHex}"));
+    }
+
+    [TestMethod]
+    public async Task TheAgentVerb_AServiceWantsASignedInOwner_SaysSoAndTouchesNothing()
+    {
+        // The installation has accounts, so the service's socket answers
+        // only a signed-in owner (FR-USR-001), and this verb carries no
+        // session. The honest outcome is the service's refusal with the two
+        // ways on named — never a fallback to the file, which would be the
+        // race the routed arm exists to avoid.
+        _ = await StartServiceAsync();
+        var rebuilt = PairPeer("rebuilt");
+        var users = UserStore.Open(_harness.StateDirectory);
+        var sessions = new SessionRegistry();
+        await using var socket = FallbackPlan.Api.Transport.LocalServiceListener.Start(
+            () => new AuthenticatingService(_local!, users, sessions, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance),
+            _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync, "reattribute", "--state", _harness.StateDirectory,
+            "--repository", RepositoryIdHex, "--to", rebuilt.Identity.Fingerprint);
+
+        Assert.AreEqual(1, result.ExitCode, result.Output);
+        Assert.Contains("signed in", result.Error, StringComparison.Ordinal);
+        Assert.Contains("console", result.Error, StringComparison.Ordinal);
+        Assert.AreNotEqual(rebuilt.Identity.Fingerprint, _runtime!.ReplicaOwners.Find(RepositoryIdHex)!.Fingerprint);
+        Assert.AreNotEqual(
+            rebuilt.Identity.Fingerprint,
+            ReplicaOwnerStore.Open(_harness.StateDirectory).Find(RepositoryIdHex)!.Fingerprint);
+    }
+
     private async ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command) =>
         await _local!.ExecuteAsync(command, Timeout);
 
