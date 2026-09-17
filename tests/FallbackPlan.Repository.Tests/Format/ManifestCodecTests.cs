@@ -8,7 +8,7 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.Format;
 
 /// <summary>
-/// The manifest codecs (specification 06; FR-MAN-003, FR-ARCH-010,
+/// The manifest codecs (specification 06; FR-MAN-003, FR-MAN-018, FR-ARCH-010,
 /// NFR-PORT-003): round-trips are exact, unknown keys are rejected so
 /// physical location has nowhere to hide (exit criteria 2 and 9), the
 /// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the

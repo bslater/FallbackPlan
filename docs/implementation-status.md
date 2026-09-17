@@ -84,6 +84,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0058--what-the-adapter-does-not-carry) |
 | [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
+| [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the policy manifest records the set's shape, `discover_archives` / `adopt_archive` take an archive back under its original repository and set ids with the passphrase, the writer identity is resumed, the next backup is incremental; console, CLI and peers; contract 1.30 | Built | `Repository.Format/Manifests/PolicyManifest` · `Agent/ServiceCommandHandler.Adoption.cs` · `Application/LocalState` · `Web/ConsoleRestoreGate` · `Cli/CliApplication` · `Cli/OperationGateway` · `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests`, `Cli.Tests/AdoptVerbValidationTests`, `Repository.Tests/ManifestCodecTests` · [notes](#0061--the-rebuilt-machine-resumes) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -484,7 +485,7 @@ Three limits worth stating:
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
 | [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims). For a `direct_ship` set the staging half of this arc is replaced by the direct-to-destination row below |
-| Direct-to-destination arc | Partly built ([ADR-0046](adr/0046-direct-to-destination-publication.md), [ADR-0047](adr/0047-backup-pool-and-priorities.md)): the ship sink and metadata store, destination-backed restore/verify/retention reads, migration and staging retirement, the pool with priorities and true suspend/resume, and the kill sweep — the trimming drill run, the flag on the contract and console, and new local-path sets born direct-ship — the peer write adapter is the one remaining tail; see [0046](#0046--the-set-that-never-stages) |
+| Direct-to-destination arc | Partly built ([ADR-0046](adr/0046-direct-to-destination-publication.md), [ADR-0047](adr/0047-backup-pool-and-priorities.md)): the ship sink and metadata store, destination-backed restore/verify/retention reads, migration and staging retirement, the pool with priorities and true suspend/resume, and the kill sweep — the trimming drill run, the flag on the contract and console, and new local-path sets born direct-ship — the peer write adapter landed as [ADR-0058](adr/0058-peer-write-adapter.md), and a rebuilt machine adopts a destination's archives back under their original ids ([ADR-0061](adr/0061-adopt-a-destinations-archives.md)); see [0046](#0046--the-set-that-never-stages) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
 | 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
 | 5 — Legacy archive import | Not started, gated on legal review |
@@ -618,11 +619,43 @@ refused by name — and is green on the Release binaries.
 are the in-process halves; `Hosts.Tests/PeerClaimTests` is the peer half,
 through [ADR-0053 Amendment 2](adr/0053-peer-claim-and-configuration-recovery.md).
 
-**What is not built, and is named in the record:** the flow that would let a
-rebuilt machine be pointed at an existing destination and adopt what it finds
-there under the original repository ids. Until it exists, a person who has
-forgotten where their backups are holds a passphrase that opens nothing they
-can find.
+**The follow-up the record named is built as [ADR-0061](adr/0061-adopt-a-destinations-archives.md):**
+a rebuilt machine pointed at an existing destination discovers what it holds
+and adopts each archive under its original ids, resuming rather than
+re-seeding — see [0061](#0061--the-rebuilt-machine-resumes). What a person
+must still know is *where* the backups are: a forgotten destination is a
+passphrase that opens nothing they can find.
+
+### 0061 — the rebuilt machine resumes
+
+Built, over six commits, and the drill is the shortest way to say what it
+does: `eng/recovery-drill.sh` step 8 destroys the machine, sets it up again
+under the same passphrase and a new salt, points it at the vault with no sets
+declared, and the service discovers both archives by descriptor, adopts each
+under its original ids from the shape the archive records, and backs both
+sets up again — fourteen kilobytes into the same two archives, not the
+history.
+
+The archive carries the set's shape since this record: policy-manifest keys
+10 `roots`, 11 `set_name` and 12 `schedule`
+(`Repository.Format/Manifests/PolicyManifest`), optional, with the nine-key
+form byte-identical for every archive written before. Adoption
+(`Agent/ServiceCommandHandler.Adoption.cs`) proves the envelope's derivation
+against the descriptor before it writes anything, rebuilds the catalogue at
+the runtime's real path over the replica, copies the metadata, resumes the
+archive's writer identity when nothing here has published
+(`Application/LocalState`), stores the credential, appends the set as
+direct-ship and seeds the ledger at the replica's own head. The console
+derives in its own process against the discovered row
+(`Web/ConsoleRestoreGate`); the CLI's `discover` and `adopt` speak to the
+service, and its routed restore derives the grant per set
+(`Cli/OperationGateway`), because an adopted set keeps the salt its archive
+was born under. At a peer the owner inventory is the enumerator and the
+retrieval session the store; nothing below the resolve step changed for it.
+
+Not recorded, on purpose: retention, priority and destinations
+(FR-DEST-006). Not guessed at: a recorded root missing on this machine is
+reported and left for the person to edit.
 
 ### 0044 — the ceremony that two requirements have been waiting for
 

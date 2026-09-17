@@ -165,7 +165,10 @@ and this is the one case where the poor one is all that is available.
 > set is re-declared after a rebuild, and the flow the owner's recovery model
 > implies — add an existing destination, discover its archives by descriptor,
 > adopt them under their original ids — is the named follow-up, not this
-> record's.
+> record's. **Built as [ADR-0061](0061-adopt-a-destinations-archives.md):**
+> the shape travels in the archive itself (policy-manifest keys 10–12), and a
+> rebuilt machine adopts a claimed replica back under its original ids over
+> the retrieval session.
 
 Name, roots, schedule, retention, and the destinations it shipped to go into
 the recovery kit ([ADR-0013](0013-recovery-kit.md)), which is already the
@@ -401,7 +404,8 @@ only purpose is to carry sixteen public bytes the peer already holds.
 The set's shape was to travel in the kit. There is no kit; the set is
 re-declared after a rebuild, and the flow that would make that cheap — add an
 existing destination, discover its archives by descriptor, adopt them under
-their original ids with the passphrase — is the named follow-up. §4 is
+their original ids with the passphrase — is the named follow-up, since built
+as [ADR-0061](0061-adopt-a-destinations-archives.md). §4 is
 **will not do** as written, and the *Negative* consequence about a kit that
 goes stale goes with it.
 
@@ -452,6 +456,7 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | The intent of §4 is met otherwise: the set's shape travels in the archive's policy manifest and a rebuilt machine adopts a claimed replica back under its original ids ([ADR-0061](0061-adopt-a-destinations-archives.md)); `Hosts.Tests/PeerAdoptionTests` runs the drill after the claim. §3's operator re-attribution remains unbuilt |
 | 2026-09 | Amended (passphrase only) | [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else): the kit is withdrawn, so the claimant holds the passphrase and nothing else. The ceremony is two phases in one session — `ReplicationClaimOpen`, `ReplicationClaimParameters` (the destination serves the distinct KDF salts and costs behind its claimable replicas), a multi-entry `ReplicationClaim`, `ReplicationClaimAccepted` — with `replica-claim` redefined rather than versioned. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder` and `Cli/CliApplication` carry it; `Hosts.Tests/PeerClaimTests` runs the drill with the state directory destroyed. §4 closes as will-not-do |
 | 2026-09 | Amended | The `fbp/claim/v1` root went with format 1 ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); the installation's claim key is the only one |
 | 2026-09 | Amended (derivation and ceremony) | Decisions 1–3 built. [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) records two changes the attempt forced: §1's repository-derived claim key is unreachable by a claimant that has lost the repository, so the key is derived from the **installation** (`fbp/claim/v2`, with `fbp/claim/v1` for a format-v1 kit); and §2's nonce round trip is replaced by the session identifier from [ADR-0059](0059-session-bound-deletion-authority.md), with the claim naming no repository because the claimant holds no repository id. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Repository/RecoveryKitClaim` and `Application/ReplicaOwnerStore` carry it; `Hosts.Tests/PeerClaimTests` runs the drill. §3's operator re-attribution and §4 remain unbuilt |

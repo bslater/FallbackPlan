@@ -122,6 +122,12 @@ repository id with the passphrase* — does **not** exist yet.
 console mints a fresh set id. It is the named follow-up, not part of this
 record.
 
+> **Built as [ADR-0061](0061-adopt-a-destinations-archives.md) (2026-09).**
+> The archive records the set's shape, `discover_archives` lists a
+> destination's archives by descriptor alone, and `adopt_archive` takes one
+> back under its original ids with the passphrase — locally and at a peer,
+> from the console and the CLI. `eng/recovery-drill.sh` step 8 runs it.
+
 **The "no archive yet" window** — setup done, the state directory lost before
 the first backup — loses the salt for ever, and there is nothing to recover.
 Run setup again. The kit was pointless there too: a kit for an installation
@@ -193,4 +199,5 @@ nothing; withdrawing the kit makes the gap moot rather than closing it.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | §6's named follow-up is built as [ADR-0061](0061-adopt-a-destinations-archives.md): a rebuilt machine discovers and adopts a destination's archives under their original ids and resumes incrementally; `eng/recovery-drill.sh` step 8 is its drill |
 | 2026-09 | Accepted | Built as the last slice of the format-1 withdrawal. `Recovery/RecoverySession` opens from the passphrase and the descriptor through `Repository.Crypto/WriteOnlyDerivation`'s shared gate; the kit format, factory, codec, text form, vectors, fuzz seeds, specification, contract verb, setup state, status field, setup step, console endpoint and CLI export are deleted; contract 1.29; `eng/recovery-drill.sh` rewritten passphrase-only and green on the Release binaries; `Hosts.Tests/RecoveryHostTests` and `Repository.Tests/PassphraseDrillTests` are the in-process halves. Supersedes ADR-0013 |

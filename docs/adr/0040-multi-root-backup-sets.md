@@ -155,7 +155,7 @@ as the single-root top level always has.
   surface for something the tree already expresses better.
 
   > **Amended 2026-09.** A reader for the recorded roots now exists:
-  > adoption of a destination's archives after a rebuild (ADR-0061) needs
+  > adoption of a destination's archives after a rebuild ([ADR-0061](0061-adopt-a-destinations-archives.md)) needs
   > the set's shape — root paths, labels, name, schedule — to re-declare
   > the set the archive was written by, and the tree expresses none of the
   > paths. The roots are recorded on the **policy** manifest
@@ -171,4 +171,4 @@ as the single-root top level always has.
 |------|--------|------|
 | 2026-08 | Proposed | Written after the exploration that found the single root absent from the format and the five sharp constraints above |
 | 2026-08 | Accepted | Built end to end: engine adapter and intersection, schema 3, contract 1.10 with draft preview, upsert labels and re-anchoring, refusing runner, conservative domain, and the console's machine-wide tree with its compiler and live feedback |
-| 2026-09 | Amended | The policy manifest now records the roots' paths and labels, the set's name and its schedule (06 §7 keys 10–12) so a destination's archive can re-declare the set after a rebuild — ADR-0061; the rejected "`roots` array" alternative is annotated in place |
+| 2026-09 | Amended | The policy manifest now records the roots' paths and labels, the set's name and its schedule (06 §7 keys 10–12) so a destination's archive can re-declare the set after a rebuild — [ADR-0061](0061-adopt-a-destinations-archives.md); the rejected "`roots` array" alternative is annotated in place |
