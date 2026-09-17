@@ -378,9 +378,10 @@ public sealed partial class ServiceCommandHandler
 
         RecordedShape shape;
         var survey = await FanOut.PublicationSurveyAsync(replicaStore, cancellationToken).ConfigureAwait(false);
-        using (var reader = await OpenMetadataReaderAsync(replicaStore, repository, cancellationToken).ConfigureAwait(false))
-        using (var catalogue = await RebuildCatalogueAsync(
-            replicaStore, repository, cataloguePath, reader, warnings, cancellationToken).ConfigureAwait(false))
+        using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replicaStore, repository, cancellationToken)
+            .ConfigureAwait(false))
+        using (var catalogue = await CatalogueRebuild.OpenRebuiltAsync(
+            runtime, replicaStore, repository, cataloguePath, reader, warnings, cancellationToken).ConfigureAwait(false))
         {
             shape = await ReadRecordedShapeAsync(catalogue, reader, replicaStore, repository, cancellationToken)
                 .ConfigureAwait(false);

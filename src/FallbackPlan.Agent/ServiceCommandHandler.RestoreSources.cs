@@ -466,9 +466,10 @@ public sealed partial class ServiceCommandHandler
             Directory.CreateDirectory(cacheDirectory);
             var cataloguePath = Path.Combine(cacheDirectory, "catalogue.db");
 
-            using (var reader = await OpenMetadataReaderAsync(store, repository, cancellationToken).ConfigureAwait(false))
-            using (var catalogue = await RebuildCatalogueAsync(
-                store, repository, cataloguePath, reader, warnings, cancellationToken).ConfigureAwait(false))
+            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(store, repository, cancellationToken)
+                .ConfigureAwait(false))
+            using (var catalogue = await CatalogueRebuild.OpenRebuiltAsync(
+                runtime, store, repository, cataloguePath, reader, warnings, cancellationToken).ConfigureAwait(false))
             {
                 if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))
                 {
@@ -496,85 +497,6 @@ public sealed partial class ServiceCommandHandler
         catch
         {
             TryDeleteCache(cacheDirectory);
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// A reader over a repository's metadata blobs, loaded and ready to
-    /// answer manifest reads (the metadata-class footers only). The caller
-    /// disposes.
-    /// </summary>
-    private static async ValueTask<RepositoryReader> OpenMetadataReaderAsync(
-        Storage.Abstractions.IObjectStore store, OpenedRepository repository, CancellationToken cancellationToken)
-    {
-        var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
-        try
-        {
-            var metadataBlobs = new List<Storage.Abstractions.ObjectKey>();
-            await foreach (var blob in store.ListAsync(
-                Storage.Abstractions.ObjectPrefix.Parse("blobs/meta/"),
-                Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
-            {
-                metadataBlobs.Add(blob.Key);
-            }
-
-            await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
-            return reader;
-        }
-        catch
-        {
-            reader.Dispose();
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Rebuilds a catalogue at <paramref name="cataloguePath"/> from the
-    /// repository in <paramref name="store"/>: index-plane rebuild for
-    /// locations, manifest projection for snapshots and paths (FR-MAN-002),
-    /// through a <paramref name="reader"/> already loaded with the metadata
-    /// blobs. The restore source builds its throwaway copy this way and
-    /// archive adoption (ADR-0061) builds the set's real one. Rebuild
-    /// findings land in <paramref name="warnings"/>; the caller disposes the
-    /// open catalogue.
-    /// </summary>
-    private async ValueTask<CatalogueDb> RebuildCatalogueAsync(
-        Storage.Abstractions.IObjectStore store,
-        OpenedRepository repository,
-        string cataloguePath,
-        RepositoryReader reader,
-        List<string> warnings,
-        CancellationToken cancellationToken)
-    {
-        var generation = Math.Max(
-            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
-        var catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId, runtime.LoggerFor<CatalogueDb>());
-        try
-        {
-            // The index plane rebuilds the locations; no blob inventory is
-            // taken, because an entry naming a trimmed blob is re-answered
-            // honestly by the plan probe, which asks the store per blob
-            // (FR-RST-003).
-            var report = await new CatalogueRebuilder(
-                new IndexLoader(
-                    store, repository.RepositoryId, repository.Credential, runtime.LoggerFor<IndexLoader>()),
-                runtime.LoggerFor<CatalogueRebuilder>())
-                .RebuildAsync(
-                    catalogue, generation, gapPatienceGenerations: 2,
-                    isSequenceAccountedAsync: null, cancellationToken)
-                .ConfigureAwait(false);
-
-            await CatalogueProjector.ProjectAsync(
-                catalogue, reader, store, repository.RepositoryId, repository.Keys,
-                repository.Credential, cancellationToken).ConfigureAwait(false);
-
-            warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
-            return catalogue;
-        }
-        catch
-        {
-            catalogue.Dispose();
             throw;
         }
     }

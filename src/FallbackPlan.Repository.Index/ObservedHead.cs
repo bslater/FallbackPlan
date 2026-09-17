@@ -75,7 +75,34 @@ public static class ObservedHead
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(index);
 
-        var head = index.ObservedHeadFor(writer);
+        return Math.Max(
+            index.ObservedHeadFor(writer),
+            await JournalHeadAsync(store, writer, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// The journal half of <see cref="OfAsync"/> on its own: the highest
+    /// sequence <paramref name="store"/> attests for <paramref name="writer"/>
+    /// in journal keys alone — one prefix listing, no reads, no key.
+    /// </summary>
+    /// <remarks>
+    /// What a fan-out pass asks a destination (ADR-0062): a destination
+    /// holds no index to load and the caller holds no credential for it, but
+    /// the journal key carries the sequence in the clear, so the question
+    /// "how far had this writer got, as far as this replica knows" costs a
+    /// listing. It is below <see cref="OfAsync"/> where the index attests
+    /// more than the journal does, and never above it.
+    /// </remarks>
+    /// <param name="store">The repository — or a replica of it — to ask.</param>
+    /// <param name="writer">The writer to ask about.</param>
+    /// <param name="cancellationToken">Cancels the listing.</param>
+    /// <returns>The highest journal sequence, or zero when the store holds none for the writer.</returns>
+    public static async ValueTask<ulong> JournalHeadAsync(
+        IObjectStore store, WriterId writer, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+
+        var head = 0UL;
 
         // The journal key's last segment IS the sequence, zero-padded to a
         // fixed width so ordinal listing order is numeric order. Reading it
