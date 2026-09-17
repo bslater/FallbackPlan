@@ -26,7 +26,7 @@ namespace FallbackPlan.Web.Tests;
 [TestClass]
 public sealed class SetupWizardScriptTests
 {
-    private static string AppJs()
+    internal static string AppJs()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FallbackPlan.slnx")))

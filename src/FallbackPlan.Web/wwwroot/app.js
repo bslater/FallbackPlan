@@ -2392,6 +2392,7 @@ function renderConfigBody() {
       <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
       <td>
         <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
+        ${destination.kind === "local-path" ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
         <button type="button" class="btn small" data-action="cfg-delete-dest" data-name="${esc(destination.name)}">Delete…</button>
       </td>
     </tr>`).join("");
@@ -3510,6 +3511,96 @@ Object.assign(actions, {
       if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return; }
       if (body?.outcome === "provisioned") {
         reportDialog("Write-only provisioned", body.lines ?? []);
+        refreshConfigData(); refreshStatus();
+      } else {
+        toast("bad", body?.detail ?? "The ceremony refused.");
+      }
+    });
+  },
+
+  // Adopting a destination's archives (ADR-0061): after a rebuild, point
+  // the product at the drive its backups are on, see what is there, and
+  // take a set back under its original ids. Discovery is credential-free;
+  // adoption is the write-only ceremony above, derived in the console
+  // process against the DISCOVERED archive's salt — the passphrase never
+  // crosses the command contract.
+  async "dest-discover"(el) {
+    const name = el.dataset.name;
+    await withBusy(el, async () => {
+      const result = await run({ command: "discover_archives", destinationName: name }, { errToast: "Discovery refused" });
+      if (!result || result.result !== "archives_discovered") return;
+      const rows = (result.archives ?? []).map(archive => `
+        <tr>
+          <td class="mono detail">${esc(archive.repositoryId.slice(0, 12))}…</td>
+          <td class="detail">${esc(archive.createdBy ?? "")}<br>${archive.createdAt ? esc(new Date(Number(archive.createdAt)).toLocaleString()) : ""}</td>
+          <td>${esc(String(archive.snapshotObjects ?? 0))}</td>
+          <td>${archive.ownedBySet ? `set '${esc(archive.ownedBySet)}'` : (archive.sameInstallation ? "this installation" : "nobody yet")}</td>
+          <td>${archive.ownedBySet ? "" : `<button type="button" class="btn small" data-action="dest-adopt" data-name="${esc(name)}" data-repo="${esc(archive.repositoryId)}">Adopt…</button>`}</td>
+        </tr>`).join("");
+      const warnings = (result.warnings ?? []).map(line => `<li>${esc(line)}</li>`).join("");
+      openDialog(`
+        <h3>Backups at '${esc(name)}'</h3>
+        <p class="dlg-sub">Every archive this destination holds, read from its descriptor alone. Adopting one
+        takes it back under its original ids with the passphrase it was written with; the next backup is
+        then incremental, not a fresh copy.</p>
+        ${rows ? `<table class="table"><thead><tr><th>Archive</th><th>Written by</th><th>Snapshots</th><th>Owned by</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<p class="detail">No archives here.</p>`}
+        ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
+        <div class="dlg-actions"><button type="button" class="btn" data-action="close-dialog">Close</button></div>`);
+    });
+  },
+
+  "dest-adopt"(el) {
+    const name = el.dataset.name;
+    const repo = el.dataset.repo;
+    openDialog(`
+      <h3>Adopt a backup from '${esc(name)}'</h3>
+      <p class="dlg-sub">Archive <span class="mono">${esc(repo.slice(0, 12))}…</span>. The set comes back as the
+      archive recorded it — name, folders, schedule, rules — and this service continues it. Enter the passphrase
+      the backup was written with; it is checked here, on this machine, before anything is sent.</p>
+      <label class="field" for="adopt-passphrase">Passphrase</label>
+      <input type="password" id="adopt-passphrase" autocomplete="current-password">
+      <label class="field" for="adopt-name">Set name <span class="detail">(leave blank to use the recorded name)</span></label>
+      <input type="text" id="adopt-name" autocomplete="off" spellcheck="false">
+      <ul class="warnings"><li>The passphrase can never change, and there is no reset and no export.
+      <b>If it is lost, this backup is unrecoverable.</b></li></ul>
+      <label class="check-row"><input type="checkbox" id="adopt-ack">
+        I understand that losing this passphrase loses the backup, permanently.</label>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" data-action="dest-adopt-go" data-name="${esc(name)}" data-repo="${esc(repo)}">Adopt</button>
+      </div>`);
+    document.getElementById("adopt-passphrase").focus();
+  },
+
+  async "dest-adopt-go"(el) {
+    const passphrase = document.getElementById("adopt-passphrase")?.value ?? "";
+    const acknowledged = document.getElementById("adopt-ack")?.checked ?? false;
+    const setName = document.getElementById("adopt-name")?.value.trim() ?? "";
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
+    if (!acknowledged) { toast("warn", "Adoption needs the loss acknowledgement."); return; }
+    await withBusy(el, async () => {
+      let response;
+      try {
+        response = await fetch("/api/adopt-archive", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({
+            destinationName: el.dataset.name, repositoryId: el.dataset.repo, passphrase, acknowledged,
+            setName: setName || null,
+          }),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const body = await safeJson(response);
+      if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return; }
+      if (body?.outcome === "adopted") {
+        const set = body.set ?? {};
+        const lines = [...(body.lines ?? [])];
+        if ((set.missingRoots ?? []).length) lines.push(`Folders not found on this machine: ${set.missingRoots.join(", ")}`);
+        reportDialog(`Backup set '${set.setName ?? ""}' adopted`, lines);
         refreshConfigData(); refreshStatus();
       } else {
         toast("bad", body?.detail ?? "The ceremony refused.");

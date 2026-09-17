@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Api;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
@@ -358,6 +359,76 @@ public static class ConsoleRestoreGate
             passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
 
         return new SetupAnswer(
+            GateOutcome.Verified,
+            Envelope: Convert.ToHexStringLower(
+                WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));
+    }
+
+    /// <summary>
+    /// The client half of archive adoption (ADR-0061 §5): derive against the
+    /// <em>discovered</em> archive's salt and parameters — not the
+    /// installation's, whose salt a rebuilt machine has just minted afresh —
+    /// prove the derivation against the discovered sealing public key, and
+    /// only then seal the write bundle to the service's recipient key. Pure:
+    /// nothing here touches the filesystem, because the facts came from the
+    /// service's discovery answer.
+    /// </summary>
+    /// <param name="archive">The discovered archive, as <c>discover_archives</c> listed it.</param>
+    /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
+    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
+    /// <returns>The envelope, or why it could not be made.</returns>
+    public static ProvisionAnswer BuildAdoptEnvelope(
+        DiscoveredArchiveDescriptor archive, string passphraseText, string grantRecipientHex)
+    {
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(passphraseText);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
+
+        if (!TryParseRecipient(grantRecipientHex, out var recipient))
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Unavailable,
+                "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                + "and try again (ADR-0042).");
+        }
+
+        byte[] salt, sealingPublicKey;
+        try
+        {
+            salt = Convert.FromHexString(archive.KdfSalt);
+            sealingPublicKey = Convert.FromHexString(archive.SealingPublicKey);
+        }
+        catch (FormatException)
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Unavailable,
+                $"Archive '{archive.RepositoryId}' was listed with derivation facts that do not parse — run discovery again.");
+        }
+
+        if (salt.Length != KekDerivation.SaltLength)
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Unavailable,
+                $"Archive '{archive.RepositoryId}' was listed with a salt of {salt.Length} bytes; {KekDerivation.SaltLength} are expected.");
+        }
+
+        var parameters = new Domain.Configuration.Argon2Parameters
+        {
+            MemoryKiB = archive.KdfMemoryKib, Iterations = archive.KdfIterations, Parallelism = archive.KdfParallelism,
+        };
+
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.OpenRepository);
+        if (!authority.Credential.SealingPublicKey.SequenceEqual(sealingPublicKey))
+        {
+            return new ProvisionAnswer(
+                GateOutcome.Wrong,
+                "The passphrase does not reproduce this archive's sealing key — it is not the passphrase "
+                + "this backup was written with. Nothing was sent.");
+        }
+
+        return new ProvisionAnswer(
             GateOutcome.Verified,
             Envelope: Convert.ToHexStringLower(
                 WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));

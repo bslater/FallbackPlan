@@ -199,6 +199,7 @@ public static class WebConsoleHost
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth, log));
         app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
         app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
+        app.MapPost("/api/adopt-archive", (HttpContext context) => AdoptArchiveAsync(context, clients, auth));
         app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
         app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
         app.MapPost("/api/password-check", (HttpContext context) => CheckPasswordAsync(context, auth));
@@ -388,6 +389,142 @@ public static class WebConsoleHost
     /// <param name="Detail">Why, when not provisioned.</param>
     /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
     private sealed record ProvisionResponse(string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
+
+    /// <summary>The page's adoption request (ADR-0061 §5).</summary>
+    /// <param name="DestinationName">The declared destination the archive was discovered at.</param>
+    /// <param name="RepositoryId">The discovered archive's repository id.</param>
+    /// <param name="Passphrase">The typed passphrase; it stops here.</param>
+    /// <param name="Acknowledged">The loss acknowledgement, collected before anything derives.</param>
+    /// <param name="SetName">An optional name to adopt the set under; blank takes the archive's recorded one.</param>
+    private sealed record AdoptRequest(
+        string? DestinationName, string? RepositoryId, string? Passphrase, bool Acknowledged, string? SetName = null);
+
+    /// <summary>The adoption endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>adopted</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not adopted.</param>
+    /// <param name="Lines">The service's statements, when adopted.</param>
+    /// <param name="Set">The set as adopted, when adopted.</param>
+    private sealed record AdoptResponse(
+        string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null, ArchiveAdoptedResult? Set = null);
+
+    /// <summary>
+    /// The adoption ceremony (ADR-0061 §5): the third endpoint permitted a
+    /// secret, holding the same line as the other two — Argon2id runs in
+    /// this process, against the <em>discovered</em> archive's salt, and
+    /// what goes to the service is the write bundle sealed to its published
+    /// recipient key. The derivation is proved against the discovered
+    /// sealing key before anything is sent, so a wrong passphrase is caught
+    /// where it was typed.
+    /// </summary>
+    private static async Task AdoptArchiveAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        AdoptRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<AdoptRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { DestinationName.Length: > 0, RepositoryId.Length: > 0, Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a destination name, a repository id and a passphrase are required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(AdoptResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        if (!request.Acknowledged)
+        {
+            await AnswerAsync(new AdoptResponse(
+                "refused",
+                "Adoption needs the loss acknowledgement: the passphrase can never change, and if it is "
+                + "lost the backup is unrecoverable.")).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult { RestoreGrantRecipient.Length: > 0 } description)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    "unavailable", "The service does not publish a grant-recipient key.")).ConfigureAwait(false);
+                return;
+            }
+
+            // The facts to derive against come from the service's own
+            // discovery, never from the page: the page names an id, the
+            // service says what that id's descriptor holds.
+            var discovered = await client.ExecuteAsync(
+                new DiscoverArchivesCommand(request.DestinationName), context.RequestAborted).ConfigureAwait(false);
+            if (discovered is ServiceError discoveryRefusal)
+            {
+                await AnswerAsync(new AdoptResponse("refused", discoveryRefusal.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (discovered is not ArchivesDiscoveredResult listing
+                || listing.Archives.FirstOrDefault(archive =>
+                    string.Equals(archive.RepositoryId, request.RepositoryId, StringComparison.OrdinalIgnoreCase)) is not { } target)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    "unavailable",
+                    $"Destination '{request.DestinationName}' does not list an archive '{request.RepositoryId}' — "
+                    + "discover again and pick one it shows.")).ConfigureAwait(false);
+                return;
+            }
+
+            var minted = ConsoleRestoreGate.BuildAdoptEnvelope(target, request.Passphrase, description.RestoreGrantRecipient);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    minted.Outcome == ConsoleRestoreGate.GateOutcome.Wrong ? "wrong" : "unavailable",
+                    minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new AdoptArchiveCommand(
+                    request.DestinationName, target.RepositoryId, minted.Envelope!,
+                    SetName: string.IsNullOrWhiteSpace(request.SetName) ? null : request.SetName.Trim()),
+                context.RequestAborted).ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                ArchiveAdoptedResult adopted => new AdoptResponse("adopted", Lines: adopted.Lines, Set: adopted),
+                ServiceError refusal => new AdoptResponse("refused", refusal.Message),
+                _ => new AdoptResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
     /// The write-only setup ceremony (ADR-0042 §4, §10): the second endpoint
