@@ -66,6 +66,11 @@ internal static class ReplicationInitiator
     /// avoid being asked about is a key this same session re-ships, because
     /// the declaration is also the push's diff. Hiding a loss repairs it.
     /// </remarks>
+    /// <param name="ConvergenceWithheld">
+    /// Whether a keep filter was given and then set aside on the inventory's
+    /// evidence (<see cref="PushAndConvergeAsync"/>'s <c>onInventory</c>): the
+    /// push went whole and no instruction was sent.
+    /// </param>
     public sealed record PushOutcome(
         long Committed,
         long Deleted,
@@ -73,7 +78,8 @@ internal static class ReplicationInitiator
         ulong? Headroom = null,
         long BytesSent = 0,
         long ResumedObjects = 0,
-        IReadOnlyCollection<string>? HeldKeys = null);
+        IReadOnlyCollection<string>? HeldKeys = null,
+        bool ConvergenceWithheld = false);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -124,6 +130,18 @@ internal static class ReplicationInitiator
     /// zero, which is what every build before this one did.
     /// </param>
     /// <param name="logger">Where a resumed — or refused — prefix is reported.</param>
+    /// <param name="onInventory">
+    /// Sees the destination's complete inventory once, after it is read and
+    /// before anything is pushed, and answers whether the keep filter may
+    /// still be applied. The inventory names every journal key the
+    /// destination holds, so this is where a source learns that the
+    /// destination attests history the source's own state has never heard
+    /// of ([ADR-0062](../../docs/adr/0062-the-destination-is-the-rollback-witness.md)
+    /// Amendment 1) — and a keep filter computed from that state would then
+    /// condemn the very history the destination is keeping safe. False sets
+    /// the filter aside for the whole session: the push goes whole and no
+    /// instruction is sent.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -133,7 +151,8 @@ internal static class ReplicationInitiator
         bool resumeNegotiated = false,
         ILogger? logger = null,
         ReadOnlyMemory<byte> sessionBinding = default,
-        ReadOnlyMemory<byte> claimPublicKey = default)
+        ReadOnlyMemory<byte> claimPublicKey = default,
+        Func<IReadOnlyCollection<string>, bool>? onInventory = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -150,6 +169,16 @@ internal static class ReplicationInitiator
                 .ConfigureAwait(false);
 
             var (held, headroom) = await ReadInventoryAsync(stream, cancellationToken).ConfigureAwait(false);
+
+            // Asked before the listing loop, because the filter gates the
+            // push as well as the drop half: a keep-set left on the push
+            // would still skip objects the destination is owed.
+            var convergenceWithheld = false;
+            if (onInventory is not null && !onInventory(held) && keeps is not null)
+            {
+                keeps = null;
+                convergenceWithheld = true;
+            }
 
             // What the destination part holds, when both sides agreed a cut
             // object may be finished rather than started again (ADR-0057). A
@@ -205,7 +234,8 @@ internal static class ReplicationInitiator
 
             if (keeps is null)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held);
+                return new PushOutcome(
+                    (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld);
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots

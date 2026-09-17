@@ -489,14 +489,71 @@ public static class FanOut
                     ? session.Binding
                     : default;
 
+            // The peer as the rollback witness (ADR-0062 Amendment 1). The
+            // inventory the peer declares at the start of the push names
+            // every journal key it holds, so the question the local-path
+            // pass asks with a listing is answered here from strings already
+            // in hand: the allocator is offered the peer's head for this
+            // writer and only ever rises. A rollback is the one case the
+            // filter must be set aside — computed from rolled-back metadata
+            // it would condemn the history the peer is keeping — and the
+            // hook's answer is what sets it aside for the session.
+            var attested = 0UL;
+            SequenceAdoption.Adopted? ahead = null;
+            bool OnInventory(IReadOnlyCollection<string> held)
+            {
+                attested = ObservedHead.JournalHeadOf(held, runtime.Writer);
+                ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
+                return ahead is null;
+            }
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
                 archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
                 reclaimPublicKey, reclaimSigner,
                 session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
                 runtime.LoggerFor(typeof(ReplicationInitiator)),
                 sessionBinding,
-                claimPublicKey)
+                claimPublicKey,
+                OnInventory)
                 .ConfigureAwait(false);
+
+            // The heal, for a direct-ship set whose metadata plane is behind
+            // the peer: over the retrieval session, dialled only for this,
+            // and keyed on the metadata plane so a heal that failed is
+            // retried on every pass until it succeeds. A staging set is not
+            // healed: what it lacks is content, and the peer keeps it.
+            string? healFailure = null;
+            if (archive.ShipSink is not null
+                && attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                healFailure = await HealFromPeerAsync(runtime, set, destination, archive, cancellationToken)
+                    .ConfigureAwait(false);
+                if (healFailure is null)
+                {
+                    Log.MetadataHealedFromDestination(runtime.LoggerFor(typeof(FanOut)), set.Name, destination.Name);
+                }
+                else
+                {
+                    Log.MetadataHealFailed(runtime.LoggerFor(typeof(FanOut)), set.Name, healFailure);
+                }
+            }
+
+            if (ahead is not null)
+            {
+                ReportDestinationAhead(
+                    runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs,
+                    peer: true);
+            }
+
+            if (healFailure is not null)
+            {
+                ledger.RecordFailure(
+                    set.Id, destination.Name, DestinationSyncState.Failed,
+                    $"the set's metadata is behind this destination and could not be copied back: {healFailure}",
+                    nowMs);
+                return;
+            }
 
             ReportShortfall(
                 runtime, set, destination.Name, priorSuccess, replicaRootMissing: false,
@@ -803,7 +860,8 @@ public static class FanOut
                 if (ahead is not null)
                 {
                     ReportDestinationAhead(
-                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs);
+                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs,
+                        peer: false);
                 }
 
                 if (healFailure is not null)
@@ -1194,18 +1252,48 @@ public static class FanOut
     /// shortfall notice's posture — the next pass is quiet because the
     /// writer moved, not because the rollback did not happen.
     /// </summary>
+    /// <summary>
+    /// Heals a direct-ship set from a peer's replica over the retrieval
+    /// session (ADR-0062 Amendment 1): one dial, the copy-back and the
+    /// catalogue rebuild the local-path heal performs, and the session
+    /// closed. A peer that will not serve the session, or drops it, is a
+    /// heal failure the next pass retries — never a finding.
+    /// </summary>
+    private static async ValueTask<string?> HealFromPeerAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var client = await PeerRetrievalClient.DialAsync(
+                runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
+                .ConfigureAwait(false);
+            return await runtime.HealFromDestinationAsync(
+                set.Id, archive, new PeerRetrievalObjectStore(client), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or Protocol.PeerProtocolException)
+        {
+            return exception.Message;
+        }
+    }
+
     private static void ReportDestinationAhead(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
-        SequenceAdoption.Adopted ahead, bool staging, string? healFailure, ulong nowMs)
+        SequenceAdoption.Adopted ahead, bool staging, string? healFailure, ulong nowMs, bool peer)
     {
         var attested = ahead.To - 1;
         Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
 
         var consequence = staging
-            ? "This is a staging set, so its staging archive is behind the destination as well and is not "
-              + "healed from it: the destination's newer history is only at the destination, and the next "
-              + "converging pass will trim the destination to the staging archive's keep-set — restore or copy "
-              + "that history aside first if it matters."
+            ? peer
+                ? "This is a staging set, so its staging archive is behind the peer as well and is not healed "
+                  + "from it. The peer keeps what the staging archive no longer lists (ADR-0034 §6), so the "
+                  + "newer history survives there — as history this machine cannot see until it is restored "
+                  + "from the peer — and no convergence run will delete it."
+                : "This is a staging set, so its staging archive is behind the destination as well and is not "
+                  + "healed from it: the destination's newer history is only at the destination, and the next "
+                  + "converging pass will trim the destination to the staging archive's keep-set — restore or copy "
+                  + "that history aside first if it matters."
             : healFailure is null
                 ? "The destination's metadata was copied back into the set's metadata store and the catalogue "
                   + "was rebuilt from it, so the set is current again and the next backup is incremental. "
