@@ -1848,7 +1848,7 @@ public static class CliApplication
                     throw new CliFailureException(
                         "the peer holds no replica that can be claimed: no attribution there carries a claim key. "
                         + "A replica recorded before this installation published one is the destination "
-                        + "operator's to re-point (ADR-0053 §3).");
+                        + "operator's to re-point (ADR-0053 §3: `fallbackplan-agent reattribute` there).");
                 }
 
                 // Phase two: one claim per served derivation. Argon2id runs

@@ -156,8 +156,8 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
         // The self-healing half, and the whole of what makes an existing
         // peering claimable: one more offer from an updated source fills the
         // absence. What it cannot help is a machine that died before that
-        // offer — ADR-0053 §3's operator path is the answer there, and is not
-        // built.
+        // offer — ADR-0053 §3's operator path (Reattribute, through the
+        // service's verb) is the answer there.
         var store = ReplicaOwnerStore.Open(_stateDirectory);
         Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
         Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);

@@ -110,7 +110,7 @@ A machine rebuilt after total loss holds a new device identity, so this gate
 refuses it — correctly, since the gate is what stops a stranger asking for a
 repository by name. The exit is the claim ([03 §6](03-replication.md#6-the-claim)),
 which re-points the attribution before retrieval is attempted; the claim
-refuses in these same identical terms and for this same reason.
+refuses in these same identical terms and for this same reason. An attribution recorded without a claim key has no such exit here; it is re-pointed by the destination's operator through their own command contract ([ADR-0053 Amendment 3](../../docs/adr/0053-peer-claim-and-configuration-recovery.md#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)), and this gate then serves the new identity on its next open.
 
 Within an authorised replica every key is servable, the descriptor
 included: it carries only public parameters, indistinguishable in

@@ -1,6 +1,6 @@
 # ADR-0053 — A rebuilt machine claims its peer replica, and its backup set's shape survives with it
 
-**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message) and [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)
+**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message), [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else) and [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)
 **Date:** 2026-09
 **Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership), [peer-protocol 07 §4](../../specifications/peer-protocol/07-retrieval.md)
@@ -158,6 +158,12 @@ operator's own authority on their own machine. A recovery that needs a phone
 call to a friend is a poor recovery; a recovery that is impossible is worse,
 and this is the one case where the poor one is all that is available.
 
+> **Built (2026-09).** The verb is `reattribute_replica` on the command
+> contract (1.31), `fallbackplan-agent reattribute` at the destination's
+> shell, and the Re-point control on its console — Owner-only, local callers
+> only, and refused by name for any replica that *does* carry a claim key. See
+> [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb).
+
 ### 4 The set's shape travels in the recovery kit
 
 > **Closed as will-not-do (2026-09).** There is no recovery kit to carry it:
@@ -309,12 +315,13 @@ identified rather than guessed at.
 
 ### What is still not built, said plainly
 
-**§3's operator re-attribution is not built.** A replica attributed before the
-claim key existed has no key to check against. It self-heals the moment an
-updated source makes one more offer, because `TryAttribute` fills an absence —
-but if the machine died before that offer, there is nothing, and §3's
-out-of-band verb is the only answer. `docs/proof-obligations.md` carries that
-limit rather than the record implying otherwise.
+~~**§3's operator re-attribution is not built.**~~ Built since
+([Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)).
+The rest of this paragraph stands as the reason it is needed: a replica
+attributed before the claim key existed has no key to check against. It
+self-heals the moment an updated source makes one more offer, because
+`TryAttribute` fills an absence — but if the machine died before that offer,
+there is nothing, and §3's verb is the only answer.
 
 **§4 is untouched**, and §5 still says why: the kit a service builds is an
 installation kit, and carrying one shape per set is a larger change to a
@@ -409,6 +416,69 @@ as [ADR-0061](0061-adopt-a-destinations-archives.md). §4 is
 **will not do** as written, and the *Negative* consequence about a kit that
 goes stale goes with it.
 
+## Amendment 3 (2026-09) — the operator's re-attribution is a stated verb
+
+§3 named the case the claim cannot reach and left the verb unspecified. It is
+now specified and built, on three surfaces with one logic behind them
+(`Agent/ReplicaReattribution`), and the record says what it is, what it
+refuses, and the one limit it has.
+
+### What it is
+
+`list_replica_attributions` (contract 1.31) answers every replica stored here
+with its owner's fingerprint and pairing label and whether a claim key is on
+record — `claimable` — with the key itself never crossing.
+`reattribute_replica {repository_id, fingerprint}` points one replica at a
+different paired device and answers the ordinary `configuration_change`,
+saying whom it now belongs to and whom it was attributed to. The same verb is
+`fallbackplan-agent reattribute --state <dir> --repository <hex> --to
+<fingerprint>` at the destination's shell, and a Re-point control in the
+"Replicas stored here" table on its console. A prefix of the fingerprint
+resolves exactly as `unpair`'s does, and a re-point raises a notice,
+`replica-reattributed:<id>`, that is never auto-resolved: an attribution moved
+by hand is a fact the next person reading this machine should see.
+
+Building it moved one thing first. The attribution ledger the listener served
+from was one the listener opened for itself; a verb on the service would have
+opened a second instance over the same file, and the two would each have
+written the whole file from their own picture — the override moving the file
+while the live retrieval gate went on refusing from what it read at start.
+The ledger is therefore the runtime's (`ServiceRuntime.ReplicaOwners`) and
+the listener borrows it, so what the operator re-points is what the gate
+consults, without a restart. `Hosts.Tests/ReplicaReattributionTests` proves
+this by retrieval rather than by reading the file.
+
+### What it refuses, in order
+
+The id's shape (the directory name under `replicas`); a repository nothing
+here is attributed to — the operator's own disk, so [07 §4](../../specifications/peer-protocol/07-retrieval.md#4-authorization)'s
+reconnaissance rule does not apply and the answer is plain; a device not
+paired here ("pair it here first"); an ambiguous prefix; a device paired only
+as a destination this machine stores at, which holds nothing here and must
+not gain a retrieval gate; and — last, because it is the one that matters —
+**a replica that carries a claim key**. Its owner can claim it with the
+passphrase (Amendment 2), and an operator who could bypass that proof would
+make the weakest path stand in for the strongest on every replica, not just
+the orphaned one the override exists for. §3's own argument, applied to §3's
+own verb.
+
+It is Owner-only in the authenticating gate, beside `restart_service`, refused
+before any account exists for the same reason, and local callers only: whose
+replica this machine holds is its own operator's decision, not a paired
+console's.
+
+### The one limit
+
+The agent's verb goes through the running service when one is listening — the
+`notices` shape, for the reason above — and directly to the ledger when none
+is. Once the installation has accounts, the service's socket answers only a
+signed-in owner, and the shell verb carries no session. It does not then fall
+back to the file, which would be the race the routing exists to avoid; it
+prints the service's refusal and the two honest ways on: the console's
+control, or stopping the service and running the verb again. Pinned by a test
+that stands the gate in front of the handler and checks that neither the
+runtime's ledger nor the file moved.
+
 ## Consequences
 
 **Positive**
@@ -423,7 +493,10 @@ goes stale goes with it.
 **Negative**
 
 - A destination now stores one more durable fact per attribution, and a
-  destination that has never seen a claim key must fall back to its operator.
+  destination that has never seen a claim key must fall back to its operator
+  — whose re-attribution ([Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb))
+  is a judgement made on their own machine, not a proof, which is why it is
+  refused wherever a proof exists.
 - ~~The kit gains state that goes stale.~~ Closed with §4
   ([Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)): there is no kit.
 - A paired peer learns the salts and KDF costs of every claimable installation
@@ -456,6 +529,7 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (§3 built) | [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb): the operator's re-attribution is `reattribute_replica` / `list_replica_attributions` (contract 1.31), `fallbackplan-agent reattribute` and the console's Re-point control, with `Agent/ReplicaReattribution` behind all three and the ledger now the runtime's (`ServiceRuntime.ReplicaOwners`); refused by name for a replica that carries a claim key. `Hosts.Tests/ReplicaReattributionTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Web.Tests/ConsolePairingScriptTests`. Every decision of this record is now built or closed |
 | 2026-09 | Amended | The intent of §4 is met otherwise: the set's shape travels in the archive's policy manifest and a rebuilt machine adopts a claimed replica back under its original ids ([ADR-0061](0061-adopt-a-destinations-archives.md)); `Hosts.Tests/PeerAdoptionTests` runs the drill after the claim. §3's operator re-attribution remains unbuilt |
 | 2026-09 | Amended (passphrase only) | [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else): the kit is withdrawn, so the claimant holds the passphrase and nothing else. The ceremony is two phases in one session — `ReplicationClaimOpen`, `ReplicationClaimParameters` (the destination serves the distinct KDF salts and costs behind its claimable replicas), a multi-entry `ReplicationClaim`, `ReplicationClaimAccepted` — with `replica-claim` redefined rather than versioned. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder` and `Cli/CliApplication` carry it; `Hosts.Tests/PeerClaimTests` runs the drill with the state directory destroyed. §4 closes as will-not-do |
 | 2026-09 | Amended | The `fbp/claim/v1` root went with format 1 ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); the installation's claim key is the only one |

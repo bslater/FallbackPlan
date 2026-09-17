@@ -219,7 +219,7 @@ A claim in which no key matches anything recorded here, and one in which any sig
 
 A destination that does not offer `replica-claim` MUST refuse the open with `feature_unsupported` naming the feature, rather than letting it fall through to the offer reader. The claimant is mid-recovery, and "expected a replication offer" is true and no use at all.
 
-**A replica attributed before key 5 existed has nothing to check against**, and is not in the parameters. It becomes claimable the moment an updated source makes one more offer, because a destination fills an absence — but if the machine died before that offer, there is nothing, and the remedy is the destination's own operator re-pointing the attribution out of band. That verb is not specified here.
+**A replica attributed before key 5 existed has nothing to check against**, and is not in the parameters. It becomes claimable the moment an updated source makes one more offer, because a destination fills an absence — but if the machine died before that offer, there is nothing, and the remedy is the destination's own operator re-pointing the attribution out of band. That verb is not on this wire: it is the destination's own command contract (`reattribute_replica`, [ADR-0053 Amendment 3](../../docs/adr/0053-peer-claim-and-configuration-recovery.md#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)), local to the destination's operator, and refused there for any attribution that does carry a key — the claim is the only path for those.
 
 ## 7 Framing and limits
 
