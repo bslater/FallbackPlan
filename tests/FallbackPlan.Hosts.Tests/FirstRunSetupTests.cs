@@ -6,7 +6,6 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
@@ -57,87 +56,10 @@ public sealed class FirstRunSetupTests : IDisposable
 
         await SetUpAsync(handler);
 
-        // Not `ready` — the ceremony still owes a saved recovery kit
-        // (FR-KIT-004). Reaching `ready` is the next test's business.
-        Assert.AreEqual("kit_required", (await DescribeAsync(handler)).SetupState);
-    }
-
-    [TestMethod]
-    public async Task KitStatus_AcrossTheCeremony_ReadsNeverSavedThenSaved()
-    {
-        // FR-KIT-005 asks for status surfaced *continuously*, so it rides
-        // describe_service — the result every client already polls — rather
-        // than living only inside the ceremony an operator saw once.
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-
-        var before = await DescribeAsync(handler);
-        Assert.AreEqual("never_saved", before.KitStatus);
-        Assert.IsNull(before.KitConfirmedAt);
-
-        await SetUpAsync(handler);
-
-        // Still never_saved: a passphrase is not a kit, and the whole reason
-        // the ceremony has a fourth step is that one does not imply the other.
-        Assert.AreEqual("never_saved", (await DescribeAsync(handler)).KitStatus);
-
-        Assert.IsInstanceOfType<ConfigurationChangeResult>(
-            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('a', 64)), _timeout.Token),
-            out _);
-
-        var after = await DescribeAsync(handler);
-        Assert.AreEqual("saved", after.KitStatus);
-        Assert.IsNotNull(after.KitConfirmedAt);
-        Assert.IsGreaterThan(0ul, after.KitConfirmedAt!.Value);
-    }
-
-    [TestMethod]
-    public async Task KitStatus_AfterARestart_IsStillSavedWithItsOriginalTime()
-    {
-        // The status is a durable fact about the installation, not a fact about
-        // this process — an operator who restarts the service must not be told
-        // their kit was never saved.
-        _harness.WriteConfiguration("every 1h");
-        ulong confirmedAt;
-
-        await using (var runtime = await StartWithoutPassphraseAsync())
-        {
-            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            await SetUpAsync(handler);
-            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('b', 64)), _timeout.Token);
-            confirmedAt = (await DescribeAsync(handler)).KitConfirmedAt!.Value;
-        }
-
-        await using (var restarted = await StartWithoutPassphraseAsync())
-        {
-            var describe = await DescribeAsync(new ServiceCommandHandler(restarted, RemoteBindingState.Off));
-            Assert.AreEqual("saved", describe.KitStatus);
-            Assert.AreEqual(confirmedAt, describe.KitConfirmedAt);
-        }
-    }
-
-    [TestMethod]
-    public async Task KitStatus_HasExactlyTwoValues_BecauseAnInstallationKitCannotGoStale()
-    {
-        // Recorded as a test rather than only as prose in ADR-0013, because the
-        // requirement's wording says three. An installation kit carries no
-        // destinations, so FR-KIT-005's stated staleness trigger cannot fire;
-        // its salt, Argon2id parameters and sealing public key are fixed for the
-        // installation's life; and regenerating one differs only in issued_at.
-        // Nothing can move it out of `saved`.
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-
-        await SetUpAsync(handler);
-        await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('c', 64)), _timeout.Token);
-
-        // A second kit, confirmed later, is still simply `saved` — there is no
-        // third value for it to become.
-        await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('d', 64)), _timeout.Token);
-
-        Assert.AreEqual("saved", (await DescribeAsync(handler)).KitStatus);
+        // `ready` on the passphrase alone (ADR-0060): there is nothing else
+        // for the ceremony to wait for, because nothing else has to be
+        // saved. The account layer, not this handler, adds users_required.
+        Assert.AreEqual("ready", (await DescribeAsync(handler)).SetupState);
     }
 
     [TestMethod]
@@ -271,11 +193,7 @@ public sealed class FirstRunSetupTests : IDisposable
             await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token));
         Assert.AreEqual(JobState.Complete, await watching);
 
-        // Deliberately backed up while the kit is still unconfirmed. The
-        // ceremony is incomplete and the console says so, but data
-        // protection does not wait on a paperwork step — stopping backups
-        // over an unsaved kit would lose data to enforce a habit.
-        Assert.AreEqual("kit_required", (await DescribeAsync(handler)).SetupState);
+        Assert.AreEqual("ready", (await DescribeAsync(handler)).SetupState);
 
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
             new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
@@ -327,7 +245,7 @@ public sealed class FirstRunSetupTests : IDisposable
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
                 "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+                "--user", "ben", "--password-env", PasswordVariable);
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("too weak", result.All, StringComparison.Ordinal);
@@ -352,7 +270,7 @@ public sealed class FirstRunSetupTests : IDisposable
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
                 "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+                "--user", "ben", "--password-env", PasswordVariable);
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("too weak", result.All, StringComparison.Ordinal);
@@ -380,7 +298,7 @@ public sealed class FirstRunSetupTests : IDisposable
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
                 "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-                "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+                "--user", "ben", "--password-env", PasswordVariable);
 
             Assert.AreEqual(1, result.ExitCode);
             Assert.Contains("account policy", result.All, StringComparison.Ordinal);
@@ -401,7 +319,7 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+            "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(0, first.ExitCode, first.All);
         Assert.Contains("never be changed", first.All, StringComparison.Ordinal);
@@ -413,116 +331,14 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+            "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(2, second.ExitCode);
         Assert.Contains("already set up", second.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
-    public async Task Setup_AfterThePassphrase_WaitsForTheKitRatherThanReportingReady()
-    {
-        // The middle state is what makes the confirmation real. Without it,
-        // a closed tab between provisioning and confirming would leave an
-        // installation that looks finished and has no kit.
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-
-        Assert.AreEqual("setup_required", (await DescribeAsync(handler)).SetupState);
-
-        await SetUpAsync(handler);
-        Assert.AreEqual("kit_required", (await DescribeAsync(handler)).SetupState);
-
-        Assert.IsInstanceOfType<ConfigurationChangeResult>(
-            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('a', 64)), _timeout.Token),
-            out var confirmed);
-        Assert.AreEqual("ready", (await DescribeAsync(handler)).SetupState);
-
-        Assert.IsTrue(
-            confirmed.Lines.Any(line => line.Contains("Keep them apart", StringComparison.Ordinal)),
-            "the confirmation says why two factors kept together are one factor");
-    }
-
-    [TestMethod]
-    public async Task Setup_TheConfirmationSurvivesARestart_AndTheServiceKeepsOnlyTheChecksum()
-    {
-        _harness.WriteConfiguration("every 1h");
-        const string Checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-        await using (var runtime = await StartWithoutPassphraseAsync())
-        {
-            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            await SetUpAsync(handler);
-            Assert.IsInstanceOfType<ConfigurationChangeResult>(
-                await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(Checksum), _timeout.Token));
-        }
-
-        await using (var restarted = await StartWithoutPassphraseAsync())
-        {
-            Assert.AreEqual("ready", restarted.SetupState);
-        }
-
-        // The checksum and nothing else: a service holding a copy of the kit
-        // would have made itself a second factor.
-        var path = Path.Combine(_harness.StateDirectory, "recovery-kit.confirmed");
-        var text = await File.ReadAllTextAsync(path, _timeout.Token);
-        Assert.Contains(Checksum, text, StringComparison.Ordinal);
-        Assert.IsTrue(
-            new FileInfo(path).Length < 512,
-            "the confirmation records a checksum, never a kit");
-    }
-
-    [TestMethod]
-    public async Task ConfirmKit_BeforeSetup_IsRefusedAsOutOfOrder()
-    {
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('a', 64)), _timeout.Token),
-            out var refusal);
-        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
-        Assert.Contains("no passphrase yet", refusal.Message, StringComparison.Ordinal);
-    }
-
-    [TestMethod]
-    public async Task ConfirmKit_SomethingThatIsNotAChecksum_IsRefused()
-    {
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        await SetUpAsync(handler);
-
-        foreach (var candidate in new[] { "", "not-a-checksum", new string('a', 63), new string('z', 64) })
-        {
-            Assert.IsInstanceOfType<ServiceError>(
-                await handler.ExecuteAsync(new ConfirmRecoveryKitCommand(candidate), _timeout.Token),
-                out var refusal);
-            Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason, candidate);
-        }
-
-        Assert.AreEqual("kit_required", (await DescribeAsync(handler)).SetupState);
-    }
-
-    [TestMethod]
-    public async Task ConfirmKit_FromARemoteCaller_IsRefused()
-    {
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var local = new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Local);
-        var remote = new ServiceCommandHandler(runtime, RemoteBindingState.On("127.0.0.1:9"), CallerScope.Remote);
-        await SetUpAsync(local);
-
-        Assert.IsInstanceOfType<ServiceError>(
-            await remote.ExecuteAsync(new ConfirmRecoveryKitCommand(new string('a', 64)), _timeout.Token),
-            out var refusal);
-        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
-        Assert.AreEqual("kit_required", (await DescribeAsync(local)).SetupState);
-    }
-
-    [TestMethod]
-    public async Task Describe_PublishesThisDevicesPublicIdentity_ForTheKitToRecord()
+    public async Task Describe_PublishesThisDevicesPublicIdentity()
     {
         await using var runtime = await StartWithoutPassphraseAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
@@ -535,16 +351,20 @@ public sealed class FirstRunSetupTests : IDisposable
     }
 
     [TestMethod]
-    public async Task SetupVerb_WithoutAKitPath_RefusesRatherThanWaivingTheConfirmation()
+    public async Task SetupVerb_OfferedAKitOutput_RefusesByNameRatherThanIgnoringIt()
     {
-        // A headless operator cannot tick a box, so the path is required.
-        // Waiving the confirmation because there is no button would be
-        // letting the interface decide what the requirement means.
+        // The kit is withdrawn (ADR-0060). A flag that used to name where it
+        // went is refused with the remedy, not silently skipped: an operator
+        // following an old note would otherwise believe a kit had been
+        // written somewhere.
         Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
+
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
+            "--kit-output", Path.Combine(_harness.StateDirectory, "kit.bin"),
+            "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("--kit-output", result.All, StringComparison.Ordinal);
@@ -552,126 +372,29 @@ public sealed class FirstRunSetupTests : IDisposable
     }
 
     [TestMethod]
-    public async Task SetupVerb_Acknowledged_WritesBothKitFormsAndReachesReady()
+    public async Task SetupVerb_Acknowledged_ReachesReady_AndWritesNothingButTheCredential()
     {
         Environment.SetEnvironmentVariable(_harness.PassphraseVariable, PassphraseText);
-        var kit = KitPath();
 
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss", "--kit-output", kit,
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
             "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(0, result.ExitCode, result.All);
-        Assert.IsTrue(File.Exists(kit), "the machine form");
-        Assert.IsTrue(File.Exists(kit + ".txt"), "the printable form");
+        Assert.DoesNotContain("kit", result.All, StringComparison.OrdinalIgnoreCase);
 
-        // Both forms, identical content, and an installation kit at that.
-        var framed = await File.ReadAllBytesAsync(kit, _timeout.Token);
-        SequenceAssert.AreEqual(
-            framed,
-            RecoveryKitText.ParseToFramed(await File.ReadAllTextAsync(kit + ".txt", _timeout.Token)));
-        Assert.IsTrue(RecoveryKitCodec.Parse(framed).IsInstallationKit);
-
-        // Writing the kit is what completes setup for this verb.
+        // Setting the passphrase is what completes setup for this verb: the
+        // passphrase is the whole recovery credential (ADR-0060), so there
+        // is no artefact to write and nothing on this machine to leave for
+        // a person to keep.
         await using var runtime = await StartWithoutPassphraseAsync();
         Assert.AreEqual("ready", runtime.SetupState);
-
-        Assert.IsFalse(
-            (await File.ReadAllTextAsync(kit + ".txt", _timeout.Token))
-                .Contains(PassphraseText, StringComparison.Ordinal),
-            "the printable kit must not carry the passphrase");
+        Assert.IsEmpty(
+            Directory.GetFiles(_harness.StateDirectory, "*kit*", SearchOption.AllDirectories),
+            "setup must leave no kit and no kit confirmation behind");
     }
-
-    [TestMethod]
-    public async Task Setup_RecordsTheInstallationsPublicParameters_SoAKitNeedsNoArchive()
-    {
-        // The kit is known the moment the passphrase is chosen
-        // (specifications/recovery-kit §2.2) — but the console could only
-        // learn the salt by reading a repository descriptor, which no
-        // installation has until its first backup. An operator who left
-        // before saving the kit was then stuck behind the full-screen setup
-        // gate, unable to reach the configuration that would let them run
-        // the backup that would write the descriptor (FR-KIT-004).
-        //
-        // Provisioning therefore records the PUBLIC half of the derivation
-        // beside the credential: the salt and parameters every archive would
-        // have stamped anyway, and the sealing public key that proves a
-        // re-derivation reproduced them.
-        _harness.WriteConfiguration("every 1h");
-        await using var runtime = await StartWithoutPassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-
-        Assert.IsNull(
-            InstallationParameters.TryLoad(_harness.StateDirectory),
-            "an unprovisioned installation has no derivation to publish");
-
-        await SetUpAsync(handler);
-
-        var published = InstallationParameters.TryLoad(_harness.StateDirectory);
-        Assert.IsNotNull(published, "provisioning must record the installation's public parameters");
-
-        // They are the real ones: deriving the chosen passphrase with them
-        // reproduces the sealing key they carry.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var derived = WriteOnlyDerivation.Derive(
-            passphrase,
-            new Argon2Parameters
-            {
-                MemoryKiB = published.KdfMemoryKiB,
-                Iterations = published.KdfIterations,
-                Parallelism = published.KdfParallelism,
-            },
-            Convert.FromHexString(published.KdfSalt),
-            KdfValidationMode.OpenRepository);
-
-        Assert.AreEqual(
-            published.SealingPublicKey,
-            Convert.ToHexStringLower(derived.Credential.SealingPublicKey),
-            "the published verifier must be this installation's own");
-    }
-
-    [TestMethod]
-    public async Task TheInstallationsPublicParameters_CarryNoSecret_AndAreHealedWhenMissing()
-    {
-        // The file is public by construction — every archive descriptor
-        // publishes the same three facts — but "public by construction" is
-        // a claim worth holding to the bytes.
-        _harness.WriteConfiguration("every 1h");
-        await using (var runtime = await StartWithoutPassphraseAsync())
-        {
-            await SetUpAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off));
-        }
-
-        var path = InstallationParameters.PathIn(_harness.StateDirectory);
-        var text = await File.ReadAllTextAsync(path, _timeout.Token);
-        Assert.DoesNotContain(PassphraseText, text, StringComparison.Ordinal);
-
-        var credential = await File.ReadAllBytesAsync(
-            Path.Combine(_harness.StateDirectory, "write-credentials", "installation.bin"), _timeout.Token);
-        Assert.DoesNotContain(
-            Convert.ToHexStringLower(credential), text, StringComparison.OrdinalIgnoreCase,
-            "the sealed credential must not be echoed into a public file");
-
-        // An installation provisioned before this file existed still gets
-        // one: the service writes it at startup from the credential it
-        // already holds, so upgrading is enough and no backup is needed.
-        var published = InstallationParameters.TryLoad(_harness.StateDirectory);
-        File.Delete(path);
-
-        await using (var restarted = await StartWithoutPassphraseAsync())
-        {
-            Assert.IsNotNull(restarted);
-            var healed = InstallationParameters.TryLoad(_harness.StateDirectory);
-            Assert.IsNotNull(healed, "a service holding a credential must publish its parameters");
-            Assert.AreEqual(published!.KdfSalt, healed!.KdfSalt);
-            Assert.AreEqual(published.SealingPublicKey, healed.SealingPublicKey);
-        }
-    }
-
-    /// <summary>Where this harness writes its kit.</summary>
-    private string KitPath() => Path.Combine(_harness.StateDirectory, "recovery-kit.fbpkrkit");
 
     private async Task<ServiceDescriptionResult> DescribeAsync(ServiceCommandHandler handler)
     {
@@ -719,8 +442,7 @@ public sealed class FirstRunSetupTests : IDisposable
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath());
+            "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss");
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("--user", result.All, StringComparison.Ordinal);
@@ -736,7 +458,7 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath(), "--user", "ben", "--password-env", "FBP_NOT_SET_ANYWHERE");
+            "--user", "ben", "--password-env", "FBP_NOT_SET_ANYWHERE");
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("FBP_NOT_SET_ANYWHERE", result.All, StringComparison.Ordinal);
@@ -752,7 +474,7 @@ public sealed class FirstRunSetupTests : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", KitPath(), "--user", "ben", "--password-env", PasswordVariable);
+            "--user", "ben", "--password-env", PasswordVariable);
 
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("owner", result.All, StringComparison.OrdinalIgnoreCase);

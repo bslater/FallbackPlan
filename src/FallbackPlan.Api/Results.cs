@@ -772,39 +772,24 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// restore-grant envelopes to — public by construction, never sensitive.
 /// </param>
 /// <param name="SetupState">
-/// How far first-run setup has got — <c>"setup_required"</c>,
-/// <c>"kit_required"</c> or <c>"ready"</c> (ADR-0044 §7 as amended,
-/// FR-SVC-011, FR-KIT-004). A client meeting either unfinished state shows
-/// the ceremony in place of its normal views and resumes at the step named,
-/// so a closed tab between provisioning and confirming does not strand the
-/// installation. Null from a service older than contract 1.13, which a
+/// How far first-run setup has got — <c>"setup_required"</c> or
+/// <c>"ready"</c> (ADR-0044 §7 as amended by ADR-0060, FR-SVC-011). A
+/// client meeting the unfinished state shows the ceremony in place of its
+/// normal views. Null from a service older than contract 1.13, which a
 /// client reads as "cannot tell" and so as no reason to interrupt anybody.
+/// Contract 1.14 to 1.28 had a third value, <c>"kit_required"</c>, between
+/// the two; the recovery kit it waited for is withdrawn, and a client that
+/// still knows the word treats it as the ceremony being unfinished.
 /// </param>
 /// <param name="DeviceId">
-/// This device's public identity, lowercase hex — what a kit records as its
-/// issuer (FR-KIT-001). Public by construction; the device's private key
-/// never leaves the service (ADR-0010).
+/// This device's public identity, lowercase hex. Public by construction;
+/// the device's private key never leaves the service (ADR-0010).
 /// </param>
 /// <param name="LogLevel">
 /// The default level in force, by name (ADR-0043 §6). Carried here so a
 /// console can show what the service is logging without a second round trip,
 /// the same way the Maintenance card already reads this result. Null from a
 /// service older than contract 1.15.
-/// </param>
-/// <param name="KitStatus">
-/// Whether the installation's recovery kit has been saved —
-/// <c>"never_saved"</c> or <c>"saved"</c> (FR-KIT-005). Two values, not
-/// three: an installation kit carries no destinations, so the requirement's
-/// staleness trigger cannot fire, and its salt, Argon2id parameters and
-/// sealing public key are fixed for the life of the installation, so nothing
-/// else can make it stale either (ADR-0013 as amended). Carried on the result
-/// every client already polls, because "surfaced continuously" means visible
-/// outside the ceremony, not only during it. Null from a service older than
-/// contract 1.15.
-/// </param>
-/// <param name="KitConfirmedAt">
-/// When the kit was confirmed saved, Unix milliseconds, or null when none has
-/// been. What lets a console say how long ago rather than merely whether.
 /// </param>
 /// <param name="SignedInUser">
 /// Whose session this connection has presented, or null when it has presented
@@ -848,8 +833,6 @@ public sealed record ServiceDescriptionResult(
     string? SetupState = null,
     string? DeviceId = null,
     string? LogLevel = null,
-    string? KitStatus = null,
-    ulong? KitConfirmedAt = null,
     string? SignedInUser = null,
     string? SignedInRole = null,
     string? KdfSalt = null,

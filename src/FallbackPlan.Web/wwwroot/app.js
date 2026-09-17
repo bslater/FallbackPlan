@@ -75,7 +75,7 @@ const S = {
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
   setupRequired: false,     // describe_service said the ceremony is unfinished (ADR-0044)
-  setupState: null,         // setup_required | kit_required | ready — which step it resumes at
+  setupState: null,         // setup_required | ready (| users_required, from the auth layer)
 };
 
 // Paused is deliberately live, not settled (ADR-0047): a suspended run holds
@@ -363,6 +363,8 @@ async function refreshDesc() {
     S.desc = result;
     // A service older than contract 1.13 answers null here, which reads as
     // "cannot tell" and so as no reason to interrupt anybody.
+    // kit_required is a value contracts 1.14–1.28 reported between the two;
+    // a service still saying it has an unfinished ceremony, and is treated so.
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
     S.setupState = result.setupState ?? null;
@@ -1144,45 +1146,7 @@ function renderMaintenance() {
         </div>
       </div>
 
-      <div class="card">
-        <h3>🗝 Recovery kit</h3>
-        <p class="sub">One of the two things a recovery needs. The kit is useless to a thief without the passphrase — and useless to you without it either.</p>
-        ${renderKitStatus()}
-      </div>
-
     </div>`;
-}
-
-// FR-KIT-005 asks for kit status "surfaced continuously", and continuously
-// means here — on a card an operator passes every time they open Maintenance —
-// rather than only inside the setup ceremony they saw once and closed.
-//
-// Two states, not three. An installation kit carries no destinations, so the
-// requirement's staleness trigger cannot fire, and its salt, Argon2id
-// parameters and sealing public key are fixed for the life of the installation,
-// so nothing else can make it stale either (ADR-0013 as amended).
-function renderKitStatus() {
-  const status = S.desc?.kitStatus ?? null;
-
-  if (status === null) {
-    // A service older than contract 1.15 says nothing here, which reads as
-    // "cannot tell" — not as a missing kit, which would be a false alarm.
-    return `<p class="sub">This service does not report kit status.</p>`;
-  }
-
-  if (status !== "saved") {
-    return `
-      <p class="dropped"><b>Never saved.</b> Nothing on this machine can rebuild your keys without it.
-      Losing the passphrase or the kit makes every backup unrecoverable — there is no reset and no support path.</p>`;
-  }
-
-  const when = S.desc.kitConfirmedAt
-    ? new Date(Number(S.desc.kitConfirmedAt)).toLocaleString()
-    : null;
-
-  return `
-    <p>${badge({ cls: "ok", icon: "✓" }, "saved")}${when ? ` <span class="sub">confirmed ${esc(when)}</span>` : ""}</p>
-    <p class="sub">Keep it somewhere separate from the passphrase. It holds neither the passphrase nor any key.</p>`;
 }
 
 /* ---------------------------------------------------------------- dialogs */
@@ -1421,14 +1385,15 @@ async function withBusy(button, work) {
 
 /* -------------------------------------------------- first-run setup (ADR-0044) */
 
-// The one ceremony that runs before anything else works. Four steps —
+// The one ceremony that runs before anything else works. Three steps —
 // what you are about to commit to, the passphrase with its confirmation,
-// the recovery kit, and the first account — shown INSTEAD of the console
-// rather than in a dialog over it, because there is nothing behind it that
-// functions until an installation has a passphrase and an owner.
+// and the first account — shown INSTEAD of the console rather than in a
+// dialog over it, because there is nothing behind it that functions until
+// an installation has a passphrase and an owner. There is nothing to save
+// but the passphrase (ADR-0060): every archive carries the rest.
 let U = null;
 
-const SETUP_STEPS = ["What this is", "Passphrase", "Recovery kit", "Account"];
+const SETUP_STEPS = ["What this is", "Passphrase", "Account"];
 
 /* ------------------------------------------------------------- sign-in */
 
@@ -1453,7 +1418,7 @@ function renderSignIn() {
 
   // While the setup ceremony is mid-flight it owns the screen — including
   // its own account step — so the sign-in gate stays down until the wizard
-  // object is gone. Without this, the moment the kit is confirmed the
+  // object is gone. Without this, the moment the passphrase is accepted the
   // service reports users_required and BOTH gates would render.
   if (U) {
     host.hidden = true;
@@ -1551,11 +1516,11 @@ async function signOut() {
 function renderSetupGate() {
   const host = document.getElementById("setup");
   if (!S.setupRequired) {
-    // The account step outlives setup_required: the moment the kit is
-    // confirmed the service reads ready-or-users_required, but the
+    // The account step outlives setup_required: the moment the passphrase
+    // is accepted the service reads ready-or-users_required, but the
     // ceremony is not over until the first account exists (or the service
-    // says one already does). A live step-4 wizard keeps the gate up.
-    if (U && U.step === 4) {
+    // says one already does). A live step-3 wizard keeps the gate up.
+    if (U && U.step === 3) {
       appEl.hidden = true;
       host.hidden = false;
       setupRender();
@@ -1568,14 +1533,8 @@ function renderSetupGate() {
     return;
   }
 
-  // A service in kit_required has a passphrase already: the ceremony
-  // resumes at the kit step rather than asking for one again.
-  if (!U) U = S.setupState === "kit_required"
-    ? { step: 3, passphrase: "", confirmation: "", acknowledged: true, strength: null, busy: false,
-        kit: null, taken: false, saved: false, resumed: true, passHash: null, kitLines: [],
-        account: { user: "", password: "", confirm: "", check: null, hash: null } }
-    : { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false,
-        kit: null, taken: false, saved: false, resumed: false, passHash: null, kitLines: [],
+  if (!U) U = { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false,
+        passHash: null, setupLines: [],
         account: { user: "", password: "", confirm: "", check: null, hash: null } };
   appEl.hidden = true;
   host.hidden = false;
@@ -1584,7 +1543,7 @@ function renderSetupGate() {
 
 function setupRender() {
   const host = document.getElementById("setup");
-  const body = [setupStep1, setupStep2, setupStep3, setupStep4][U.step - 1]();
+  const body = [setupStep1, setupStep2, setupStep3][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
     <div class="rst-steps">${SETUP_STEPS.map((label, index) =>
       `<span class="rst-step ${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
@@ -1595,7 +1554,7 @@ function setupRender() {
     field?.focus();
   }
 
-  if (U.step === 4) {
+  if (U.step === 3) {
     const field = document.getElementById("setup-user");
     field?.focus();
   }
@@ -1648,7 +1607,7 @@ function setupStep2() {
       <button type="button" class="btn" data-action="setup-back">‹ Back</button>
       <button type="button" class="btn danger" data-action="setup-finish"
         ${setupBuildReady() ? "" : "disabled"}>
-        ${U.busy ? "Building…" : "Build the recovery kit"}</button>
+        ${U.busy ? "Setting…" : "Set the passphrase"}</button>
     </div>`;
 }
 
@@ -1666,7 +1625,7 @@ function setupMatchMarkup() {
     ? `<p class="setup-danger">These do not match.</p>` : "";
 }
 
-// The one gate for "Build the recovery kit": the server's strength verdict,
+// The one gate for "Set the passphrase": the server's strength verdict,
 // AND a non-empty confirmation that matches, AND not mid-request.
 function setupBuildReady() {
   return !!U && !U.busy
@@ -1689,13 +1648,6 @@ function setupApplyStrength() {
   if (match) match.innerHTML = setupMatchMarkup();
   const go = document.querySelector('[data-action="setup-finish"]');
   if (go) go.disabled = !setupBuildReady();
-
-  // The resume screen shares the #setup-pass field: its rebuild button
-  // gates only on a non-empty entry (the server verifies the passphrase
-  // against the installation — strength is a creation-time policy, and an
-  // existing passphrase must never be refused for predating it).
-  const rebuild = document.querySelector('[data-action="setup-rebuild-kit"]');
-  if (rebuild) rebuild.disabled = U.busy || U.passphrase.length === 0;
 }
 
 // SHA-256 as lowercase hex, for comparing secrets without holding them:
@@ -1708,55 +1660,6 @@ async function sha256Hex(text) {
 }
 
 function setupStep3() {
-  // The kit is the second of the two things a recovery needs, and the only
-  // one this ceremony can hand over. It holds no passphrase and no keys, so
-  // it is safe to print — and useless to anyone who does not also have the
-  // passphrase, which is exactly why it must not live beside it.
-  if (U.resumed && !U.kit) {
-    return `
-      <h1>Your recovery kit is still unsaved</h1>
-      <p>This installation has its passphrase, but setup is not finished: the
-      recovery kit was never confirmed saved.</p>
-      <p>A kit can only be built from the passphrase, so to produce one now,
-      re-enter it.</p>
-      <input type="password" id="setup-pass" class="setup-field" autocomplete="current-password"
-        spellcheck="false" placeholder="the passphrase for this installation"
-        value="${esc(U.passphrase)}" data-action-input="setup-pass">
-      <div class="dlg-actions">
-        <button type="button" class="btn danger" data-action="setup-rebuild-kit"
-          ${U.busy || U.passphrase.length === 0 ? "disabled" : ""}>
-          ${U.busy ? "Building…" : "Build the recovery kit"}</button>
-      </div>`;
-  }
-
-  return `
-    <h1>Save your recovery kit</h1>
-    <p>This is the <b>second</b> of the two things a recovery needs. Your
-    passphrase is the first, and it is <b>not</b> in this file.</p>
-    <ul class="setup-facts">
-      <li><b>It holds no passphrase and no keys.</b> It is safe to print, and
-      it opens nothing on its own.</li>
-      <li><b>Keep it apart from your passphrase.</b> Together in one place they
-      are one thing to lose, not two.</li>
-      <li><b>It opens every archive this installation makes</b> — including
-      backup sets you have not created yet.</li>
-    </ul>
-    <div class="dlg-actions setup-kit-actions">
-      <button type="button" class="btn primary" data-action="setup-kit-file">Download the file</button>
-      <button type="button" class="btn" data-action="setup-kit-print">Open the printable page</button>
-    </div>
-    <label class="check-row"><input type="checkbox" id="setup-kit-ack" ${U.taken ? "" : "disabled"}
-      ${U.saved ? "checked" : ""} data-action-change="setup-kit-ack">
-      I have saved this somewhere separate from my passphrase.</label>
-    ${U.taken ? "" : `<p class="gate-hint">Take one of the two forms above first.</p>`}
-    <div class="dlg-actions">
-      <button type="button" class="btn danger" data-action="setup-kit-done"
-        ${U.busy || !U.saved ? "disabled" : ""}>
-        ${U.busy ? "Finishing…" : "Finish setup"}</button>
-    </div>`;
-}
-
-function setupStep4() {
   // The first account, inside the ceremony (FR-USR-001): the service is in
   // its bootstrap window — no accounts yet, so create_user needs no session
   // — and this first account becomes the owner (FR-USR-004). The password
@@ -1856,69 +1759,6 @@ function setupSchedulePasswordCheck() {
   }, 250);
 }
 
-// The kit is handed over as a download the page builds itself: the console
-// host returned it inline and keeps no copy, so there is nothing to fetch
-// back and nothing left behind if this tab closes.
-function setupTakeKit(data, name, type) {
-  const url = URL.createObjectURL(new Blob([data], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-  U.taken = true;
-  setupRender();
-}
-
-function setupTakeKitFile() {
-  if (!U.kit) return;
-  setupTakeKit(
-    Uint8Array.from(atob(U.kit.machine), c => c.charCodeAt(0)),
-    "fallbackplan-recovery-kit.fbpkrkit", "application/octet-stream");
-}
-
-// The printable form OPENS, as the button promises: a new tab holding a
-// self-contained, script-free document — about:blank can inherit the
-// opener's CSP, so the opener drives the printing rather than the child —
-// and the print dialog over it. The page stays behind the dialog for
-// re-printing. A popup blocker that still wins degrades to the .txt
-// download, so the kit is handed over either way.
-function setupOpenPrintable() {
-  if (!U.kit) return;
-
-  const view = window.open("", "_blank");
-  if (!view) {
-    toast("warn", "The browser blocked the printable page — downloading the text form instead.");
-    setupTakeKit(U.kit.text, "fallbackplan-recovery-kit.txt", "text/plain;charset=utf-8");
-    return;
-  }
-
-  view.document.write(`<!doctype html>
-    <html lang="en"><head><meta charset="utf-8"><title>FallbackPlan recovery kit</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 720px; color: #111; }
-      h1 { font-size: 20px; margin: 0 0 4px; }
-      p.hint { color: #555; font-size: 13px; margin: 0 0 20px; }
-      pre { font-family: ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.5;
-            white-space: pre-wrap; word-break: break-all; border: 1px solid #ccc;
-            border-radius: 6px; padding: 16px; }
-      @media print { p.hint { display: none; } pre { border: none; padding: 0; } }
-    </style></head><body>
-    <h1>FallbackPlan recovery kit</h1>
-    <p class="hint">Print this page, or save it as PDF from the print dialog. It holds no
-    passphrase and no keys — keep it somewhere apart from your passphrase.</p>
-    <pre>${esc(U.kit.text)}</pre>
-    </body></html>`);
-  view.document.close();
-
-  // From the opener, once the written document has had a beat to render.
-  setTimeout(() => { try { view.focus(); view.print(); } catch { /* the tab may already be closed */ } }, 150);
-
-  U.taken = true;
-  setupRender();
-}
-
 // Debounced so a fast typist does not queue a request per keystroke. The
 // scoring is the server's so there is exactly one implementation of the
 // policy — see WebConsoleHost.AssessPassphraseAsync for why that is worth a
@@ -2002,92 +1842,22 @@ const setupActions = {
     U.passphrase = "";
     U.confirmation = "";
     U.strength = null;
-    U.kit = body.kit ?? null;
-    U.kitLines = body.lines ?? [];
+    U.setupLines = body.lines ?? [];
+
+    // The passphrase is the whole ceremony's credential (ADR-0060): nothing
+    // else is produced or saved. Whether the ceremony is over depends on
+    // whether the installation has its first account. The account step is
+    // claimed BEFORE the refresh so renderSetupGate keeps this gate up while
+    // the service re-describes itself.
     U.step = 3;
-    reportDialog("Passphrase accepted", body.lines ?? []);
-    setupRender();
-  },
-
-  "setup-kit-file"() { setupTakeKitFile(); },
-
-  "setup-kit-print"() { setupOpenPrintable(); },
-
-  "setup-kit-ack"(el) { U.saved = el.checked; setupRender(); },
-
-  async "setup-rebuild-kit"() {
-    // Resuming an installation whose kit was never confirmed. The kit can
-    // only come from the passphrase, so it has to be entered again — the
-    // one place this ceremony asks twice, and only because the first
-    // attempt did not finish.
-    U.busy = true;
-    setupRender();
-    let body;
-    try {
-      const response = await fetch("/api/recovery-kit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify({ passphrase: U.passphrase }),
-      });
-      body = await response.json();
-    } catch {
-      U.busy = false;
-      toast("bad", "The console process stopped answering.");
-      setupRender();
-      return;
-    }
-
-    U.busy = false;
-    if (body?.outcome !== "built") {
-      toast("warn", body?.detail ?? "The kit could not be built.");
-      setupRender();
-      return;
-    }
-
-    // Hash before wipe, exactly as the fresh ceremony does: the account
-    // step may still be ahead, and its not-the-passphrase check needs this.
-    U.passHash = await sha256Hex(U.passphrase);
-    U.passphrase = "";
-    U.kit = body.kit;
-    U.resumed = false;
-    setupRender();
-  },
-
-  async "setup-kit-done"() {
-    U.busy = true;
-    setupRender();
-    let result;
-    try {
-      result = await api({ command: "confirm_recovery_kit", kitChecksum: U.kit.checksum });
-    } catch (error) {
-      U.busy = false;
-      toast("bad", error?.message ?? "Could not record the confirmation.");
-      setupRender();
-      return;
-    }
-
-    U.busy = false;
-    if (result?.result === "error") {
-      toast("warn", result.message ?? "Could not record the confirmation.");
-      setupRender();
-      return;
-    }
-
-    U.kitLines = result?.lines ?? U.kitLines;
-
-    // The kit is confirmed; whether the ceremony is over depends on whether
-    // the installation has its first account. Step 4 is claimed BEFORE the
-    // refresh so renderSetupGate keeps this gate up while the service
-    // re-describes itself; a headless setup that already created the owner
-    // ends the ceremony here instead.
-    U.step = 4;
     await refreshDesc();
     if (S.setupState === "users_required") {
+      reportDialog("Passphrase accepted", body.lines ?? []);
       setupRender();
       return;
     }
 
-    const lines = U.kitLines;
+    const lines = U.setupLines;
     U = null;
     S.setupRequired = false;
     renderSetupGate();
@@ -2150,7 +1920,7 @@ const setupActions = {
     }
 
     U.busy = false;
-    const lines = U.kitLines;
+    const lines = U.setupLines;
     U = null;
 
     if (answered?.result === "session") {
@@ -3708,8 +3478,8 @@ Object.assign(actions, {
       Restoring — or moving the archive to another machine — means entering the passphrase again.</p>
       <label class="field" for="wo-passphrase">Passphrase</label>
       <input type="password" id="wo-passphrase" autocomplete="new-password">
-      <ul class="warnings"><li>The passphrase can never change, and there is no reset, no export and no
-      recovery kit that restores without it. <b>If it is lost, this backup is unrecoverable.</b></li></ul>
+      <ul class="warnings"><li>The passphrase can never change, and there is no reset and no export.
+      <b>If it is lost, this backup is unrecoverable.</b></li></ul>
       <label class="check-row"><input type="checkbox" id="wo-ack">
         I understand that losing this passphrase loses the backup, permanently.</label>
       <div class="dlg-actions">

@@ -186,22 +186,6 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
-    public async Task KeyExport_AnOpenRepository_WritesARecoveryKit()
-    {
-        await _cli.InitAsync();
-        Directory.CreateDirectory(_cli.WorkPath);
-        var kit = Path.Combine(_cli.WorkPath, "kit.bin");
-
-        var export = await _cli.RunAsync("key-export", "--output", kit);
-
-        Assert.IsTrue(export.ExitCode == 0, export.All);
-        Assert.IsTrue(new FileInfo(kit).Length > 0, "the exported kit is empty");
-
-        // The transcribable text form is written alongside it (FR-KIT-003).
-        Assert.IsTrue(File.Exists(kit + ".txt"), "the text form of the kit was not written");
-    }
-
-    [TestMethod]
     public async Task Status_SeveralBackupSets_ReportsProtectionForEach()
     {
         await _cli.InitAsync();

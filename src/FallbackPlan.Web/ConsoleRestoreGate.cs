@@ -243,12 +243,11 @@ public static class ConsoleRestoreGate
     /// <c>sets</c> child holding direct-ship metadata stores (ADR-0046).
     /// </summary>
     /// <remarks>
-    /// One definition, because three ceremonies need it and a fourth will.
-    /// Each used to spell the layout itself, and when direct-ship arrived
-    /// only the restore gate was taught the second root — leaving an
-    /// all-direct-ship installation unable to rebuild its recovery kit
-    /// (FR-KIT-004) and quietly turning write-only adoption into creation
-    /// against a fresh salt. A shape can now only be taught here.
+    /// One definition, because more than one ceremony needs it. Each used to
+    /// spell the layout itself, and when direct-ship arrived only the
+    /// restore gate was taught the second root — quietly turning write-only
+    /// adoption into creation against a fresh salt. A shape can now only be
+    /// taught here.
     /// </remarks>
     private static List<string> RepositoryRoots(string? archivesRoot, string? stateDirectory)
     {
@@ -314,52 +313,31 @@ public static class ConsoleRestoreGate
         return true;
     }
 
-    /// <summary>What building an installation kit produced.</summary>
-    /// <param name="Framed">The framed machine form, or null when it could not be built.</param>
-    /// <param name="Text">The printable transcribable form, a rendering of those exact bytes.</param>
-    /// <param name="Checksum">The kit's SHA-256, lowercase hex — what the confirmation records.</param>
-    public sealed record KitAnswer(byte[] Framed, string Text, string Checksum);
-
-    /// <summary>Everything the setup ceremony derives, from one Argon2id pass.</summary>
-    /// <param name="Outcome"><see cref="GateOutcome.Verified"/> when both were produced.</param>
-    /// <param name="Detail">Why not, when they were not.</param>
+    /// <summary>What the setup ceremony derives.</summary>
+    /// <param name="Outcome"><see cref="GateOutcome.Verified"/> when the envelope was produced.</param>
+    /// <param name="Detail">Why not, when it was not.</param>
     /// <param name="Envelope">The sealed provisioning envelope, hex.</param>
-    /// <param name="Kit">The installation's recovery kit, in both forms.</param>
-    public sealed record SetupAnswer(
-        GateOutcome Outcome, string? Detail = null, string? Envelope = null, KitAnswer? Kit = null);
+    public sealed record SetupAnswer(GateOutcome Outcome, string? Detail = null, string? Envelope = null);
 
     /// <summary>
-    /// The client half of first-run setup (ADR-0044 §5, FR-KIT-004): mints
-    /// this installation's salt, derives from the passphrase here — where
-    /// the person typed it — and produces both the sealed provisioning
-    /// envelope and the recovery kit.
+    /// The client half of first-run setup (ADR-0044 §5): mints this
+    /// installation's salt, derives from the passphrase here — where the
+    /// person typed it — and produces the sealed provisioning envelope.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Both from <b>one</b> derivation, which is why they are one method.
-    /// Argon2id is deliberately expensive; running it twice to produce two
-    /// things from the same root would be paying that cost to learn nothing.
-    /// </para>
-    /// <para>
     /// There is no archives root, no set id and no descriptor here, which is
     /// the whole difference from <see cref="BuildProvisionEnvelopeAsync"/>:
     /// nothing exists yet to adopt or to prove against, so this is always a
     /// creation with a fresh salt. Every archive the installation goes on to
-    /// create records that salt, which is what lets one passphrase — and one
-    /// kit — open all of them.
-    /// </para>
-    /// <para>
-    /// The kit is built here rather than by the service because a kit is
-    /// never produced by a command (ADR-0028): building one re-derives from
-    /// a passphrase, and that belongs where the person is.
-    /// </para>
+    /// create records that salt, which is what lets one passphrase open all
+    /// of them — and is why nothing else has to be produced here
+    /// (ADR-0060): the archive carries what a recovery needs beyond the
+    /// passphrase.
     /// </remarks>
     /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
     /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
-    /// <param name="deviceIdHex">The service's device identity, from <c>describe_service</c>.</param>
-    /// <returns>The envelope and the kit, or why neither could be made.</returns>
-    public static SetupAnswer BuildInstallationSetup(
-        string passphraseText, string grantRecipientHex, string deviceIdHex)
+    /// <returns>The envelope, or why it could not be made.</returns>
+    public static SetupAnswer BuildInstallationSetup(string passphraseText, string grantRecipientHex)
     {
         ThrowHelper.ThrowIfNull(passphraseText);
         ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
@@ -372,21 +350,6 @@ public static class ConsoleRestoreGate
                 + "and try again (ADR-0044).");
         }
 
-        byte[] deviceId;
-        try
-        {
-            deviceId = Convert.FromHexString(deviceIdHex ?? string.Empty);
-        }
-        catch (FormatException)
-        {
-            return new SetupAnswer(GateOutcome.Unavailable, "The service's device identity is not readable hex.");
-        }
-
-        if (deviceId.Length != 16)
-        {
-            return new SetupAnswer(GateOutcome.Unavailable, "The service's device identity is not 16 bytes.");
-        }
-
         var parameters = Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters;
         var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
 
@@ -394,183 +357,10 @@ public static class ConsoleRestoreGate
         using var authority = WriteOnlyDerivation.Derive(
             passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
 
-        var framed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
-            RecoveryKitFactory.BuildForInstallation(
-                authority.Credential, salt, parameters, deviceId,
-                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-
         return new SetupAnswer(
             GateOutcome.Verified,
             Envelope: Convert.ToHexStringLower(
-                WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)),
-            Kit: new KitAnswer(
-                framed,
-                Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                    framed,
-                    "This kit is ONE of the two things you need. The other is your passphrase, which is not "
-                    + "in here. Keep them apart."),
-                Convert.ToHexStringLower(framed.AsSpan(framed.Length - 32))));
-    }
-
-    /// <summary>
-    /// Rebuilds an installation's kit from an archive it already wrote, for
-    /// a ceremony interrupted before the kit was confirmed (FR-KIT-004).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The salt is not ours to mint here — minting a second one would
-    /// produce a kit that opens nothing. It comes from the descriptor of an
-    /// archive the installation already wrote, and the passphrase is proved
-    /// against that descriptor's sealing key before a kit is built, so a
-    /// wrong passphrase yields no kit rather than a useless one.
-    /// </para>
-    /// <para>
-    /// Any one of the installation's repositories will do, whichever shape
-    /// wrote it: one passphrase and one salt stamp every archive an
-    /// installation will ever make (ADR-0044), so the first readable
-    /// descriptor is as good a witness as the last. It is searched for
-    /// rather than asked for by set, because a set the console has not been
-    /// told about is still this installation's.
-    /// </para>
-    /// <para>
-    /// An installation with no repository yet has no salt to recover, and
-    /// this says so rather than inventing one. That case is real but narrow:
-    /// it needs a ceremony abandoned after provisioning and before any set's
-    /// first backup.
-    /// </para>
-    /// </remarks>
-    /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
-    /// <param name="stateDirectory">The service's state directory, from <c>describe_service</c>; its <c>sets</c> child holds the metadata stores.</param>
-    /// <param name="passphraseText">The typed passphrase.</param>
-    /// <param name="deviceIdHex">The service's device identity.</param>
-    /// <param name="cancellationToken">Cancels the descriptor reads.</param>
-    /// <returns>The kit, or why one could not be rebuilt.</returns>
-    public static async Task<SetupAnswer> RebuildInstallationKitAsync(
-        string? archivesRoot,
-        string? stateDirectory,
-        string passphraseText,
-        string deviceIdHex,
-        CancellationToken cancellationToken)
-    {
-        ThrowHelper.ThrowIfNull(passphraseText);
-
-        byte[] deviceId;
-        try
-        {
-            deviceId = Convert.FromHexString(deviceIdHex ?? string.Empty);
-        }
-        catch (FormatException)
-        {
-            return new SetupAnswer(GateOutcome.Unavailable, "The service's device identity is not readable hex.");
-        }
-
-        if (deviceId.Length != 16)
-        {
-            return new SetupAnswer(
-                GateOutcome.Unavailable, "This console cannot read the service's archives from here.");
-        }
-
-        // The installation's own record of its derivation, written when the
-        // passphrase was chosen. Asked first because it is the one source
-        // that exists before any backup does — the case that used to strand
-        // a ceremony no archive could yet answer for.
-        if (Api.InstallationParameters.TryLoad(stateDirectory) is { } published)
-        {
-            using var passphrase = Passphrase.Create(passphraseText);
-            using var authority = WriteOnlyDerivation.Derive(
-                passphrase,
-                new Domain.Configuration.Argon2Parameters
-                {
-                    MemoryKiB = published.KdfMemoryKiB,
-                    Iterations = published.KdfIterations,
-                    Parallelism = published.KdfParallelism,
-                },
-                Convert.FromHexString(published.KdfSalt),
-                Domain.Configuration.KdfValidationMode.OpenRepository);
-
-            return Convert.ToHexStringLower(authority.Credential.SealingPublicKey) == published.SealingPublicKey
-                ? BuiltKit(
-                    authority.Credential, Convert.FromHexString(published.KdfSalt),
-                    new Domain.Configuration.Argon2Parameters
-                    {
-                        MemoryKiB = published.KdfMemoryKiB,
-                        Iterations = published.KdfIterations,
-                        Parallelism = published.KdfParallelism,
-                    },
-                    deviceId)
-                : new SetupAnswer(
-                    GateOutcome.Wrong, "That passphrase does not reproduce this installation's keys.");
-        }
-
-        if (RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
-        {
-            return new SetupAnswer(
-                GateOutcome.Unavailable, "This console cannot read the service's archives from here.");
-        }
-
-        foreach (var path in LocalRepositories(archivesRoot, stateDirectory))
-        {
-            Repository.Format.Descriptor.RepositoryDescriptor descriptor;
-            try
-            {
-                descriptor = await Repository.RepositoryLifecycle.ReadDescriptorAsync(
-                    new Storage.Local.LocalFileSystemObjectStore(path), cancellationToken).ConfigureAwait(false);
-            }
-            catch (Repository.RepositoryOpenException)
-            {
-                continue;
-            }
-
-            using var passphrase = Passphrase.Create(passphraseText);
-            using var authority = WriteOnlyDerivation.Derive(
-                passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span,
-                Domain.Configuration.KdfValidationMode.OpenRepository);
-
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
-            {
-                return new SetupAnswer(
-                    GateOutcome.Wrong, "That passphrase does not reproduce this installation's keys.");
-            }
-
-            return BuiltKit(
-                authority.Credential, descriptor.KdfSalt.Span, descriptor.KdfParameters, deviceId);
-        }
-
-        return new SetupAnswer(
-            GateOutcome.Unavailable,
-            "No archive of this installation exists yet, so its salt cannot be recovered — run a backup "
-            + "first, then save the kit.");
-    }
-
-    /// <summary>
-    /// The kit a proved derivation produces, in both forms with the checksum
-    /// the page confirms.
-    /// </summary>
-    /// <param name="credential">The derivation, already proved against its verifier.</param>
-    /// <param name="kdfSalt">The installation's salt.</param>
-    /// <param name="kdfParameters">The parameters it was derived with.</param>
-    /// <param name="deviceId">The issuing device's public identity.</param>
-    /// <returns>The verified answer, carrying the kit.</returns>
-    private static SetupAnswer BuiltKit(
-        RepositoryWriteCredential credential,
-        ReadOnlySpan<byte> kdfSalt,
-        Domain.Configuration.Argon2Parameters kdfParameters,
-        byte[] deviceId)
-    {
-        var framed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
-            RecoveryKitFactory.BuildForInstallation(
-                credential, kdfSalt, kdfParameters, deviceId,
-                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
-
-        return new SetupAnswer(
-            GateOutcome.Verified,
-            Kit: new KitAnswer(
-                framed,
-                Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                    framed,
-                    "This kit is ONE of the two things you need. The other is your passphrase, which is "
-                    + "not in here. Keep them apart."),
-                Convert.ToHexStringLower(framed.AsSpan(framed.Length - 32))));
+                WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));
     }
 
     private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)

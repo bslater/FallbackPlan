@@ -133,18 +133,6 @@ public sealed class AuthenticationGateTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AKitStillOwed_AlsoKeepsItsOwnState()
-    {
-        _inner.SetupState = "kit_required";
-        var connection = Connect();
-
-        var described = (ServiceDescriptionResult)await connection.ExecuteAsync(
-            new DescribeServiceCommand(), CancellationToken.None);
-
-        Assert.AreEqual("kit_required", described.SetupState);
-    }
-
-    [TestMethod]
     public async Task AReadyInstallationWithNoAccounts_IsMovedToUsersRequired()
     {
         // The one case the override exists for: everything else is finished,

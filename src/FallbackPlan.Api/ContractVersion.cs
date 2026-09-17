@@ -210,8 +210,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// value is public by construction (each archive's descriptor records the
     /// same three facts) and null until setup has run. Additive with
     /// defaults.
+    /// 1.29 withdraws the recovery kit (ADR-0060): `confirm_recovery_kit`
+    /// is gone, `describe_service` no longer carries `kit_status` or
+    /// `kit_confirmed_at`, and `setup_state` is two-valued again —
+    /// `setup_required` or `ready`. A minor with removals, admitted under
+    /// the pre-release rule stated at the top of these remarks: the only
+    /// clients are this repository's, a client reads a missing `kit_status`
+    /// exactly as it read one from a pre-1.15 service, and a client that
+    /// still knows `kit_required` treats it as an unfinished ceremony. A
+    /// 2.0 would protect a client nobody has.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 28);
+    public static ContractVersion Current { get; } = new(1, 29);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

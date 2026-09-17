@@ -348,10 +348,7 @@ public sealed class RecoveryHostTests : IDisposable
         Environment.SetEnvironmentVariable(passwordVariable, password);
 
         var vault = Path.Combine(_harness.WorkPath, "vault");
-        var kit = Path.Combine(_harness.WorkPath, "installation-kit.bin");
         Directory.CreateDirectory(vault);
-        // The setup verb still writes a kit until the verb itself is cut
-        // over; the recovery below never reads it.
 
         try
         {
@@ -359,7 +356,7 @@ public sealed class RecoveryHostTests : IDisposable
                 AgentHost.RunAsync,
                 "setup", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
                 "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
-                "--kit-output", kit, "--user", "ben", "--password-env", passwordVariable);
+                "--user", "ben", "--password-env", passwordVariable);
             Assert.AreEqual(0, setup.ExitCode, setup.Error);
 
             _harness.WriteSourceFile("docs/notes.txt", "the words worth keeping");

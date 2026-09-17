@@ -4,11 +4,9 @@
 //
 // What it verifies, in order:
 //   step 2  a short passphrase, a long-but-lowercase one, and a mismatched
-//           confirmation each leave "Build the recovery kit" disabled; a
-//           compliant, matching pair enables it and the kit arrives.
-//   step 3  the acknowledgement checkbox is locked until a kit form is
-//           taken; "Finish setup" is locked until it is ticked.
-//   step 4  a short password, one missing the composition, one equal to the
+//           confirmation each leave "Set the passphrase" disabled; a
+//           compliant, matching pair enables it and the account step arrives.
+//   step 3  a short password, one missing the composition, one equal to the
 //           passphrase, and a mismatched confirmation each leave "Create
 //           User" disabled; a valid set enables it, the account is created,
 //           and the console lands signed in as the new owner.
@@ -93,31 +91,10 @@ try {
   check("passphrase: compliant and matching enables Build", !await disabled(build));
 
   await page.click(build);
-  await page.waitForSelector('[data-action="setup-kit-file"]', { timeout: 30000 });
+  await page.waitForSelector("#setup-user", { timeout: 30000 });
   await closeDialog();
 
-  // ---- step 3: the kit gate
-  check("kit: the acknowledgement is locked before a form is taken",
-    await disabled("#setup-kit-ack"));
-  check("kit: Finish is locked before the acknowledgement",
-    await disabled('[data-action="setup-kit-done"]'));
-
-  const download = page.waitForEvent("download", { timeout: 10000 });
-  await page.click('[data-action="setup-kit-file"]');
-  const file = await download;
-  check("kit: the download is the framed kit file",
-    file.suggestedFilename() === "fallbackplan-recovery-kit.fbpkrkit");
-
-  check("kit: taking a form unlocks the acknowledgement", !await disabled("#setup-kit-ack"));
-  check("kit: Finish stays locked until the box is ticked",
-    await disabled('[data-action="setup-kit-done"]'));
-  await page.check("#setup-kit-ack");
-  check("kit: the ticked box enables Finish", !await disabled('[data-action="setup-kit-done"]'));
-
-  await page.click('[data-action="setup-kit-done"]');
-  await page.waitForSelector("#setup-user", { timeout: 20000 });
-
-  // ---- step 4: the first account, invalid shapes first
+  // ---- step 3: the first account, invalid shapes first
   const create = '[data-action="setup-create-user"]';
   await page.fill("#setup-user", "ben");
 

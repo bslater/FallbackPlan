@@ -74,9 +74,6 @@ public sealed class HostHarness : IDisposable
     /// <summary>A scratch directory for kits and restore targets.</summary>
     public string WorkPath => Path.Combine(_scratch, "work");
 
-    /// <summary>The installation kit the setup verb wrote, once <see cref="SetupAsync"/> has run.</summary>
-    public string InstallationKitPath => Path.Combine(WorkPath, "installation-kit.bin");
-
     /// <summary>The result of one host invocation.</summary>
     public sealed record Invocation(int ExitCode, string Output, string Error)
     {
@@ -102,8 +99,7 @@ public sealed class HostHarness : IDisposable
     /// <summary>
     /// First-run setup through the agent's own verb, as a headless operator
     /// would run it (ADR-0044): the passphrase becomes the installation's
-    /// credential, the kit is written under <see cref="WorkPath"/>, and the
-    /// first account is created. Once per harness; a second call is a no-op,
+    /// credential and the first account is created. Once per harness; a second call is a no-op,
     /// because the verb itself refuses a second run.
     /// </summary>
     public async Task SetupAsync()
@@ -118,7 +114,7 @@ public sealed class HostHarness : IDisposable
             AgentHost.RunAsync,
             "setup", "--archives", ArchivesRoot, "--state", StateDirectory,
             "--passphrase-env", PassphraseVariable, "--acknowledge-loss",
-            "--kit-output", InstallationKitPath, "--user", OwnerUser, "--password-env", PasswordVariable);
+            "--user", OwnerUser, "--password-env", PasswordVariable);
         Assert.AreEqual(0, result.ExitCode, $"setup failed: {result.All}");
         _setUp = true;
     }

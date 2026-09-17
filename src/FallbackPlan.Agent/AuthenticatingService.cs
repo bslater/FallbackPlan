@@ -369,9 +369,9 @@ public sealed class AuthenticatingService : IFallbackPlanService
             SignedInRole = session?.Role.ToString(),
 
             // Only when the installation is otherwise finished: an installation
-            // still owing a passphrase or a recovery kit has a more urgent
-            // state to report, and stacking this on top would send the operator
-            // to the wrong screen.
+            // still owing a passphrase has a more urgent state to report, and
+            // stacking this on top would send the operator to the wrong
+            // screen.
             SetupState = !_users.HasAccounts && description.SetupState is null or "ready"
                 ? UsersRequiredState
                 : description.SetupState,

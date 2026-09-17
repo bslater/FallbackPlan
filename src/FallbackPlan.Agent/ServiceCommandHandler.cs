@@ -421,7 +421,6 @@ public sealed partial class ServiceCommandHandler(
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
-        ConfirmRecoveryKitCommand confirm => ConfirmRecoveryKit(confirm),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -2628,8 +2627,6 @@ public sealed partial class ServiceCommandHandler(
             runtime.Options.Logging is { } logging
                 ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
                 : null,
-            runtime.KitConfirmation.Status,
-            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds,
             KdfSalt: provisioning is null ? null : Convert.ToHexStringLower(provisioning.KdfSalt),
             KdfMemoryKib: provisioning?.KdfParameters.MemoryKiB,
             KdfIterations: provisioning?.KdfParameters.Iterations,

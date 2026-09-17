@@ -14,7 +14,7 @@ namespace FallbackPlan.Web.Tests;
 /// renders at zero size — invisible — while its modal backdrop still makes
 /// the whole document inert. During first-run setup the app shell is hidden
 /// and the setup gate shown, so the "Passphrase accepted" report opened an
-/// invisible modal over the recovery-kit step: the page looked normal and
+/// invisible modal over the wizard's next step: the page looked normal and
 /// every button was dead, the download included. Toasts share the trap in a
 /// quieter form: a toast raised while the shell is hidden simply never
 /// appears.
@@ -70,7 +70,7 @@ public sealed class ConsoleShellLayerTests
             0, DivDepthOf(IndexHtml(), "id=\"dialog\""),
             "the <dialog> sits inside a container the page can hide. showModal() from a hidden "
             + "subtree is an invisible modal whose backdrop swallows every click — the setup "
-            + "wizard's recovery-kit step went dead exactly this way. Keep it a direct child of "
+            + "wizard once went dead exactly this way. Keep it a direct child of "
             + "<body>.");
     }
 

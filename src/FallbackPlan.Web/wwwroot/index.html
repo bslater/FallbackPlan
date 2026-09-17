@@ -53,8 +53,8 @@
 <!-- The overlay layers live OUTSIDE the app shell, as direct children of
      <body>, because the shell hides while a gate is up: a dialog opened by
      showModal() from inside a [hidden] subtree renders at zero size while
-     its modal backdrop still makes the whole page inert — the setup
-     wizard's kit step went dead exactly that way — and a toast raised then
+     its modal backdrop still makes the whole page inert — a setup
+     wizard step once went dead exactly that way — and a toast raised then
      never appears. ConsoleShellLayerTests pins this arrangement. -->
 <div class="toasts" id="toasts" aria-live="polite" popover="manual"></div>
 <dialog class="dialog" id="dialog"></dialog>

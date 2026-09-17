@@ -82,7 +82,7 @@ public sealed class SetupWizardScriptTests
     public void TheCombinedPassphraseStep_GatesBuildOnStrengthAndMatch()
     {
         // The user's spec for the wizard's passphrase step: one screen with
-        // the passphrase AND its confirmation, and "Build the recovery kit"
+        // the passphrase AND its confirmation, and "Set the passphrase"
         // disabled until the strength policy passes and the two entries
         // match.
         var script = AppJs();
@@ -94,7 +94,7 @@ public sealed class SetupWizardScriptTests
         Assert.Contains("id=\"setup-match\"", step, StringComparison.Ordinal,
             "the mismatch hint needs a stable container so typing patches it in place");
         Assert.Contains("data-action=\"setup-finish\"", step, StringComparison.Ordinal);
-        Assert.Contains("Build the recovery kit", step, StringComparison.Ordinal);
+        Assert.Contains("Set the passphrase", step, StringComparison.Ordinal);
 
         var gate = FunctionBody(script, "setupBuildReady");
         Assert.Contains("strength?.acceptable", gate, StringComparison.Ordinal,
@@ -107,28 +107,30 @@ public sealed class SetupWizardScriptTests
     }
 
     [TestMethod]
-    public void TheKitStep_GatesFinishOnTheSavedAcknowledgement()
+    public void TheWizard_HasNoKitStep_AndNoKitAction()
     {
-        // Step two of the user's spec: no way past the kit step until one of
-        // the two forms was taken and the checkbox says it was saved.
-        var step = FunctionBody(AppJs(), "setupStep3");
+        // The recovery kit is withdrawn (ADR-0060): the passphrase is the
+        // whole credential, so the ceremony goes straight from the
+        // passphrase to the first account. A kit step creeping back would be
+        // a second artefact for a person to lose.
+        var script = AppJs();
 
-        Assert.Contains("data-action-change=\"setup-kit-ack\"", step, StringComparison.Ordinal);
-        Assert.Contains("!U.saved", step, StringComparison.Ordinal,
-            "the finishing button must stay disabled until the checkbox is ticked");
-        Assert.Contains("data-action=\"setup-kit-file\"", step, StringComparison.Ordinal);
-        Assert.Contains("data-action=\"setup-kit-print\"", step, StringComparison.Ordinal);
+        Assert.Contains("const SETUP_STEPS = [\"What this is\", \"Passphrase\", \"Account\"];", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("setup-kit-", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("/api/recovery-kit", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("confirm_recovery_kit", script, StringComparison.Ordinal);
     }
 
     [TestMethod]
     public void TheAccountStep_GatesCreateUserOnEveryRule()
     {
-        // Step three of the user's spec: username, password, confirmation;
+        // The last step of the user's spec: username, password, confirmation;
         // Create User enabled only when the server accepts the password, it
         // is not the passphrase (compared by hash), and the confirmation
         // matches.
         var script = AppJs();
-        var step = FunctionBody(script, "setupStep4");
+        var step = FunctionBody(script, "setupStep3");
 
         Assert.Contains("id=\"setup-user\"", step, StringComparison.Ordinal);
         Assert.Contains("id=\"setup-user-pass\"", step, StringComparison.Ordinal);
@@ -156,10 +158,10 @@ public sealed class SetupWizardScriptTests
     {
         // The account step compares by hash precisely so the passphrase is
         // not held past provisioning. That only works if the hash is taken
-        // BEFORE the secret is wiped — on both paths that learn it.
+        // BEFORE the secret is wiped.
         var script = AppJs();
 
-        foreach (var action in new[] { "setup-finish", "setup-rebuild-kit" })
+        foreach (var action in new[] { "setup-finish" })
         {
             var body = ActionBody(script, action);
             var hashed = body.IndexOf("passHash = await sha256Hex(", StringComparison.Ordinal);
@@ -188,25 +190,6 @@ public sealed class SetupWizardScriptTests
             StringComparison.Ordinal,
             "the strength callback must apply its answer through the in-place patch, so the "
             + "field being typed in is never touched");
-    }
-
-    [TestMethod]
-    public void ThePrintableForm_OpensAPage_RatherThanOnlyDownloadingAFile()
-    {
-        // The button says "Open the printable page", and for a while it
-        // quietly downloaded a .txt instead. The label is a promise: the
-        // print action opens a window and asks it to print; the download is
-        // only the popup-blocked fallback.
-        var script = AppJs();
-        var body = FunctionBody(script, "setupOpenPrintable");
-
-        Assert.Contains("window.open(", body, StringComparison.Ordinal,
-            "the printable form must open a page — that is what the button promises");
-        Assert.Contains(".print()", body, StringComparison.Ordinal,
-            "the opener drives printing (the child stays script-free, since about:blank can inherit the opener's CSP)");
-
-        Assert.Contains("\"setup-kit-print\"() { setupOpenPrintable(", script, StringComparison.Ordinal,
-            "the print button must route to the printable view, not to a download");
     }
 
     [TestMethod]

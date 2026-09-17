@@ -53,8 +53,7 @@ public static class AgentHost
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
-                                            --acknowledge-loss --kit-output <path>
-                                            --user <name> --password-env <VAR>
+                                            --acknowledge-loss --user <name> --password-env <VAR>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
                                             [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]
                   fallbackplan-agent pairings --state <dir>
@@ -101,10 +100,9 @@ public static class AgentHost
                 passphrase can never be changed, so a second attempt is refused
                 rather than obeyed. --acknowledge-loss is required, because losing
                 the passphrase makes every backup unrecoverable and there is no
-                reset, no export and no support path. --kit-output names where to
-                write the recovery kit, which setup does not complete without: the
-                binary form goes there and the printable form to '<path>.txt'. The
-                kit is ONE factor — store it apart from the passphrase.
+                reset, no export and no support path. The passphrase is the whole
+                recovery credential (ADR-0060): there is no kit to write, and a
+                recovery needs only the passphrase and reach to an archive.
 
                 The service never holds the passphrase (ADR-0042 §5): after
                 `setup` it opens every archive with the stored write credential,
@@ -508,8 +506,8 @@ public static class AgentHost
             if (!created.IsOk)
             {
                 error.WriteLine(
-                    $"error: the first account was refused ({created.Outcome}). The installation is set up "
-                    + "and its kit is saved; add the account from the console or the CLI.");
+                    $"error: the first account was refused ({created.Outcome}). The installation is set up; "
+                    + "add the account from the console or the CLI.");
                 return 2;
             }
 
@@ -517,10 +515,8 @@ public static class AgentHost
             return 0;
         }
 
-        async Task<int> SetupVerbAsync(string kitOutput, string firstUser, string firstPassword)
+        async Task<int> SetupVerbAsync(string firstUser, string firstPassword)
         {
-            byte[] kitFramed = [];
-
             try
             {
                 await using var setupRuntime = await ServiceRuntime.StartAsync(
@@ -550,20 +546,12 @@ public static class AgentHost
                         Repository.Crypto.KekDerivation.SaltLength);
 
                     // Argon2id runs here, in the process the operator started.
-                    // What crosses is the sealed bundle (NFR-SEC-011) — and
-                    // the same derivation produces the recovery kit, so the
-                    // expensive part is paid once.
+                    // What crosses is the sealed bundle (NFR-SEC-011).
                     using var authority = Repository.Crypto.WriteOnlyDerivation.Derive(
                         passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
                     envelope = Convert.ToHexStringLower(
                         Repository.Crypto.WriteOnlyProvisioning.SealProvision(
                             Convert.FromHexString(description.RestoreGrantRecipient), authority, salt, parameters));
-
-                    kitFramed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
-                        Repository.RecoveryKitFactory.BuildForInstallation(
-                            authority.Credential, salt, parameters,
-                            Convert.FromHexString(description.DeviceId ?? string.Empty),
-                            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
                 }
 
                 var result = await handler.ExecuteAsync(
@@ -577,12 +565,7 @@ public static class AgentHost
                             output.WriteLine(line);
                         }
 
-                        var written = await WriteKitAndConfirmAsync(handler, kitOutput, kitFramed)
-                            .ConfigureAwait(false);
-
-                        return written == 0
-                            ? CreateFirstAccount(firstUser, firstPassword)
-                            : written;
+                        return CreateFirstAccount(firstUser, firstPassword);
 
                     case Api.ServiceError refusal:
                         error.WriteLine($"error: {refusal.Message}");
@@ -598,56 +581,6 @@ public static class AgentHost
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
-        }
-
-        // Writing the kit and confirming it are one step here, because a
-        // headless operator cannot tick a box: the confirmation records that
-        // the kit reached durable storage, which for this verb is the file
-        // having been written where they asked for it.
-        async Task<int> WriteKitAndConfirmAsync(
-            ServiceCommandHandler handler, string kitOutput, byte[] kitFramed)
-        {
-            var textPath = kitOutput + ".txt";
-            try
-            {
-                await File.WriteAllBytesAsync(kitOutput, kitFramed, cancellationToken).ConfigureAwait(false);
-                await File.WriteAllTextAsync(
-                    textPath,
-                    Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                        kitFramed,
-                        "This kit is ONE of the two things you need. The other is your passphrase, which is "
-                        + "not in here. Keep them apart."),
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                // The installation has its passphrase; only the kit is
-                // missing. Saying which half succeeded is the difference
-                // between "run setup again" (which would be refused) and
-                // "fix the path and save the kit".
-                error.WriteLine(
-                    $"error: the installation is set up, but its recovery kit could not be written to "
-                    + $"'{kitOutput}': {failure.Message}. Save the kit from the console before relying on "
-                    + "this installation.");
-                return 2;
-            }
-
-            var checksum = Convert.ToHexStringLower(kitFramed.AsSpan(kitFramed.Length - 32));
-            var confirmed = await handler.ExecuteAsync(
-                new Api.ConfirmRecoveryKitCommand(checksum), cancellationToken).ConfigureAwait(false);
-
-            if (confirmed is Api.ServiceError refusal)
-            {
-                error.WriteLine($"error: {refusal.Message}");
-                return 2;
-            }
-
-            output.WriteLine($"recovery kit   {kitOutput}");
-            output.WriteLine($"kit (text)     {textPath}");
-            output.WriteLine(
-                "the kit is ONE factor — move it somewhere that is not this machine, and not beside the "
-                + "passphrase.");
-            return 0;
         }
 
         // `setup` gives a fresh installation its passphrase (ADR-0044) for
@@ -690,15 +623,15 @@ public static class AgentHost
                 return 1;
             }
 
-            if (Get("--kit-output") is not { Length: > 0 } kitOutput)
+            if (args.Contains("--kit-output"))
             {
-                // Setup does not complete without a saved kit (FR-KIT-004),
-                // and a headless operator has nowhere to click — so the path
-                // is required rather than the confirmation being waived for
-                // want of a button.
+                // Refused by name rather than ignored: a flag that used to
+                // name where the recovery kit went would otherwise leave an
+                // operator believing a kit had been written somewhere.
                 error.WriteLine(
-                    "error: `setup` needs --kit-output <path>. Setup is not complete until the recovery kit "
-                    + "is saved, and this is where it goes (ADR-0044, FR-KIT-004).");
+                    "error: `setup` no longer takes --kit-output. The recovery kit is withdrawn (ADR-0060): "
+                    + "the passphrase is the whole recovery credential, and a recovery needs only it and "
+                    + "reach to an archive. Drop the flag and run again.");
                 return 1;
             }
 
@@ -736,7 +669,7 @@ public static class AgentHost
                 return 1;
             }
 
-            return await SetupVerbAsync(kitOutput, firstUser, firstPassword).ConfigureAwait(false);
+            return await SetupVerbAsync(firstUser, firstPassword).ConfigureAwait(false);
         }
 
         // `retention [--apply]` runs one pass per configured set
@@ -1503,7 +1436,7 @@ public static class AgentHost
         error.WriteLine(
             $"#   \"{executablePath}\" setup --archives \"{options.ArchivesRoot}\" "
             + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR> --acknowledge-loss "
-            + "--kit-output <path> --user <name> --password-env <VAR>");
+            + "--user <name> --password-env <VAR>");
         return 0;
     }
 

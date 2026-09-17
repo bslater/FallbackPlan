@@ -316,13 +316,13 @@ public sealed class InstallationCredentialTests : IDisposable
             await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
         Assert.AreEqual("setup_required", description.SetupState);
 
-        // And a provisioned installation still answers — reaching the kit
-        // step rather than being stuck at setup_required — because the
-        // installation credential answers without the configuration at all.
+        // And a provisioned installation still answers — ready rather than
+        // stuck at setup_required — because the installation credential
+        // answers without the configuration at all.
         Save(Store());
         Assert.IsInstanceOfType<ServiceDescriptionResult>(
             await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var afterwards);
-        Assert.AreEqual("kit_required", afterwards.SetupState);
+        Assert.AreEqual("ready", afterwards.SetupState);
     }
 
     [TestMethod]
