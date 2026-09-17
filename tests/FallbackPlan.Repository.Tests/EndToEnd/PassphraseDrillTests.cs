@@ -11,12 +11,11 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The passphrase drill (FR-KIT-006; ADR-0060): one passphrase, and
+/// The passphrase drill (FR-DRL-001; ADR-0060): one passphrase, and
 /// nothing else kept anywhere, restores from an archive it created — and
 /// from a <em>second</em> archive of the same installation — because every
 /// archive's own descriptor carries the salt, the parameters and the
-/// verifier the derivation needs. Does not establish FR-KIT-004, which
-/// named a kit this drill no longer holds.
+/// verifier the derivation needs.
 /// </summary>
 [TestClass]
 public sealed class PassphraseDrillTests : IDisposable

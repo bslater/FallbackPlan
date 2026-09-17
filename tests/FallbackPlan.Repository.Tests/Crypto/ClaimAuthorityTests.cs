@@ -8,7 +8,7 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 
 /// <summary>
 /// The claim key ([ADR-0053](../../../docs/adr/0053-peer-claim-and-configuration-recovery.md);
-/// FR-REP-001, FR-KIT-006): the authority a rebuilt machine proves its
+/// FR-REP-001, FR-WOR-002): the authority a rebuilt machine proves its
 /// ownership of a peer replica with, on a derivation domain of its own.
 /// </summary>
 /// <remarks>

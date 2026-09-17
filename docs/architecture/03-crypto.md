@@ -204,7 +204,7 @@ Stated here so it is never implied elsewhere:
 
 - a compromised source reads plaintext before encryption — no backup system can prevent this;
 - ransomware holding source credentials *and* unlocked keys can act with the user's authority (mitigations, not solutions, in [`07-retention-and-gc.md` §5](07-retention-and-gc.md#5-destructive-change-safeguards));
-- loss of all recovery material makes the repository permanently unreadable — by design, and the reason the recovery-kit workflow is mandatory;
+- loss of the passphrase makes the repository permanently unreadable — by design, and the reason recovery is drilled rather than assumed;
 - stored record lengths leak compressed sizes ([`../threat-model.md`](../threat-model.md#t-11-metadata-side-channels)).
 
 One property to note for the external cryptographic review: **AES-GCM is not key-committing**. A ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the repository master key and an attacker without it cannot choose them — but `repository-unverified` deduplication accepts records from other writers without checking them, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. The AAD binding in §3.4 should be assessed against this. Not a v1 blocker ([PT-15](../review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)).

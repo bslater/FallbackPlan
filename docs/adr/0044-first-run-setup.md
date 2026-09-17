@@ -1,6 +1,6 @@
 # ADR-0044 — First-run setup: an installation is initialised the moment it has a passphrase
 
-**Status:** Accepted
+**Status:** Accepted · Amended (2026-09) — the ceremony ends at the passphrase and the first account; the kit step is withdrawn ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md))
 **Date:** 2026-08
 **Requirements:** FR-SVC-011, NFR-SEC-011
 **Related:** [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0036](0036-local-web-console.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [architecture 03](../architecture/03-crypto.md), [format spec 03](../../specifications/repository-format/03-keys.md)
@@ -100,6 +100,16 @@ repository ids remain independently random per archive, so the archives are
 still distinct repositories in every way the format cares about.
 
 ### 3. Setup captures the passphrase and generates the recovery kit
+
+> **Amended 2026-09.** The heading's second half, and the two amendments
+> below that built it, are withdrawn with the kit
+> ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)). Setup captures the passphrase and the first account, and
+> is complete: `setup_state` is `setup_required` or `ready`, the console's
+> wizard is three steps, and the headless verb takes no `--kit-output` (it
+> refuses one by name). The public-parameters record the third amendment
+> added is gone too — the same facts ride `describe_service` at contract
+> 1.28, and with no kit to assemble from them the objection that record
+> answered no longer applies.
 
 *(§3 as first accepted read "captures the passphrase and stops", scoping the
 kit out. The amendment below replaces that; the reasoning it replaced is kept
@@ -275,6 +285,8 @@ and unmigrated.
 
 ## Amendment (2026-08): the ceremony ends with the recovery kit
 
+> **Withdrawn 2026-09** — see the note at §3 and [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md).
+
 §3 above scoped the kit out, on the reasoning that a kit needs an archive and
 an archive needs a set and a destination — so including it would have grown a
 passphrase ceremony into the whole of §16.1. That reasoning was sound about
@@ -355,6 +367,9 @@ skips the step entirely.
 
 ## Amendment (2026-09): the installation records the public half of its own derivation
 
+> **Withdrawn 2026-09** — see the note at §3 and [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md). The record
+> existed so a kit could be rebuilt before the first backup; there is no kit.
+
 The ceremony could be entered and then never finished. Resuming an unsaved
 kit asks for the passphrase and rebuilds the kit from the installation's
 Argon2id salt — and the console, which must not read the service's
@@ -367,7 +382,7 @@ unfinishable, and FR-KIT-004 is the requirement that says it must not be.
 
 The fix is to make the implementation match what a v2 kit already claims to
 be. [ADR-0013's amendment](0013-recovery-kit.md) and
-[recovery-kit §2.2](../../specifications/recovery-kit/README.md#22-installation-kits-kit-format-v2)
+recovery-kit §2.2 (a specification since withdrawn with the kit)
 both say everything a kit carries is known the moment the passphrase is
 chosen. So provisioning now writes that: `installation-public.json` in the
 state directory, holding the salt, the Argon2id parameters and the derived
@@ -400,3 +415,4 @@ so a service that predates the file keeps working unchanged.
 | 2026-08 | Amended | The ceremony no longer stops at the passphrase: it generates the installation recovery kit and will not complete until the operator confirms saving it (FR-KIT-004), adding a `kit_required` state between `setup_required` and `ready`. §3's original scoping is kept above rather than rewritten, because the reasoning it rested on is worth being able to find |
 | 2026-08 | Amended | The passphrase policy tightens to a floor of sixteen with composition rules (an uppercase letter, two digits, a special character), enforced at the same creation-only boundary; the wizard's passphrase and confirmation share one step gated together; and the ceremony ends by creating the owner account — the account policy live as a checklist, the passphrase excluded by hash comparison, and the new owner signed straight in |
 | 2026-09 | Amended | Provisioning records the public half of its derivation — salt, Argon2id parameters and sealing public key — as `installation-public.json` in the state directory, healed at startup for installations provisioned earlier, so the recovery kit is rebuildable from the moment the passphrase is chosen rather than from the first backup. An operator who left before saving the kit was otherwise stranded: the resume path needed a salt, the only salt it could read was in a repository descriptor, and the full-screen setup gate blocked creating the set that would write one. Recorded as a local file rather than a `describe_service` field on purpose — the device id is already published, so publishing these too would have let any session holder assemble a kit, which NFR-SEC-009 and T-19 both forbid |
+| 2026-09 | Amended (kit withdrawn) | [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md): the ceremony ends at the passphrase and the first account. The `kit_required` state, `confirm_recovery_kit`, the kit step and its rebuild endpoint, `--kit-output` and the public-parameters record are gone (contract 1.29); `Hosts.Tests/FirstRunSetupTests` and `Web.Tests/FirstRunSetupTests` pin the shorter ceremony and the refusal of a `--kit-output` by name |

@@ -18,8 +18,7 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 | Destination health, **per destination** | Replication state ([`04-concurrency-and-publication.md` §6.1](04-concurrency-and-publication.md#61-the-distinction)) |
 | Full-backup standing, **per destination** — when its baseline completed, and whether it is still owed its seed | Sync ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by contract 1.19 |
 | Last verified restore point | Verification coverage ([`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification)) |
-| Warnings requiring action | Damage reports, quota exhaustion, stale recovery kit, unusual deletion rates |
-| Recovery-kit status | Never generated / saved / stale |
+| Warnings requiring action | Damage reports, quota exhaustion, unusual deletion rates |
 
 ### 1.1 States must be distinguishable
 

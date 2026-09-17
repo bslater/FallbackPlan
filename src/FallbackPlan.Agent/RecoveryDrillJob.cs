@@ -4,7 +4,7 @@ using FallbackPlan.Application;
 namespace FallbackPlan.Agent;
 
 /// <summary>
-/// The scheduled restore drill (ADR-0054; FR-KIT-007, NFR-OPS-005): bring a
+/// The scheduled restore drill (ADR-0054; FR-DRL-002, NFR-OPS-005): bring a
 /// sampled file back out of a destination's own replica, on a cadence, and
 /// record what happened so "we could recover" stops being a claim about the
 /// last time somebody chose to check.

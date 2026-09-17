@@ -1,6 +1,6 @@
 # ADR-0013 — Recovery kit contents and format
 
-**Status:** Accepted · Implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Superseded by [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md) (2026-09) — there is no recovery kit; the passphrase is the whole recovery credential
 **Date:** 2026-08
 **Requirements:** FR-KIT-001..006, NFR-OPS-005, NFR-SEC-006
 **Review finding:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified)
@@ -18,6 +18,18 @@ That disjunction is the crux, and it was left open. Bare key material means a st
 A release gate that depends on an unspecified artefact is not a gate.
 
 ## Decision
+
+> **Superseded (2026-09).** Everything below describes an artefact the
+> product no longer produces. With format 1 withdrawn
+> ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze))
+> there is no key object for a kit to carry, and every other field it held is
+> in each archive's own descriptor; the peer replica's salt, the one thing a
+> descriptor could not hand a rebuilt machine, is served by the peer at claim
+> time ([ADR-0053 Amendment 2](0053-peer-claim-and-configuration-recovery.md#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)).
+> [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md) records the decision: a recovery is the passphrase and reach
+> to an archive, and nothing else exists to be saved, printed, confirmed or
+> lost. The record is kept as written because the kit was load-bearing for a
+> year of decisions that cite it.
 
 ### Contents
 
@@ -158,6 +170,7 @@ carried and staleness is real. A v1 kit's staleness rule stands unchanged.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | |
-| 2026-08 | Accepted | Built, specified as [`specifications/recovery-kit/`](../../specifications/recovery-kit/README.md), conformance-fixtured, and exercised by the clean-machine drill — restore from store plus kit plus passphrase, with per-line transcription checks. Shamir splitting stays deferred rather than rejected. |
+| 2026-08 | Accepted | Built, specified as `specifications/recovery-kit/` (since withdrawn with the kit), conformance-fixtured, and exercised by the clean-machine drill — restore from store plus kit plus passphrase, with per-line transcription checks. Shamir splitting stays deferred rather than rejected. |
 | 2026-08 | Amended | Kit format v2 describes an **installation** rather than a repository ([ADR-0044](0044-first-run-setup.md)): repository id, wrapped key and destinations are dropped, the archive supplies its own identity from its descriptor, and one kit opens every archive the passphrase wrote. v1 kits are untouched |
 | 2026-08 | Amended | An installation kit **cannot go stale**, and the reasoning is recorded rather than the question left open. Status is two-valued, carried on `describe_service` at contract 1.15 and surfaced continuously on the console's Maintenance card (FR-KIT-005) |
+| 2026-09 | Superseded | By [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md): the kit is withdrawn outright. For a format-2 installation it was never a second factor — its payload was a strict subset of every archive's descriptor — and the one fact it carried that a descriptor could not give a rebuilt machine, a peer replica's salt, is served by the peer at claim time. FR-KIT-001..005 are deleted; FR-KIT-006/007, which were about drills, are re-homed as FR-DRL-001/002 |

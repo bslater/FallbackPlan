@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-09
-**Requirements:** FR-KIT-006, FR-KIT-007, FR-VER-004, NFR-OPS-005
+**Requirements:** FR-DRL-001, FR-DRL-002 (FR-KIT-006 and FR-KIT-007 until [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md) re-homed them), FR-VER-004, NFR-OPS-005
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0046](0046-direct-to-destination-publication.md), [recovery drill](../../eng/recovery-drill.sh)
 
 ---
@@ -122,6 +122,10 @@ drill does **not** exercise:
 
 - **The kit file's own parse.** The service holds the passphrase and derives
   directly; nothing reads a `.bin` or transcribes a printable page.
+
+  > **Amended 2026-09.** Moot: there is no kit to parse
+  > ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)). What the operator drill still proves beyond this one
+  > is the next two bullets — the tool's closure and the machine's absence.
 - **The standalone recovery tool's dependency closure.** The drill runs inside
   the service, which has every assembly. Whether `FallbackPlan.Recovery` still
   restores on a machine with nothing on it is a build-graph property held by
@@ -284,3 +288,4 @@ overstates by exactly what the limit says.
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R11. Built: `Agent/RecoveryDrillJob` drills through the guided-restore verbs, `Agent/Scheduler` decides when, `Application/DestinationSyncStore` carries the answer, and contract 1.25 puts it on the status matrix. The scheduled drill deliberately proves less than [the operator drill](../../eng/recovery-drill.sh), and §5 says what |
 | 2026-09 | Amended | [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09): an interrupted drill states nothing. `Agent/RecoveryDrillJob` translates a cancelled command answer back into a cancellation, `Agent/AgentPass` waits for the drill phase, and `Agent/JobScheduler` refuses work once stopped instead of posting to disposed semaphores |
 | 2026-09 | Amended | [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09): on a write-only set the scheduled drill proves the road back as far as the sealed content and states that limit as a pass, never as a failure. `Agent/RecoveryDrillJob` recognises a sealed-only refusal and confirms the plan finds every segment; `Application/DestinationSyncStore` and contract 1.27 carry `drill_limit`; `Hosts.Tests/RecoveryDrillTests` runs on a set-up installation |
+| 2026-09 | Amended (kit withdrawn) | The requirements this record carries are FR-DRL-001/002, the drills re-homed from FR-KIT-006/007 by [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md); §5's first "does not exercise" bullet is moot because there is no kit file, and `eng/recovery-drill.sh` is rewritten passphrase-only |

@@ -69,7 +69,7 @@ FallbackPlan.slnx
 ├── external/
 │   └── packages/                  committed Bodu package feed — see §5.1
 ├── specifications/                repository-format, peer-protocol, command-contract,
-│                                  discovery-protocol, recovery-kit, conformance-vectors
+│                                  discovery-protocol, conformance-vectors
 ├── docs/                          this set
 ├── tools/                         repository-inspector, fixture-generator,
 │                                  corruption-injector, network-fault-proxy
@@ -182,7 +182,7 @@ They are separate stores on disk, not separate tables in one file, so that "dele
 
 Hub-and-spoke adds two journal-shaped files **beside** the durable state, deliberately not inside it ([ADR-0010 Amendment 1](../adr/0010-local-store-separation.md#amendment-1-2026-08--where-the-hub-and-spoke-state-lands-in-the-split)): per-destination **sync state** (what each destination holds, when it was last reached, why it last failed) and **notices** (peering ended, terms narrowed, quota hit). Both are sacrificial the way `jobs.json` is — sync state re-derives from a destination inventory pass, and a lost notice is re-raised by the condition still holding — so their corruption or deletion can never touch the device identity. One nuance since sync-ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)): a re-derived ledger re-earns its baselines from the destinations' real inventories rather than re-shipping terabytes — "replicas seed the ledgers" — so sacrificing it costs a reconciliation pass, not a re-seed. And a privacy note the export guidance now carries: configuration holds no secrets, but with destinations in it, it names who stores your backups and where.
 
-**Durable local state** is backed up separately or re-established by re-pairing. The device *private key* is never written to the recovery kit; a recovering device establishes a new identity and is re-authorised ([`08-restore-and-recovery.md` §4.2](08-restore-and-recovery.md#42-what-is-deliberately-excluded)).
+**Durable local state** is backed up separately or re-established by re-pairing. The device *private key* is never exported anywhere; a recovering device establishes a new identity and is re-authorised ([`08-restore-and-recovery.md` §4.2](08-restore-and-recovery.md#42-what-is-deliberately-excluded)).
 
 **Configuration** is file-based, schema-versioned, validated before use, and exportable without secrets (NFR-OPS-003).
 

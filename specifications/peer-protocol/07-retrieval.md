@@ -9,7 +9,7 @@ over the same authenticated session replication pushed it through. Everything
 served is the owner's ciphertext returning home: the destination decrypts
 nothing, learns nothing new about the content, and serves nobody but the peer
 its attribution ledger says the replica belongs to. What retrieval buys is a
-restore path that needs no shared disk and no recovery kit — a hub with no
+restore path that needs no shared disk and nothing but the passphrase — a hub with no
 local copy of the content (its staging archive lost, or a direct-ship set,
 for which that is the designed steady state —
 [ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)) opens
@@ -26,8 +26,7 @@ would be one state machine wearing two hats.
 The observable cost is stated rather than hidden: a destination serving
 retrieval learns **which objects** the owner reads and when. It already holds
 the ciphertext; access patterns are the only new information, and an owner for
-whom that is too much should restore from a local replica or the recovery kit
-instead.
+whom that is too much should restore from a local replica instead.
 
 ## 2 Feature and negotiation
 

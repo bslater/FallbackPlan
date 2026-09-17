@@ -34,7 +34,7 @@ Architecture decision records and threat model · versioned configuration schema
 
 Filesystem capture, immutable tree and snapshot manifests, reliable local restore. *Execution plan:* [`phase-1-execution-plan.md`](phase-1-execution-plan.md).
 
-**Features:** cross-platform streaming scanner · include/exclude rules · file identity and version comparison · immutable file, tree, policy, error, and snapshot manifests · local store and catalogue integration · CLI `init`, `backup`, `snapshots`, `ls`, `restore`, `check`, `key export` · restore planner and verifier · recovery kit · repository inspector · integrity verification · retention selection without physical pruning · three-way local state separation · OpenTelemetry instrumentation · Agent service and basic scheduling.
+**Features:** cross-platform streaming scanner · include/exclude rules · file identity and version comparison · immutable file, tree, policy, error, and snapshot manifests · local store and catalogue integration · CLI `init`, `backup`, `snapshots`, `ls`, `restore`, `check`, `key export` · restore planner and verifier · passphrase-only recovery · repository inspector · integrity verification · retention selection without physical pruning · three-way local state separation · OpenTelemetry instrumentation · Agent service and basic scheduling.
 
 **Exit criteria:** cross-platform backup and point-in-time restore · path and version lookups meet NFR-PERF-004 · interruption testing at every publication boundary · complete rebuild without the local database · restore begins during partial rebuild · clean-machine recovery using only repository plus kit · public conformance fixtures cover blobs, records, manifests, indexes, and snapshots.
 
@@ -50,7 +50,7 @@ Restore computer-to-computer backup, and make the engine a service that front en
 
 **Exit criteria (service boundary):** a second process cannot take the writer role — it refuses with a stated reason naming the holder · a default install listens on no port · an unpaired remote client is refused, and a substituted identity is refused rather than prompted · a restore commanded remotely writes on the service's machine and no plaintext crosses the remote binding · a running job reports states beyond `Scanning` · a service with no front end installed backs up unattended, and an unreachable console never stops it · client and service at incompatible versions refuse with both versions named.
 
-**Exit criteria (peer-to-peer):** the source can be destroyed and restored using only destination plus recovery kit · no relay required on a LAN · no destination plaintext visibility · multi-day disconnection and resumption tested · quota exhaustion handled distinctly from disk-full · verify-on-reuse prevents a hostile writer corrupting another device's backup.
+**Exit criteria (peer-to-peer):** the source can be destroyed and restored using only the destination plus the passphrase · no relay required on a LAN · no destination plaintext visibility · multi-day disconnection and resumption tested · quota exhaustion handled distinctly from disk-full · verify-on-reuse prevents a hostile writer corrupting another device's backup.
 
 ---
 
@@ -183,7 +183,7 @@ Treated as **experimental** until validated against diverse real archives, and n
 
 ### P1 — Usable local backup
 
-Streaming scanner · include/exclude rules · snapshot pipeline · CLI · restore planner and verifier · recovery kit format and drill · three-way local state separation · scheduling and Agent service · OpenTelemetry · clean-machine recovery test.
+Streaming scanner · include/exclude rules · snapshot pipeline · CLI · restore planner and verifier · passphrase-only recovery and its drill · three-way local state separation · scheduling and Agent service · OpenTelemetry · clean-machine recovery test.
 
 ### P2 — Peer destination
 
@@ -210,7 +210,7 @@ Retention engine · generation GC · compaction · tombstones and grace periods 
 - A backup set fans out to every configured destination, none of which has to be local; protection means a configured destination outside the source's failure domain is in sync, never merely that a local copy exists ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)).
 - Azure Blob and S3 repositories pass the shared contract suite.
 - All content and metadata are encrypted before leaving the source trust boundary.
-- A repository restores from a clean machine using only repository access and a recovery kit.
+- A repository restores from a clean machine using only repository access and the passphrase.
 - Deleting the catalogue loses no repository history, and does not take device identity with it.
 - Interruption tests cover publication, replication, restore, and maintenance.
 - Repository check identifies missing and corrupted objects and names the affected scope.

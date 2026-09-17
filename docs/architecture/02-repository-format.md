@@ -179,7 +179,7 @@ With the physical layer behind an indirection, compaction republishes index entr
 
 The cost is one index lookup per segment on the restore path. That is bounded, local, indexed, and measured against NFR-PERF-004 — a good trade for making the maintenance story correct.
 
-That accounting holds while the index is healthy. When it is not, the cost is larger and should be stated plainly: before this change, a manifest plus a blob was enough to recover a file, because the manifest said where the bytes were. Now recovering a single file with no index means scanning blob recovery footers until its segments are located. A user who has lost their machine, holds the recovery kit, and wants one 4 MiB document could wait through a scale-**M** footer scan — hours — before that document can be produced, which is not what FR-MAN-010 promises ([PT-10](../review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
+That accounting holds while the index is healthy. When it is not, the cost is larger and should be stated plainly: before this change, a manifest plus a blob was enough to recover a file, because the manifest said where the bytes were. Now recovering a single file with no index means scanning blob recovery footers until its segments are located. A user who has lost their machine, holds the passphrase, and wants one 4 MiB document could wait through a scale-**M** footer scan — hours — before that document can be produced, which is not what FR-MAN-010 promises ([PT-10](../review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
 
 Two mitigations, neither of which reverses the decision:
 

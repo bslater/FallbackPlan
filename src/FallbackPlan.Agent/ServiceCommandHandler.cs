@@ -24,9 +24,9 @@ namespace FallbackPlan.Agent;
 /// </para>
 /// <para>
 /// Key material never appears in any command or result, in either direction
-/// (NFR-SEC-009). Exporting a recovery kit is <b>not a command</b> — it
-/// re-derives the key-encryption key from a passphrase supplied per invocation,
-/// so it runs where the person typed it.
+/// (NFR-SEC-009). Nothing that derives from the passphrase is a command:
+/// derivation runs where the person typed it, and only sealed envelopes and
+/// public parameters cross this surface.
 /// </para>
 /// </remarks>
 public sealed partial class ServiceCommandHandler(

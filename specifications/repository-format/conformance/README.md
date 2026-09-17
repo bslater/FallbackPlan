@@ -99,8 +99,6 @@ Cross-verification is not an audit. It establishes that two people did not make 
 
 The vectors here cover algorithms and encodings. **Fixture repositories** — complete small repositories with known content — live in [`fixtures/`](fixtures/README.md). `fixture-repository-v2` is a committed write-only repository (ADR-0042; descriptor, blobs, standalone snapshot, index delta, journal): sealing is randomised by design so it is not byte-regenerated — instead every run re-proves its read contract (structure with the write bundle, `ContentSealed` without a grant, byte-identical restore with the derived authority). A format-1 fixture with byte-identical regeneration existed while format v1 did; it was withdrawn with the format, before any freeze.
 
-The suite also carries the **recovery kit** ([specifications/recovery-kit](../../recovery-kit/README.md)): framing and text-form vectors in `vectors/recovery-kit.json`.
-
 Fixtures containing user data are never committed. Everything in this suite is synthetic and constant.
 
 ## Known gaps

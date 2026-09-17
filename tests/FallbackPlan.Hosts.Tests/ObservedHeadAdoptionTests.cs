@@ -21,7 +21,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// through the next backup, reported to the operator as a store failure.
 /// </para>
 /// <para>
-/// This does not establish FR-KIT-006 — it never restores anything; the
+/// This does not establish FR-DRL-001 — it never restores anything; the
 /// machine keeps its repository throughout and only its allocation state is
 /// disturbed.
 /// </para>

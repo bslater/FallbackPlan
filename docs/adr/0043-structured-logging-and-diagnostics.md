@@ -465,3 +465,4 @@ and a retention drill over an applied pass.
 
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |
 | 2026-09 | Amended | Range 3300–3399 retired with the platform keystore (format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); `Protocol` keeps 3200–3299 |
+| 2026-09 | Amended (event 3100) | The recovery tool's event 3100 records the archive descriptor read — repository id and format — rather than the recovery kit read, because there is no kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); 3101 and 3102 are unchanged, and the 1.14 numbering note above stays as history |

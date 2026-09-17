@@ -92,7 +92,7 @@ This family's write ordering — durable data first, indexes second, snapshot re
 
 **Adopt:** a minimal blob-store abstraction · content-addressed encrypted blocks · packs sized for high-latency, request-priced stores · index recovery data embedded in packs · encrypted filenames and metadata · policy inheritance · repository-server mode · caching designed for remote latency · independently configurable chunking, compression, packing, and encryption suites.
 
-**Improve:** minimise repository-wide format configuration that cannot evolve per generation · make the key hierarchy and recovery kit comprehensible to consumers · distinguish password rotation from data-key rotation · establish deterministic conformance fixtures for third-party readers.
+**Improve:** minimise repository-wide format configuration that cannot evolve per generation · make the key hierarchy and the recovery credential comprehensible to consumers · distinguish password rotation from data-key rotation · establish deterministic conformance fixtures for third-party readers.
 
 ### 5.5 Plugin-oriented clients with an authoritative local database
 
@@ -211,7 +211,7 @@ The first vertical slice:
 
 The second:
 
-> Pair two computers → transfer the repository snapshot to the destination → destroy the source installation → restore solely from the destination and recovery kit.
+> Pair two computers → transfer the repository snapshot to the destination → destroy the source installation → restore solely from the destination and the passphrase.
 
 The third ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md)):
 

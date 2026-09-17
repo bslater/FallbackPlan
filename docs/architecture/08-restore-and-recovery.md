@@ -61,60 +61,46 @@ They are now distinct:
 
 A displaced file goes into a directory namespaced by the restore run. A single shared refuge is worse than none: restoring the same path twice silently destroys the first displaced copy, which is precisely the data the policy exists to keep.
 
-## 4. Recovery kit
+## 4. Recovery credential
 
-The recovery kit is what makes clean-machine recovery possible, and it is a release gate ([`../requirements/functional.md`](../requirements/functional.md#recovery-kit)). The original proposal defined it in a single sentence and left its most important property — whether it contains key material or *wrapped* key material — open. Those have completely different consequences if a kit is stolen. The answer, since format 1 went ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), is *neither*: a kit carries no key material of any kind, because a repository stores none.
+Clean-machine recovery is a release gate ([`../requirements/functional.md`](../requirements/functional.md#recovery-drills)), and what it needs is deliberately short: **the passphrase, and reach to an archive** ([ADR-0060](../adr/0060-the-passphrase-is-the-recovery-credential.md)). There is no recovery kit. The original proposal defined one in a single sentence and left open whether it carried key material; the answer, once format 1 went ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), was that a repository stores no key material at all — and with nothing to carry, the kit's remaining payload was a strict subset of every archive's own descriptor.
 
-### 4.1 Contents
+### 4.1 What a recovery needs
 
-| Field | Purpose | Sensitive |
-|-------|---------|-----------|
-| Kit format version | Lets a future tool parse an old kit | No |
-| Minimum recovery-tool version | Refuse rather than misread | No |
-| Repository ID | Identifies which repository this opens | Low |
-| Repository format profile | Lets the tool check compatibility before starting | No |
-| Sealing public key | The wrong-passphrase verifier: derive from the passphrase, compare | No |
-| KDF parameters (Argon2id salt, memory, iterations, parallelism) | Reproduces the root from the passphrase | No |
-| Destination descriptors | Where the repository lives — endpoint, bucket/container, prefix. For a direct-ship set this list is the **only** road back: there is no local archive behind it, so a stale list costs the address of the backup, not merely convenience ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) | Low |
-| Issuing device identity (public) | Names the device that created the kit | No |
-| Issue timestamp | Detects an outdated kit | No |
-| Recovery instructions | Step-by-step, embedded in the kit | No |
-| Integrity checksum over the whole kit | Detects transcription errors | No |
+| Held by | Fact | Sensitive |
+|---------|------|-----------|
+| The person | The passphrase | **Yes** — the one secret, never stored anywhere |
+| The person | Where the backups are: a destination folder, a drive, or a paired peer | Low — and no longer written down by the product; see §6 |
+| The archive's descriptor | Repository ID | Low |
+| The archive's descriptor | Repository format version | No |
+| The archive's descriptor | KDF parameters (Argon2id salt, memory, iterations, parallelism) | No |
+| The archive's descriptor | Sealing public key — the wrong-passphrase verifier: derive from the passphrase, compare | No |
+
+The descriptor is unencrypted by design ([repository format 01 §3.3](../../specifications/repository-format/01-object-layout.md)). `RecoverySession` reads it, derives under its salt and parameters, and proves the derivation against its sealing public key by equality — nothing is decrypted to find out. One passphrase opens every archive an installation wrote, because one salt stamps them all ([ADR-0044](../adr/0044-first-run-setup.md)).
+
+For a **peer replica** the descriptor sits behind the peer's attribution gate, where a rebuilt machine cannot read it. The peer therefore serves the KDF salts and costs behind its claimable replicas to a paired claimant, the claim proves the passphrase against each, and the attribution follows the new machine (§6; [ADR-0053 Amendment 2](../adr/0053-peer-claim-and-configuration-recovery.md#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)).
 
 ### 4.2 What is deliberately excluded
 
-- **The passphrase.** The kit is one factor; the passphrase is the other. A stolen kit alone does not open the repository.
-- **Store credentials.** The kit says *where* the repository is, never how to authenticate to it. A kit found on a printout must not grant access to the user's cloud account.
+- **Any exported artefact.** Nothing is produced at setup for a person to print, save, confirm or lose. An artefact whose every field is public and already recorded in every archive is not a second factor; calling it one would have been a fiction.
+- **Store credentials.** The product records *where* the repository is only in the configuration that dies with the machine, and never how to authenticate to it.
 - **The device private key.** Recovery does not need it; a new device establishes a new identity and is re-authorised. For a peer destination, "re-authorised" is the claim ceremony rather than only re-pairing (§6).
 
-### 4.3 Representations
+### 4.3 Restore grants (format v2)
 
-**Printable** — QR code plus checksummed text, transcribable by hand. It must survive a printer, a filing cabinet, a decade, and a person typing it back in. Human-transcribable encoding with a checksum is what makes the last part survivable.
-
-**Machine-readable** — a single file for a password manager or an encrypted USB stick.
-
-Both carry identical content. Both embed their own instructions, on the assumption that when the kit is needed, no other project documentation is reachable — which is precisely the scenario the kit exists for.
-
-### 4.5 The write-only kit (format v2)
-
-Every kit is this kit ([ADR-0042](../adr/0042-write-only-repositories.md)): it carries **no key material at all** — no key object exists to carry. It holds the repository id, the format version, the sealing public key, the KDF salt and parameters, and the destinations — purely "where the repository is and how to re-derive". The passphrase is the one factor; `RecoverySession` derives the whole authority from it against the kit's recorded parameters and proves it by public-key equality. A stolen kit yields an address and a public key, nothing to attack offline.
-
-### 4.6 Restore grants (format v2)
-
-On a write-only set the service cannot read file contents, so a guided restore ([ADR-0041](../adr/0041-guided-restore-and-peer-retrieval.md)) carries a **grant**: the admin client re-derives the sealing scalar from the passphrase where the person typed it, seals it end-to-end to the service's published recipient key (opaque to the browser and to every relay), and sends it on `open_restore_source`. The unsealed scalar lives only inside the source handle — zeroed on explicit close, the 30-minute idle sweep, or shutdown — and structure-plane verbs (browse, list, plan) never needed it at all. A restore attempted without a grant degrades honestly: each sealed read is reported as sealed in the receipt, never as damage.
+On a write-only set the service cannot read file contents, so a guided restore ([ADR-0041](../adr/0041-guided-restore-and-peer-retrieval.md)) carries a **grant**: the admin client re-derives the sealing scalar from the passphrase where the person typed it, seals it end-to-end to the service's published recipient key (opaque to the browser and to every relay), and sends it on `open_restore_source`. The unsealed scalar lives only inside the source handle — zeroed on explicit close, the 30-minute idle sweep, or shutdown — and structure-plane verbs (browse, list, plan) never needed it at all. A restore attempted without a grant degrades honestly: each sealed read is reported as sealed in the receipt, never as damage. The installation's public derivation parameters ride `describe_service` (contract 1.28) so a client holding the passphrase can build the grant without holding an archive.
 
 ### 4.4 Lifecycle
 
-- Generated during first-run setup, with **explicit confirmation** that it has been saved before setup completes.
-- Regenerated when destinations change materially, with a clear indication that the old kit's destination list is stale. The old kit still *opens* the repository; it just may not know where all of it is — and for a direct-ship set "where" is everything it knows, since the destinations are the only copies (the stakes the kit-staleness surface exists for).
-- Status surfaced continuously ([`10-observability.md`](10-observability.md#1-user-level-status)): never generated, saved, or stale.
-- A **recovery drill** — actually restoring a file using only the kit — is a supported and prompted workflow. A kit that has never been tested is a kit whose failure is discovered at the worst possible moment.
+- Nothing is generated at first-run setup: the ceremony is the passphrase and the first account ([ADR-0044](../adr/0044-first-run-setup.md) as amended).
+- A **recovery drill** — actually restoring a file using only the passphrase and reach to an archive — is a supported and prompted workflow (FR-DRL-001). A recovery that has never been tested is a recovery whose failure is discovered at the worst possible moment.
+- The drill also happens **on a cadence**, unattended, from each destination's own replica (FR-DRL-002; [ADR-0054](../adr/0054-scheduled-restore-drills.md)) — §6.
 
 ## 5. Emergency recovery
 
 A standalone recovery executable, independent of the Agent and UI, that can:
 
-- open a repository using a recovery kit;
+- open a repository using the passphrase alone;
 - list snapshots;
 - validate format compatibility and refuse clearly when it cannot read a repository;
 - restore without the service, the catalogue, or any local state;
@@ -126,7 +112,7 @@ Source and reproducible release artifacts are published for every major format v
 
 ## 6. What must survive a clean machine
 
-The release gate is recovery using **only** repository access and a recovery kit. That constrains what may live in local state, and it is why local state is separated into three stores rather than one ([H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)):
+The release gate is recovery using **only** repository access and the passphrase. That constrains what may live in local state, and it is why local state is separated into three stores rather than one ([H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)):
 
 | Store | Rebuildable from repository? | Needed for clean-machine recovery? |
 |-------|------------------------------|-----------------------------------|
@@ -134,7 +120,7 @@ The release gate is recovery using **only** repository access and a recovery kit
 | Durable local state (device keypair, pairing grants, job history) | **No** | No — a recovering device establishes a new identity, and for a peer destination claims its replica under that new identity (below) |
 | Configuration (backup sets, schedules, policies) | Partially — policy manifests record what each snapshot used | Not for restore; needed to *resume backing up* |
 
-Recovery of **data** needs only the repository and the kit. Recovery of **operation** — resuming scheduled backups to the same destinations — additionally needs configuration and re-pairing. The distinction is stated plainly in the UI, because a user who has restored their files and believes they are protected again is in a worse position than one who knows they still have to set up their destinations.
+Recovery of **data** needs only the repository and the passphrase. Recovery of **operation** — resuming scheduled backups to the same destinations — additionally needs configuration and re-pairing. The distinction is stated plainly in the UI, because a user who has restored their files and believes they are protected again is in a worse position than one who knows they still have to set up their destinations.
 
 **A peer destination needed one more thing than "a new identity", and it now has it** ([ADR-0053](../adr/0053-peer-claim-and-configuration-recovery.md)). A peer attributes each replica to a *pinned device identity*, and re-pairing deliberately does not transfer an attribution — that rule is what stops a stranger who pairs with your friend's machine asking for your repository by name. A rebuilt machine therefore arrives with a new identity that owns nothing, and the row above was, for peers, an aspiration.
 
@@ -144,13 +130,13 @@ Two limits belong on the recovery screen rather than in a footnote. A replica at
 
 Full model in [`11-solution-structure.md` §3](11-solution-structure.md#3-local-state-separation).
 
-**A direct-ship set sharpens this** ([ADR-0046](../adr/0046-direct-to-destination-publication.md)): its content never lands locally at all, so the state directory holds metadata and nothing else, and losing that directory is the whole loss rather than an inconvenience. Its destination is the only complete copy in existence, and recovery reads it directly — pointing the standalone tool at `<destination>/<repository id>` with the kit and the passphrase. The drill that holds this to the Release binaries is [eng/recovery-drill.sh](../../eng/recovery-drill.sh): it builds an installation, captures a corpus across the segment and blob boundaries, deletes the state directory, the archives root and the sources, and then compares every recovered byte against a manifest taken beforehand. Its in-process half runs in CI as `Hosts.Tests/RecoveryHostTests`.
+**A direct-ship set sharpens this** ([ADR-0046](../adr/0046-direct-to-destination-publication.md)): its content never lands locally at all, so the state directory holds metadata and nothing else, and losing that directory is the whole loss rather than an inconvenience. Its destination is the only complete copy in existence, and recovery reads it directly — pointing the standalone tool at `<destination>/<repository id>` with the passphrase. The drill that holds this to the Release binaries is [eng/recovery-drill.sh](../../eng/recovery-drill.sh): it builds an installation, captures a corpus across the segment and blob boundaries, deletes the state directory, the archives root and the sources, and then compares every recovered byte against a manifest taken beforehand. Its in-process half runs in CI as `Hosts.Tests/RecoveryHostTests`.
 
 **And the drill happens without being asked** ([ADR-0054](../adr/0054-scheduled-restore-drills.md)). Every scheduler pass, after the transfers, each `(set, local-path destination)` pair due a drill has a bounded sample of files restored out of that destination's own replica — opened as a stranger would open it, through the same guided-restore verbs a person uses ([ADR-0041](../adr/0041-guided-restore-and-peer-retrieval.md)): that replica's store, its own repository open, and a catalogue rebuilt from its own index plane, with no staging archive and no live catalogue in the path. Thirty days by default, against the deep sweep's seven and the possession challenge's six hours, because a drill rebuilds a catalogue and writes real bytes while watching for something that changes far more slowly than rot does.
 
 The answer is durable per pair and reaches the status matrix as **three** states, never two: never drilled, drilled and passed, drilled and failed. The first and the last both mean this destination has not been shown to work, and only the last means something is wrong — a surface that folded "never" into either would turn an unexercised destination into a reassuring one. A failed drill raises a notice and deliberately does not touch the sync state: a destination can hold every byte it was sent, prove possession of them, and still fail to restore, and blaming the copy that worked would back off the transfers that are fine.
 
-What the scheduled drill does **not** prove is as load-bearing as what it does. On a write-only set — the only shape setup produces — the service holds no content key, so the drill proves the road back as far as the sealed content (the replica opens, its index and catalogue rebuild, every sampled file's manifest and segment records are found) and records that as a pass with a stated limit, `drill_limit`, rather than as a failure or a plain pass ([ADR-0054 Amendment 2](../adr/0054-scheduled-restore-drills.md#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09)); the content drill there is the manual one, with the passphrase. It runs inside the service, so it never parses the kit file, never exercises the standalone tool's dependency closure, and cannot delete the state directory it is running out of. Those three remain [eng/recovery-drill.sh](../../eng/recovery-drill.sh)'s alone, which is why that script is not superseded: it asks "does recovery work at all", thoroughly and on demand, while the scheduled drill asks "does *this* destination still restore", repeatedly and unprompted.
+What the scheduled drill does **not** prove is as load-bearing as what it does. On a write-only set — the only shape setup produces — the service holds no content key, so the drill proves the road back as far as the sealed content (the replica opens, its index and catalogue rebuild, every sampled file's manifest and segment records are found) and records that as a pass with a stated limit, `drill_limit`, rather than as a failure or a plain pass ([ADR-0054 Amendment 2](../adr/0054-scheduled-restore-drills.md#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09)); the content drill there is the manual one, with the passphrase. It runs inside the service, so it never exercises the standalone tool's dependency closure, and cannot delete the state directory it is running out of. Those three remain [eng/recovery-drill.sh](../../eng/recovery-drill.sh)'s alone, which is why that script is not superseded: it asks "does recovery work at all", thoroughly and on demand, while the scheduled drill asks "does *this* destination still restore", repeatedly and unprompted.
 
 ---
 

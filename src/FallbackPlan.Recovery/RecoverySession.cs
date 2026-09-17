@@ -20,7 +20,7 @@ public sealed record RecoveredSnapshot(SnapshotManifest Manifest, bool Signature
 public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped, IReadOnlyList<string> Notes);
 
 /// <summary>
-/// The last line of defence (architecture 08 §5; FR-KIT-006; ADR-0060):
+/// The last line of defence (architecture 08 §5; FR-DRL-001; ADR-0060):
 /// opens a repository from the passphrase and the archive alone — no state
 /// directory, no catalogue, no engine, no kit — and restores from recovery
 /// footers alone. The archive's descriptor supplies the KDF salt and
@@ -71,7 +71,7 @@ public sealed class RecoverySession : IDisposable
     /// <summary>
     /// Opens a session from the passphrase and the archive
     /// ([ADR-0060](../../docs/adr/0060-the-passphrase-is-the-recovery-credential.md);
-    /// FR-KIT-006).
+    /// FR-DRL-001).
     /// </summary>
     /// <remarks>
     /// <para>

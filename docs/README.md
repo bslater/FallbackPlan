@@ -35,7 +35,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 | 05 | [Storage providers](architecture/05-storage-providers.md) | Store contract, capabilities, providers, request economics |
 | 06 | [Filesystem capture](architecture/06-filesystem-capture.md) | Scanner, path handling, metadata matrix, change detection, consistency |
 | 07 | [Retention and GC](architecture/07-retention-and-gc.md) | Retention policy, mark and sweep, compaction, safeguards, healing |
-| 08 | [Restore and recovery](architecture/08-restore-and-recovery.md) | Restore paths, planning, verification, recovery kit, emergency recovery |
+| 08 | [Restore and recovery](architecture/08-restore-and-recovery.md) | Restore paths, planning, verification, recovery credential, emergency recovery |
 | 09 | [Replication and peers](architecture/09-replication-and-peers.md) | Peer exchange, pairing, durability policy, verification challenges, quotas |
 | 10 | [Observability](architecture/10-observability.md) | User status model, metrics, job state machine, diagnostics, telemetry |
 | 11 | [Solution structure](architecture/11-solution-structure.md) | Project layout, dependency rules, local state separation, technology |
@@ -51,7 +51,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 
 ## Decisions
 
-Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0051 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051; and 0054/0055, which put the recovery drill on a schedule and split the authority that deletes from the authority that publishes (0020 amended a second time to admit a destination that holds no keys at all).
+Status per record. **Fifty-three of the sixty are Accepted.** Among them: 0005, 0006, 0008, 0009, 0011 and 0016–0018 following the [pressure test](review/2026-08-fix-pressure-test.md); 0019–0029 on the evidence recorded in them (0028 amended once implementation decided what "or an equivalent" means on Linux); 0001 — dual AGPL-3.0-only + commercial, with `specifications/` under Apache-2.0 ([LICENSING.md](../LICENSING.md)); 0003, 0010, 0013 and 0030 at the freeze-gate pass (0030 amended once when RFC 7250 proved unreachable on the platform); and 0031–0051 as their slices were built, through the direct-to-destination pair 0046/0047 and the determinate-progress and lifecycle records 0048/0049 to the completed-run drill-down 0050 and the local-placement condition 0051; and 0054/0055, which put the recovery drill on a schedule and split the authority that deletes from the authority that publishes (0020 amended a second time to admit a destination that holds no keys at all); 0056–0059 as their slices landed; and 0060, which withdrew the recovery kit and superseded 0013 — the passphrase is the whole recovery credential.
 
 **Six remain `Proposed`, each for a stated reason rather than by neglect:** 0052 is a design taken deliberately early, while making it is still a format revision rather than a data migration, and nothing implements it; 0002 and 0004 await the corpus benchmark and the hash decision ([Q5](open-questions.md#q5--segmentation-default), [Q6](open-questions.md#q6--segment-hash-function)); 0012 awaits a second storage provider to test the contract against; 0014 is provisional by design until the format freezes; 0015 is gated on the legal review in [Q2](open-questions.md#q2--third-party-reader-licence-and-reuse-posture). 0053 has left that list: its claim ceremony is built, and its amendment records the two things building it changed; the set's shape in the kit remains its open half.
 
@@ -75,7 +75,7 @@ Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0
 | [0010](adr/0010-local-store-separation.md) | Local store separation |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics |
 | [0012](adr/0012-storage-provider-contract.md) | Storage provider contract |
-| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format |
+| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format — superseded by 0060 |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 stability |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation and licensing gate |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated, not content-derived |
@@ -122,12 +122,13 @@ Status per record. **Forty-eight of the fifty-five are Accepted.** Among them: 0
 | [0057](adr/0057-resumable-object-transfer.md) | An interrupted object resumes where it stopped |
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over a session it holds open |
 | [0059](adr/0059-session-bound-deletion-authority.md) | A deletion instruction is bound to the session it was authorised in |
+| [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential; the recovery kit is withdrawn |
 
 Template: [0000](adr/0000-template.md)
 
 ## Specification
 
-The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md). The [recovery-kit format](../specifications/recovery-kit/README.md) is specified alongside it, and the [peer protocol](../specifications/peer-protocol/README.md) — how two devices come to trust one another and open a session — is specified end to end: identity and pairing, the session layer, replication, verification, quotas, retention and retrieval. The [command contract](../specifications/command-contract/README.md) — the client↔service surface — has a register and version history there too, with the code as its wire truth.
+The normative on-disk format lives outside `docs/`, in [`specifications/repository-format/`](../specifications/repository-format/README.md), with [conformance vectors](../specifications/repository-format/conformance/README.md). The [peer protocol](../specifications/peer-protocol/README.md) — how two devices come to trust one another and open a session — is specified end to end: identity and pairing, the session layer, replication, verification, quotas, retention and retrieval. The [command contract](../specifications/command-contract/README.md) — the client↔service surface — has a register and version history there too, with the code as its wire truth.
 
 Architecture documents explain *why*; the specification says *what bytes*. Where they disagree about format, the specification wins.
 

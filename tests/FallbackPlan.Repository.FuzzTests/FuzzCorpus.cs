@@ -7,7 +7,6 @@ using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
@@ -171,13 +170,9 @@ internal static class FuzzCorpus
             new("standalone-record", BuildStandaloneRecord(),
                 bytes => StandaloneRecordFraming.Parse(bytes)),
 
-            // The sealed-content parsers (ADR-0042): the 168-byte sealed
-            // envelope and both recovery-kit body shapes. The format-1 kit
-            // shape still parses at the wire level — the opener refuses it
-            // by name — so its parser is fuzzed like any other.
+            // The sealed-content parser (ADR-0042): the 168-byte sealed
+            // envelope.
             new("sealed-blob-envelope", BuildSealedEnvelope(), bytes => BlobEnvelope.Parse(bytes)),
-            new("recovery-kit-format-1", BuildRecoveryKit(formatOne: true), bytes => RecoveryKitCodec.Parse(bytes)),
-            new("recovery-kit", BuildRecoveryKit(formatOne: false), bytes => RecoveryKitCodec.Parse(bytes)),
         };
 
         return seeds;
@@ -198,24 +193,6 @@ internal static class FuzzCorpus
         envelope.WriteTo(bytes);
         return bytes;
     }
-
-    private static byte[] BuildRecoveryKit(bool formatOne) => RecoveryKitCodec.Serialize(new RecoveryKit
-    {
-        KitFormatVersion = 1,
-        MinimumToolVersion = "0.1.0",
-        RepositoryId = Repo,
-        RepositoryFormatVersion = formatOne ? (ushort)1 : FormatLimits.FormatVersion,
-        KeyObject = formatOne ? "FBPKKEYS-fuzz-corpus-wrapped-key"u8.ToArray() : ReadOnlyMemory<byte>.Empty,
-        KdfMemoryKiB = 8 * 1024,
-        KdfIterations = 1,
-        KdfParallelism = 1,
-        KdfSalt = Fill16(0x21),
-        Destinations = [new KitDestination("local-path", "file:///fuzz", "", "")],
-        IssuingDeviceId = Fill16(0x55),
-        IssuedAt = 1_722_600_000_000,
-        Instructions = "fuzz-corpus instructions",
-        SealingPublicKey = formatOne ? ReadOnlyMemory<byte>.Empty : Enumerable.Repeat((byte)0x9C, 32).ToArray(),
-    });
 
     /// <summary>
     /// A committed v2 spool sidecar, content key included — written through

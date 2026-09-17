@@ -37,7 +37,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
 | [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local` · `Storage.ContractTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
-| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Built** | `FallbackPlan.Recovery`, [`specifications/recovery-kit/`](../specifications/recovery-kit/README.md) · `Repository.ConformanceTests/RecoveryKitConformanceTests` |
+| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Applied** | Superseded by [ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md): no kit exists to be built. What the record set in motion and still stands is the standalone tool, `Recovery/RecoverySession`, which now opens from the passphrase and the descriptor; [notes](#0060--the-passphrase-is-the-recovery-credential) |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture; format 1 withdrawn before freeze (Amendment 1) | **Built** | `Domain/FormatLimits` · `Repository.Format/Descriptor/RepositoryDescriptorCodec` · `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests` · [notes](#0014--one-format-and-a-refusal-by-name) |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated | **Built** | `Domain/Identifiers/BlobId`, `Domain/IBlobCounterAllocator` · `InterruptionTests/SequenceRollbackTests` holds the refusal when an identifier is ever reused |
@@ -84,6 +84,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
 | [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0058--what-the-adapter-does-not-carry) |
 | [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
+| [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
 
@@ -336,10 +337,12 @@ repository open, a catalogue rebuilt from its own index plane — so it proves
 the read path is open for that destination, repeatedly, without anybody
 remembering to ask.
 
-It does **not** parse the kit file, does not exercise the standalone recovery
-tool's dependency closure, and cannot delete the state directory it is running
-out of. All three remain [the committed recovery drill](../eng/recovery-drill.sh)'s,
-which is unchanged and not superseded ([ADR-0054](adr/0054-scheduled-restore-drills.md) §5).
+It does **not** exercise the standalone recovery tool's dependency closure,
+and cannot delete the state directory it is running out of. Both remain
+[the committed recovery drill](../eng/recovery-drill.sh)'s, which is not
+superseded ([ADR-0054](adr/0054-scheduled-restore-drills.md) §5) and which,
+since [ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md),
+recovers from the destination and the passphrase alone.
 
 Nor, on a write-only set, does it read content: the service holds no content
 key, so the scheduled drill proves the road back as far as the sealed content
@@ -583,23 +586,86 @@ Three things the build corrected in the decision, each recorded as an ADR amendm
 
 The key-material canary caught six new contract members and was right to; they are carved out by exact name in the shape ADR-0042 established, with a second test that each carved-out name still exists and is still a string.
 
+### 0060 — the passphrase is the recovery credential
+
+Built, as the last slice of the format-1 withdrawal, and the register's
+shortest way to say what changed is what a person must now keep: **the
+passphrase, and knowing where the backups are.** Nothing else.
+
+The recovery tool opens an archive from the passphrase and the archive's own
+descriptor — `Recovery/RecoverySession` through
+`Repository.Crypto/WriteOnlyDerivation`'s `TryDeriveVerified`, the one
+derive-and-compare gate the engine, the console and the tool now share, placed
+in Crypto because the tool deliberately links no engine. Its usage is
+`open | snapshots | restore --repo --passphrase-env`; `--kit` is refused by
+name. Event 3100 records the descriptor read.
+
+Everything the kit touched is gone rather than dormant: the kit format, codec
+and text form in `Repository.Format`, the factory, the conformance vectors and
+fuzz seeds, `specifications/recovery-kit`, the CLI's `key-export`, the setup
+verb's `--kit-output`, the console's kit step, rebuild endpoint and
+Maintenance card, `confirm_recovery_kit`, `kit_status`, `kit_confirmed_at`,
+the `kit_required` state, `recovery-kit.confirmed` and
+`installation-public.json`. Contract 1.29 admits the removals under the
+pre-release rule.
+
+`eng/recovery-drill.sh` is rewritten to the sequence the record describes —
+setup, two direct-ship sets, the machine destroyed, each archive opened,
+enumerated and restored byte-identically from the destination and the
+passphrase, a wrong passphrase and a foreign passphrase refused, a `--kit`
+refused by name — and is green on the Release binaries.
+`Hosts.Tests/RecoveryHostTests` and `Repository.Tests/PassphraseDrillTests`
+are the in-process halves; `Hosts.Tests/PeerClaimTests` is the peer half,
+through [ADR-0053 Amendment 2](adr/0053-peer-claim-and-configuration-recovery.md).
+
+**What is not built, and is named in the record:** the flow that would let a
+rebuilt machine be pointed at an existing destination and adopt what it finds
+there under the original repository ids. Until it exists, a person who has
+forgotten where their backups are holds a passphrase that opens nothing they
+can find.
+
 ### 0044 — the ceremony that two requirements have been waiting for
 
-Built, and both gaps it originally scoped out are now closed.
+Built. The passphrase half: a service with no passphrase says so on
+`describe_service`, and the first client to connect walks the operator through
+choosing one. What made a passphrase-only ceremony possible is that the
+passphrase was never per-set — `WriteOnlyDerivation` takes no repository
+identifier, so one `(passphrase, salt, params)` triple stamps every archive an
+installation will ever create. Setup provisions the installation; each set's
+archive is created from that credential on its first backup.
 
-The passphrase half: a service with no passphrase says so on `describe_service`, and the first client to connect walks the operator through choosing one. What made a passphrase-only ceremony possible is that the passphrase was never per-set — `WriteOnlyDerivation` takes no repository identifier, so one `(passphrase, salt, params)` triple stamps every archive an installation will ever create. Setup provisions the installation; each set's staging archive is created from that credential on its first backup, replacing the silent format-1 fallthrough in `ServiceRuntime.ArchiveForAsync`.
+**FR-SNP-007** lands on `validate_set_draft`, which the console already calls
+live while editing, so a set whose every destination sits inside its source's
+failure domain is warned at the moment it is chosen. It warns on every edit
+rather than only at first run, since the belief the requirement guards against
+can form at any point.
 
-**FR-KIT-004** was blocked by the kit *format*, not by the product: a kit demanded a repository id, which demanded an archive, a set and a destination. Kit format v2 drops it ([ADR-0013](adr/0013-recovery-kit.md)'s amendment), so the kit is generated inside the ceremony that already holds the passphrase — one Argon2id pass produces both it and the provisioning envelope — and setup stays in a `kit_required` state until the operator confirms saving it. Backups run in that state deliberately: stopping them over an unsaved kit would lose data to enforce a habit.
+**The ceremony ends at the passphrase and the first account.** For a year it
+ended at a saved recovery kit: a `kit_required` state, a `confirm_recovery_kit`
+verb recording the kit's checksum, a kit status on every describe, a console
+step handing the kit over in two forms, a rebuild endpoint for a ceremony
+closed before saving, and a public-parameters file so the rebuild could
+happen before the first backup. All of it went with the kit
+([ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md), contract
+1.29): the passphrase is the whole recovery credential, so there is nothing
+to save and nothing for the ceremony to wait for. `setup_state` is
+`setup_required` or `ready`, the wizard is three steps, and `--kit-output` is
+refused by name. FR-KIT-004 and FR-KIT-005, which the kit step existed to
+meet, are deleted rather than left unmet.
 
-**FR-SNP-007** lands on `validate_set_draft`, which the console already calls live while editing, so a set whose every destination sits inside its source's failure domain is warned at the moment it is chosen. It warns on every edit rather than only at first run, since the belief the requirement guards against can form at any point.
+Contract 1.13 carries `provision_installation`, the setup state and device
+identity on `describe_service`, and the draft's roots and destinations.
+`CallerScope` is new and is the fact the code was missing — one handler
+served both listeners and `RemoteBindingState` said only whether the remote
+binding was on. Q14 is answered: a floor plus a modest estimate — twelve at
+decision, sixteen with composition rules since ADR-0044's second amendment —
+enforced where a passphrase is chosen and never in `Passphrase.Create`, which
+is on the restore path.
 
-Contract 1.14 carries `provision_installation`, `confirm_recovery_kit`, the setup state and device identity on `describe_service`, and the draft's roots and destinations. `CallerScope` is new and is the fact the code was missing — one handler served both listeners and `RemoteBindingState` said only whether the remote binding was on; the pending ADR-0043 diagnostics work reuses it. Q14 is answered: a floor plus a modest estimate — twelve at decision, sixteen with composition rules since ADR-0044's second amendment — enforced where a passphrase is chosen and never in `Passphrase.Create`, which is on the restore path.
-
-Proven by drill rather than by test alone: setup writes both kit forms, two sets back up, the **entire state directory is deleted**, and the recovery tool opens each archive from the kit and the passphrase alone — restoring byte-identical files, and opening a second archive the kit was never generated against.
-
-**One requirement remains unmet and says so in its own traceability row.** FR-KIT-003: the transcribable text form is built and fixtured, the QR half is not — [recovery-kit §5](../specifications/recovery-kit/README.md#5-qr-form) pins the parameters and defers the rendering.
-
-**FR-KIT-005 is now met, with its third state recorded as inapplicable.** Kit status rides `describe_service` at contract 1.15 and shows on the console's Maintenance card whenever it is open, which is what "surfaced continuously" asks — as against surfacing it only inside a ceremony the operator saw once. It has **two** values rather than three, and the open question from the previous entry is answered rather than left to omission: an installation kit carries no destinations, so the requirement's staleness trigger cannot fire, and its salt, Argon2id parameters and sealing public key are fixed for the life of the installation — that is what makes one passphrase open every archive — so nothing else can stale it either. Regenerating one differs only in `issued_at`, which makes a checksum comparison meaningless and a freshness indicator theatre ([ADR-0013 amendment](adr/0013-recovery-kit.md#an-installation-kit-cannot-go-stale)).
+Proven by drill rather than by test alone: setup runs, two sets back up, the
+**entire state directory is deleted**, and the recovery tool opens each
+archive from the passphrase alone — restoring byte-identical files from two
+archives the passphrase was never told about.
 
 ### 0035 — a destination has to earn being relied on
 

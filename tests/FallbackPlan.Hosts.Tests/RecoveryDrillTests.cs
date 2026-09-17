@@ -5,7 +5,7 @@ using FallbackPlan.Application;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// The scheduled restore drill (FR-KIT-007, NFR-OPS-005): the service
+/// The scheduled restore drill (FR-DRL-002, NFR-OPS-005): the service
 /// periodically restores a sampled file from a destination's own replica,
 /// records what happened, and lets the answer go stale visibly.
 /// </summary>

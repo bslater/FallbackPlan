@@ -9,7 +9,7 @@ namespace FallbackPlan.Recovery;
 
 /// <summary>
 /// The standalone recovery tool's command line, as a callable unit. This is
-/// the last line of defence (architecture 08 §5; FR-KIT-006; ADR-0060), so the case
+/// the last line of defence (architecture 08 §5; FR-DRL-001; ADR-0060), so the case
 /// for testing it is the strongest in the codebase — and until now every
 /// command lived in <c>Main</c>, where only launching a process could reach
 /// one.

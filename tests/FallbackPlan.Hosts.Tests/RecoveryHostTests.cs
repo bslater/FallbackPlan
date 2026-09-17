@@ -8,7 +8,7 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The standalone recovery tool's command line (architecture 08 §5;
-/// FR-KIT-006; ADR-0060), driven against a repository built the ordinary
+/// FR-DRL-001; ADR-0060), driven against a repository built the ordinary
 /// way: the passphrase alone opens it, lists its snapshots, and restores its
 /// files — with no catalogue, no state directory, no kit and no Agent.
 /// </summary>
@@ -337,7 +337,7 @@ public sealed class RecoveryHostTests : IDisposable
         // for losing the machine — for this set it IS the loss, and the
         // destination is the only complete copy left in the world.
         //
-        // NFR-OPS-005 and FR-KIT-006 are about exactly that morning. The
+        // NFR-OPS-005 and FR-DRL-001 are about exactly that morning. The
         // earlier proof of them ran against a staging archive in the
         // archives root, which a direct-ship installation never writes, so
         // this is the first time the claim is held to the default shape.

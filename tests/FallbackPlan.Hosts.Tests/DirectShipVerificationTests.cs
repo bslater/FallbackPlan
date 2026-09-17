@@ -28,7 +28,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// needed.
 /// </para>
 /// <para>
-/// This does not establish FR-KIT-006 — nothing here restores anything.
+/// This does not establish FR-DRL-001 — nothing here restores anything.
 /// </para>
 /// </remarks>
 [TestClass]
