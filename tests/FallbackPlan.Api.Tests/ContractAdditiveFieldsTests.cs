@@ -130,6 +130,56 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheAdoptionWireNames_AreThePublishedOnes()
+    {
+        // Contract 1.30 (ADR-0061): the discovery row and the adoption
+        // answer, pinned on the bytes so a C# rename cannot drift them.
+        var discovered = JsonSerializer.Serialize<ServiceResult>(
+            new ArchivesDiscoveredResult(
+                "vault",
+                [
+                    new DiscoveredArchiveDescriptor(
+                        new string('c', 32), 2, 1234, "fallbackplan-agent/0.1", new string('0', 32), 65536, 3, 4,
+                        new string('1', 64), 1, 7, OwnedBySet: null, SameInstallation: false),
+                ],
+                []),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"repository_id\":\"cccc", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_salt\":", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_memory_kib\":65536", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"sealing_public_key\":", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"snapshot_objects\":1", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"highest_publication_sequence\":7", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"owned_by_set\":null", discovered, StringComparison.Ordinal);
+        Assert.Contains("\"same_installation\":false", discovered, StringComparison.Ordinal);
+
+        var adopted = JsonSerializer.Serialize<ServiceResult>(
+            new ArchiveAdoptedResult(
+                new string('a', 32), "docs", new string('c', 32), [new BackupRootDescriptor("/src")], [],
+                "every 1h", [], ["**/*.tmp"], 1, new string('5', 32), 9000,
+                WriterIdentityResumed: true, AlreadyAdopted: false, Lines: []),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"set_id\":\"aaaa", adopted, StringComparison.Ordinal);
+        Assert.Contains("\"missing_roots\":[]", adopted, StringComparison.Ordinal);
+        Assert.Contains("\"writer_identity_resumed\":true", adopted, StringComparison.Ordinal);
+        Assert.Contains("\"already_adopted\":false", adopted, StringComparison.Ordinal);
+        Assert.Contains("\"newest_snapshot_at\":9000", adopted, StringComparison.Ordinal);
+
+        var sets = JsonSerializer.Serialize<ServiceResult>(
+            new BackupSetsResult(
+                [
+                    new BackupSetDescriptor(
+                        new string('a', 32), "docs", "/src", null, [], [], [],
+                        KdfSalt: new string('0', 32), KdfMemoryKib: 65536, KdfIterations: 3, KdfParallelism: 4,
+                        SealingPublicKey: new string('1', 64)),
+                ]),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"kdf_salt\":\"0000", sets, StringComparison.Ordinal);
+        Assert.Contains("\"kdf_parallelism\":4", sets, StringComparison.Ordinal);
+        Assert.Contains("\"sealing_public_key\":\"1111", sets, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void AFrameFromBeforeTheFields_ReadsAsTheStatedDefaults()
     {
         // A 1.16-era status row: no priority, no baseline, no needs_full.

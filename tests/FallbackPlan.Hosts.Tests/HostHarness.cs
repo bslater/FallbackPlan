@@ -153,19 +153,44 @@ public sealed class HostHarness : IDisposable
     /// service's command surface, however the test reaches it.
     /// </summary>
     public async Task<string> RestoreGrantAsync(
-        Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>> execute, CancellationToken cancellationToken)
+        Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>> execute,
+        CancellationToken cancellationToken,
+        string? setName = null)
     {
         ArgumentNullException.ThrowIfNull(execute);
 
         Assert.IsInstanceOfType<ServiceDescriptionResult>(
             await execute(new DescribeServiceCommand(), cancellationToken), out var description);
 
-        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
-        Assert.IsNotNull(provisioning, "the installation is not set up");
+        // The set's own derivation facts when it publishes them (contract
+        // 1.30): an adopted set's archive was born under another
+        // installation's salt, and only a grant derived under THAT salt
+        // reproduces its sealing key. The installation's otherwise.
+        Argon2Parameters parameters;
+        byte[] salt;
+        BackupSetDescriptor? set = null;
+        if (setName is not null)
+        {
+            Assert.IsInstanceOfType<BackupSetsResult>(
+                await execute(new ListBackupSetsCommand(), cancellationToken), out var sets);
+            set = sets.Sets.FirstOrDefault(candidate => candidate.Name == setName);
+        }
+
+        if (set is { KdfSalt.Length: > 0, KdfMemoryKib: { } memory, KdfIterations: { } iterations, KdfParallelism: { } lanes })
+        {
+            parameters = new Argon2Parameters { MemoryKiB = memory, Iterations = iterations, Parallelism = lanes };
+            salt = Convert.FromHexString(set.KdfSalt);
+        }
+        else
+        {
+            using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+            Assert.IsNotNull(provisioning, "the installation is not set up");
+            parameters = provisioning.KdfParameters;
+            salt = provisioning.KdfSalt.ToArray();
+        }
 
         using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(PassphraseVariable)!);
-        using var authority = WriteOnlyDerivation.Derive(
-            passphrase, provisioning.KdfParameters, provisioning.KdfSalt, KdfValidationMode.OpenRepository);
+        using var authority = WriteOnlyDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository);
         return Convert.ToHexStringLower(
             WriteOnlyProvisioning.SealGrant(
                 Convert.FromHexString(description.RestoreGrantRecipient!), authority.SealingPrivateKey));
@@ -185,7 +210,7 @@ public sealed class HostHarness : IDisposable
 
         var opened = await execute(
             new OpenRestoreSourceCommand(
-                setName, destinationName, Envelope: await RestoreGrantAsync(execute, cancellationToken)),
+                setName, destinationName, Envelope: await RestoreGrantAsync(execute, cancellationToken, setName)),
             cancellationToken);
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
             opened, out var source, (opened as ServiceError)?.Message ?? opened.GetType().Name);

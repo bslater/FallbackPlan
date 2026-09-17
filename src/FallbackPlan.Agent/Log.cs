@@ -35,6 +35,17 @@ internal static partial class Log
     internal static partial void ObservedHeadUnavailable(ILogger logger, string setId, string reason);
 
     [LoggerMessage(
+        EventId = 3771, Level = LogLevel.Information,
+        Message = "Set {SetId} adopted repository {RepositoryId} from destination {Destination}: {SnapshotCount} snapshot(s), writer identity resumed: {WriterIdentityResumed}")]
+    internal static partial void ArchiveAdopted(
+        ILogger logger, string setId, string repositoryId, string destination, int snapshotCount, bool writerIdentityResumed);
+
+    [LoggerMessage(
+        EventId = 3772, Level = LogLevel.Warning,
+        Message = "This installation now writes under the adopted archive's writer identity {WriterId}; its own never published")]
+    internal static partial void WriterIdentityResumed(ILogger logger, string writerId);
+
+    [LoggerMessage(
         EventId = 3700, Level = LogLevel.Error,
         Message = "Job {JobId} ({Description}) failed past its own handler")]
     internal static partial void JobFaulted(ILogger logger, string jobId, string description, Exception exception);

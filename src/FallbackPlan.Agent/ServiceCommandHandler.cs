@@ -421,6 +421,8 @@ public sealed partial class ServiceCommandHandler(
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
+        DiscoverArchivesCommand discover => await DiscoverArchivesAsync(discover, cancellationToken).ConfigureAwait(false),
+        AdoptArchiveCommand adopt => await AdoptArchiveAsync(adopt, cancellationToken).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
@@ -1223,18 +1225,29 @@ public sealed partial class ServiceCommandHandler(
 
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(
-            [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
-                set.Id, set.Name,
-                // Root carries the first root for pre-1.10 clients; Roots is
-                // the whole truth (ADR-0040).
-                set.Roots[0].Path,
-                set.Schedule, set.IncludeRules, set.ExcludeRules,
-                [.. set.Destinations.Select(reference => reference.Ref)],
-                ToPolicyDescriptor(set.Retention),
-                ToOverrideDescriptors(set.Destinations),
-                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
-                set.Priority,
-                set.DirectShip))]);
+            [.. runtime.Configuration.BackupSets.Select(set =>
+            {
+                var facts = LocalDescriptorOf(set);
+                return new BackupSetDescriptor(
+                    set.Id, set.Name,
+                    // Root carries the first root for pre-1.10 clients; Roots is
+                    // the whole truth (ADR-0040).
+                    set.Roots[0].Path,
+                    set.Schedule, set.IncludeRules, set.ExcludeRules,
+                    [.. set.Destinations.Select(reference => reference.Ref)],
+                    ToPolicyDescriptor(set.Retention),
+                    ToOverrideDescriptors(set.Destinations),
+                    [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
+                    set.Priority,
+                    set.DirectShip,
+                    // The archive's own derivation facts (contract 1.30): an
+                    // adopted set's differ from the installation's.
+                    facts is null ? null : Convert.ToHexStringLower(facts.KdfSalt.Span),
+                    facts?.KdfParameters.MemoryKiB,
+                    facts?.KdfParameters.Iterations,
+                    facts?.KdfParameters.Parallelism,
+                    facts is null ? null : Convert.ToHexStringLower(facts.SealingPublicKey.Span));
+            })]);
 
     private async ValueTask<ServiceResult> UpsertBackupSetAsync(
         UpsertBackupSetCommand command, CancellationToken cancellationToken)

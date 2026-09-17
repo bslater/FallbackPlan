@@ -57,6 +57,8 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
+[JsonDerivedType(typeof(ArchivesDiscoveredResult), "archives_discovered")]
+[JsonDerivedType(typeof(ArchiveAdoptedResult), "archive_adopted")]
 [JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
 [JsonDerivedType(typeof(DestinationsResult), "destinations")]
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
@@ -159,6 +161,23 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// migrates at its next open with staging kept as a read-only seed until
 /// the explicit retire_staging.
 /// </param>
+/// <param name="KdfSalt">
+/// The set's archive's Argon2id salt, lowercase hex (contract 1.30): the
+/// public half of the derivation a restore grant for THIS set needs. An
+/// installation's sets normally share the installation's salt
+/// (<c>describe_service</c>), but a set adopted from a destination
+/// (ADR-0061) keeps the salt its archive was born under, so a client that
+/// derives per set is right for both. Null when the set has no archive
+/// yet, and from services before 1.30; on an upsert it is ignored.
+/// </param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfIterations">Argon2id time cost; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfParallelism">Argon2id lanes; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="SealingPublicKey">
+/// The archive's X25519 sealing public key, lowercase hex — the verifier a
+/// client compares its derivation against before sending a grant. Null
+/// with <paramref name="KdfSalt"/>.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -171,7 +190,12 @@ public sealed record BackupSetDescriptor(
     IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
     IReadOnlyList<BackupRootDescriptor>? Roots = null,
     int? Priority = null,
-    bool? DirectShip = null);
+    bool? DirectShip = null,
+    string? KdfSalt = null,
+    uint? KdfMemoryKib = null,
+    uint? KdfIterations = null,
+    byte? KdfParallelism = null,
+    string? SealingPublicKey = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it
@@ -840,6 +864,90 @@ public sealed record ServiceDescriptionResult(
     uint? KdfIterations = null,
     byte? KdfParallelism = null,
     string? SealingPublicKey = null) : ServiceResult;
+
+/// <summary>
+/// One archive a destination holds, as discovery reads it from the
+/// descriptor and the cleartext object names (ADR-0061 §2, contract 1.30).
+/// </summary>
+/// <param name="RepositoryId">The repository id, lowercase hex — the directory's name at the destination.</param>
+/// <param name="FormatVersion">The descriptor's format version.</param>
+/// <param name="CreatedAt">When the repository was created, Unix milliseconds (informational).</param>
+/// <param name="CreatedBy">The implementation that created it (informational).</param>
+/// <param name="KdfSalt">The archive's Argon2id salt, lowercase hex — public, recorded in its descriptor.</param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB.</param>
+/// <param name="KdfIterations">Argon2id time cost.</param>
+/// <param name="KdfParallelism">Argon2id lanes.</param>
+/// <param name="SealingPublicKey">
+/// The archive's X25519 sealing public key, lowercase hex: the verifier a
+/// client compares its derivation against before sending an envelope.
+/// </param>
+/// <param name="SnapshotObjects">How many snapshot objects the archive holds.</param>
+/// <param name="HighestPublicationSequence">The highest publication counter among them; zero with none.</param>
+/// <param name="OwnedBySet">The configured set whose archive this already is, by name; null when nobody's.</param>
+/// <param name="SameInstallation">Whether this installation's own credential wrote it — the sealing keys agree.</param>
+public sealed record DiscoveredArchiveDescriptor(
+    string RepositoryId,
+    int FormatVersion,
+    ulong CreatedAt,
+    string CreatedBy,
+    string KdfSalt,
+    uint KdfMemoryKib,
+    uint KdfIterations,
+    byte KdfParallelism,
+    string SealingPublicKey,
+    int SnapshotObjects,
+    ulong HighestPublicationSequence,
+    string? OwnedBySet,
+    bool SameInstallation);
+
+/// <summary>The archives a destination holds (ADR-0061 §2).</summary>
+/// <param name="DestinationName">The destination looked in.</param>
+/// <param name="Archives">Every readable archive, in repository-id order.</param>
+/// <param name="Warnings">Directories that looked like archives and did not read, one line each.</param>
+public sealed record ArchivesDiscoveredResult(
+    string DestinationName,
+    IReadOnlyList<DiscoveredArchiveDescriptor> Archives,
+    IReadOnlyList<string> Warnings) : ServiceResult;
+
+/// <summary>
+/// The set an archive was adopted as (ADR-0061 §3): what the archive
+/// recorded, what the caller overrode, and what the service did about the
+/// writer identity.
+/// </summary>
+/// <param name="SetId">The set's id — the archive's own, or freshly minted when it held no snapshot.</param>
+/// <param name="SetName">The set's name as configured.</param>
+/// <param name="RepositoryId">The adopted repository, lowercase hex.</param>
+/// <param name="Roots">The roots as configured, labels materialised.</param>
+/// <param name="MissingRoots">Recorded root paths that do not exist on this machine — reported, not refused.</param>
+/// <param name="Schedule">The schedule as configured; null for manual-only.</param>
+/// <param name="IncludeRules">The include rules the archive's newest snapshot recorded.</param>
+/// <param name="ExcludeRules">The exclude rules it recorded.</param>
+/// <param name="SnapshotCount">How many snapshots the archive holds.</param>
+/// <param name="NewestSnapshotId">The newest snapshot's id, hex; null with none.</param>
+/// <param name="NewestSnapshotAt">When it completed, Unix milliseconds; null with none.</param>
+/// <param name="WriterIdentityResumed">
+/// Whether this installation now writes under the archive's writer identity.
+/// True only when nothing here had published yet and the archive has one
+/// writer; otherwise the next run re-sends unchanged content once (ADR-0006's
+/// device domain), and <paramref name="Lines"/> says so.
+/// </param>
+/// <param name="AlreadyAdopted">The set was already configured against this archive; nothing was repeated.</param>
+/// <param name="Lines">What was done, for a person.</param>
+public sealed record ArchiveAdoptedResult(
+    string SetId,
+    string SetName,
+    string RepositoryId,
+    IReadOnlyList<BackupRootDescriptor> Roots,
+    IReadOnlyList<string> MissingRoots,
+    string? Schedule,
+    IReadOnlyList<string> IncludeRules,
+    IReadOnlyList<string> ExcludeRules,
+    int SnapshotCount,
+    string? NewestSnapshotId,
+    ulong? NewestSnapshotAt,
+    bool WriterIdentityResumed,
+    bool AlreadyAdopted,
+    IReadOnlyList<string> Lines) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

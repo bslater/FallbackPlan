@@ -38,6 +38,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
+[JsonDerivedType(typeof(DiscoverArchivesCommand), "discover_archives")]
+[JsonDerivedType(typeof(AdoptArchiveCommand), "adopt_archive")]
 [JsonDerivedType(typeof(GetDiagnosticsCommand), "get_diagnostics")]
 [JsonDerivedType(typeof(SetLogLevelCommand), "set_log_level")]
 [JsonDerivedType(typeof(ReadLogCommand), "read_log")]
@@ -479,6 +481,65 @@ public sealed record ProvisionWriteOnlySetCommand(string SetName, string Envelop
 /// permitted shape, NFR-SEC-011).
 /// </param>
 public sealed record ProvisionInstallationCommand(string Envelope) : ServiceCommand;
+
+/// <summary>
+/// Lists the archives a declared destination holds, by descriptor alone
+/// (ADR-0061 §2, contract 1.30): what a rebuilt machine pointed at the drive
+/// its backups are on sees before it holds any credential.
+/// </summary>
+/// <remarks>
+/// Credential-free by construction. Every fact in the answer is read from
+/// the unencrypted descriptor or counted from cleartext object names, so the
+/// verb reveals nothing a directory listing of the destination would not;
+/// the sealing public key it carries is the verifier a client compares its
+/// own derivation against before sending anything.
+/// </remarks>
+/// <param name="DestinationName">The declared destination to look in.</param>
+public sealed record DiscoverArchivesCommand(string DestinationName) : ServiceCommand;
+
+/// <summary>
+/// Adopts one of a destination's archives under its original repository id
+/// and set id (ADR-0061 §3): the set is re-declared from the shape the
+/// archive records — name, roots, schedule, rules — the metadata is copied
+/// beside the state, the credential stored, and the destination's ledger
+/// seeded so the next backup is incremental against the replica.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The same sealed shape as <see cref="ProvisionWriteOnlySetCommand"/>, but
+/// derived against the <em>discovered</em> archive's salt and parameters
+/// rather than the installation's: the rebuilt machine's own salt is new,
+/// and only a credential derived under the archive's opens it. The service
+/// proves the derived sealing public key against the descriptor before it
+/// stores anything.
+/// </para>
+/// <para>
+/// The optional fields override what the archive records, field by field,
+/// and are required exactly when the archive records nothing to take —
+/// an archive written for no configured set, or before the shape was
+/// recorded. A recorded root that does not exist on this machine is
+/// reported, never refused: the person edits the set.
+/// </para>
+/// </remarks>
+/// <param name="DestinationName">The declared destination holding the archive.</param>
+/// <param name="RepositoryId">The archive's repository id, 32 hex, as discovery listed it.</param>
+/// <param name="Envelope">
+/// The provisioning envelope — write bundle plus the archive's KDF salt and
+/// parameters — sealed to the service's recipient key and rendered as hex
+/// (NFR-SEC-009's permitted shape).
+/// </param>
+/// <param name="SetName">The set's name; null takes the recorded one.</param>
+/// <param name="Roots">The set's roots; null takes the recorded ones.</param>
+/// <param name="Schedule">The set's schedule; null takes the recorded one.</param>
+/// <param name="Priority">The set's priority (ADR-0047); null means none.</param>
+public sealed record AdoptArchiveCommand(
+    string DestinationName,
+    string RepositoryId,
+    string Envelope,
+    string? SetName = null,
+    IReadOnlyList<BackupRootDescriptor>? Roots = null,
+    string? Schedule = null,
+    int? Priority = null) : ServiceCommand;
 
 /// <summary>
 /// Asks what this service is logging and where it is putting it (ADR-0043 §6,

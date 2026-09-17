@@ -166,12 +166,14 @@ public sealed class KeyMaterialConfinementTests
                 nameof(ProvisionWriteOnlySetCommand),
                 nameof(ProvisionInstallationCommand),
                 nameof(OpenRestoreSourceCommand),
+                nameof(AdoptArchiveCommand),
             },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
-            "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation and "
-            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) — nowhere "
-            + "else. This list grows only by decision, which is what keeps it a fence; widening it to a "
-            + "pattern that admits any verb named plausibly would not be one.");
+            "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation, "
+            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) and "
+            + "adopt_archive (ADR-0061: the same provisioning envelope, sealed against a discovered archive's "
+            + "descriptor) — nowhere else. This list grows only by decision, which is what keeps it a fence; "
+            + "widening it to a pattern that admits any verb named plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

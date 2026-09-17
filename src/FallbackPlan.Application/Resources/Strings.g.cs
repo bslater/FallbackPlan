@@ -389,4 +389,9 @@ internal static class Strings
     /// </summary>
     internal static string FormatModel_NotValidStateFile(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, Model_NotValidStateFile, arg0, arg1);
+
+    /// <summary>
+    /// A writer identity is exactly 16 bytes.
+    /// </summary>
+    internal static string LocalState_WriterIdentityIs16Bytes => Get(nameof(LocalState_WriterIdentityIs16Bytes));
 }

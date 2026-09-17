@@ -119,6 +119,28 @@ public sealed class LocalState
         return state;
     }
 
+    /// <summary>
+    /// Takes over another writer identity — an adopted archive's (ADR-0061
+    /// §4) — so this installation continues that writer's sequence space and
+    /// its own past content stays reusable under the device dedup domain.
+    /// </summary>
+    /// <remarks>
+    /// Only ever safe on an installation that has published nothing under the
+    /// identity it is giving up: a writer that has allocated sequence numbers
+    /// and then changes name orphans them. The caller establishes that; this
+    /// method only records the decision durably.
+    /// </remarks>
+    public void AdoptWriterId(ReadOnlySpan<byte> writerId)
+    {
+        if (writerId.Length != 16)
+        {
+            throw new ArgumentException(Strings.LocalState_WriterIdentityIs16Bytes, nameof(writerId));
+        }
+
+        _model = _model with { WriterId = Convert.ToHexString(writerId).ToLowerInvariant() };
+        Save();
+    }
+
     /// <summary>Appends one job to the history and persists.</summary>
     public void RecordJob(JobHistoryEntry entry)
     {

@@ -219,8 +219,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// exactly as it read one from a pre-1.15 service, and a client that
     /// still knows `kit_required` treats it as an unfinished ceremony. A
     /// 2.0 would protect a client nobody has.
+    /// 1.30 adds adoption of a destination's archives (ADR-0061):
+    /// `discover_archives` lists what a declared destination holds by
+    /// descriptor alone — repository id, format, creation facts, the public
+    /// derivation parameters and sealing key, snapshot count and highest
+    /// publication counter, which configured set already owns it, whether
+    /// this installation wrote it — and `adopt_archive` takes one back under
+    /// its original repository and set ids with the same sealed provisioning
+    /// envelope `provision_write_only_set` carries, derived against the
+    /// discovered archive's salt; the set is re-declared from the shape the
+    /// archive records, overridable field by field. The set descriptor gains
+    /// the archive's own public derivation parameters and sealing key, so a
+    /// client derives a restore grant per set: an adopted set keeps the salt
+    /// its archive was born under, which is not the installation's. Additive.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 29);
+    public static ContractVersion Current { get; } = new(1, 30);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

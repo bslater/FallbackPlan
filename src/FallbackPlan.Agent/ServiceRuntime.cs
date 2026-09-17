@@ -549,11 +549,23 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// direct-ship set's metadata store, once, at the first open after the
     /// flip (ADR-0046). Idempotent: every put is if-absent.
     /// </summary>
-    private async ValueTask MigrateStagingMetadataAsync(
-        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken)
+    private ValueTask MigrateStagingMetadataAsync(
+        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken) =>
+        CopyMetadataAsync(
+            new LocalFileSystemObjectStore(ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>()),
+            metadata, cancellationToken);
+
+    /// <summary>
+    /// Copies a repository's metadata — everything except blob content and
+    /// the lifecycle objects that never leave the writer's side — from one
+    /// store into a direct-ship set's metadata store. The staging migration
+    /// (ADR-0046) and archive adoption (ADR-0061) are the same copy from
+    /// different sources. Idempotent: every put is if-absent.
+    /// </summary>
+    internal static async ValueTask CopyMetadataAsync(
+        Storage.Abstractions.IObjectStore from, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken)
     {
-        var staging = new LocalFileSystemObjectStore(ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>());
-        await foreach (var entry in staging.ListAsync(
+        await foreach (var entry in from.ListAsync(
             Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
@@ -569,10 +581,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 entry.Key,
                 async token =>
                 {
-                    var read = await staging.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
+                    var read = await from.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
                     return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
                         ? read.Content
-                        : throw new IOException($"Object {entry.Key.Value} listed but could not be read to migrate.");
+                        : throw new IOException($"Object {entry.Key.Value} listed but could not be read to copy.");
                 },
                 Storage.Abstractions.PutConditions.IfNotExists,
                 cancellationToken).ConfigureAwait(false);

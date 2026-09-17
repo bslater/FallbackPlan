@@ -652,13 +652,29 @@ public static class FanOut
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
+        var survey = await PublicationSurveyAsync(archive.Store, cancellationToken).ConfigureAwait(false);
+        return (survey.Sequence, survey.NewestSnapshotKey);
+    }
+
+    /// <summary>
+    /// What a repository's snapshot objects say about its publication head,
+    /// read from the standalone record framing alone — no key involved: the
+    /// highest counter, which object carries it, and how many there are.
+    /// The ledger's synced watermark is seeded from it, and archive
+    /// discovery (ADR-0061) reports it.
+    /// </summary>
+    internal static async ValueTask<(ulong Sequence, string? NewestSnapshotKey, int SnapshotObjects)> PublicationSurveyAsync(
+        Storage.Abstractions.IObjectStore store, CancellationToken cancellationToken)
+    {
         var highest = 0UL;
         string? newestKey = null;
-        await foreach (var entry in archive.Store.ListAsync(
+        var objects = 0;
+        await foreach (var entry in store.ListAsync(
             Storage.Abstractions.ObjectPrefix.Parse("snapshots/"),
             Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
         {
-            using var read = await archive.Store.OpenReadAsync(entry.Key, range: null, cancellationToken)
+            objects++;
+            using var read = await store.OpenReadAsync(entry.Key, range: null, cancellationToken)
                 .ConfigureAwait(false);
             if (read.Outcome != Storage.Abstractions.OpenReadOutcome.Found)
             {
@@ -683,7 +699,7 @@ public static class FanOut
             }
         }
 
-        return (highest, newestKey);
+        return (highest, newestKey, objects);
     }
 
     private static async ValueTask CopyToLocalPathAsync(

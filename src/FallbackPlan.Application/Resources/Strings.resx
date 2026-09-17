@@ -157,4 +157,7 @@
   <data name="Model_NotValidStateFile" xml:space="preserve">
     <value>'{0}' is not a valid state file: {1} — durable local state is never guessed.</value>
   </data>
+  <data name="LocalState_WriterIdentityIs16Bytes" xml:space="preserve">
+    <value>A writer identity is exactly 16 bytes.</value>
+  </data>
 </root>
