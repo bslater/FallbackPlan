@@ -256,6 +256,24 @@ public sealed class ReplicaOwnerStore
     }
 
     /// <summary>
+    /// Every attribution this destination holds, ids ascending — the
+    /// operator's view ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// §3): whose each replica is, and whether a claim key is on record,
+    /// which decides whether its owner's passphrase can move it or only the
+    /// operator can.
+    /// </summary>
+    /// <returns>Repository ids, lower-hex, each with its attribution as recorded.</returns>
+    public IReadOnlyList<(string RepositoryIdHex, ReplicaOwner Owner)> All()
+    {
+        lock (_gate)
+        {
+            return [.. _owners
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (pair.Key, pair.Value))];
+        }
+    }
+
+    /// <summary>
     /// Points a replica at a new device identity, the claim ceremony having
     /// proved the claimant is the same owner (ADR-0053 §2).
     /// </summary>

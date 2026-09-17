@@ -51,7 +51,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string agentVersion,
         ILogger log,
         string? replicationStateDirectory,
-        IReadOnlyList<string>? offeredFeatures)
+        IReadOnlyList<string>? offeredFeatures,
+        FallbackPlan.Application.ReplicaOwnerStore? owners)
     {
         _keypair = keypair;
         _grants = grants;
@@ -73,7 +74,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             // ever come back for. Startup is where a process kill — which
             // leaves a prefix nobody closed — is noticed at all.
             PartialSpool.Sweep(_spoolRoot, DateTimeOffset.UtcNow);
-            _owners = FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
+            _owners = owners ?? FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
         }
     }
 
@@ -124,6 +125,14 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// front of a current source; nothing in production passes anything but
     /// the default.
     /// </param>
+    /// <param name="owners">
+    /// The attribution store to serve from, when the process already holds
+    /// one — the service runtime's (<see cref="ServiceRuntime.ReplicaOwners"/>),
+    /// so an operator's re-attribution (ADR-0053 §3) is what the retrieval
+    /// gate sees. Null opens a store of its own over
+    /// <paramref name="replicationStateDirectory"/>, which is only right for a
+    /// listener with no runtime beside it.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
@@ -131,7 +140,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string agentVersion,
         ILogger? log = null,
         string? replicationStateDirectory = null,
-        IReadOnlyList<string>? offeredFeatures = null)
+        IReadOnlyList<string>? offeredFeatures = null,
+        FallbackPlan.Application.ReplicaOwnerStore? owners = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -144,7 +154,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
                 keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
-                replicationStateDirectory, offeredFeatures);
+                replicationStateDirectory, offeredFeatures, owners);
         }
         catch
         {

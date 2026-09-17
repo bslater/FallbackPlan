@@ -840,7 +840,8 @@ public static class AgentHost
                     remoteListener = RemoteServiceListener.Start(
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
                         log: logging.Factory.CreateLogger<RemoteServiceListener>(),
-                        replicationStateDirectory: stateDirectory);
+                        replicationStateDirectory: stateDirectory,
+                        owners: runtime.ReplicaOwners);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
 

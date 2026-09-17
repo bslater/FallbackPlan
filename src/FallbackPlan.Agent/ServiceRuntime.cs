@@ -142,6 +142,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
+        ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
     }
 
     /// <summary>How this service was started.</summary>
@@ -228,6 +229,20 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
     internal WriteCredentialStore WriteCredentials { get; }
+
+    /// <summary>
+    /// Which peer each replica stored here belongs to (peer-protocol 05 §2).
+    /// </summary>
+    /// <remarks>
+    /// The runtime's, and the one instance in the process: the remote
+    /// binding borrows it rather than opening its own, because the
+    /// attribution the retrieval gate consults and the attribution the
+    /// operator re-points (ADR-0053 §3) must be the same object. Two stores
+    /// over one file would each write the whole file from its own picture,
+    /// and the override would be undone by the next offer the listener
+    /// recorded.
+    /// </remarks>
+    public ReplicaOwnerStore ReplicaOwners { get; }
 
     /// <summary>
     /// What first-run setup provisioned, from which every set's archive —

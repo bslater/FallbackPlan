@@ -263,6 +263,28 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
         Assert.ContainsSingle(store.OwnedBy("peer-one"));
     }
 
+    [TestMethod]
+    public void All_ListsEveryAttribution_WithWhatWasRecorded()
+    {
+        // The operator's view (ADR-0053 §3): every replica stored here, whose
+        // it is, and whether a claim key is on record — which is what decides
+        // whether the passphrase can move it or only the operator can. Ids
+        // ascend so two listings of the same store read the same.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        store.TryAttribute(RepoB, "peer-two", claimPublicKey: new string('e', 64));
+        store.TryAttribute(RepoA, "peer-one");
+
+        var all = store.All();
+
+        Assert.HasCount(2, all);
+        Assert.AreEqual(RepoA, all[0].RepositoryIdHex);
+        Assert.AreEqual("peer-one", all[0].Owner.Fingerprint);
+        Assert.IsNull(all[0].Owner.ClaimPublicKey);
+        Assert.AreEqual(RepoB, all[1].RepositoryIdHex);
+        Assert.AreEqual(new string('e', 64), all[1].Owner.ClaimPublicKey);
+        Assert.IsEmpty(ReplicaOwnerStore.Open(Path.Combine(_stateDirectory, "empty")).All());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_stateDirectory))
