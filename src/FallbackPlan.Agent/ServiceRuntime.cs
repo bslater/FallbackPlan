@@ -838,6 +838,72 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Heals a direct-ship set whose local metadata has fallen behind a
+    /// destination (ADR-0062): copies the destination's metadata into the
+    /// set's metadata store, rebuilds the catalogue in place from it, and
+    /// moves the writer past whatever the healed archive now attests.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The three steps are each idempotent and each safe to repeat after a
+    /// failure: the copy is if-absent, the rebuild upserts, and the sequence
+    /// only ever rises. So a heal that fails halfway leaves a state
+    /// directory the next pass heals again, and the caller decides that by
+    /// the same test that decided this one — the destination's journal head
+    /// still exceeds the local one.
+    /// </para>
+    /// <para>
+    /// Runs inside the fan-out pass, under the set gate, over the runtime's
+    /// live catalogue handle: the rebuild adds what is missing and disturbs
+    /// nothing, which is what lets it run without evicting the archive
+    /// under a read path.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    /// <param name="archive">The set's open archive — a direct-ship one, whose store is the sink.</param>
+    /// <param name="replica">The destination's replica, the newer copy.</param>
+    /// <param name="cancellationToken">Cancels the heal.</param>
+    /// <returns>Null when healed; otherwise why not, in a sentence for the notice.</returns>
+    internal async ValueTask<string?> HealFromDestinationAsync(
+        string setId, ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(replica);
+
+        try
+        {
+            var metadata = new LocalFileSystemObjectStore(SetMetadataPath(setId), LoggerFor<LocalFileSystemObjectStore>());
+            await CopyMetadataAsync(replica, metadata, cancellationToken).ConfigureAwait(false);
+
+            var warnings = new List<string>();
+            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replica, archive.Repository, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await CatalogueRebuild.RebuildIntoAsync(
+                    this, archive.Catalogue, replica, archive.Repository, reader, warnings, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            var log = LoggerFor<ServiceRuntime>();
+            foreach (var warning in warnings)
+            {
+                Log.HealRebuildFinding(log, setId, warning);
+            }
+
+            // Over the healed sink now, so the index plane's watermarks count
+            // too: the pass moved the writer past the destination's journal
+            // head before calling this, and this only ever raises further.
+            await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return exception.Message;
+        }
+    }
+
+    /// <summary>
     /// Asks the repository how far this writer had got, and moves the local
     /// sequence past it when local state turns out to be behind (NFR-SEC-005).
     /// </summary>
@@ -850,7 +916,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// halfway through the next backup. It never lowers the sequence: a writer
     /// ahead of the published head is the ordinary case.
     /// </remarks>
-    private async ValueTask AdoptObservedHeadAsync(
+    internal async ValueTask AdoptObservedHeadAsync(
         string setId, ArchiveHandle archive, CancellationToken cancellationToken)
     {
         SequenceAdoption adoption;

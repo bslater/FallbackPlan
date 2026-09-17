@@ -292,4 +292,20 @@ internal static partial class Log
             + "the state directory was rolled back; the writer moved past the destination's head and this pass deletes nothing there")]
     internal static partial void DestinationAhead(
         ILogger logger, string setName, string destination, ulong attested, ulong local);
+
+    [LoggerMessage(
+        EventId = 3774, Level = LogLevel.Warning,
+        Message = "Set {SetName}: metadata copied back from destination {Destination} and the catalogue rebuilt in place — "
+            + "the set's local state had fallen behind what it published")]
+    internal static partial void MetadataHealedFromDestination(ILogger logger, string setName, string destination);
+
+    [LoggerMessage(
+        EventId = 3775, Level = LogLevel.Warning,
+        Message = "Set {SetName}: the heal from a destination could not copy the metadata back ({Reason}); the next pass retries")]
+    internal static partial void MetadataHealFailed(ILogger logger, string setName, string reason);
+
+    [LoggerMessage(
+        EventId = 3776, Level = LogLevel.Information,
+        Message = "Set {SetId}: catalogue rebuild during the heal reported {Finding}")]
+    internal static partial void HealRebuildFinding(ILogger logger, string setId, string finding);
 }

@@ -753,13 +753,6 @@ public static class FanOut
             var previous = ledger.Find(set.Id, destination.Name);
             var priorSuccess = previous?.LastSuccessAt is not null;
 
-            // The sequence is read BEFORE the copy starts: a success then
-            // proves the destination holds everything published at or before
-            // it, which is what the replication gate compares snapshots to
-            // (FR-GC-009). A snapshot publishing mid-copy may or may not have
-            // crossed, so the claim stops at the pre-copy sequence.
-            var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
-                .ConfigureAwait(false);
             var replica = new LocalFileSystemObjectStore(replicaRoot);
 
             // The destination as the rollback witness (ADR-0062). A state
@@ -779,13 +772,61 @@ public static class FanOut
             {
                 var attested = await ObservedHead.JournalHeadAsync(replica, runtime.Writer, cancellationToken)
                     .ConfigureAwait(false);
-                if (archive.Sequence.AdoptObservedHead(attested) is SequenceAdoption.Adopted ahead)
+                var ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
+                rolledBack = ahead is not null;
+
+                // The heal, for a direct-ship set: the destination's metadata
+                // copied back, the catalogue rebuilt in place, the writer
+                // moved past what the healed archive attests. Triggered by
+                // the metadata plane rather than by the allocator, so a heal
+                // that failed is retried on every pass until it succeeds —
+                // the sequence moved durably the first time and would never
+                // ask again. A staging set is not healed: what it lacks is
+                // content, and the notice says where it is.
+                string? healFailure = null;
+                if (archive.ShipSink is not null
+                    && attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                        .ConfigureAwait(false))
                 {
-                    rolledBack = true;
+                    healFailure = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (healFailure is null)
+                    {
+                        Log.MetadataHealedFromDestination(runtime.LoggerFor(typeof(FanOut)), set.Name, destination.Name);
+                    }
+                    else
+                    {
+                        Log.MetadataHealFailed(runtime.LoggerFor(typeof(FanOut)), set.Name, healFailure);
+                    }
+                }
+
+                if (ahead is not null)
+                {
                     ReportDestinationAhead(
-                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, nowMs);
+                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs);
+                }
+
+                if (healFailure is not null)
+                {
+                    // Nothing at the destination is touched and the ledger is
+                    // not advanced: the next pass finds the metadata still
+                    // behind and heals again.
+                    ledger.RecordFailure(
+                        set.Id, destination.Name, DestinationSyncState.Failed,
+                        $"the set's metadata is behind this destination and could not be copied back: {healFailure}",
+                        nowMs);
+                    return;
                 }
             }
+
+            // The sequence is read BEFORE the copy starts — and after the
+            // heal, so it is the healed archive's: a success then proves the
+            // destination holds everything published at or before it, which
+            // is what the replication gate compares snapshots to (FR-GC-009).
+            // A snapshot publishing mid-copy may or may not have crossed, so
+            // the claim stops at the pre-copy sequence.
+            var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
+                .ConfigureAwait(false);
 
             // Filling a destination volume to zero is a harm to the machine,
             // not just to this backup: logs stop, temp files fail, and on the
@@ -1155,7 +1196,7 @@ public static class FanOut
     /// </summary>
     private static void ReportDestinationAhead(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
-        SequenceAdoption.Adopted ahead, bool staging, ulong nowMs)
+        SequenceAdoption.Adopted ahead, bool staging, string? healFailure, ulong nowMs)
     {
         var attested = ahead.To - 1;
         Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
@@ -1165,7 +1206,13 @@ public static class FanOut
               + "healed from it: the destination's newer history is only at the destination, and the next "
               + "converging pass will trim the destination to the staging archive's keep-set — restore or copy "
               + "that history aside first if it matters."
-            : "The set's local metadata store and catalogue are behind what the destination holds.";
+            : healFailure is null
+                ? "The destination's metadata was copied back into the set's metadata store and the catalogue "
+                  + "was rebuilt from it, so the set is current again and the next backup is incremental. "
+                  + "Anything else kept beside the state directory deserves the same suspicion."
+                : $"The destination's metadata could not be copied back ({healFailure}); nothing at the "
+                  + "destination was changed, this destination was not recorded as synced, and the next pass "
+                  + "tries again.";
         runtime.Notices.Raise(
             $"destination-ahead:{set.Id}:{destinationName}",
             $"destination '{destinationName}' of set '{set.Name}' attests writer sequence {attested}; this machine's "

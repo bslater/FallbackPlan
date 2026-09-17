@@ -81,7 +81,78 @@ public sealed class DirectoryRollbackTests : IDisposable
         // And the writer moved past what the destination holds, before
         // anything else happened: the allocation state is put right first.
         Assert.AreNotEqual(sequenceBefore, await SequenceFileAsync(), "the sequence file must move past the destination's head");
+
+        // Healed: every piece of metadata the destination holds is back in
+        // the set's metadata store, the catalogue lists both backups again,
+        // and the notice says so.
+        Assert.Contains("copied back", notice.Message, StringComparison.Ordinal);
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        foreach (var key in after.Where(IsMetadataKey))
+        {
+            Assert.IsTrue(File.Exists(Path.Combine(metadata, key)), $"{key} was not copied back from the destination");
+        }
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        Assert.HasCount(2, listed.Snapshots);
+
+        // The proof the heal was the right shape: a third backup publishes
+        // rather than colliding with its own history, and is listed with it.
+        _harness.WriteSourceFile("docs/a.txt", "third content");
+        await BackUpAsync(runtime);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var relisted);
+        Assert.HasCount(3, relisted.Snapshots);
     }
+
+    [TestMethod]
+    public async Task AFailedCopyBack_LeavesTheDestinationUntouched_AndTheNextPassHealsAgain()
+    {
+        // The metadata store made unwritable where the copy would land: the
+        // heal fails, and what must hold is that the destination is not
+        // touched, the destination is not recorded as synced, the notice
+        // says why — and the next pass, the obstacle gone, heals without
+        // being asked. The sequence moved on the first pass and will never
+        // detect again, so the retry must not depend on it.
+        var replica = await TwoBackupsThenRollBackAsync(directShip: true);
+        var before = ReplicaKeys(replica);
+        var journal = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId, "journal");
+        var writerDirectory = Assert.ContainsSingle(Directory.GetDirectories(journal));
+        Directory.Delete(writerDirectory, recursive: true);
+        await File.WriteAllTextAsync(writerDirectory, "not a directory", Timeout);
+
+        await using var runtime = await StartAsync();
+        await SyncAsync(runtime);
+
+        var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
+        Assert.Contains("could not be copied back", notice.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal));
+        var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.AreEqual(DestinationSyncState.Failed, row!.State);
+        Assert.Contains("could not be copied back", row.LastError ?? "", StringComparison.Ordinal);
+
+        File.Delete(writerDirectory);
+        await SyncAsync(runtime);
+
+        Assert.AreEqual(DestinationSyncState.InSync, runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!.State);
+        foreach (var key in before.Where(IsMetadataKey))
+        {
+            Assert.IsTrue(
+                File.Exists(Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId, key)),
+                $"{key} was not copied back on the retry");
+        }
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        Assert.HasCount(2, listed.Snapshots);
+    }
+
+    private static bool IsMetadataKey(string key) =>
+        !key.StartsWith("blobs/", StringComparison.Ordinal)
+        && !key.StartsWith("tombstones/", StringComparison.Ordinal)
+        && !key.StartsWith("leases/", StringComparison.Ordinal);
 
     [TestMethod]
     public async Task TheCurrentStateDirectory_RaisesNothing()
