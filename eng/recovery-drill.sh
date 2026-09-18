@@ -179,7 +179,9 @@ for archive in "$VAULT"/*/; do
     $RECOVER snapshots --repo "$archive" --passphrase-env DRILL_PASSPHRASE \
         > "$DRILL/snapshots-$id.log" 2>&1 || die "step 5 — snapshots $id"
     grep -q "SIGNATURE-FAILED" "$DRILL/snapshots-$id.log" && die "step 5 — $id has an unverified snapshot"
-    snapshot=$(awk 'NR==1 {print $1}' "$DRILL/snapshots-$id.log")
+    # The newest by the listing's own timestamp column — the tool lists newest
+    # first, and the drill does not lean on that either.
+    snapshot=$(sort -k2,3 "$DRILL/snapshots-$id.log" | tail -n 1 | awk '{print $1}')
     [ -n "$snapshot" ] || die "step 5 — $id listed no snapshot"
 
     $RECOVER restore --repo "$archive" --passphrase-env DRILL_PASSPHRASE \
@@ -343,7 +345,7 @@ for archive in "$VAULT"/*/; do
         > "$DRILL/snapshots-after-$id.log" 2>&1 || die "step 8 — snapshots $id after the resume"
     COUNT=$(grep -c . "$DRILL/snapshots-after-$id.log")
     [ "$COUNT" -eq 2 ] || { cat "$DRILL/snapshots-after-$id.log"; die "step 8 — $id lists $COUNT snapshots after the resume, expected 2"; }
-    snapshot=$(awk 'NR==1 {print $1}' "$DRILL/snapshots-after-$id.log")
+    snapshot=$(sort -k2,3 "$DRILL/snapshots-after-$id.log" | tail -n 1 | awk '{print $1}')
     $RECOVER restore --repo "$archive" --passphrase-env DRILL_PASSPHRASE \
         --snapshot "$snapshot" --output "$DRILL/after/$id" > "$DRILL/restore-after-$id.log" 2>&1 \
         || { cat "$DRILL/restore-after-$id.log"; die "step 8 — restore $id after the resume"; }

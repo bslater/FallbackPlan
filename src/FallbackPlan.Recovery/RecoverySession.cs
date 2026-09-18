@@ -201,7 +201,18 @@ public sealed class RecoverySession : IDisposable
         return (blobs, notes);
     }
 
-    /// <summary>Lists every discoverable snapshot with its signature verdict.</summary>
+    /// <summary>
+    /// Lists every discoverable snapshot with its signature verdict, newest
+    /// first by its own capture time and then by identifier.
+    /// </summary>
+    /// <remarks>
+    /// Sorted here rather than taken from the store: a store lists keys in
+    /// ordinal order, and a snapshot's key is its device id and snapshot id,
+    /// both random. The first line of this listing is what a person reads
+    /// under pressure and what the operator drill restores by machine, so it
+    /// has to be the newest by contract and not by the toss of two
+    /// identifiers.
+    /// </remarks>
     public async ValueTask<IReadOnlyList<RecoveredSnapshot>> ListSnapshotsAsync(CancellationToken cancellationToken)
     {
         var snapshots = new List<RecoveredSnapshot>();
@@ -247,6 +258,13 @@ public sealed class RecoverySession : IDisposable
             }
         }
 
+        snapshots.Sort(static (left, right) =>
+        {
+            var byTime = right.Manifest.CaptureCompletedAt.CompareTo(left.Manifest.CaptureCompletedAt);
+            return byTime != 0
+                ? byTime
+                : left.Manifest.SnapshotId.Span.SequenceCompareTo(right.Manifest.SnapshotId.Span);
+        });
         return snapshots;
     }
 

@@ -46,6 +46,7 @@ public static class RecoveryHost
                 usage:
                   fallbackplan-recover open      --repo <path> --passphrase-env <VAR>
                   fallbackplan-recover snapshots --repo <path> --passphrase-env <VAR>
+                                                 (newest first)
                   fallbackplan-recover restore   --repo <path> --passphrase-env <VAR>
                                                  --snapshot <hex> --output <dir>
 

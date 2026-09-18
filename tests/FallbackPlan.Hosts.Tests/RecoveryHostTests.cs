@@ -93,6 +93,43 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Snapshots_TwoSnapshots_AreListedNewestFirstWhateverTheirKeysSortLike()
+    {
+        // The listing is what a person reads under pressure and what the
+        // operator drill's "restore the newest" reads by machine, so its
+        // order is a contract: newest first. The store lists keys in ordinal
+        // order, and a snapshot's key is its device id and snapshot id —
+        // both random — so an order taken from the store is a coin toss
+        // that happened to come up heads for as long as it was relied on.
+        await PrepareAsync();
+        await Task.Delay(1_100);
+        _harness.WriteSourceFile("notes.txt", "recovery drill, revised");
+        await _harness.BackUpAsync();
+
+        AssertNewestFirst((await RunAsync(Arguments("snapshots"))).Output);
+
+        // The same two manifests under each other's keys: the store now
+        // lists them in the opposite order, and the tool must not.
+        var files = Directory.GetFiles(Path.Combine(_harness.RepositoryPath, "snapshots"), "*", SearchOption.AllDirectories);
+        Assert.HasCount(2, files);
+        var (first, second) = (File.ReadAllBytes(files[0]), File.ReadAllBytes(files[1]));
+        File.WriteAllBytes(files[0], second);
+        File.WriteAllBytes(files[1], first);
+
+        AssertNewestFirst((await RunAsync(Arguments("snapshots"))).Output);
+    }
+
+    private static void AssertNewestFirst(string listing)
+    {
+        var rows = listing.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.HasCount(2, rows, listing);
+        var times = rows.Select(row => row.Split("  ", StringSplitOptions.RemoveEmptyEntries)[1]).ToList();
+        Assert.IsTrue(
+            string.CompareOrdinal(times[0], times[1]) > 0,
+            $"the newest snapshot must be listed first: {listing}");
+    }
+
+    [TestMethod]
     public async Task Restore_ThePassphraseAlone_WritesTheFilesBack()
     {
         await PrepareAsync();
