@@ -9,14 +9,25 @@ namespace FallbackPlan.Domain;
 public static class FormatLimits
 {
     /// <summary>
-    /// The repository format version — the only one this implementation
-    /// writes or reads: file contents sealed to the repository's public key,
+    /// The repository format version a new repository is created with unless
+    /// told otherwise: file contents sealed to the repository's public key,
     /// structure symmetric (ADR-0042). The descriptor carries it, and so does
     /// every sealed data blob. Format 1 was withdrawn before any freeze; the
     /// number is not renumbered, because it is bound into every descriptor
-    /// and every sealed blob's AAD already on disk.
+    /// and every sealed blob's AAD already on disk. Readers accept every
+    /// version from this one to <see cref="LatestFormatVersion"/>
+    /// (<see cref="FormatVersions.IsReadable"/>).
     /// </summary>
-    public const ushort FormatVersion = 2;
+    public const ushort FormatVersion = FormatVersions.SealedDataPlane;
+
+    /// <summary>
+    /// The newest repository format this implementation reads and, on
+    /// request, writes: format 3, whose records are relocatable
+    /// ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)).
+    /// Creation stays at <see cref="FormatVersion"/> unless a caller asks for
+    /// this one; a repository's version is fixed at creation.
+    /// </summary>
+    public const ushort LatestFormatVersion = FormatVersions.RelocatableRecords;
 
     /// <summary>
     /// The version stamped on a <b>symmetric</b> container — a metadata blob

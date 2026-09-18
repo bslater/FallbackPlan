@@ -72,7 +72,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // The descriptor names format 2, demands the sealed-data-plane
         // feature, and its public key is the derive-and-compare verifier.
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
-        Assert.AreEqual(FormatLimits.FormatVersion, descriptor.FormatVersion);
+        Assert.AreEqual(FormatVersions.SealedDataPlane, descriptor.FormatVersion);
         Assert.Contains(
             Format.Descriptor.RepositoryDescriptorCodec.FeatureSealedDataPlane, descriptor.RequiredFeatures);
 

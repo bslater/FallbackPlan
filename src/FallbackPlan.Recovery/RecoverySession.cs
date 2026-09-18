@@ -157,6 +157,14 @@ public sealed class RecoverySession : IDisposable
                 throw new RecoveryFailureException(Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead),
             DescriptorParseResult.FormatViolation violation =>
                 throw new RecoveryFailureException(violation.Message),
+            // Named, because this is the one place a person reads the answer
+            // under pressure: a newer format's feature is a reason to update
+            // the tool, and "does not read" would send them to check the disk.
+            DescriptorParseResult.UnsupportedRequiredFeatures unsupported =>
+                throw new RecoveryFailureException(
+                    "The archive requires features this recovery tool does not implement: "
+                    + string.Join(", ", unsupported.Features.Select(feature => $"0x{feature:x4}"))
+                    + " — update the tool; the archive is not damaged (specification 01 §3.2)."),
             var other =>
                 throw new RecoveryFailureException(
                     Resources.Strings.RecoverySession_ArchiveDescriptorDoesNotRead + " (" + other.GetType().Name + ")"),

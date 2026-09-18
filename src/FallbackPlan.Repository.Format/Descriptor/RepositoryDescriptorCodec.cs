@@ -56,8 +56,20 @@ public static class RepositoryDescriptorCodec
     /// </remarks>
     public const ushort FeatureReclaimAuthority = 0x0002;
 
+    /// <summary>
+    /// The relocatable-records feature
+    /// ([ADR-0052](../../../docs/adr/0052-relocatable-records-format-v3.md)
+    /// Amendment 1): a format-3 repository names it in
+    /// <c>required_features</c> — and a format-2 repository never does — so a
+    /// reader that predates format 3 refuses through the 01 §3.2 path with
+    /// the identifier named, rather than half-reading records whose nonces
+    /// it would misconstruct.
+    /// </summary>
+    public const ushort FeatureRelocatableRecords = 0x0003;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
-    private static readonly HashSet<ushort> Implemented = [FeatureSealedDataPlane, FeatureReclaimAuthority];
+    private static readonly HashSet<ushort> Implemented =
+        [FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
@@ -69,23 +81,29 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only format 2 is written (ADR-0042 §1; format 1 withdrawn before
-        // freeze), and a format-2 descriptor is nothing without its sealing
-        // public key — the verifier every open compares against. A caller
-        // handing over anything else is a bug refused here rather than a
-        // stored contradiction.
-        if (descriptor.FormatVersion != FormatLimits.FormatVersion)
+        // Only formats 2 and 3 are written (ADR-0042 §1, ADR-0052; format 1
+        // withdrawn before freeze), and a descriptor of either is nothing
+        // without its sealing public key — the verifier every open compares
+        // against. A caller handing over anything else is a bug refused here
+        // rather than a stored contradiction.
+        if (!FormatVersions.IsReadable(descriptor.FormatVersion))
         {
             throw new ArgumentException(
-                $"Only format {FormatLimits.FormatVersion} descriptors are written; format 1 is withdrawn.",
+                $"Only format {FormatLimits.FormatVersion} to {FormatLimits.LatestFormatVersion} descriptors are "
+                + "written; format 1 is withdrawn.",
                 nameof(descriptor));
         }
 
         if (descriptor.SealingPublicKey.Length != 32)
         {
             throw new ArgumentException(
-                "A format-2 descriptor carries exactly a 32-byte sealing public key (ADR-0042).",
+                "A format-2 or format-3 descriptor carries exactly a 32-byte sealing public key (ADR-0042).",
                 nameof(descriptor));
+        }
+
+        if (FeatureVersionDisagreement(descriptor.FormatVersion, descriptor.RequiredFeatures) is { } disagreement)
+        {
+            throw new ArgumentException(disagreement, nameof(descriptor));
         }
 
         var writer = new CanonicalCborWriter();
@@ -289,26 +307,40 @@ public static class RepositoryDescriptorCodec
         // Refused by name, never misread (ADR-0014): format 1 — a master key
         // wrapped under the passphrase at /keys/ — was withdrawn before any
         // freeze, and no reader of it remains. A repository stamped with it
-        // is re-seeded from a live installation, not opened.
-        if (formatVersion != FormatLimits.FormatVersion)
+        // is re-seeded from a live installation, not opened. A version above
+        // the newest this build reads is refused the same way, naming the
+        // range, before the feature check can name the feature: either
+        // refusal is by name, and the version is the earlier fact.
+        if (!FormatVersions.IsReadable(formatVersion))
         {
             return new DescriptorParseResult.FormatViolation(
-                $"The repository is format {formatVersion}; only format {FormatLimits.FormatVersion} is read. "
-                + "Format 1 is withdrawn — re-seed this location from a live installation.");
+                $"The repository is format {formatVersion}; formats {FormatLimits.FormatVersion} to "
+                + $"{FormatLimits.LatestFormatVersion} are read. "
+                + (formatVersion < FormatLimits.FormatVersion
+                    ? "Format 1 is withdrawn — re-seed this location from a live installation."
+                    : "Update this installation to read it."));
         }
 
-        // A format-2 descriptor without its sealing public key has lost its
-        // verifier; the map count admits the key, and this makes it mandatory.
+        // A descriptor without its sealing public key has lost its verifier;
+        // the map count admits the key, and this makes it mandatory.
         if (sealingPublicKey is null)
         {
             return new DescriptorParseResult.FormatViolation(
-                "The sealing public key (key 9) is mandatory for a format-2 descriptor (ADR-0042).");
+                "The sealing public key (key 9) is mandatory for a format-2 or format-3 descriptor (ADR-0042).");
         }
 
         var unsupported = required.Where(feature => !Implemented.Contains(feature)).ToArray();
         if (unsupported.Length > 0)
         {
             return new DescriptorParseResult.UnsupportedRequiredFeatures(unsupported);
+        }
+
+        // The version and the relocatable-records feature name one fact
+        // (01 §3.2): a descriptor in which they disagree was not written by
+        // a conforming writer, and reading it either way would be a guess.
+        if (FeatureVersionDisagreement(formatVersion, required) is { } disagreement)
+        {
+            return new DescriptorParseResult.FormatViolation(disagreement);
         }
 
         return new DescriptorParseResult.Ok(new RepositoryDescriptor(
@@ -322,6 +354,27 @@ public static class RepositoryDescriptorCodec
             createdBy,
             unstable,
             sealingPublicKey));
+    }
+
+    /// <summary>
+    /// Why the version and the relocatable-records feature disagree, or null
+    /// when they agree: a format-3 descriptor lists the feature and a
+    /// format-2 one does not (01 §3.2).
+    /// </summary>
+    private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required)
+    {
+        var listed = required.Contains(FeatureRelocatableRecords);
+        var relocatable = FormatVersions.HasRelocatableRecords(formatVersion);
+        if (listed == relocatable)
+        {
+            return null;
+        }
+
+        return relocatable
+            ? $"A format-{formatVersion} descriptor must list feature 0x{FeatureRelocatableRecords:x4} "
+              + "(relocatable-records) and this one does not (specification 01 §3.2)."
+            : $"A format-{formatVersion} descriptor must not list feature 0x{FeatureRelocatableRecords:x4} "
+              + "(relocatable-records) and this one does (specification 01 §3.2).";
     }
 
     private static List<ushort> ReadFeatureArray(CanonicalCborReader reader)

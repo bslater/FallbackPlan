@@ -170,11 +170,8 @@ public static class RepositoryLifecycle
         {
             var descriptor = new RepositoryDescriptor(
                 repositoryId,
-                FormatLimits.FormatVersion,
-                RequiredFeatures: [
-                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
-                ],
+                settings.FormatVersion,
+                RequiredFeatures: RequiredFeaturesFor(settings.FormatVersion),
                 OptionalFeatures: [],
                 settings.KdfParameters,
                 kdfSalt,
@@ -209,7 +206,9 @@ public static class RepositoryLifecycle
     /// admin client ran Argon2id where the person typed, and what arrived
     /// here is the credential plus the KDF salt and parameters the descriptor
     /// must record so a later restore can re-derive. The service never held
-    /// the passphrase, which is exactly why this overload exists.
+    /// the passphrase, which is exactly why this overload exists. The trailing
+    /// format version is <see cref="FormatLimits.FormatVersion"/> unless the
+    /// caller asks for a newer one this build writes (specification 00 §5).
     /// </summary>
     /// <exception cref="ArgumentException">The salt is not exactly <see cref="KekDerivation.SaltLength"/> bytes.</exception>
     /// <exception cref="IOException">The store refused the descriptor — the location already holds a repository.</exception>
@@ -221,10 +220,12 @@ public static class RepositoryLifecycle
         string createdBy,
         ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ushort formatVersion = FormatLimits.FormatVersion)
     {
         var created = await CreateCoreAsync(
-            store, credential, kdfSalt, kdfParameters, createdBy, createdAtUnixMilliseconds, cancellationToken)
+            store, credential, kdfSalt, kdfParameters, createdBy, createdAtUnixMilliseconds, formatVersion,
+            cancellationToken)
             .ConfigureAwait(false);
         Log.RepositoryCreated(
             logger ?? NullLogger.Instance, created.RepositoryId, created.Descriptor.FormatVersion);
@@ -235,6 +236,25 @@ public static class RepositoryLifecycle
     // one place that reports what opened or was refused, rather than a log call
     // beside every throw. Every refusal here is a RepositoryOpenException or a
     // KeyUnwrapFailedException by design, which is what makes that possible.
+    /// <summary>
+    /// What a new descriptor of this version must declare (01 §3.2): the
+    /// sealed data plane and the reclaim authority always; relocatable
+    /// records exactly when the format is 3.
+    /// </summary>
+    private static ushort[] RequiredFeaturesFor(ushort formatVersion) =>
+        FormatVersions.HasRelocatableRecords(formatVersion)
+            ?
+            [
+                RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                RepositoryDescriptorCodec.FeatureReclaimAuthority,
+                RepositoryDescriptorCodec.FeatureRelocatableRecords,
+            ]
+            :
+            [
+                RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                RepositoryDescriptorCodec.FeatureReclaimAuthority,
+            ];
+
     private static async ValueTask<OpenedRepository> CreateCoreAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
@@ -242,12 +262,21 @@ public static class RepositoryLifecycle
         Argon2Parameters kdfParameters,
         string createdBy,
         ulong createdAtUnixMilliseconds,
+        ushort formatVersion,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(kdfParameters);
         ThrowHelper.ThrowIfNullOrWhiteSpace(createdBy);
+
+        if (!FormatVersions.IsReadable(formatVersion))
+        {
+            throw new ArgumentException(
+                $"Format {formatVersion} cannot be created; formats {FormatLimits.FormatVersion} to "
+                + $"{FormatLimits.LatestFormatVersion} can (specification 00 §5).",
+                nameof(formatVersion));
+        }
 
         if (kdfSalt.Length != KekDerivation.SaltLength)
         {
@@ -261,11 +290,8 @@ public static class RepositoryLifecycle
 
         var descriptor = new RepositoryDescriptor(
             repositoryId,
-            FormatLimits.FormatVersion,
-            RequiredFeatures: [
-                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
-                ],
+            formatVersion,
+            RequiredFeatures: RequiredFeaturesFor(formatVersion),
             OptionalFeatures: [],
             kdfParameters,
             kdfSalt.ToArray(),

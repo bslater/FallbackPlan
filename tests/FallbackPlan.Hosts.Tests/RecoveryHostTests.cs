@@ -320,6 +320,33 @@ public sealed class RecoveryHostTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Open_AnArchiveRequiringAFeatureThisToolLacks_NamesTheFeatureAndTheRemedy()
+    {
+        // ADR-0014's rule at the one place a person reads it under pressure:
+        // an archive from a newer build names the feature this tool does not
+        // implement and says to update — never "does not read", which sends
+        // them to check a disk that is fine.
+        await PrepareAsync();
+        var path = Path.Combine(_harness.RepositoryPath, "repository-format");
+        Assert.IsInstanceOfType<FallbackPlan.Repository.Format.Descriptor.DescriptorParseResult.Ok>(
+            FallbackPlan.Repository.Format.Descriptor.RepositoryDescriptorCodec.Parse(await File.ReadAllBytesAsync(path)),
+            out var parsed);
+        await File.WriteAllBytesAsync(
+            path,
+            FallbackPlan.Repository.Format.Descriptor.RepositoryDescriptorCodec.Serialize(parsed.Descriptor with
+            {
+                RequiredFeatures = [.. parsed.Descriptor.RequiredFeatures, (ushort)0x0042],
+            }));
+
+        var result = await RunAsync(Arguments("open"));
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("0x0042", result.Error, StringComparison.Ordinal);
+        Assert.Contains("update", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("does not read", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Open_AFolderThatIsNotAnArchive_SaysSoRatherThanBlamingThePassphrase()
     {
         // The two refusals a person can meet are different questions: "not

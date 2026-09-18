@@ -41,6 +41,62 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat2AndClaimsNoRelocatableRecords()
+    {
+        // The creation default stays format 2 (ADR-0052 Amendment 1, item
+        // 7): a build that reads format 3 does not start writing it unasked.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        _ = await CreateAsync(store, passphrase);
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.SealedDataPlane, reopened.Descriptor.FormatVersion);
+            Assert.IsFalse(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
+                "a format-2 descriptor must not list relocatable-records (01 §3.2)");
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedAsFormat3_DeclaresRelocatableRecordsAndReopens()
+    {
+        // Opt-in through the settings: the descriptor carries version 3 and
+        // feature 0x0003 together, and this build opens it (ADR-0052).
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings with { FormatVersion = FormatVersions.RelocatableRecords },
+            createdAtUnixMilliseconds: 1, CancellationToken.None);
+        repository.Dispose();
+        createdAuthority.Dispose();
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords));
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedAsAFormatThisBuildDoesNotWrite_IsRefusedByTheSettings()
+    {
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+
+        var settings = Settings with { FormatVersion = 4 };
+        Assert.IsFalse(settings.Validate().IsValid);
+        await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
+            await RepositoryLifecycle.CreateFromPassphraseAsync(
+                store, passphrase, settings, createdAtUnixMilliseconds: 1, CancellationToken.None));
+    }
+
+    [TestMethod]
     public async Task Repository_CreatedThenOpenedWithItsPassphrase_Opens()
     {
         var store = CreateStore();
