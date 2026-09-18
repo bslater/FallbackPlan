@@ -542,6 +542,7 @@ public static class FanOut
             // deletion it attests has already happened, whatever the rest of
             // this pass concludes (ADR-0063).
             RecordReceipt(runtime, set, destination, outcome, receiptFate, nowMs);
+            RecordReplicationReceipt(runtime, set, destination, outcome, ledger, nowMs);
 
             // The heal, for a set whose archive is behind the peer: over the
             // retrieval session, dialled only for this, and keyed on the
@@ -1407,6 +1408,61 @@ public static class FanOut
                 fate.FilingFailure = exception.Message;
             }
         }
+    }
+
+    /// <summary>
+    /// Files a verified replication receipt under this installation's state
+    /// directory and counts the peer on its strength, or says why the one
+    /// that arrived was not believed
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)). The ledger's
+    /// completeness figures are written for a peer here and nowhere else:
+    /// a source cannot cheaply list a peer's replica, so what it records is
+    /// what the peer signed for — everything it was owed, after a push in
+    /// which it acknowledged committing everything it lacked. A peer that
+    /// sends no receipt stays uncounted, as every peer was before receipts;
+    /// a rejected receipt is a notice and never a refusal, because the
+    /// objects have already been committed and what is missing is a
+    /// statement of it that holds up.
+    /// </summary>
+    private static void RecordReplicationReceipt(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ReplicationInitiator.PushOutcome outcome, DestinationSyncStore ledger, ulong nowMs)
+    {
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (outcome.ReplicationReceiptProblem is { } problem)
+        {
+            Log.ReplicationReceiptRejected(log, destination.Name, set.Name, problem);
+            runtime.Notices.Raise(
+                $"replication-receipt-invalid:{set.Id}:{destination.Name}",
+                $"peer '{destination.Name}' acknowledged set '{set.Name}'s push with a receipt this installation "
+                + $"will not file: {problem}. The peer acknowledged committing {outcome.Committed} object(s) and "
+                + "that stands; what is missing is a statement of what it holds under its own signature that "
+                + "holds up, so this peer is not counted complete on this pass. A peer that misattests once "
+                + "deserves a look.",
+                nowMs);
+            return;
+        }
+
+        if (outcome.ReplicationReceipt is not { } receipt)
+        {
+            return;
+        }
+
+        try
+        {
+            Protocol.ReplicationReceiptStore.Open(runtime.Options.StateDirectory).File(
+                Protocol.DeletionReceiptRole.Commander, receipt.SignedBytes.Span, receipt.Signature.Span,
+                receipt.Signer, set.Name, destination.Name);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Log.ReplicationReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+        }
+
+        // Verified is what counts, filed or not: the attestation was made and
+        // checked, and a copy this side could not keep changes nothing about
+        // what the peer holds.
+        ledger.RecordCompleteness(set.Id, destination.Name, outcome.OwedBytes, outcome.OwedBytes, nowMs);
     }
 
     private static void ReportDestinationAhead(

@@ -82,6 +82,22 @@ internal static class ReplicationInitiator
     /// sends none is older, not wrong: no receipt is a fact and not a fault,
     /// and this is null then too.
     /// </param>
+    /// <param name="OwedBytes">
+    /// The bytes the destination is owed by this source's policy — every
+    /// replicable object the keep filter admits, held already or sent now.
+    /// What a verified <paramref name="ReplicationReceipt"/> lets the ledger
+    /// count the destination as holding in full.
+    /// </param>
+    /// <param name="ReplicationReceipt">
+    /// The destination's statement of what this push created and what it
+    /// holds now, when one arrived and passed every check
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)); null when
+    /// none arrived or it was rejected.
+    /// </param>
+    /// <param name="ReplicationReceiptProblem">
+    /// Why the replication receipt that arrived was rejected, or null — as
+    /// for <paramref name="ReceiptProblem"/>, none is a fact and not a fault.
+    /// </param>
     public sealed record PushOutcome(
         long Committed,
         long Deleted,
@@ -93,7 +109,10 @@ internal static class ReplicationInitiator
         bool ConvergenceWithheld = false,
         bool Instructed = false,
         VerifiedReceipt? Receipt = null,
-        string? ReceiptProblem = null);
+        string? ReceiptProblem = null,
+        long OwedBytes = 0,
+        VerifiedReplicationReceipt? ReplicationReceipt = null,
+        string? ReplicationReceiptProblem = null);
 
     /// <summary>
     /// What a commander holds a deletion receipt against
@@ -116,6 +135,14 @@ internal static class ReplicationInitiator
     /// <param name="Signer">The destination that signed it.</param>
     public sealed record VerifiedReceipt(
         DeletionReceipt Receipt, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature, PeerIdentity Signer);
+
+    /// <summary>A replication receipt that passed every check, with what is needed to file it.</summary>
+    /// <param name="Receipt">The statement.</param>
+    /// <param name="SignedBytes">Its exact signed encoding — the artefact; the statement is a reading of it.</param>
+    /// <param name="Signature">The destination's signature over <paramref name="SignedBytes"/>.</param>
+    /// <param name="Signer">The destination that signed it.</param>
+    public sealed record VerifiedReplicationReceipt(
+        ReplicationReceipt Receipt, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature, PeerIdentity Signer);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -179,9 +206,12 @@ internal static class ReplicationInitiator
     /// instruction is sent.
     /// </param>
     /// <param name="expectReceipt">
-    /// What to hold the destination's deletion receipt against
-    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)), or null when
-    /// this caller cannot check one — a receipt then goes unverified and is
+    /// What to hold the destination's receipts against — the replication
+    /// receipt on every push
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)) and the
+    /// deletion receipt on an instruction
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)) — or null when
+    /// this caller cannot check one: a receipt then goes unverified and is
     /// reported as such rather than believed.
     /// </param>
     /// <returns>What moved and what went.</returns>
@@ -231,28 +261,42 @@ internal static class ReplicationInitiator
                 ? await ReadPartialsAsync(stream, cancellationToken).ConfigureAwait(false)
                 : [];
 
-            var sent = 0L;
+            // What went is kept by key, because the receipt the destination
+            // answers with lists what it committed and every key it lists
+            // must be one this commander sent (ADR-0064); what is owed is
+            // summed in bytes, held or sent alike, because that is the figure
+            // a verified receipt lets the ledger count the destination
+            // complete against.
+            var sentKeys = new HashSet<string>(StringComparer.Ordinal);
+            var owedBytes = 0L;
             var bytesSent = 0L;
             var resumed = 0L;
             await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (held.Contains(entry.Key.Value)
-                    || IsStagingOnly(entry.Key.Value)
-                    || (keeps is not null && !keeps(entry.Key.Value)))
+                var key = entry.Key.Value;
+                if (IsStagingOnly(key) || (keeps is not null && !keeps(key)))
+                {
+                    continue;
+                }
+
+                owedBytes += entry.Length;
+                if (held.Contains(key))
                 {
                     continue;
                 }
 
                 var from = await SendObjectAsync(
                     source, entry, stream, partials, log, cancellationToken).ConfigureAwait(false);
-                sent++;
+                sentKeys.Add(key);
                 bytesSent += entry.Length - (long)from;
                 if (from > 0)
                 {
                     resumed++;
                 }
             }
+
+            var sent = (long)sentKeys.Count;
 
             await PeerFrame.WriteAsync(stream, new ReplicationComplete((ulong)sent), cancellationToken)
                 .ConfigureAwait(false);
@@ -275,10 +319,22 @@ internal static class ReplicationInitiator
                     $"The destination acknowledged committing {ack.Count} object(s) of the {sent} sent.");
             }
 
+            // The receipt is held against the push before the exchange goes
+            // on to anything else, because every push has one to expect and
+            // most pushes end here.
+            var (replicationReceipt, replicationReceiptProblem) = expectReceipt is null
+                ? (null, ack.Receipt.IsEmpty ? null : "this commander had nothing to verify it against")
+                : VerifyReplicationReceipt(ack, expectReceipt, repositoryId, sentKeys, held.Count);
+
             if (keeps is null)
             {
                 return new PushOutcome(
-                    (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld);
+                    (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld)
+                {
+                    OwedBytes = owedBytes,
+                    ReplicationReceipt = replicationReceipt,
+                    ReplicationReceiptProblem = replicationReceiptProblem,
+                };
             }
 
             // The drop half (06 §2): inventory minus keep-closure, snapshots
@@ -303,7 +359,12 @@ internal static class ReplicationInitiator
                 .ToList();
             if (drops.Count == 0)
             {
-                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held);
+                return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held)
+                {
+                    OwedBytes = owedBytes,
+                    ReplicationReceipt = replicationReceipt,
+                    ReplicationReceiptProblem = replicationReceiptProblem,
+                };
             }
 
             // Each page's signed bytes are digested as it goes out, because
@@ -345,6 +406,9 @@ internal static class ReplicationInitiator
                 Instructed = true,
                 Receipt = receipt,
                 ReceiptProblem = receiptProblem,
+                OwedBytes = owedBytes,
+                ReplicationReceipt = replicationReceipt,
+                ReplicationReceiptProblem = replicationReceiptProblem,
             };
         }
         catch (PeerProtocolException exception)
@@ -432,6 +496,86 @@ internal static class ReplicationInitiator
         }
 
         return (new VerifiedReceipt(receipt, ack.Receipt, ack.Signature, expected.Peer), null);
+    }
+
+    /// <summary>
+    /// Holds a replication receipt against everything this commander knows
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)). The
+    /// signature first — nothing else is worth reading until it is the
+    /// peer's — then the session, so a recording of an earlier push is
+    /// refused however well it verifies; the repository and the addressee;
+    /// the count, which must be what the acknowledgement said; the keys,
+    /// every one of which must have been sent this session; and the held
+    /// figure, which can be no smaller than what the destination declared
+    /// before the push plus what it committed during it — a smaller one
+    /// means something declared has gone, and a figure the ledger must not
+    /// count on. (That the keys listed do not outnumber the count, and that
+    /// the held figure is at least the count, are the receipt's own shape,
+    /// held where it is parsed.) A receipt that fails any one of these is a
+    /// different lie and is named as such.
+    /// </summary>
+    /// <param name="ack">The acknowledgement that carried the receipt.</param>
+    /// <param name="expected">The peer, the session and this device's key.</param>
+    /// <param name="repositoryId">The repository pushed.</param>
+    /// <param name="sent">Every key sent this session.</param>
+    /// <param name="heldAtStart">How many objects the destination's inventory declared before the push.</param>
+    /// <returns>The verified receipt, or why it was rejected; both null when none arrived.</returns>
+    internal static (VerifiedReplicationReceipt? Receipt, string? Problem) VerifyReplicationReceipt(
+        ReplicationAck ack, ReceiptExpectation expected, ReadOnlyMemory<byte> repositoryId,
+        IReadOnlySet<string> sent, long heldAtStart)
+    {
+        ThrowHelper.ThrowIfNull(ack);
+        ThrowHelper.ThrowIfNull(expected);
+        ThrowHelper.ThrowIfNull(sent);
+
+        if (ack.Receipt.IsEmpty)
+        {
+            return (null, null);
+        }
+
+        if (!expected.Peer.Verify(ack.Receipt.Span, ack.Signature.Span))
+        {
+            return (null, "its signature is not the peer's this session was opened to");
+        }
+
+        var receipt = ReplicationReceipt.Parse(ack.Receipt.Span);
+        if (!receipt.SessionId.Span.SequenceEqual(expected.SessionId.Span))
+        {
+            return (null, "it names a session other than this one");
+        }
+
+        if (!receipt.RepositoryId.Span.SequenceEqual(repositoryId.Span))
+        {
+            return (null, "it names a repository other than the one pushed");
+        }
+
+        if (!receipt.CommanderPublicKey.Span.SequenceEqual(expected.CommanderPublicKey.Span))
+        {
+            return (null, "it is addressed to a commander other than this device");
+        }
+
+        if (receipt.CommittedCount != ack.Count)
+        {
+            return (null, $"its count ({receipt.CommittedCount}) disagrees with the acknowledgement's ({ack.Count})");
+        }
+
+        foreach (var key in receipt.Committed)
+        {
+            if (!sent.Contains(key))
+            {
+                return (null, $"it lists '{key}', which this commander never sent");
+            }
+        }
+
+        var expectedHeld = (ulong)heldAtStart + receipt.CommittedCount;
+        if (receipt.HeldObjects < expectedHeld)
+        {
+            return (null,
+                $"it says the replica holds {receipt.HeldObjects} object(s), fewer than the {heldAtStart} it "
+                + $"declared plus the {receipt.CommittedCount} it committed");
+        }
+
+        return (new VerifiedReplicationReceipt(receipt, ack.Receipt, ack.Signature, expected.Peer), null);
     }
 
     /// <summary>

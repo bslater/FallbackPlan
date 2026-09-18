@@ -124,6 +124,18 @@ internal static partial class Log
         ILogger logger, string destination, string set, string detail);
 
     [LoggerMessage(
+        EventId = 3778, Level = LogLevel.Warning,
+        Message = "Replication receipt from peer {Destination} for set {Set} rejected: {Detail}")]
+    internal static partial void ReplicationReceiptRejected(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3779, Level = LogLevel.Warning,
+        Message = "Replication receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
+    internal static partial void ReplicationReceiptNotFiledByCommander(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);
