@@ -162,7 +162,7 @@ This costs some blob-size variance and buys a great deal: recovery scanning neve
 
 ## 9 Test vectors
 
-Record framing vectors, including header layouts and AAD construction, are in [`conformance/vectors/records.json`](conformance/vectors/records.json).
+Record framing vectors, including header layouts and AAD construction, are in [`conformance/vectors/records.json`](conformance/vectors/records.json) for format 2 and [`conformance/vectors/records-v3.json`](conformance/vectors/records-v3.json) for format 3 — the same record under both formats: the object-scoped key and its separation checks, the carried nonce, the 51-byte AAD and the writer's seed derivation ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)).
 
 **There are no AEAD ciphertext vectors.** Producing them independently requires an AES-GCM implementation the vector generator deliberately does not depend on, and generating them from the reference implementation would prove only that a future build matches today's build. The gap is stated rather than filled with self-certifying values — see [`conformance/README.md`](conformance/README.md).
 

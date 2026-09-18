@@ -38,6 +38,25 @@ public static class RecordNonce
     }
 
     /// <summary>
+    /// Draws a format-3 record's nonce: twelve bytes from a CSPRNG, carried
+    /// in the record's prefix (specification 04 §3). Random rather than zero
+    /// because two writers can seal different stored bytes under one object
+    /// identifier — and so one derived key — with no hash collision involved;
+    /// a fixed nonce would then reuse a <c>(key, nonce)</c> pair.
+    /// </summary>
+    /// <exception cref="ArgumentException">The destination is not 12 bytes.</exception>
+    public static void DrawRandom(Span<byte> destination)
+    {
+        if (destination.Length != AesGcmLength)
+        {
+            throw new ArgumentException(Strings.FormatRecordNonce_FooterNonceBytesGot(AesGcmLength, destination.Length),
+                nameof(destination));
+        }
+
+        System.Security.Cryptography.RandomNumberGenerator.Fill(destination);
+    }
+
+    /// <summary>
     /// Writes the reserved footer nonce — twelve <c>0xFF</c> bytes,
     /// unreachable by any record because ordinals never exceed 65 535
     /// (specification 05 §3).

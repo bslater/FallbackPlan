@@ -34,6 +34,7 @@ public sealed class VectorFileTests
         ["write-only.json"] = true,
         ["identifiers.json"] = true,
         ["records.json"] = true,
+        ["records-v3.json"] = true,
         ["segmentation.json"] = true,
         ["compression.json"] = true,
         ["aes-gcm.json"] = false,
@@ -112,6 +113,24 @@ public sealed class VectorFileTests
         Assert.AreNotEqual(blobKey, otherWriter);
         Assert.AreNotEqual(blobKey, otherCounter);
         Assert.AreNotEqual(otherWriter, otherCounter);
+    }
+
+    [TestMethod]
+    public void AssociatedDataV3_TheCommittedCase_IsFiftyOneBytes()
+    {
+        // Format 3 drops the ordinal (04 §4): 16 + 2 + 1 + 32. The two record
+        // files describe one record under two formats, so the object and the
+        // repository must agree between them.
+        using var v3 = Load("records-v3.json");
+        using var v2 = Load("records.json");
+        Assert.AreEqual(51, v3.RootElement.GetProperty("aad_length").GetInt32());
+        Assert.AreEqual(102, v3.RootElement.GetProperty("aad").GetString()!.Length);
+        Assert.AreEqual(3, v3.RootElement.GetProperty("inputs").GetProperty("format_version").GetInt32());
+        Assert.AreEqual(
+            v2.RootElement.GetProperty("inputs").GetProperty("object_id").GetString(),
+            v3.RootElement.GetProperty("inputs").GetProperty("object_id").GetString());
+        Assert.AreEqual(12, v3.RootElement.GetProperty("prefix").GetProperty("metadata_prefix_length").GetInt32());
+        Assert.AreEqual(92, v3.RootElement.GetProperty("prefix").GetProperty("sealed_data_prefix_length").GetInt32());
     }
 
     [TestMethod]

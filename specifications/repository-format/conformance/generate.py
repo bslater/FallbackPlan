@@ -707,6 +707,76 @@ def aad_vectors() -> dict:
     }
 
 
+def records_v3_vectors() -> dict:
+    """Format-3 records (specification 04 sections 2-4, 03 section 5.4;
+    ADR-0052 Amendment 1): the key is the record's, derived from the class
+    key and the record's own type and identifier; the nonce is carried; the
+    AAD omits the ordinal. Everything here is HKDF and concatenation, so it
+    is derived, not pinned -- the same root and object as records.json, so
+    the two files describe one record under two formats."""
+    tree = write_only_tree()
+    content_id = hashlib.sha256(b"hello world").digest()
+    object_id = hmac.new(
+        tree["content_id_key"], bytes([OBJECT_TYPE_SEGMENT]) + content_id, hashlib.sha256
+    ).digest()
+    class_key = tree["metadata_key_generation_0"]
+    format_version = 3
+
+    def record_key(object_type: int, oid: bytes) -> bytes:
+        return hkdf_expand(class_key, b"fbp/record/v3" + bytes([object_type]) + oid, 32)
+
+    aad = REPOSITORY_ID + u16(format_version) + bytes([OBJECT_TYPE_SEGMENT]) + object_id
+    assert len(aad) == 51, f"format-3 AAD must be 51 bytes, got {len(aad)}"
+
+    other_object_id = hmac.new(
+        tree["content_id_key"], bytes([OBJECT_TYPE_SEGMENT]) + hashlib.sha256(b"goodbye world").digest(),
+        hashlib.sha256,
+    ).digest()
+
+    # The writer's per-blob seed and the content key it derives for a data
+    # record before sealing it (03 section 5.4). Any 32 bytes stand in for a
+    # CSPRNG draw; what the vector pins is the derivation.
+    seed = bytes([0x33] * 32)
+    seed_key = hkdf_expand(seed, b"fbp/record-seed/v3" + object_id, 32)
+
+    return {
+        "description": (
+            "Format-3 record key derivation, carried nonce and associated data "
+            "(specification 04 sections 2-4, 03 section 5.4)."
+        ),
+        "independently_derived": True,
+        "inputs": {
+            "repository_id": REPOSITORY_ID.hex(),
+            "format_version": format_version,
+            "object_type": OBJECT_TYPE_SEGMENT,
+            "object_id": object_id.hex(),
+            "class_key": class_key.hex(),
+            "class_key_provenance": "write-only.json derived.metadata_key_generation_0",
+        },
+        "record_key": {
+            "info": "fbp/record/v3 || u8(object_type) || object_id",
+            "record_key": record_key(OBJECT_TYPE_SEGMENT, object_id).hex(),
+            "separation_checks": {
+                "record_key_other_object": record_key(OBJECT_TYPE_SEGMENT, other_object_id).hex(),
+                "record_key_other_type": record_key(0x02, object_id).hex(),
+            },
+        },
+        "prefix": {
+            "nonce": RECORD_V3_VECTOR_NONCE.hex(),
+            "nonce_comment": "Carried in the record's prefix; a real record draws twelve random bytes.",
+            "metadata_prefix_length": 12,
+            "sealed_data_prefix_length": 12 + 80,
+        },
+        "aad": aad.hex(),
+        "aad_length": len(aad),
+        "seed_derivation": {
+            "info": "fbp/record-seed/v3 || object_id",
+            "seed": seed.hex(),
+            "record_content_key": seed_key.hex(),
+        },
+    }
+
+
 def segmentation_vectors() -> dict:
     """Specification 09 -- fixed-v1 boundaries."""
     mib = 1024 * 1024
@@ -945,6 +1015,20 @@ AES_GCM_CASE_2_CIPHERTEXT = (
 )
 AES_GCM_CASE_2_TAG = "412ae7ebd757a4d4836bf14210248da1"
 
+# Case 3: the format-3 record construction (04 sections 2-4, 03 section 5.4).
+# Computed ONCE with an independent AES-256-GCM (Node's crypto, OpenSSL
+# underneath) over the key, nonce and AAD records-v3.json derives, and
+# pinned. A regression vector, not conformance evidence, exactly as case 2.
+AES_GCM_CASE_3_CIPHERTEXT = (
+    "5b864b6faf5d1f5b185a6f32413cc12d0e6679f218d8309516abef99bd097d5a"
+    "fc59e75862e94a86108f883dbd0c3e"
+)
+AES_GCM_CASE_3_TAG = "f52db06ac1176245e4fe7a4c77ffc32c"
+
+# The nonce the format-3 vector case carries. A real record draws twelve
+# random bytes; a vector needs a fixed one, and this is any twelve.
+RECORD_V3_VECTOR_NONCE = bytes(range(0x30, 0x3C))
+
 
 def aes_gcm_vectors() -> dict:
     """
@@ -1023,6 +1107,26 @@ def aes_gcm_vectors() -> dict:
                 ),
                 "ciphertext": AES_GCM_CASE_2_CIPHERTEXT,
                 "tag": AES_GCM_CASE_2_TAG,
+            },
+            {
+                "name": "record_v3_real_construction",
+                "provenance": (
+                    "platform-derived: computed once with an independent "
+                    "AES-256-GCM (Node crypto over OpenSSL) and pinned. "
+                    "Regression vector, not conformance evidence. Key is "
+                    "records-v3.json record_key; nonce and 51-byte AAD are "
+                    "records-v3.json prefix.nonce and aad (format 3, no ordinal)."
+                ),
+                "provenance_reverified": False,
+                "key": records_v3_vectors()["record_key"]["record_key"],
+                "iv": RECORD_V3_VECTOR_NONCE.hex(),
+                "plaintext": (
+                    "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a"
+                    "20666f726d61742d33207265636f7264"
+                ),
+                "aad": records_v3_vectors()["aad"],
+                "ciphertext": AES_GCM_CASE_3_CIPHERTEXT,
+                "tag": AES_GCM_CASE_3_TAG,
             },
         ],
     }
@@ -1520,6 +1624,7 @@ GROUPS = {
     "write-only.json": write_only_vectors,
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
+    "records-v3.json": records_v3_vectors,
     "segmentation.json": segmentation_vectors,
     "compression.json": compression_vectors,
     "aes-gcm.json": aes_gcm_vectors,

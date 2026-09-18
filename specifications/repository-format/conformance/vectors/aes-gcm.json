@@ -26,6 +26,17 @@
       "aad": "0102030405060708090a0b0c0d0e0f10000201b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff240000002f",
       "ciphertext": "b41f78c1c843a7769ad72605805380febf0ec1116454f7165986026e9461eaccceedb95d926f6d10d9ad38296aa326af54",
       "tag": "412ae7ebd757a4d4836bf14210248da1"
+    },
+    {
+      "name": "record_v3_real_construction",
+      "provenance": "platform-derived: computed once with an independent AES-256-GCM (Node crypto over OpenSSL) and pinned. Regression vector, not conformance evidence. Key is records-v3.json record_key; nonce and 51-byte AAD are records-v3.json prefix.nonce and aad (format 3, no ordinal).",
+      "provenance_reverified": false,
+      "key": "b4bd5fc8dd7dcac4ce129f48b574d4c95d5807d0fc05c855952035b8af8cee7e",
+      "iv": "303132333435363738393a3b",
+      "plaintext": "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a20666f726d61742d33207265636f7264",
+      "aad": "0102030405060708090a0b0c0d0e0f10000301b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff24",
+      "ciphertext": "5b864b6faf5d1f5b185a6f32413cc12d0e6679f218d8309516abef99bd097d5afc59e75862e94a86108f883dbd0c3e",
+      "tag": "f52db06ac1176245e4fe7a4c77ffc32c"
     }
   ]
 }

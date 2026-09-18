@@ -78,4 +78,52 @@ public sealed class RecordCipherConformanceTests
         Assert.IsTrue(RecordCipher.TryOpen(blobKey, nonce, aad, ciphertext, tag, restored));
         SequenceAssert.AreEqual(plaintext, restored);
     }
+
+    [TestMethod]
+    public void RecordCipherV3_ThePinnedCase_IsReproducedByTheRealConstruction()
+    {
+        // aes-gcm.json case 3 over the format-3 construction: the record key
+        // from the real deriver, the carried nonce records-v3.json fixes for
+        // the vector, the 51-byte AAD from the real builder — and the bytes
+        // an independent AES-GCM produced once, pinned as a regression case.
+        using var aesGcm = Load("aes-gcm.json");
+        using var keys = Load("write-only.json");
+        using var records = Load("records-v3.json");
+
+        var vectorCase = aesGcm.RootElement.GetProperty("cases").EnumerateArray()
+            .Single(c => c.GetProperty("name").GetString() == "record_v3_real_construction");
+
+        using var authority = WriteOnlyDerivation.FromRoot(
+            Convert.FromHexString(keys.RootElement.GetProperty("inputs").GetProperty("root").GetString()!));
+        var inputs = records.RootElement.GetProperty("inputs");
+        var objectType = (ObjectType)inputs.GetProperty("object_type").GetByte();
+        var objectId = ObjectId.FromBytes(Convert.FromHexString(inputs.GetProperty("object_id").GetString()!));
+        var recordKey = new byte[RecordKeyDeriver.RecordKeyLength];
+        RecordKeyDeriver.Derive(authority.Credential.DeriveMetadataKey(KeyGeneration.Zero), objectType, objectId, recordKey);
+        Assert.AreEqual(vectorCase.GetProperty("key").GetString(), Convert.ToHexStringLower(recordKey));
+
+        var nonce = Convert.FromHexString(records.RootElement.GetProperty("prefix").GetProperty("nonce").GetString()!);
+        Assert.AreEqual(vectorCase.GetProperty("iv").GetString(), Convert.ToHexStringLower(nonce));
+
+        var aad = new byte[RecordAad.RelocatableLength];
+        RecordAad.WriteRelocatable(
+            RepositoryId.FromBytes(Convert.FromHexString(inputs.GetProperty("repository_id").GetString()!)),
+            inputs.GetProperty("format_version").GetUInt16(),
+            objectType,
+            objectId,
+            aad);
+        Assert.AreEqual(vectorCase.GetProperty("aad").GetString(), Convert.ToHexStringLower(aad));
+
+        var plaintext = Convert.FromHexString(vectorCase.GetProperty("plaintext").GetString()!);
+        var ciphertext = new byte[plaintext.Length];
+        var tag = new byte[RecordCipher.TagLength];
+        RecordCipher.Seal(recordKey, nonce, aad, plaintext, ciphertext, tag);
+
+        Assert.AreEqual(vectorCase.GetProperty("ciphertext").GetString(), Convert.ToHexStringLower(ciphertext));
+        Assert.AreEqual(vectorCase.GetProperty("tag").GetString(), Convert.ToHexStringLower(tag));
+
+        var restored = new byte[plaintext.Length];
+        Assert.IsTrue(RecordCipher.TryOpen(recordKey, nonce, aad, ciphertext, tag, restored));
+        SequenceAssert.AreEqual(plaintext, restored);
+    }
 }
