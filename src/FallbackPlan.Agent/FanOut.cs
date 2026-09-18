@@ -343,7 +343,7 @@ public static class FanOut
     private static async ValueTask PushToPeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
-        Func<byte[], byte[]>? grantedSigner = null)
+        Func<byte[], byte[]>? grantedSigner = null, ReceiptFate? receiptFate = null)
     {
         var ledger = runtime.DestinationSync;
 
@@ -533,8 +533,15 @@ public static class FanOut
                 runtime.LoggerFor(typeof(ReplicationInitiator)),
                 sessionBinding,
                 claimPublicKey,
-                OnInventory)
+                OnInventory,
+                new ReplicationInitiator.ReceiptExpectation(
+                    grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()))
                 .ConfigureAwait(false);
+
+            // The receipt is dealt with before anything else is judged: the
+            // deletion it attests has already happened, whatever the rest of
+            // this pass concludes (ADR-0063).
+            RecordReceipt(runtime, set, destination, outcome, receiptFate, nowMs);
 
             // The heal, for a direct-ship set whose metadata plane is behind
             // the peer: over the retrieval session, dialled only for this,
@@ -1301,6 +1308,95 @@ public static class FanOut
         }
     }
 
+    /// <summary>
+    /// What became of the deletion receipt a peer push brought back, for the
+    /// granted run's report: a pass that instructed nothing has none to
+    /// expect, a peer older than receipts sends none, and a receipt that
+    /// arrived was filed, rejected, or verified but could not be kept.
+    /// </summary>
+    private sealed class ReceiptFate
+    {
+        public bool Instructed { get; set; }
+
+        public long Deleted { get; set; }
+
+        public string? FiledPath { get; set; }
+
+        public string? Rejected { get; set; }
+
+        public string? FilingFailure { get; set; }
+
+        public override string ToString() =>
+            !Instructed ? "nothing to delete, no receipt"
+            : FiledPath is { } path ? $"{Deleted} object(s) deleted, receipt {path}"
+            : Rejected is { } rejected ? $"{Deleted} object(s) deleted, receipt rejected: {rejected}"
+            : FilingFailure is { } failure ? $"{Deleted} object(s) deleted, receipt verified but not filed: {failure}"
+            : $"{Deleted} object(s) deleted, no receipt (the peer predates receipts)";
+    }
+
+    /// <summary>
+    /// Files a verified deletion receipt under this installation's state
+    /// directory, or says why the one that arrived was not believed
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)). A rejected
+    /// receipt is a notice and never a refusal: the peer has already deleted
+    /// what it acknowledged, and what is missing is a statement of it that
+    /// verifies — which is exactly the kind of thing a human should hear
+    /// about once and not have withdrawn by the next clean pass.
+    /// </summary>
+    private static void RecordReceipt(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ReplicationInitiator.PushOutcome outcome, ReceiptFate? fate, ulong nowMs)
+    {
+        if (fate is not null)
+        {
+            fate.Instructed = outcome.Instructed;
+            fate.Deleted = outcome.Deleted;
+        }
+
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (outcome.ReceiptProblem is { } problem)
+        {
+            Log.DeletionReceiptRejected(log, destination.Name, set.Name, problem);
+            runtime.Notices.Raise(
+                $"deletion-receipt-invalid:{set.Id}:{destination.Name}",
+                $"peer '{destination.Name}' answered set '{set.Name}'s deletion instruction with a receipt this "
+                + $"installation will not file: {problem}. The peer acknowledged deleting {outcome.Deleted} "
+                + "object(s) and that deletion stands; what is missing is a statement of it under the peer's own "
+                + "signature that holds up. A peer that misattests once deserves a look.",
+                nowMs);
+            if (fate is not null)
+            {
+                fate.Rejected = problem;
+            }
+
+            return;
+        }
+
+        if (outcome.Receipt is not { } receipt)
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Protocol.DeletionReceiptStore.Open(runtime.Options.StateDirectory).File(
+                Protocol.DeletionReceiptRole.Commander, receipt.SignedBytes.Span, receipt.Signature.Span,
+                receipt.Signer, set.Name, destination.Name);
+            if (fate is not null)
+            {
+                fate.FiledPath = path;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Log.DeletionReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+            if (fate is not null)
+            {
+                fate.FilingFailure = exception.Message;
+            }
+        }
+    }
+
     private static void ReportDestinationAhead(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
         SequenceAdoption.Adopted ahead, bool staging, string? healFailure, ulong nowMs, bool peer)
@@ -1410,12 +1506,13 @@ public static class FanOut
                 continue;
             }
 
-            await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign)
+            var receipt = new ReceiptFate();
+            await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt)
                 .ConfigureAwait(false);
 
             var row = runtime.DestinationSync.Find(set.Id, destination.Name);
             lines.Add(row is { State: DestinationSyncState.InSync }
-                ? $"peer '{destination.Name}' converged under the grant"
+                ? $"peer '{destination.Name}' converged under the grant: {receipt}"
                 : $"peer '{destination.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}");
         }
 

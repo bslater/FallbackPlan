@@ -255,6 +255,54 @@ public sealed class PeerRetentionTests : IDisposable
         Assert.IsNotNull(metadata.Metadata, "the key only the spoke holds was condemned by a staging-computed drop-list");
     }
 
+    [TestMethod]
+    public async Task ApplyRetention_FilesTheSpokesReceiptAndNamesItInTheReport()
+    {
+        // The audit half of FR-GC-008 on the peer plane (ADR-0063): the
+        // spoke's signed statement of what it deleted comes back in the
+        // acknowledgement, and the commander that verified it keeps its own
+        // copy beside the run's report — so what a granted run destroyed at
+        // a peer is on record here, under the peer's own signature, and not
+        // only as a count somebody once acknowledged.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
+        await BackUpAsync(start.AddHours(10));
+
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        var before = await ListAsync(replica, "snapshots/");
+        Assert.HasCount(3, before);
+        Assert.IsEmpty(DeletionReceiptStore.Open(StateDirectory).List(), "nothing has been instructed yet");
+
+        var lines = await ApplyRetentionAsync();
+
+        var lost = before.Except(await ListAsync(replica, "snapshots/"), StringComparer.Ordinal).ToList();
+        Assert.HasCount(2, lost);
+
+        var filed = Assert.ContainsSingle(DeletionReceiptStore.Open(StateDirectory).List());
+        Assert.AreEqual(DeletionReceiptRole.Commander, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.AreEqual("docs", filed.Set);
+        Assert.AreEqual("friend", filed.Destination);
+        Assert.AreEqual(fingerprint, filed.SignerFingerprint);
+
+        var receipt = filed.Receipt!;
+        CollectionAssert.IsSubsetOf(lost, receipt.Deleted.ToList(), "the receipt does not name the snapshots the replica lost");
+        Assert.AreEqual((ulong)receipt.Deleted.Count, receipt.DeletedCount);
+        Assert.AreEqual(0u, receipt.NotHeld, "the instruction named only what the spoke declared");
+
+        var line = Assert.ContainsSingle(lines.Where(candidate =>
+            candidate.Contains("converged under the grant", StringComparison.Ordinal)));
+        Assert.Contains($"{receipt.DeletedCount} object(s) deleted", line, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFileName(filed.Path), line, StringComparison.Ordinal);
+    }
+
     private void WriteConfiguration(string fingerprint) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
@@ -319,7 +367,8 @@ public sealed class PeerRetentionTests : IDisposable
     /// instructs the spoke, since a scheduled pass holds no authority to
     /// delete.
     /// </summary>
-    private async Task ApplyRetentionAsync()
+    /// <returns>The run's report lines.</returns>
+    private async Task<IReadOnlyList<string>> ApplyRetentionAsync()
     {
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions { ArchivesRoot = ArchivesRoot, StateDirectory = StateDirectory },
@@ -336,6 +385,7 @@ public sealed class PeerRetentionTests : IDisposable
             CancellationToken.None);
         Assert.IsInstanceOfType<Api.RetentionResult>(
             applied, (applied as Api.ServiceError)?.Message ?? applied.GetType().Name);
+        return ((Api.RetentionResult)applied).Lines;
     }
 
     private async Task BackUpAsync(DateTimeOffset now)

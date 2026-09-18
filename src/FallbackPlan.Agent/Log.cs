@@ -113,6 +113,17 @@ internal static partial class Log
     internal static partial void DeletionReceiptNotFiled(ILogger logger, string fingerprint, string detail);
 
     [LoggerMessage(
+        EventId = 3726, Level = LogLevel.Warning,
+        Message = "Deletion receipt from peer {Destination} for set {Set} rejected: {Detail}")]
+    internal static partial void DeletionReceiptRejected(ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3727, Level = LogLevel.Warning,
+        Message = "Deletion receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
+    internal static partial void DeletionReceiptNotFiledByCommander(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);

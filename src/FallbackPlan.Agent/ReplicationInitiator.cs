@@ -71,6 +71,17 @@ internal static class ReplicationInitiator
     /// evidence (<see cref="PushAndConvergeAsync"/>'s <c>onInventory</c>): the
     /// push went whole and no instruction was sent.
     /// </param>
+    /// <param name="Instructed">Whether a retention instruction was sent this session at all.</param>
+    /// <param name="Receipt">
+    /// The destination's deletion receipt, verified
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)); null when none
+    /// arrived or the one that did was rejected.
+    /// </param>
+    /// <param name="ReceiptProblem">
+    /// Why the receipt that arrived was rejected, or null. A destination that
+    /// sends none is older, not wrong: no receipt is a fact and not a fault,
+    /// and this is null then too.
+    /// </param>
     public sealed record PushOutcome(
         long Committed,
         long Deleted,
@@ -79,7 +90,32 @@ internal static class ReplicationInitiator
         long BytesSent = 0,
         long ResumedObjects = 0,
         IReadOnlyCollection<string>? HeldKeys = null,
-        bool ConvergenceWithheld = false);
+        bool ConvergenceWithheld = false,
+        bool Instructed = false,
+        VerifiedReceipt? Receipt = null,
+        string? ReceiptProblem = null);
+
+    /// <summary>
+    /// What a commander holds a deletion receipt against
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)): the peer this
+    /// session was opened to, the session itself, and this device's own key.
+    /// </summary>
+    /// <param name="Peer">The destination's pinned identity — the only signer a receipt may have.</param>
+    /// <param name="SessionId">
+    /// This session's identifier (02 §3.5), whatever the negotiated features:
+    /// a receipt for another session is a recording, however well it verifies.
+    /// </param>
+    /// <param name="CommanderPublicKey">This device's public key, which the receipt must be addressed to.</param>
+    public sealed record ReceiptExpectation(
+        PeerIdentity Peer, ReadOnlyMemory<byte> SessionId, ReadOnlyMemory<byte> CommanderPublicKey);
+
+    /// <summary>A deletion receipt that passed every check, with what is needed to file it.</summary>
+    /// <param name="Receipt">The statement.</param>
+    /// <param name="SignedBytes">Its exact signed encoding — the artefact; the statement is a reading of it.</param>
+    /// <param name="Signature">The destination's signature over <paramref name="SignedBytes"/>.</param>
+    /// <param name="Signer">The destination that signed it.</param>
+    public sealed record VerifiedReceipt(
+        DeletionReceipt Receipt, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature, PeerIdentity Signer);
 
     /// <summary>
     /// Pushes the objects the destination lacks and the policy keeps, then —
@@ -142,6 +178,12 @@ internal static class ReplicationInitiator
     /// the filter aside for the whole session: the push goes whole and no
     /// instruction is sent.
     /// </param>
+    /// <param name="expectReceipt">
+    /// What to hold the destination's deletion receipt against
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)), or null when
+    /// this caller cannot check one — a receipt then goes unverified and is
+    /// reported as such rather than believed.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -152,7 +194,8 @@ internal static class ReplicationInitiator
         ILogger? logger = null,
         ReadOnlyMemory<byte> sessionBinding = default,
         ReadOnlyMemory<byte> claimPublicKey = default,
-        Func<IReadOnlyCollection<string>, bool>? onInventory = null)
+        Func<IReadOnlyCollection<string>, bool>? onInventory = null,
+        ReceiptExpectation? expectReceipt = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -263,11 +306,17 @@ internal static class ReplicationInitiator
                 return new PushOutcome((long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held);
             }
 
+            // Each page's signed bytes are digested as it goes out, because
+            // that is what the destination's receipt commits to (ADR-0063):
+            // the same bytes its signature covered, hashed on both sides.
+            var pageDigests = new List<byte[]>();
             for (var offset = 0; offset < drops.Count; offset += RetentionOffer.MaximumKeys)
             {
                 var page = drops.Skip(offset).Take(RetentionOffer.MaximumKeys).ToList();
                 var instruction = new RetentionOffer(
                     repositoryId, page, More: offset + RetentionOffer.MaximumKeys < drops.Count);
+                var signedBytes = instruction.EncodeForSigning(sessionBinding.Span);
+                pageDigests.Add(SHA256.HashData(signedBytes));
 
                 // Signed under the reclaim key (ADR-0055 §5), so a spoke can
                 // tell an instruction authorised by whoever holds that key
@@ -278,10 +327,7 @@ internal static class ReplicationInitiator
                 // because a check the sender can opt out of is not a check.
                 if (signer is not null)
                 {
-                    instruction = instruction with
-                    {
-                        Signature = signer(instruction.EncodeForSigning(sessionBinding.Span)),
-                    };
+                    instruction = instruction with { Signature = signer(signedBytes) };
                 }
 
                 await PeerFrame.WriteAsync(stream, instruction, cancellationToken).ConfigureAwait(false);
@@ -289,8 +335,17 @@ internal static class ReplicationInitiator
 
             var retentionAck = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.RetentionAck, RetentionAck.Read, cancellationToken).ConfigureAwait(false);
+            var (receipt, receiptProblem) = expectReceipt is null
+                ? (null, retentionAck.Receipt.IsEmpty ? null : "this commander had nothing to verify it against")
+                : VerifyReceipt(
+                    retentionAck, expectReceipt, repositoryId, pageDigests, drops.ToHashSet(StringComparer.Ordinal));
             return new PushOutcome(
-                (long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom, bytesSent, resumed, held);
+                (long)ack.Count, (long)retentionAck.Deleted, held.Count, headroom, bytesSent, resumed, held)
+            {
+                Instructed = true,
+                Receipt = receipt,
+                ReceiptProblem = receiptProblem,
+            };
         }
         catch (PeerProtocolException exception)
         {
@@ -301,6 +356,82 @@ internal static class ReplicationInitiator
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Holds a deletion receipt against everything this commander knows
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)). The signature
+    /// first — nothing else is worth reading until it is the peer's — then
+    /// the session, so a recording of another exchange is refused however
+    /// well it verifies; the repository and the addressee; the pages, digest
+    /// for digest in order, so the receipt attests the instruction actually
+    /// sent; the count, which must be what the acknowledgement said; and the
+    /// keys, every one of which must have been instructed. (That the keys
+    /// listed do not outnumber the count is the receipt's own shape, held
+    /// where it is parsed.) A receipt that fails any one of these is a
+    /// different lie and is named as such.
+    /// </summary>
+    /// <param name="ack">The acknowledgement that carried the receipt.</param>
+    /// <param name="expected">The peer, the session and this device's key.</param>
+    /// <param name="repositoryId">The repository instructed.</param>
+    /// <param name="pageDigests">SHA-256 of each page's signed bytes, in the order sent.</param>
+    /// <param name="instructed">Every key the instruction named.</param>
+    /// <returns>The verified receipt, or why it was rejected; both null when none arrived.</returns>
+    internal static (VerifiedReceipt? Receipt, string? Problem) VerifyReceipt(
+        RetentionAck ack, ReceiptExpectation expected, ReadOnlyMemory<byte> repositoryId,
+        IReadOnlyList<byte[]> pageDigests, IReadOnlySet<string> instructed)
+    {
+        ThrowHelper.ThrowIfNull(ack);
+        ThrowHelper.ThrowIfNull(expected);
+        ThrowHelper.ThrowIfNull(pageDigests);
+        ThrowHelper.ThrowIfNull(instructed);
+
+        if (ack.Receipt.IsEmpty)
+        {
+            return (null, null);
+        }
+
+        if (!expected.Peer.Verify(ack.Receipt.Span, ack.Signature.Span))
+        {
+            return (null, "its signature is not the peer's this session was opened to");
+        }
+
+        var receipt = DeletionReceipt.Parse(ack.Receipt.Span);
+        if (!receipt.SessionId.Span.SequenceEqual(expected.SessionId.Span))
+        {
+            return (null, "it names a session other than this one");
+        }
+
+        if (!receipt.RepositoryId.Span.SequenceEqual(repositoryId.Span))
+        {
+            return (null, "it names a repository other than the one instructed");
+        }
+
+        if (!receipt.CommanderPublicKey.Span.SequenceEqual(expected.CommanderPublicKey.Span))
+        {
+            return (null, "it is addressed to a commander other than this device");
+        }
+
+        if (receipt.PageDigests.Count != pageDigests.Count
+            || receipt.PageDigests.Where((digest, index) => !digest.Span.SequenceEqual(pageDigests[index])).Any())
+        {
+            return (null, $"it attests {receipt.PageDigests.Count} page(s) that are not the {pageDigests.Count} sent");
+        }
+
+        if (receipt.DeletedCount != ack.Deleted)
+        {
+            return (null, $"its count ({receipt.DeletedCount}) disagrees with the acknowledgement's ({ack.Deleted})");
+        }
+
+        foreach (var key in receipt.Deleted)
+        {
+            if (!instructed.Contains(key))
+            {
+                return (null, $"it lists '{key}', which this commander never instructed");
+            }
+        }
+
+        return (new VerifiedReceipt(receipt, ack.Receipt, ack.Signature, expected.Peer), null);
     }
 
     /// <summary>
