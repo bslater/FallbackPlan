@@ -1021,27 +1021,107 @@ public sealed record RetentionOffer(
 
 /// <summary>The spoke confirms what it deleted (specification peer-protocol 06 §4.2).</summary>
 /// <param name="Deleted">Objects actually removed — a key not held counts nothing.</param>
-public sealed record RetentionAck(ulong Deleted) : IPeerMessage
+/// <param name="Receipt">
+/// The spoke's signed deletion receipt — the bytes of
+/// <see cref="DeletionReceipt.EncodeForSigning"/> — or empty from a spoke
+/// that predates receipts ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)).
+/// </param>
+/// <param name="Signature">The receipt's signature under the spoke's device key; present exactly when the receipt is.</param>
+public sealed record RetentionAck(
+    ulong Deleted,
+    ReadOnlyMemory<byte> Receipt = default,
+    ReadOnlyMemory<byte> Signature = default) : IPeerMessage
 {
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.RetentionAck;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 1;
+    public int BodyEntryCount => Receipt.IsEmpty ? 1 : 3;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
         ThrowHelper.ThrowIfNull(writer);
+        RequireReceiptShape(Receipt, Signature);
 
         writer.WriteInt32(1);
         writer.WriteUInt64(Deleted);
+        if (!Receipt.IsEmpty)
+        {
+            writer.WriteInt32(2);
+            writer.WriteByteString(Receipt.Span);
+            writer.WriteInt32(3);
+            writer.WriteByteString(Signature.Span);
+        }
     }
 
     /// <summary>Reads an acknowledgement.</summary>
     /// <param name="reader">The frame's reader.</param>
     /// <returns>The acknowledgement.</returns>
-    public static RetentionAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
+    /// <exception cref="PeerProtocolException">A receipt without its signature, or one that does not parse.</exception>
+    public static RetentionAck Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        ulong deleted = 0;
+        byte[]? receipt = null;
+        byte[]? signature = null;
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    deleted = reader.ReadUInt64();
+                    break;
+                case 2:
+                    receipt = reader.ReadByteString();
+                    break;
+                case 3:
+                    signature = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        var ack = new RetentionAck(deleted, receipt ?? [], signature ?? []);
+        RequireReceiptShape(ack.Receipt, ack.Signature);
+        return ack;
+    }
+
+    /// <summary>
+    /// A receipt and its signature travel together or not at all, and the
+    /// receipt must be one. Malformed rather than dropped, for the reclaim
+    /// key's reason: an audit record silently discarded is an audit that
+    /// did not happen.
+    /// </summary>
+    private static void RequireReceiptShape(ReadOnlyMemory<byte> receipt, ReadOnlyMemory<byte> signature)
+    {
+        if (receipt.IsEmpty && signature.IsEmpty)
+        {
+            return;
+        }
+
+        if (receipt.IsEmpty || signature.Length != DeletionReceipt.SignatureLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "A retention acknowledgement's receipt and its 64-byte signature travel together (06 §4.2).");
+        }
+
+        _ = DeletionReceipt.Parse(receipt.Span);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(RetentionAck? other) =>
+        other is not null
+        && Deleted == other.Deleted
+        && Receipt.Span.SequenceEqual(other.Receipt.Span)
+        && Signature.Span.SequenceEqual(other.Signature.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Deleted, Receipt.Length);
 }
 
 /// <summary>

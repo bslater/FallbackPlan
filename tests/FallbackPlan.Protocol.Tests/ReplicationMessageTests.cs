@@ -391,6 +391,8 @@ public sealed class ReplicationMessageTests
 
         var ack = new RetentionAck(7);
         Assert.AreEqual(ack, RoundTrip(ack, RetentionAck.Read));
+        Assert.AreEqual(1, ack.BodyEntryCount, "an ack without a receipt is the one-entry body it always was");
+        Assert.IsTrue(RoundTrip(ack, RetentionAck.Read).Receipt.IsEmpty);
     }
 
     [TestMethod]
@@ -763,5 +765,113 @@ public sealed class ReplicationMessageTests
             [.. keys.Select(_ => (ReadOnlyMemory<byte>)new byte[32])]);
 
         Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(partial, ReplicationPartial.Read));
+    }
+
+    // ------------------------------------------------------- deletion receipt
+
+    private static DeletionReceipt Receipt(int listed = 2, int pages = 1) => new(
+        SessionId: Enumerable.Repeat((byte)0xAB, DeletionReceipt.SessionIdLength).ToArray(),
+        RepositoryId: Enumerable.Repeat((byte)0x01, ReplicationOffer.RepositoryIdLength).ToArray(),
+        CommanderPublicKey: Enumerable.Repeat((byte)0xC0, PeerIdentity.KeyLength).ToArray(),
+        IssuedAtUnixMilliseconds: 1_722_600_000_123,
+        FloorGenerations: 2,
+        ReclaimPublicKey: Enumerable.Repeat((byte)0x5E, DeletionReceipt.ReclaimPublicKeyLength).ToArray(),
+        PageDigests: [.. Enumerable.Range(0, pages).Select(page => (ReadOnlyMemory<byte>)Enumerable.Repeat((byte)page, DeletionReceipt.DigestLength).ToArray())],
+        DeletedCount: (ulong)listed,
+        Deleted: [.. Enumerable.Range(0, listed).Select(index => $"snapshots/aa/bb/deleted-{index}")],
+        NotHeld: 1);
+
+    [TestMethod]
+    public void DeletionReceipt_EncodesAndParsesBackExactly()
+    {
+        var receipt = Receipt(listed: 3, pages: 2);
+
+        var bytes = receipt.EncodeForSigning();
+        var parsed = DeletionReceipt.Parse(bytes);
+
+        Assert.AreEqual(receipt, parsed);
+        Assert.IsTrue(bytes.AsSpan().StartsWith("fbp-peer-v1:deletion-receipt"u8), "the label leads, so no other signed statement can collide");
+    }
+
+    [TestMethod]
+    public void DeletionReceipt_WithoutAReclaimKey_SaysSoRatherThanZeroFilling()
+    {
+        var receipt = Receipt() with { ReclaimPublicKey = ReadOnlyMemory<byte>.Empty };
+
+        var parsed = DeletionReceipt.Parse(receipt.EncodeForSigning());
+
+        Assert.IsTrue(parsed.ReclaimPublicKey.IsEmpty, "an instruction the spoke could check against no key is recorded as that, not as a key of zeros");
+        Assert.AreEqual(receipt, parsed);
+    }
+
+    [TestMethod]
+    public void DeletionReceipt_TrailingBytes_AreRefusedNotIgnored()
+    {
+        // A signed statement is exactly its bytes. A parser that stopped
+        // early would let a receipt carry unsigned baggage that a reader
+        // might display as though it were attested.
+        var bytes = Receipt().EncodeForSigning();
+        var longer = bytes.Concat(new byte[] { 0 }).ToArray();
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => DeletionReceipt.Parse(longer));
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+        Assert.ThrowsExactly<PeerProtocolException>(() => DeletionReceipt.Parse(bytes.AsSpan(0, bytes.Length - 1).ToArray()));
+    }
+
+    [TestMethod]
+    public void DeletionReceipt_ListingMoreKeysThanTheCap_IsMalformed()
+    {
+        var receipt = Receipt(listed: DeletionReceipt.MaximumListedKeys + 1);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => receipt.EncodeForSigning());
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void DeletionReceipt_ADigestOfTheWrongWidth_IsMalformed()
+    {
+        var receipt = Receipt() with { PageDigests = [new byte[16]] };
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => receipt.EncodeForSigning());
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void RetentionAck_CarriesAReceiptAndItsSignature()
+    {
+        var receipt = Receipt();
+        var signed = receipt.EncodeForSigning();
+        var signature = Enumerable.Repeat((byte)9, DeletionReceipt.SignatureLength).ToArray();
+
+        var ack = new RetentionAck(2, signed, signature);
+        var read = RoundTrip(ack, RetentionAck.Read);
+
+        Assert.AreEqual(3, ack.BodyEntryCount);
+        Assert.AreEqual(2UL, read.Deleted);
+        Assert.IsTrue(read.Receipt.Span.SequenceEqual(signed));
+        Assert.IsTrue(read.Signature.Span.SequenceEqual(signature));
+        Assert.AreEqual(receipt, DeletionReceipt.Parse(read.Receipt.Span));
+    }
+
+    [TestMethod]
+    public void RetentionAck_AReceiptWithoutItsSignature_IsMalformed()
+    {
+        // One without the other is refused on both sides: an unsigned
+        // receipt is a claim nobody made, and a signature over nothing is
+        // noise. Malformed rather than dropped, for the reclaim key's reason.
+        var signed = Receipt().EncodeForSigning();
+
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(new RetentionAck(2, signed, ReadOnlyMemory<byte>.Empty)));
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(new RetentionAck(2, ReadOnlyMemory<byte>.Empty, new byte[64])));
+        Assert.ThrowsExactly<PeerProtocolException>(() => PeerFrame.Encode(new RetentionAck(2, signed, new byte[63])));
+    }
+
+    [TestMethod]
+    public void RetentionAck_AReceiptThatDoesNotParse_IsMalformedOnRead()
+    {
+        var ack = new RetentionAck(2, new byte[] { 1, 2, 3 }, new byte[64]);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(ack, RetentionAck.Read));
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
     }
 }
