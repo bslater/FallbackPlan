@@ -243,10 +243,19 @@ the destination cannot forge because it never held the key:
   delta ([repository format 07 §2.2](../repository-format/07-index.md)).
 
 The digest proof reads the whole blob and is budgeted per pass on the
-source's side; a blob it cannot afford is left unproved, never blamed. A
-message in which the destination hashes its own copy and answers with the
-digest — sparing the link the blob — is not defined by this revision and
-would be a new message type behind a new feature.
+source's side; a blob it cannot afford is left unproved, never blamed, and
+the sample walks the destination's declared inventory on a cursor the source
+keeps, so successive passes reach every blob. A message in which the
+destination hashes its own copy and answers with the digest — sparing the
+link the blob — is deliberately **not** defined: the source holds only the
+flat digest, so it could check nothing keyed to a nonce, and a bare digest
+is an answer the destination may have computed once at receipt and kept
+after discarding the bytes. Such an answer is a claim, and a source MUST NOT
+count it as a proof of possession. A challenge of that shape becomes sound
+only when the index commits to the blob in a form the source can open
+without the bytes — a Merkle root over fixed chunks — which is a repository
+format question ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)
+open question 4), not one for this protocol revision.
 
 ---
 

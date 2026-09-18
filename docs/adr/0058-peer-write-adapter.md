@@ -174,11 +174,35 @@ separate piece of work and is recorded as a gap rather than implied away.
 > budgeted per pass, and the ledger says which tier proved what (contract
 > 1.32). Over a peer it runs through the same read-back — a whole-blob read
 > over the retrieval session — which is correct and costs the peer's link
-> the blob; a **digest challenge**, in which the peer hashes its own copy
-> and answers with the digest, is a new message type and negotiated feature
-> and is the named follow-up. Until it lands the digest tier is proved at a
-> local path (`Hosts.Tests/DirectShipVerificationTests`) and runs, untested
-> at scale, over retrieval.
+> the blob. Held at a local path by `Hosts.Tests/DirectShipVerificationTests`
+> and at a peer by `Hosts.Tests/PeerReadBackVerificationTests`.
+
+> **Amended 2026-09: the digest challenge will not be built as named.** The
+> note above first ended by naming a *digest challenge* — a message in which
+> the peer hashes its own copy and answers with the digest, sparing the link
+> the blob — as the follow-up. Planning it found that it cannot be a proof.
+> The source holds only the digest the writer signed, `SHA-256` over the
+> sealed bytes, so it can verify nothing keyed to a nonce; the only answer it
+> could check is the bare digest, and a bare digest is a **self-report**: a
+> peer that computed it once at receipt and discarded the bytes answers it
+> correctly for ever. That is exactly the property the keyed random-range
+> challenge ([04 §2](../../specifications/peer-protocol/04-verification.md#2-the-challenge))
+> exists to avoid, and the posture this record already takes at §8 — the
+> examined party must not be the one supplying the evidence. The read-back
+> is a proof because the bytes cross the wire. So the read-back stays the
+> proof, and it now **rotates**: the sample walks the peer's declared
+> inventory on the same cursor the local path walks its listing
+> (`Replication/VerificationSampler`'s `Rotate`), with a peer's reservoir
+> share, under a per-pass byte budget of its own
+> (`Replication/ReplicaVerifier`'s `PeerDigestByteBudget`, 64 MiB), so a
+> smaller budget adds up across passes instead of starving the same blobs.
+> What *would* make a digest challenge sound is a commitment the source can
+> open without the bytes — the covered-blob digest published as a **Merkle
+> root** over fixed-size chunks, so the source can ask for random leaves
+> with their authentication paths and verify them against the signed root.
+> That is a change to what the index carries, and it is recorded as
+> [ADR-0052](0052-relocatable-records-format-v3.md)'s open question 4 for
+> the v3 window rather than built on the wire against the flat digest.
 
 ### 9 A peer-only set still *defaults* to staging
 
@@ -268,5 +292,6 @@ is that it has none.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R0, and the discharge of [ADR-0046](0046-direct-to-destination-publication.md)'s stated tail. Built: `Agent/PeerShipStore` is the adapter, `Agent/DestinationShipSink` admits peer destinations and closes their sessions when the run's books close, `Agent/BackupRunner` awaits that close, `Agent/FanOut` withholds the verification stamp from a pair with no independent copy, and `Agent/ServiceCommandHandler` stops refusing a direct-ship set for having a peer where a local path was demanded, while leaving the peer-only default at staging. Held by `Hosts.Tests/DirectShipPeerTests` and `Hosts.Tests/DirectShipTests` |
-| 2026-09 | Noted | The digest tier (`Replication/ReplicaVerifier`, fed by `Repository.Catalogue/Catalogue`'s signed digests) proves a write-only set's sealed data plane at a destination; over a peer it rides the §8 read-back as a whole-blob read, and a digest challenge on the wire is the named follow-up |
+| 2026-09 | Amended (will not do) | The digest challenge named beside the digest tier is refused as a self-report the source cannot verify: a bare digest is precomputable by the examined party, and the source holds nothing it could key an answer to. The §8 read-back stays the proof and rotates through the peer's inventory on a cursor (`Replication/VerificationSampler`, `Agent/FanOut`) under `Replication/ReplicaVerifier`'s peer byte budget; a possession-proving digest challenge needs a Merkle-root commitment in the index, recorded as ADR-0052's open question 4. Held by `Hosts.Tests/PeerReadBackVerificationTests` |
+| 2026-09 | Noted | The digest tier (`Replication/ReplicaVerifier`, fed by `Repository.Catalogue/Catalogue`'s signed digests) proves a write-only set's sealed data plane at a destination; over a peer it rides the §8 read-back as a whole-blob read |
 | 2026-09 | Amended (the proof arrives) | Amendment at §8: a set whose only destination is a peer is no longer unprovable. `Replication/ReplicaVerifier` gained `ProveSealedAsync`, the copy-free half of its own verification exposed on its own, and `Agent/FanOut` reaches it through the retrieval session when there is no ground truth to challenge against. The red that named the gap is the one worth remembering: every data blob at the peer rotted, a pass ran, and the destination was recorded in sync. `Hosts.Tests/PeerReadBackVerificationTests` holds it |

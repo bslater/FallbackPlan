@@ -531,9 +531,13 @@ declared, opened over the retrieval session, each proved by a record's AEAD
 tag where the service can open one and by the **digest tier** where it cannot
 — a write-only set's sealed data plane, hashed whole against the digest the
 writer signed into the index. The ledger says which tier proved what
-(contract 1.32). A digest challenge on the wire, in which the peer hashes its
-own copy, is the named follow-up; until then the digest tier costs the peer's
-link the blob.
+(contract 1.32). The read-back rotates through the peer's declared inventory
+on the same cursor the local path walks, under a peer byte budget of its own.
+A digest challenge on the wire, in which the peer hashes its own copy, was
+considered and refused as a self-report the source cannot verify — the
+answer is one the peer could have cached at receipt — so the bytes crossing
+the wire stay the proof, and the Merkle-root digest that would make such a
+challenge sound is ADR-0052's open question 4.
 
 **It does not read a peer outside a run.** A peer shipment is a live session,
 not a directory, so `ReadOrder` still resolves local paths only. A catch-up

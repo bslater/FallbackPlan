@@ -270,6 +270,23 @@ precisely to reclaim the space that partially-live blobs hold.
    footer records. Full data-key rotation ([03 §7](../../specifications/repository-format/03-keys.md#7-rotation))
    already rewrites every blob, so this composes — but it wants stating in the
    specification rather than inferring.
+4. **A digest a peer can be challenged against.** *(Added 2026-09.)* The
+   covered-blob digest a delta publishes ([07 §2.2](../../specifications/repository-format/07-index.md))
+   is a flat `SHA-256` over the sealed bytes. It lets a source that reads a
+   blob back check what it read, and it lets nothing else: a peer asked to
+   hash its own copy and answer is answering a question whose answer it
+   could have cached at receipt, so a "digest challenge" over the flat
+   digest is a self-report, not a proof of possession
+   ([ADR-0058](0058-peer-write-adapter.md) §8, as amended). What would make
+   one sound is publishing the digest as a **Merkle root** over fixed-size
+   chunks of the sealed bytes — the chunk size stated, on the order of a
+   mebibyte — so a source holding only the signed root can ask a peer for
+   random leaves with their authentication paths and verify them without
+   the blob. This is the reviewing architect's R1 point, and it is a change
+   to what the index carries; v3 is the window in which the shape of that
+   field is still free. Whether the root sits beside the flat digest or
+   replaces it, and whether the leaf size is fixed by the format or
+   recorded per delta, are the decisions this item would take.
 
 ## What this record does not do
 
@@ -288,4 +305,5 @@ about that property alone.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (open question 4) | The covered-blob digest as a Merkle root, so a peer can be challenged for possession against the signed root without the bytes crossing the wire — recorded here after [ADR-0058](0058-peer-write-adapter.md)'s digest challenge was refused as a self-report over the flat digest |
 | 2026-09 | Proposed | Design only, in response to the 2026-09 architecture review's R3. Supersedes [ADR-0025](0025-compaction-reseals-records.md)'s decrypt-and-reseal decision for format v3 and leaves it in force for v1 and v2. Nothing implements v3; the record exists to take the decision while it is still a format revision rather than a data migration |
