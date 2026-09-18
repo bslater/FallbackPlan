@@ -128,6 +128,33 @@ Binding `writer_id` and `blob_counter` means a collision would additionally requ
 
 A blob key MUST NOT be stored. It is derived when the blob is written and re-derived when it is read. A compromise of one blob key exposes exactly one blob.
 
+### 5.4 Format v3: the key is the record's
+
+In a format-3 repository ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) the blob key of §5 opens the **footer only**, in every blob class. A record's key is scoped to the record, so that its sealed bytes can be copied into another blob and still open there:
+
+```text
+metadata record, and a data record where no sealed data plane applies:
+
+record_key = HKDF-Expand(
+                 PRK  = metadata_key[generation]     (the blob's envelope generation)
+                 info = "fbp/record/v3" ‖ u8(object_type) ‖ object_id,
+                 L    = 32)
+
+data record in the sealed data plane:
+
+record_key = 32 random bytes, drawn per record and sealed to the sealing
+             public key with associated data repository_id ‖ object_id,
+             carried in the record's prefix (05 §2.2)
+```
+
+The derivation inputs of the first case are the record header's own fields ([04 §2](04-record.md#2-framing)), so a reader holding the class key derives the key from the record alone; nothing about the container enters it. The second case is §9's sealed content key with `blob_id` replaced by `object_id`, and for the same reason: a derived key is derivable by whoever holds the class key, and in a write-only repository the service holds it and must not read content (FR-WOR-001).
+
+**Nonce uniqueness moves with the key.** §5.1's argument — one writer, one blob, one increasing ordinal — no longer applies to a record; the record carries a random 12-byte nonce ([04 §3](04-record.md#3-nonce)), and under one object's derived key there are at most a handful of messages ever (the same object sealed by different writers, or stored differently by one), so the birthday budget is never approached. The reason the nonce is random rather than zero is stated in [04 §3](04-record.md#3-nonce) and MUST be understood by an implementer before deviating from it.
+
+**The seed a writer resumes from.** A writer MUST NOT store per-record content keys. For a data blob it draws one random 32-byte **record-key seed** per blob, keeps it only in the spool checkpoint ([05 §6.2](05-blob.md#62-everything-that-could-vary-is-pinned)), derives each record's content key as `HKDF-Expand(seed, "fbp/record-seed/v3" ‖ object_id, 32)`, seals that key into the record, and destroys the seed at seal. A reader never sees the seed and needs nothing but the sealed share; the derivation exists so that an interrupted spool can be authenticated on resume without a key per record on disk.
+
+**Generations.** The derived key takes the generation the blob's envelope records ([05 §2](05-blob.md#2-cleartext-envelope)). A record moved between blobs MUST be placed in a blob of the same key generation; rotation (§7) rewrites, as it always has.
+
 ## 6 AEAD suites
 
 | Profile | Value | Suite | Key | Nonce | Tag | Implementation |

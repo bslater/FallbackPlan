@@ -79,6 +79,12 @@ required feature `0x0002` (`relocatable-records`), so a reader that predates
 this record refuses by name rather than half-reading records whose nonces it
 would misconstruct ([01 §2](../../specifications/repository-format/01-object-layout.md)).
 
+> **Amended 2026-09 (Amendment 1).** The feature identifier is **`0x0003`**.
+> `0x0002` was already allocated to `reclaim-authority` by
+> [ADR-0055](0055-reclaim-authority.md) §4 when this record was written, and
+> a feature identifier that means two things is the ambiguity the registry
+> exists to prevent ([01 §3.2](../../specifications/repository-format/01-object-layout.md#32-body)).
+
 **The AEAD suite does not change.** Records stay AES-256-GCM,
 `aes-256-gcm-v1` (`0x0001`). Encryption profile `0x0002` remains **withdrawn
 and unassignable** for the reason [03 §6](../../specifications/repository-format/03-keys.md#6-aead-suites)
@@ -121,6 +127,19 @@ follows a boundary the format already has rather than inventing one.
 
 The record nonce is **twelve zero bytes**. Uniqueness moves from position to
 key: one key per object identifier, one message under it.
+
+> **Amended 2026-09 (Amendment 1).** The zero nonce is withdrawn before it
+> is ever written. The condition below — that reuse needs a hash collision —
+> is false, because the object identifier is computed over the **plaintext**
+> ([04 §5](../../specifications/repository-format/04-record.md#5-producing-a-record)
+> steps 1–2) and the sealed bytes are the **stored** form after compression
+> (step 3): two writers, or one writer whose compression decision differs
+> between two runs, seal different bytes under one object identifier, one
+> key and one nonce. A v3 record instead carries **twelve random nonce
+> bytes** in its prefix ([04 §3](../../specifications/repository-format/04-record.md#3-nonce)).
+> Relocation is unaffected — the nonce travels with the bytes — and the
+> collision-resistance coupling and the convergent-ciphertext property
+> listed under Consequences both go with it.
 
 This is the decision's sharpest edge and it is stated as a condition rather
 than a claim. Under §2's derived-key case, two *different* plaintexts sealed
@@ -252,6 +271,10 @@ precisely to reclaim the space that partially-live blobs hold.
 
 ## Open questions
 
+> **Decided by Amendment 1 (2026-09).** Each of the four questions below
+> is answered in the amendment's item 6; they are kept as written so the
+> reasoning that led to them stays readable.
+
 1. **The footer's key.** §6 leaves a compactor needing footer-sealing
    capability. Whether the footer should be *signed* (Ed25519, under
    [ADR-0020](0020-ed25519-signing-key-semantics.md)) rather than AEAD-sealed
@@ -288,6 +311,85 @@ precisely to reclaim the space that partially-live blobs hold.
    replaces it, and whether the leaf size is fixed by the format or
    recorded per delta, are the decisions this item would take.
 
+## Amendment 1 (2026-09) — implementing the record plane
+
+Taken when the record plane was first built (slice 20 of the review
+response), on what building it found. Each item amends the decision it
+names; the blockquotes above mark the sections affected.
+
+1. **The feature identifier is `0x0003`** (`relocatable-records`), not
+   `0x0002`, which [ADR-0055](0055-reclaim-authority.md) §4 holds. A
+   format-3 descriptor MUST list it and a format-2 descriptor MUST NOT
+   ([01 §3.2](../../specifications/repository-format/01-object-layout.md#32-body)).
+   A reader that predates v3 refuses through the required-feature rule,
+   naming the identifier; the recovery tool names it too.
+
+2. **The nonce is carried, not zero.** §3's uniqueness condition was
+   wrong in the way the amendment there states. Every v3 record carries a
+   12-byte random nonce in a prefix between its 54-byte header and its
+   ciphertext. Twelve bytes per record; no relocation cost, since the
+   prefix is copied with the ciphertext and the tag.
+
+3. **The sealed per-record key lives in the same prefix.** A v3 data
+   record in the sealed data plane is `header ‖ nonce[12] ‖
+   sealed_record_key[80] ‖ ciphertext ‖ tag`; a v3 metadata record is
+   `header ‖ nonce[12] ‖ ciphertext ‖ tag`
+   ([04 §2](../../specifications/repository-format/04-record.md#2-framing)).
+   The share is `SealedContentKey`'s construction with associated data
+   `repository_id ‖ object_id`
+   ([05 §2.2](../../specifications/repository-format/05-blob.md#22-format-v3-data-blobs-the-sealed-record-key)).
+   A v3 data envelope carries no per-blob share: it is 88 bytes for both
+   classes. The header stays 54 bytes and stays framing, never AEAD input;
+   a relocated record is re-framed with its destination ordinal and the
+   reader's header-against-table check is unchanged.
+
+4. **The spool resumes under a seed.** A checkpoint cannot pin a key per
+   record. For a v3 data blob the writer draws one random 32-byte
+   record-key seed into the checkpoint's existing key slot and derives
+   each record's content key as `HKDF-Expand(seed, "fbp/record-seed/v3" ‖
+   object_id, 32)` before sealing it into the prefix; the resume walk
+   re-derives from the seed and the header's object identifier and
+   authenticates every spooled record exactly as v2's walk does
+   ([05 §6.2](../../specifications/repository-format/05-blob.md#62-everything-that-could-vary-is-pinned)).
+   The seed dies with the sidecar at seal. To every party but the writer
+   during the blob's life the key is random per record, which is the same
+   exposure v2's checkpointed content key has today.
+
+5. **Metadata blobs stamp 3; standalone records stay 1.** In a v3
+   repository a metadata blob's envelope carries `3`, because the stamp is
+   AAD input and its records are v3 records. Standalone metadata records
+   ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md))
+   are never in a blob, never relocated and already one key per message;
+   they keep the format-1 symmetric container in every repository, as
+   [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)
+   already has them.
+
+6. **The open questions, decided.** (1) The footer stays AEAD-sealed under
+   the blob key: a signed footer would put every object identifier, offset
+   and length in the clear for a keyless compactor nobody has asked for,
+   and §6's "inside the structure boundary" stands. (2) A compactor runs
+   where the structure key and a writer identity are — the source
+   service, over its staging archive or through the ship sink; a
+   destination never compacts, because it may not allocate a sequence
+   ([ADR-0034](0034-hub-and-spoke-destinations.md)); this retires
+   [ADR-0025 Amendment 1](0025-compaction-reseals-records.md)'s staging
+   confinement by rule rather than by silence. (3) A record's derived key
+   takes the **blob's** envelope generation, and a compactor MUST place a
+   record only into a destination blob of the same key generation;
+   rotation ([03 §7](../../specifications/repository-format/03-keys.md#7-rotation))
+   rewrites, as before. (4) The covered-blob digest becomes, beside the
+   flat digest, a **Merkle root** over 1 MiB chunks of `[0, length − 16)`
+   with RFC 6962 leaf and node prefixes, published as a new optional
+   index-delta key; the index plane and the peer challenge over it are the
+   next slice's, and this record's Built line says which plane is which.
+
+7. **The version knobs.** The creation default stays format 2; format 3
+   is created on request (`RepositoryCreationSettings.FormatVersion`, the
+   CLI's `init --format-version 3`) and read by every build from this one
+   on. Readers accept 2 and 3 (`FormatLimits.LatestFormatVersion`); the
+   predicates that used to compare against one version number now ask
+   named questions (`FormatVersions`).
+
 ## What this record does not do
 
 It does not import the reviewing architect's vocabulary. The external review
@@ -305,5 +407,6 @@ about that property alone.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (Amendment 1) | Implementing the record plane found two things and decided four: the feature identifier is `0x0003`, the zero nonce is withdrawn for a carried random one (the uniqueness condition §3 stated was false — same object, different stored bytes), the sealed per-record key rides the record's prefix and the spool resumes under a checkpointed seed; and the four open questions are decided as item 6 says. The Merkle-root digest is decided in shape and left to the index plane |
 | 2026-09 | Amended (open question 4) | The covered-blob digest as a Merkle root, so a peer can be challenged for possession against the signed root without the bytes crossing the wire — recorded here after [ADR-0058](0058-peer-write-adapter.md)'s digest challenge was refused as a self-report over the flat digest |
 | 2026-09 | Proposed | Design only, in response to the 2026-09 architecture review's R3. Supersedes [ADR-0025](0025-compaction-reseals-records.md)'s decrypt-and-reseal decision for format v3 and leaves it in force for v1 and v2. Nothing implements v3; the record exists to take the decision while it is still a format revision rather than a data migration |

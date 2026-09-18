@@ -77,6 +77,8 @@ A repository advertises a **format version** and a **feature set**, both recorde
 
 The format version is a `u16`. It changes only when the framing structures in §[04](04-record.md) or §[05](05-blob.md) change incompatibly.
 
+This specification defines versions **2** and **3**; format 1 is withdrawn ([ADR-0014 Amendment 1](../../docs/adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). Version 3 changes one thing: a sealed record stops encoding where it lives — its key is scoped to the object rather than the blob, its nonce is carried rather than positional, and its associated data no longer binds the ordinal ([04 §3–§4](04-record.md#3-nonce), [03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records), [05 §2.2](05-blob.md#22-format-v3-data-blobs-the-sealed-record-key); [ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)). A version-3 repository lists feature `0x0003` ([01 §3.2](01-object-layout.md#32-body)). A repository's version is fixed at creation; nothing upgrades in place, and a reader reads every version it implements.
+
 The feature set is a list of feature identifiers, each marked **required** or **optional**:
 
 - A reader MUST refuse the repository if any **required** feature is one it does not implement.

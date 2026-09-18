@@ -78,6 +78,16 @@ The magic string is checked first. An object that does not begin with it is not 
 
 A descriptor MUST list feature `0x0001` (`sealed-data-plane`) in `required_features`, so a reader that predates the sealed data plane refuses through the rule below with the identifier named rather than half-reading sealed blobs.
 
+The feature identifiers this specification defines:
+
+| Identifier | Name | Listed by | Means |
+|---|---|---|---|
+| `0x0001` | `sealed-data-plane` | every descriptor | Data-blob content is sealed to the sealing public key ([03 §9](03-keys.md#9-write-only-repositories-format-v2)) |
+| `0x0002` | `reclaim-authority` | every descriptor | Tombstones and retention instructions are signed under the reclaim key ([11 §3](11-lifecycle-objects.md); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
+| `0x0003` | `relocatable-records` | a format-3 descriptor, and never a format-2 one | Records are keyed to the object, carry their nonce and omit the ordinal from their associated data ([04 §3–§4](04-record.md#3-nonce)); a reader that does not implement format 3 refuses by this name ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) |
+
+A format-3 descriptor MUST list `0x0003` and a format-2 descriptor MUST NOT; a reader MUST treat either mismatch as a format violation, because the version and the feature name one fact and a descriptor in which they disagree was not written by a conforming writer.
+
 A reader MUST refuse the repository if `required_features` contains any identifier it does not implement, naming the unimplemented identifier. It MUST NOT proceed on the assumption that an unknown feature is unimportant.
 
 A reader MUST surface a prominent warning when `unstable_format` is `true`. Pre-1.0 repositories carry no forward-compatibility guarantee, and a user pointing their only copy of something at one deserves to know. → [ADR-0014](../../docs/adr/0014-format-versioning-and-stability.md)
@@ -114,7 +124,7 @@ Both proceed by tombstone, grace period, and revalidation before the delete — 
 
 A reader bootstraps in this order:
 
-1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` — it MUST be 2; a reader that meets 1 refuses by name, naming re-seeding as the remedy — and `required_features`.
+1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` — it MUST be 2 or 3; a reader that meets 1 refuses by name, naming re-seeding as the remedy — and `required_features`.
 2. Derive the root from the passphrase using `kdf_parameters`, expand the sealing scalar, and compare its public key with key 9 ([03 §2](03-keys.md#2-the-root)). A holder of the write credential instead compares the credential's public key with key 9; either way nothing is fetched and nothing is unwrapped.
 3. There is no third fetch: the derivation is the whole of the key material ([03 §3](03-keys.md#3-the-key-object)).
 4. Enumerate `/snapshots/…` to establish a stable snapshot set.
