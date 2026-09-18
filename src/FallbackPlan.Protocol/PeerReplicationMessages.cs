@@ -764,30 +764,109 @@ public sealed record ReplicationComplete(ulong Count) : IPeerMessage
 
 /// <summary>
 /// The destination confirms what it received and committed
-/// (specification peer-protocol 03 §3.4).
+/// (specification peer-protocol 03 §3.4), and since
+/// [ADR-0064](../../docs/adr/0064-replication-receipts.md) says so under its
+/// own signature: keys 2 and 3 carry a <see cref="ReplicationReceipt"/> and
+/// its signature, present together or not at all. A destination that
+/// predates receipts sends neither; a commander that predates them skips
+/// both. No feature gates them, because an absence can only mean less.
 /// </summary>
 /// <param name="Count">The number of objects the destination received and committed.</param>
-public sealed record ReplicationAck(ulong Count) : IPeerMessage
+/// <param name="Receipt">The receipt's signed bytes (<see cref="ReplicationReceipt.EncodeForSigning"/>), or empty.</param>
+/// <param name="Signature">The destination's device signature over <paramref name="Receipt"/>, or empty.</param>
+public sealed record ReplicationAck(
+    ulong Count,
+    ReadOnlyMemory<byte> Receipt = default,
+    ReadOnlyMemory<byte> Signature = default) : IPeerMessage
 {
     /// <inheritdoc/>
     public PeerMessageType Type => PeerMessageType.ReplicationAck;
 
     /// <inheritdoc/>
-    public int BodyEntryCount => 1;
+    public int BodyEntryCount => Receipt.IsEmpty ? 1 : 3;
 
     /// <inheritdoc/>
     public void WriteBody(CborWriter writer)
     {
         ThrowHelper.ThrowIfNull(writer);
+        RequireReceiptShape(Receipt, Signature);
 
         writer.WriteInt32(1);
         writer.WriteUInt64(Count);
+        if (!Receipt.IsEmpty)
+        {
+            writer.WriteInt32(2);
+            writer.WriteByteString(Receipt.Span);
+            writer.WriteInt32(3);
+            writer.WriteByteString(Signature.Span);
+        }
     }
 
     /// <summary>Reads an acknowledgement.</summary>
     /// <param name="reader">The frame's reader.</param>
     /// <returns>The acknowledgement.</returns>
-    public static ReplicationAck Read(CborReader reader) => new(ReplicationComplete.ReadCount(reader));
+    public static ReplicationAck Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        ulong count = 0;
+        byte[]? receipt = null;
+        byte[]? signature = null;
+        PeerCbor.ReadEntries(reader, key =>
+        {
+            switch (key)
+            {
+                case 1:
+                    count = reader.ReadUInt64();
+                    break;
+                case 2:
+                    receipt = reader.ReadByteString();
+                    break;
+                case 3:
+                    signature = reader.ReadByteString();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        var ack = new ReplicationAck(count, receipt ?? [], signature ?? []);
+        RequireReceiptShape(ack.Receipt, ack.Signature);
+        return ack;
+    }
+
+    /// <summary>
+    /// Both or neither, the signature the right width, and the receipt a
+    /// receipt: a half-carried statement is malformed, not ignored, because
+    /// dropping it quietly would turn an attestation into a count.
+    /// </summary>
+    private static void RequireReceiptShape(ReadOnlyMemory<byte> receipt, ReadOnlyMemory<byte> signature)
+    {
+        if (receipt.IsEmpty && signature.IsEmpty)
+        {
+            return;
+        }
+
+        if (receipt.IsEmpty || signature.Length != ReplicationReceipt.SignatureLength)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "A replication acknowledgement's receipt and its 64-byte signature travel together (03 §3.4).");
+        }
+
+        _ = ReplicationReceipt.Parse(receipt.Span);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(ReplicationAck? other) =>
+        other is not null
+        && Count == other.Count
+        && Receipt.Span.SequenceEqual(other.Receipt.Span)
+        && Signature.Span.SequenceEqual(other.Signature.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Count, Receipt.Length);
 }
 
 /// <summary>

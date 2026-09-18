@@ -836,6 +836,124 @@ public sealed class ReplicationMessageTests
         Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
     }
 
+    private static ReplicationReceipt Replicated(int listed = 2, ulong committed = 2) => new(
+        SessionId: Enumerable.Repeat((byte)0xAB, ReplicationReceipt.SessionIdLength).ToArray(),
+        RepositoryId: Enumerable.Repeat((byte)0x01, ReplicationOffer.RepositoryIdLength).ToArray(),
+        CommanderPublicKey: Enumerable.Repeat((byte)0xC0, PeerIdentity.KeyLength).ToArray(),
+        IssuedAtUnixMilliseconds: 1_722_600_000_123,
+        CommittedCount: committed,
+        Committed: [.. Enumerable.Range(0, listed).Select(index => $"blobs/data/aa/committed-{index}")],
+        HeldObjects: Math.Max(40, committed),
+        HeldBytes: 123_456_789);
+
+    [TestMethod]
+    public void ReplicationReceipt_EncodesAndParsesBackExactly()
+    {
+        var receipt = Replicated(listed: 3, committed: 3);
+
+        var bytes = receipt.EncodeForSigning();
+        var parsed = ReplicationReceipt.Parse(bytes);
+
+        Assert.AreEqual(receipt, parsed);
+        Assert.IsTrue(bytes.AsSpan().StartsWith("fbp-peer-v1:replication-receipt"u8), "the label leads, so no other signed statement can collide");
+        Assert.IsFalse(bytes.AsSpan().StartsWith("fbp-peer-v1:deletion-receipt"u8));
+    }
+
+    [TestMethod]
+    public void ReplicationReceipt_CountsMoreThanItLists_WhenTheSessionOutranTheCap()
+    {
+        // Beyond the cap the count carries the rest: the listing is for a
+        // reader, the count is the statement.
+        var receipt = Replicated(listed: 2, committed: 10_000);
+
+        Assert.AreEqual(receipt, ReplicationReceipt.Parse(receipt.EncodeForSigning()));
+    }
+
+    [TestMethod]
+    public void ReplicationReceipt_TrailingBytes_AreRefusedNotIgnored()
+    {
+        var bytes = Replicated().EncodeForSigning();
+        var padded = new byte[bytes.Length + 1];
+        bytes.CopyTo(padded, 0);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => ReplicationReceipt.Parse(padded));
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void ReplicationReceipt_ListingMoreKeysThanItCounts_IsMalformed()
+    {
+        var overstated = Replicated(listed: 3, committed: 2);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => overstated.EncodeForSigning());
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void ReplicationReceipt_ListingMoreKeysThanTheCap_IsMalformed()
+    {
+        var tooMany = Replicated(listed: ReplicationReceipt.MaximumListedKeys + 1, committed: 10_000);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => tooMany.EncodeForSigning());
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void ReplicationAck_WithoutAReceipt_IsOneEntryAsBefore()
+    {
+        var ack = new ReplicationAck(41);
+
+        Assert.AreEqual(1, ack.BodyEntryCount);
+        var read = RoundTrip(ack, ReplicationAck.Read);
+        Assert.AreEqual(41UL, read.Count);
+        Assert.IsTrue(read.Receipt.IsEmpty);
+        Assert.IsTrue(read.Signature.IsEmpty);
+    }
+
+    [TestMethod]
+    public void ReplicationAck_CarriesAReceiptAndItsSignature()
+    {
+        var receipt = Replicated();
+        var signed = receipt.EncodeForSigning();
+        var signature = Enumerable.Repeat((byte)9, ReplicationReceipt.SignatureLength).ToArray();
+
+        var ack = new ReplicationAck(2, signed, signature);
+        var read = RoundTrip(ack, ReplicationAck.Read);
+
+        Assert.AreEqual(3, ack.BodyEntryCount);
+        Assert.AreEqual(2UL, read.Count);
+        Assert.IsTrue(read.Receipt.Span.SequenceEqual(signed));
+        Assert.IsTrue(read.Signature.Span.SequenceEqual(signature));
+        Assert.AreEqual(receipt, ReplicationReceipt.Parse(read.Receipt.Span));
+    }
+
+    [TestMethod]
+    public void ReplicationAck_AReceiptWithoutItsSignature_IsMalformed()
+    {
+        var ack = new ReplicationAck(2, Replicated().EncodeForSigning(), ReadOnlyMemory<byte>.Empty);
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(() => RoundTrip(ack, ReplicationAck.Read));
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
+    [TestMethod]
+    public void ReplicationAck_AReceiptThatDoesNotParse_IsMalformedOnRead()
+    {
+        // A deletion receipt where a replication receipt belongs: the label
+        // is what keeps the two statements from ever being confused.
+        var wrongKind = Receipt().EncodeForSigning();
+        var signature = Enumerable.Repeat((byte)9, ReplicationReceipt.SignatureLength).ToArray();
+
+        var refusal = Assert.ThrowsExactly<PeerProtocolException>(
+            () => RoundTrip(new ReplicationAck(2, wrongKind, signature), ReplicationAck.Read));
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refusal.Reason);
+    }
+
     [TestMethod]
     public void RetentionAck_CarriesAReceiptAndItsSignature()
     {

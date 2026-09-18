@@ -2,18 +2,8 @@ using Bodu;
 
 namespace FallbackPlan.Protocol;
 
-/// <summary>Which side of a receipt exchange filed it — for every kind of peer receipt.</summary>
-public enum DeletionReceiptRole
-{
-    /// <summary>The destination that acted and signed.</summary>
-    Destination,
-
-    /// <summary>The commander that instructed or pushed, received and verified.</summary>
-    Commander,
-}
-
 /// <summary>
-/// A deletion receipt as read back from disk: the envelope, the parsed
+/// A replication receipt as read back from disk: the envelope, the parsed
 /// statement, and whether the signature holds.
 /// </summary>
 /// <param name="Path">Where it was read from.</param>
@@ -26,7 +16,7 @@ public enum DeletionReceiptRole
 /// <param name="Receipt">The statement, parsed from the signed bytes; null when they do not parse.</param>
 /// <param name="Verified">Whether the signature verifies under the named signer over the signed bytes.</param>
 /// <param name="Problem">Why the file could not be read as a receipt, or null.</param>
-public sealed record FiledDeletionReceipt(
+public sealed record FiledReplicationReceipt(
     string Path,
     DeletionReceiptRole Role,
     ulong FiledAtUnixMilliseconds,
@@ -34,46 +24,34 @@ public sealed record FiledDeletionReceipt(
     string SignerFingerprint,
     string? Set,
     string? Destination,
-    DeletionReceipt? Receipt,
+    ReplicationReceipt? Receipt,
     bool Verified,
     string? Problem);
 
 /// <summary>
-/// Where deletion receipts live: one immutable document per instruction
-/// under <c>receipts/deletions/&lt;repository&gt;/</c> in a state directory
-/// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)). The destination
-/// files what it signed; the commander files what it verified. Neither
-/// depends on the other's copy. The filing itself is
-/// <see cref="PeerReceiptFiles"/>, shared with the replication receipts
-/// beside it.
+/// Where replication receipts live: one immutable document per push under
+/// <c>receipts/replications/&lt;repository&gt;/</c> in a state directory
+/// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), beside the
+/// deletion receipts and filed through the same core. The destination files
+/// what it signed; the commander files what it verified.
 /// </summary>
-/// <remarks>
-/// Every fact <see cref="List"/> reports about a deletion is parsed from the
-/// signed bytes after the signature is checked, never taken from the
-/// envelope, so a file edited after filing reads as unverified rather than
-/// as a different attestation.
-/// </remarks>
-public sealed class DeletionReceiptStore
+public sealed class ReplicationReceiptStore
 {
-    /// <summary>The kind an envelope names for a deletion receipt.</summary>
-    internal const string Kind = "deletion";
+    /// <summary>The kind an envelope names for a replication receipt.</summary>
+    internal const string Kind = "replication";
 
     private readonly string _root;
 
-    private DeletionReceiptStore(string root) => _root = root;
+    private ReplicationReceiptStore(string root) => _root = root;
 
     /// <summary>Opens the store under <paramref name="stateDirectory"/>; the directory is created on first filing.</summary>
-    public static DeletionReceiptStore Open(string stateDirectory)
+    public static ReplicationReceiptStore Open(string stateDirectory)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
-        return new DeletionReceiptStore(System.IO.Path.Combine(stateDirectory, "receipts", "deletions"));
+        return new ReplicationReceiptStore(System.IO.Path.Combine(stateDirectory, "receipts", "replications"));
     }
 
-    /// <summary>
-    /// Files a receipt. The name carries the repository, the issue time and
-    /// the session, so the destination's and the commander's copies of one
-    /// exchange share a name across the two machines.
-    /// </summary>
+    /// <summary>Files a receipt; see <see cref="DeletionReceiptStore.File"/> for the naming.</summary>
     /// <param name="role">Which side is filing.</param>
     /// <param name="signedBytes">The receipt's signed bytes.</param>
     /// <param name="signature">Its signature under <paramref name="signer"/>.</param>
@@ -91,7 +69,7 @@ public sealed class DeletionReceiptStore
         string? destination)
     {
         ThrowHelper.ThrowIfNull(signer);
-        var receipt = DeletionReceipt.Parse(signedBytes);
+        var receipt = ReplicationReceipt.Parse(signedBytes);
         return PeerReceiptFiles.File(
             _root, Kind, role, signedBytes, signature, signer, set, destination,
             receipt.RepositoryId.Span, receipt.IssuedAtUnixMilliseconds, receipt.SessionId.Span);
@@ -103,7 +81,7 @@ public sealed class DeletionReceiptStore
     /// is reported with its problem rather than skipped.
     /// </summary>
     /// <param name="repositoryIdHex">The repository, lower-hex, or null for all.</param>
-    public IReadOnlyList<FiledDeletionReceipt> List(string? repositoryIdHex = null) =>
+    public IReadOnlyList<FiledReplicationReceipt> List(string? repositoryIdHex = null) =>
     [
         .. PeerReceiptFiles.Read(_root, repositoryIdHex)
             .Select(Interpret)
@@ -111,23 +89,23 @@ public sealed class DeletionReceiptStore
             .ThenBy(entry => entry.Path, StringComparer.Ordinal),
     ];
 
-    private static FiledDeletionReceipt Interpret(PeerReceiptFiles.Reading reading)
+    private static FiledReplicationReceipt Interpret(PeerReceiptFiles.Reading reading)
     {
-        DeletionReceipt? receipt = null;
+        ReplicationReceipt? receipt = null;
         var problem = reading.Problem;
         if (problem is null)
         {
-            // An envelope written before kinds existed names none and is a
-            // deletion by where it sits.
-            if (reading.Kind is not null && reading.Kind != Kind)
+            // Unlike a deletion, a replication receipt has never been filed
+            // without a kind: an envelope naming none is somebody else's.
+            if (reading.Kind != Kind)
             {
-                problem = $"a {reading.Kind} receipt filed among the deletion receipts";
+                problem = $"a {reading.Kind ?? DeletionReceiptStore.Kind} receipt filed among the replication receipts";
             }
             else
             {
                 try
                 {
-                    receipt = DeletionReceipt.Parse(reading.SignedBytes);
+                    receipt = ReplicationReceipt.Parse(reading.SignedBytes);
                 }
                 catch (PeerProtocolException exception)
                 {
@@ -136,7 +114,7 @@ public sealed class DeletionReceiptStore
             }
         }
 
-        return new FiledDeletionReceipt(
+        return new FiledReplicationReceipt(
             reading.Path, reading.Role, reading.FiledAtUnixMilliseconds, reading.SignerPublicKey,
             reading.SignerFingerprint, reading.Set, reading.Destination, receipt,
             reading.SignatureValid && receipt is not null, problem);

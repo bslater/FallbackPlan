@@ -123,6 +123,26 @@ public sealed class DeletionReceiptStoreTests : IDisposable
         Assert.IsNotNull(broken.Problem);
     }
 
+    [TestMethod]
+    public void List_AnEnvelopeFiledBeforeKindsExisted_StillReadsAsADeletion()
+    {
+        // The envelope gained a `kind` when replication receipts arrived
+        // (ADR-0064); a file written before then names none and is a
+        // deletion by where it sits.
+        using var signer = PeerKeypair.Generate();
+        var signed = Receipt(1_000).EncodeForSigning();
+        var path = Open().File(DeletionReceiptRole.Destination, signed, signer.Sign(signed), signer.Identity, null, null);
+        var text = File.ReadAllText(path);
+        Assert.Contains("\"kind\"", text, StringComparison.Ordinal);
+        File.WriteAllText(path, System.Text.RegularExpressions.Regex.Replace(text, "\\s*\"kind\":\\s*\"[a-z]+\",?", string.Empty));
+        Assert.DoesNotContain("\"kind\"", File.ReadAllText(path), StringComparison.Ordinal);
+
+        var filed = Assert.ContainsSingle(Open().List());
+
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.AreEqual(Receipt(1_000), filed.Receipt);
+    }
+
     public void Dispose()
     {
         try

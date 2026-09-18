@@ -88,10 +88,11 @@ public static class DeletionReceiptReport
         return JsonSerializer.Serialize(receipts.Select(Project).ToList(), SerializerOptions);
     }
 
-    private static void WriteOne(TextWriter output, FiledDeletionReceipt filed)
+    /// <summary>Writes one deletion receipt.</summary>
+    internal static void WriteOne(TextWriter output, FiledDeletionReceipt filed)
     {
         var filedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)filed.FiledAtUnixMilliseconds);
-        output.WriteLine($"{filedAt:u}  {Status(filed)}  {Role(filed.Role)}");
+        output.WriteLine($"{filedAt:u}  {Status(filed)}  {Role(filed.Role)}  deletion");
         output.WriteLine($"  file:        {filed.Path}");
         if (filed.Set is not null || filed.Destination is not null)
         {
@@ -138,11 +139,12 @@ public static class DeletionReceiptReport
     private static string Status(FiledDeletionReceipt filed) =>
         filed.Receipt is null ? "unreadable" : filed.Verified ? "verified" : "SIGNATURE INVALID";
 
-    private static string Role(DeletionReceiptRole role) =>
+    internal static string Role(DeletionReceiptRole role) =>
         role == DeletionReceiptRole.Destination ? "destination" : "commander";
 
-    private static Entry Project(FiledDeletionReceipt filed) => new()
+    internal static Entry Project(FiledDeletionReceipt filed) => new()
     {
+        Kind = DeletionReceiptStore.Kind,
         Path = filed.Path,
         Role = Role(filed.Role),
         FiledAt = filed.FiledAtUnixMilliseconds,
@@ -173,8 +175,11 @@ public static class DeletionReceiptReport
             : null,
     };
 
-    private sealed class Entry
+    internal sealed class Entry
     {
+        [JsonPropertyName("kind")]
+        public string? Kind { get; init; }
+
         [JsonPropertyName("path")]
         public string? Path { get; init; }
 
@@ -209,7 +214,7 @@ public static class DeletionReceiptReport
         public Attested? Receipt { get; init; }
     }
 
-    private sealed class Attested
+    internal sealed class Attested
     {
         [JsonPropertyName("session_id")]
         public string? SessionId { get; init; }
