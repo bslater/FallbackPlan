@@ -10,7 +10,9 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// The catalogue's contract (architecture 02 §7; FR-MAN-002, FR-MAN-005;
 /// NFR-PERF-004, NFR-PERF-010): a disposable cache whose SQL location
 /// resolver agrees with <see cref="IndexPrecedence"/> on every input — two
-/// implementations of 07 §3 that must never diverge.
+/// implementations of 07 §3 that must never diverge. Also (FR-VER-001) that
+/// the signed blob digests every delta publishes survive a rebuild from the
+/// index plane alone, which is what the digest tier of verification reads.
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -149,6 +151,81 @@ public sealed class CatalogueTests : IDisposable
         // the generation-1 location serves, and the anomaly is recorded.
         Assert.AreEqual(Blob(1), resolved!.BlobId);
         Assert.Contains(finding => finding.Kind == DamageKind.MissingBlob, catalogue.Findings());
+    }
+
+    [TestMethod]
+    public void ApplyDelta_TheCoveredBlobDigests_SurviveARebuildFromTheDeltaAlone()
+    {
+        // A rebuilt catalogue has only the index plane to go on: no
+        // RecordBlob ever ran, so the physical row is a placeholder. The
+        // digest the writer signed into the delta is still there — and the
+        // placeholder's store key is NOT, since it would be the blob id
+        // dressed as a key, and a restore from a rebuilt catalogue derives
+        // the real one.
+        using var catalogue = Open();
+        var digest = System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8);
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [digest],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.IsTrue(digest.AsSpan().SequenceEqual(catalogue.SignedDigestOf(Blob(1))!.Value.Span));
+        Assert.IsFalse(catalogue.SignedDigestOf(Blob(2)).HasValue, "no delta named blob 2");
+
+        var resolved = catalogue.ResolveLocation(Object(1))!;
+        Assert.AreEqual(Blob(1), resolved.BlobId);
+        Assert.IsFalse(resolved.StoreBlobKey.HasValue, "a placeholder row must not answer with the blob id as a store key");
+    }
+
+    [TestMethod]
+    public void ApplyDelta_ARowTheWriterRecorded_KeepsItsStoreKeyAndGainsTheDigest()
+    {
+        // The live path: RecordBlob first with the real store key, the delta
+        // after it. The delta's digest lands and nothing physical moves.
+        using var catalogue = Open();
+        var storeKey = StoreBlobKey.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
+        var digest = System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8);
+
+        catalogue.RecordBlob(Blob(1), storeKey, BlobClass.Data, KeyGeneration.Zero, 1, 4096, digest: default);
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [digest],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.AreEqual(storeKey, catalogue.ResolveLocation(Object(1))!.StoreBlobKey);
+        Assert.IsTrue(digest.AsSpan().SequenceEqual(catalogue.SignedDigestOf(Blob(1))!.Value.Span));
+    }
+
+    [TestMethod]
+    public void ApplyDelta_ADeltaWithoutDigests_RecordsNothingAboutItsBlobs()
+    {
+        // The digests are optional in the delta (07 §2.2); a writer that
+        // published none leaves the tier with nothing to read, and the
+        // catalogue must not invent a row that says otherwise.
+        using var catalogue = Open();
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.IsFalse(catalogue.SignedDigestOf(Blob(1)).HasValue, "the delta carried no digest");
+        Assert.IsFalse(catalogue.ResolveLocation(Object(1))!.StoreBlobKey.HasValue);
     }
 
     [TestMethod]
