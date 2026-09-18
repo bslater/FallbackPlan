@@ -216,6 +216,86 @@ public sealed class VerificationSamplerTests
         Assert.IsLessThanOrEqualTo(1_000_000uL - 512, sample.Offset);
     }
 
+    // ---------------------------------------------------------- Rotate
+
+    [TestMethod]
+    public void Rotate_AcrossSuccessivePasses_CoversEveryKeyExactlyOnce()
+    {
+        // The peer read-back's sample used to be drawn at random from the
+        // peer's declared inventory on every pass, with no cursor: a sample
+        // of 5 from 20 would in expectation still be missing keys after four
+        // passes, and a blob the byte budget skipped had no memory of being
+        // skipped. The rotation is the same one the local path walks, over
+        // keys already in hand.
+        var asked = new List<string>();
+
+        string? cursor = null;
+        for (var pass = 0; pass < 4; pass++)
+        {
+            var plan = VerificationSampler.Rotate(Keys(20), cursor, budget: 5, reservoirShare: 0);
+            asked.AddRange(plan.Samples.Select(sample => sample.Key));
+            cursor = plan.NextCursor;
+        }
+
+        CollectionAssert.AreEquivalent(Keys(20), asked.ToArray());
+        Assert.AreEqual(asked.Count, asked.Distinct(StringComparer.Ordinal).Count(), "no key was asked about twice");
+        Assert.IsNull(cursor, "the fourth pass closed the circuit");
+    }
+
+    [TestMethod]
+    public void Rotate_TheOrderOffered_DoesNotDecideTheRotation()
+    {
+        // An inventory arrives in whatever order the peer paged it; the
+        // rotation is over ordinal key order, exactly as for a listing.
+        var shuffled = Keys(20).OrderByDescending(key => key, StringComparer.Ordinal).ToArray();
+
+        var plan = VerificationSampler.Rotate(shuffled, cursor: null, budget: 5, reservoirShare: 0);
+
+        CollectionAssert.AreEqual(
+            new[] { "blobs/k00", "blobs/k01", "blobs/k02", "blobs/k03", "blobs/k04" },
+            plan.Samples.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual("blobs/k04", plan.NextCursor);
+        Assert.AreEqual(20, plan.Population);
+        Assert.IsTrue(plan.Samples.All(sample => sample is { Offset: 0, Length: 0 }), "a held key carries no range");
+    }
+
+    [TestMethod]
+    public void Rotate_WhenTheCursorHasRunOffTheEnd_WrapsWithinTheSamePass()
+    {
+        var plan = VerificationSampler.Rotate(Keys(20), cursor: "blobs/k19", budget: 5, reservoirShare: 0);
+
+        CollectionAssert.AreEqual(
+            new[] { "blobs/k00", "blobs/k01", "blobs/k02", "blobs/k03", "blobs/k04" },
+            plan.Samples.Select(sample => sample.Key).ToArray());
+        Assert.AreEqual("blobs/k04", plan.NextCursor);
+    }
+
+    [TestMethod]
+    public void Rotate_APopulationThatFitsTheBudget_ReportsNoCursorAtAll()
+    {
+        var plan = VerificationSampler.Rotate(Keys(3), cursor: null, budget: 5, reservoirShare: 0);
+
+        Assert.HasCount(3, plan.Samples);
+        Assert.IsNull(plan.NextCursor);
+    }
+
+    [TestMethod]
+    public void Rotate_APeersReservoirShare_LeavesTheRotationIntactAndNeverDoublesUp()
+    {
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var plan = VerificationSampler.Rotate(Keys(20), cursor: null, budget: 5, reservoirShare: 2);
+
+            var keys = plan.Samples.Select(sample => sample.Key).ToArray();
+            CollectionAssert.AreEqual(
+                new[] { "blobs/k00", "blobs/k01", "blobs/k02" },
+                keys.Take(3).ToArray(),
+                "the rotation keeps its slots");
+            Assert.AreEqual(keys.Length, keys.Distinct(StringComparer.Ordinal).Count());
+            Assert.IsLessThanOrEqualTo(5, keys.Length);
+        }
+    }
+
     private static Task<VerificationSampler.SamplePlan> SampleAsync(
         IObjectStore store,
         string? cursor,

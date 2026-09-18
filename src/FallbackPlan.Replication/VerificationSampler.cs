@@ -109,22 +109,8 @@ public static class VerificationSampler
         ThrowHelper.ThrowIfLessThan(maximumRangeLength, 1u);
 
         var forced = newestSnapshotKey is null ? 0 : 1;
-        var reservoirSlots = Math.Min(reservoirShare, Math.Max(0, budget - forced));
-        var rotationSlots = Math.Max(0, budget - forced - reservoirSlots);
-
+        var rotation = new Rotation(cursor, budget - forced, reservoirShare);
         VerificationSample? newest = null;
-
-        // Two bounded windows, filled in one listing pass. `ahead` is the
-        // rotation proper; `start` is what the rotation wraps to when the
-        // cursor has run off the end of the key space — computing it here
-        // costs one more bounded insert per key and saves a whole pass that
-        // would otherwise challenge nothing at all.
-        var ahead = new SortedList<string, VerificationSample>(StringComparer.Ordinal);
-        var start = new SortedList<string, VerificationSample>(StringComparer.Ordinal);
-        var reservoir = new List<VerificationSample>(reservoirSlots);
-
-        var eligible = 0;
-        var aheadSeen = 0;
 
         await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
@@ -144,70 +130,150 @@ public static class VerificationSampler
                 continue;
             }
 
-            eligible++;
+            rotation.Offer(RangeFor(key, entry.Length, maximumRangeLength));
+        }
+
+        return rotation.Close(newest, budget);
+    }
+
+    /// <summary>
+    /// Draws up to <paramref name="budget"/> keys from a set already in
+    /// hand — a destination's declared inventory — resuming the rotation
+    /// after <paramref name="cursor"/>. The same rotation as
+    /// <see cref="SampleAsync"/>, over keys instead of a listing.
+    /// </summary>
+    /// <remarks>
+    /// For the read-back a peer's replica gets where there is no copy to
+    /// challenge it against ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)
+    /// §8): the proof opens whole blobs, so a sample carries no range, and
+    /// the keys come from the inventory the push already read rather than
+    /// from a listing. A random draw per pass was what stood here before,
+    /// and it had the rotation's two failure modes without the rotation's
+    /// cure: a blob the byte budget skipped had no memory of being skipped,
+    /// and a sample of sixteen from a thousand never reaches most of them.
+    /// </remarks>
+    /// <param name="keys">The keys to rotate through, in any order.</param>
+    /// <param name="cursor">The highest key the previous pass asked about, or null to start over.</param>
+    /// <param name="budget">The most keys to draw.</param>
+    /// <param name="reservoirShare">How many of those are drawn at random from the whole set.</param>
+    /// <returns>The keys — as samples with no range — the population, and the next cursor.</returns>
+    public static SamplePlan Rotate(IReadOnlyCollection<string> keys, string? cursor, int budget, int reservoirShare)
+    {
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfLessThan(budget, 1);
+        ThrowHelper.ThrowIfLessThan(reservoirShare, 0);
+
+        var rotation = new Rotation(cursor, budget, reservoirShare);
+        foreach (var key in keys)
+        {
+            rotation.Offer(new VerificationSample(key, 0, 0));
+        }
+
+        return rotation.Close(newest: null, budget);
+    }
+
+    /// <summary>
+    /// The rotation proper, fed one eligible sample at a time by either
+    /// front: a bounded window above the cursor, a bounded window at the
+    /// start to wrap to, and a reservoir drawn uniformly over everything
+    /// offered.
+    /// </summary>
+    private sealed class Rotation
+    {
+        private readonly string? _cursor;
+        private readonly int _rotationSlots;
+        private readonly int _reservoirSlots;
+
+        // Two bounded windows, filled in one pass. `ahead` is the rotation
+        // proper; `start` is what the rotation wraps to when the cursor has
+        // run off the end of the key space — computing it here costs one
+        // more bounded insert per key and saves a whole pass that would
+        // otherwise challenge nothing at all.
+        private readonly SortedList<string, VerificationSample> _ahead = new(StringComparer.Ordinal);
+        private readonly SortedList<string, VerificationSample> _start = new(StringComparer.Ordinal);
+        private readonly List<VerificationSample> _reservoir;
+
+        private int _eligible;
+        private int _aheadSeen;
+
+        public Rotation(string? cursor, int slots, int reservoirShare)
+        {
+            _cursor = cursor;
+            _reservoirSlots = Math.Min(reservoirShare, Math.Max(0, slots));
+            _rotationSlots = Math.Max(0, slots - _reservoirSlots);
+            _reservoir = new List<VerificationSample>(_reservoirSlots);
+        }
+
+        public void Offer(VerificationSample sample)
+        {
+            _eligible++;
 
             // Reservoir sampling over the whole eligible population: every
             // key gets an equal chance without holding the listing in memory.
-            if (reservoirSlots > 0)
+            if (_reservoirSlots > 0)
             {
-                if (reservoir.Count < reservoirSlots)
+                if (_reservoir.Count < _reservoirSlots)
                 {
-                    reservoir.Add(RangeFor(key, entry.Length, maximumRangeLength));
+                    _reservoir.Add(sample);
                 }
-                else if (Random.Shared.Next(eligible) < reservoirSlots)
+                else if (Random.Shared.Next(_eligible) < _reservoirSlots)
                 {
-                    reservoir[Random.Shared.Next(reservoirSlots)] = RangeFor(key, entry.Length, maximumRangeLength);
+                    _reservoir[Random.Shared.Next(_reservoirSlots)] = sample;
                 }
             }
 
-            if (rotationSlots == 0)
+            if (_rotationSlots == 0)
             {
-                continue;
+                return;
             }
 
-            Admit(start, key, entry.Length, rotationSlots, maximumRangeLength);
-            if (cursor is null || string.CompareOrdinal(key, cursor) > 0)
+            Admit(_start, sample, _rotationSlots);
+            if (_cursor is null || string.CompareOrdinal(sample.Key, _cursor) > 0)
             {
-                aheadSeen++;
-                Admit(ahead, key, entry.Length, rotationSlots, maximumRangeLength);
-            }
-        }
-
-        // The wrap. Nothing left above the cursor means the rotation has been
-        // all the way round, so it starts again in this pass rather than
-        // spending it on the newest snapshot alone.
-        var rotation = ahead;
-        var rotationSeen = aheadSeen;
-        if (ahead.Count == 0 && cursor is not null)
-        {
-            rotation = start;
-            rotationSeen = eligible;
-        }
-
-        var samples = new List<VerificationSample>(budget);
-        if (newest is not null)
-        {
-            samples.Add(newest);
-        }
-
-        samples.AddRange(rotation.Values);
-        foreach (var sample in reservoir)
-        {
-            // The reservoir draws from the whole population, so it can land on
-            // a key the rotation already holds. Spending two of a sixteen-slot
-            // budget on the same range would quietly narrow coverage.
-            if (!rotation.ContainsKey(sample.Key))
-            {
-                samples.Add(sample);
+                _aheadSeen++;
+                Admit(_ahead, sample, _rotationSlots);
             }
         }
 
-        return new SamplePlan(
-            samples,
-            eligible + (newest is null ? 0 : 1),
-            // A rotation that saw no more than it could take has reached the
-            // end of the key space: the next pass starts over.
-            rotationSeen <= rotationSlots || rotation.Count == 0 ? null : rotation.Keys[^1]);
+        public SamplePlan Close(VerificationSample? newest, int budget)
+        {
+            // The wrap. Nothing left above the cursor means the rotation has
+            // been all the way round, so it starts again in this pass rather
+            // than spending it on the newest snapshot alone.
+            var rotation = _ahead;
+            var rotationSeen = _aheadSeen;
+            if (_ahead.Count == 0 && _cursor is not null)
+            {
+                rotation = _start;
+                rotationSeen = _eligible;
+            }
+
+            var samples = new List<VerificationSample>(budget);
+            if (newest is not null)
+            {
+                samples.Add(newest);
+            }
+
+            samples.AddRange(rotation.Values);
+            foreach (var sample in _reservoir)
+            {
+                // The reservoir draws from the whole population, so it can
+                // land on a key the rotation already holds. Spending two of a
+                // sixteen-slot budget on the same range would quietly narrow
+                // coverage.
+                if (!rotation.ContainsKey(sample.Key))
+                {
+                    samples.Add(sample);
+                }
+            }
+
+            return new SamplePlan(
+                samples,
+                _eligible + (newest is null ? 0 : 1),
+                // A rotation that saw no more than it could take has reached
+                // the end of the key space: the next pass starts over.
+                rotationSeen <= _rotationSlots || rotation.Count == 0 ? null : rotation.Keys[^1]);
+        }
     }
 
     /// <summary>A random range inside an object of the given length.</summary>
@@ -237,15 +303,14 @@ public static class VerificationSampler
     /// both failures are invisible from outside — the pass still reports a
     /// clean sweep of whatever it happened to ask for.
     /// </remarks>
-    private static void Admit(
-        SortedList<string, VerificationSample> window, string key, long length, int slots, uint maximumRangeLength)
+    private static void Admit(SortedList<string, VerificationSample> window, VerificationSample sample, int slots)
     {
-        if (window.ContainsKey(key))
+        if (window.ContainsKey(sample.Key))
         {
             return;
         }
 
-        window.Add(key, RangeFor(key, length, maximumRangeLength));
+        window.Add(sample.Key, sample);
         if (window.Count > slots)
         {
             window.RemoveAt(window.Count - 1);
