@@ -133,6 +133,15 @@ public static class ReplicaVerifier
     public const long DigestByteBudget = 256L * 1024 * 1024;
 
     /// <summary>
+    /// The digest tier's budget when the replica is a peer's: the bytes
+    /// cross the peer's link, one round trip per mebibyte, so a pass may pull
+    /// a quarter of what it would read off a local disk. The rotation the
+    /// read-back walks is what makes a smaller budget add up over passes
+    /// rather than starve the same blobs for ever.
+    /// </summary>
+    public const long PeerDigestByteBudget = 64L * 1024 * 1024;
+
+    /// <summary>
     /// Compares each sampled range at the replica against the source.
     /// </summary>
     /// <param name="source">The staging archive's store — the ground truth.</param>

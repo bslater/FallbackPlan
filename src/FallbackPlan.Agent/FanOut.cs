@@ -33,6 +33,14 @@ public static class FanOut
     internal static readonly string[] VerificationRequirement =
         [Protocol.PeerSessionNegotiation.DestinationVerificationFeature];
 
+    /// <summary>
+    /// Blobs one read-back opens at a peer. A property rather than a
+    /// constant so the test that watches the rotation's cursor move can
+    /// narrow it below the handful of blobs a fixture ships; the service
+    /// never sets it.
+    /// </summary>
+    internal static int ReadBackBudget { get; set; } = VerificationSampler.DefaultBudget;
+
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
     /// <param name="destinationName">The declared destination name.</param>
@@ -171,12 +179,15 @@ public static class FanOut
             return false;
         }
 
-        // Random rather than the first few: rot is not at the front, and a
-        // fixed choice is one a damaged replica survives for ever.
-        var sample = blobs
-            .OrderBy(_ => Random.Shared.Next())
-            .Take(VerificationSampler.DefaultBudget)
-            .ToList();
+        // The same rotation the local path walks, over the keys the peer
+        // declared: a cursor carried on the ledger so successive passes reach
+        // every blob and a blob the byte budget left comes round again, with
+        // a peer's reservoir share so the peer cannot predict every question.
+        var ledger = runtime.DestinationSync;
+        var plan = VerificationSampler.Rotate(
+            blobs, ledger.Find(set.Id, destination.Name)?.SampleCursor, ReadBackBudget,
+            VerificationSampler.PeerReservoirShare);
+        var sample = plan.Samples.Select(chosen => chosen.Key).ToList();
 
         var log = runtime.LoggerFor(typeof(FanOut));
         Replication.VerificationOutcome verification;
@@ -187,12 +198,14 @@ public static class FanOut
                 .ConfigureAwait(false);
 
             // The catalogue's signed digests feed the digest tier, which is
-            // what proves a write-only set's sealed data plane over the wire:
-            // a whole-blob read over retrieval, budgeted, until the digest
-            // challenge lands (ADR-0058 §8).
+            // what proves a write-only set's sealed data plane at a peer: the
+            // whole blob read back over retrieval and hashed here, under the
+            // peer budget. The bytes crossing the wire are the proof — a
+            // digest the peer computed of its own copy would be a claim
+            // (ADR-0058 §8).
             verification = await Replication.ReplicaVerifier.ProveSealedAsync(
                 new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken,
-                archive.Catalogue.SignedDigestOf)
+                archive.Catalogue.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (
@@ -204,7 +217,6 @@ public static class FanOut
             return false;
         }
 
-        var ledger = runtime.DestinationSync;
         if (verification.Failed.Count > 0)
         {
             RecordVerificationFailure(runtime, set, destination.Name, verification, sample.Count, nowMs);
@@ -225,7 +237,7 @@ public static class FanOut
             .ConfigureAwait(false);
         ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         ledger.RecordVerification(
-            set.Id, destination.Name, verification.Passed, blobs.Count, syncedSequence, null, nowMs,
+            set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, plan.NextCursor, nowMs,
             verification.Sealed, verification.Digest);
         return true;
     }

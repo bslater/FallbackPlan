@@ -4,6 +4,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
+using FallbackPlan.Replication;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
@@ -149,6 +150,87 @@ public sealed class PeerReadBackVerificationTests : IDisposable
             $"a rotted record header at the peer was not a finding (verified {record.VerifiedObjects} object(s))");
     }
 
+    [TestMethod]
+    public async Task Pass_AWriteOnlySetsSealedBlobsAtThePeer_AreProvedByDigestAndSaidSo()
+    {
+        // The digest tier over the wire: every set setup produces is
+        // write-only, so a data blob's records are sealed to a key this side
+        // does not hold and the tag proof stops at the container. The whole
+        // blob is read back over the retrieval session and hashed against
+        // the digest the writer signed into the index, and the ledger says
+        // that is what proved it. Held here because a digest challenge in
+        // which the peer hashes its own copy was considered and refused as a
+        // self-report (ADR-0058 §8): the bytes crossing the wire ARE the
+        // proof.
+        await SeedAsync();
+        await SyncAsync();
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
+        Assert.IsGreaterThan(0, record.VerifiedDigest, "the sealed data plane at the peer is proved by digest, and the ledger must say so");
+        Assert.IsGreaterThanOrEqualTo(record.VerifiedSealed + record.VerifiedDigest, record.VerifiedObjects);
+    }
+
+    [TestMethod]
+    public async Task Pass_OneByteRottedUnderASealedRecordAtThePeer_FailsByDigest()
+    {
+        // The narrowest damage there is, placed where only the digest can
+        // see it: inside a sealed record, with the footer left whole. The
+        // container opens, the record's tag would refuse but nobody here
+        // holds the key to try it, and before the digest tier this was a
+        // peer quietly holding damaged bytes for ever while reading in sync.
+        await SeedAsync();
+
+        var replica = await ReplicaPathAsync();
+        var blob = Assert.ContainsSingle(
+            Directory.GetFiles(Path.Combine(replica, "blobs", "data"), "*", SearchOption.AllDirectories));
+        var bytes = await File.ReadAllBytesAsync(blob, Timeout);
+        bytes[200] ^= 0xFF;
+        await File.WriteAllBytesAsync(blob, bytes, Timeout);
+
+        await SyncAsync();
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(
+            DestinationSyncState.Failed, record.State,
+            $"one rotted byte under a sealed record at the peer must fail by digest (verified {record.VerifiedObjects}, digest {record.VerifiedDigest})");
+        Assert.Contains("verification failed", record.LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Pass_TheReadBack_RotatesThroughThePeersInventoryAcrossPasses()
+    {
+        // A random draw per pass never reaches most of a large inventory and
+        // forgets what the byte budget skipped; the read-back walks the same
+        // cursor the local path does. The budget is narrowed so the fixture's
+        // two blobs are more than one pass's rotation takes: each pass stops
+        // after one and records where, and the next resumes after it and
+        // closes the circuit — so the recorded cursor alternates between a
+        // key and nothing, pass after pass. A read-back that ignored the
+        // cursor would record the same first key every time.
+        FanOut.ReadBackBudget = VerificationSampler.PeerReservoirShare + 1;
+        await SeedAsync();
+        var cursors = new List<string?> { Cursor() };
+
+        await SyncAsync();
+        cursors.Add(Cursor());
+        await SyncAsync();
+        cursors.Add(Cursor());
+
+        Assert.IsTrue(cursors.Any(cursor => cursor is not null), "a rotation that could not take everything must say where it stopped");
+        Assert.AreNotEqual(cursors[0], cursors[1], $"the second pass must resume after the first: {string.Join(", ", cursors)}");
+        Assert.AreNotEqual(cursors[1], cursors[2], $"the third pass must resume after the second: {string.Join(", ", cursors)}");
+    }
+
+    private string? Cursor()
+    {
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record?.VerifiedAt, record?.LastError);
+        return record.SampleCursor;
+    }
+
     private async Task SeedAsync()
     {
         await _harness.SetupAsync();
@@ -264,6 +346,7 @@ public sealed class PeerReadBackVerificationTests : IDisposable
 
     public void Dispose()
     {
+        FanOut.ReadBackBudget = VerificationSampler.DefaultBudget;
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
         _timeout.Dispose();
