@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using Bodu;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Replication;
@@ -25,7 +27,14 @@ public sealed record VerificationSample(string Key, ulong Offset, uint Length);
 /// half: a tag was computed by the writer under a key the destination has
 /// never held, so it cannot be forged and rot cannot survive it.
 /// </param>
-public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed, int Sealed = 0)
+/// <param name="Digest">
+/// How many of <paramref name="Passed"/> were proved by hashing the whole
+/// sealed blob at the replica against the digest the writer signed into the
+/// index (07 §2.2) — the proof a write-only set's data plane has, since its
+/// records are sealed to a key this side does not hold (FR-WOR-003). Weaker
+/// than a tag only in cost: it reads the whole blob rather than one record.
+/// </param>
+public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed, int Sealed = 0, int Digest = 0)
 {
     /// <summary>Whether this run established anything at all.</summary>
     public bool ProvedSomething => Passed > 0;
@@ -116,6 +125,14 @@ public static class RangeReader
 public static class ReplicaVerifier
 {
     /// <summary>
+    /// The most the digest tier will read in one run. A whole-blob read is
+    /// the price of proving a payload nobody here can open, and a run that
+    /// read every sampled blob could pull gigabytes; past the budget a blob
+    /// is left unproved for a later cursor, never looped over.
+    /// </summary>
+    public const long DigestByteBudget = 256L * 1024 * 1024;
+
+    /// <summary>
     /// Compares each sampled range at the replica against the source.
     /// </summary>
     /// <param name="source">The staging archive's store — the ground truth.</param>
@@ -128,6 +145,13 @@ public static class ReplicaVerifier
     /// no independent copy; absent, every sample falls to the comparison,
     /// which proves nothing where the source is the replica.
     /// </param>
+    /// <param name="signedDigestOf">
+    /// The signed whole-blob digest for a blob id, or null when none is on
+    /// record — the digest tier's input, read from the catalogue by the
+    /// caller so this project stays free of it. Absent, sealed content is
+    /// neither proved nor failed.
+    /// </param>
+    /// <param name="digestByteBudget">The most the digest tier may read this run.</param>
     /// <returns>
     /// What was proven and what was not. A range the <b>source</b> cannot read
     /// is skipped — it counts neither way — so a run that skipped everything
@@ -138,14 +162,15 @@ public static class ReplicaVerifier
     public static async Task<VerificationOutcome> VerifyAsync(
         IObjectStore source, IObjectStore replica,
         IReadOnlyList<VerificationSample> samples, CancellationToken cancellationToken,
-        Repository.OpenedRepository? repository = null)
+        Repository.OpenedRepository? repository = null,
+        Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf = null,
+        long digestByteBudget = DigestByteBudget)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(replica);
         ThrowHelper.ThrowIfNull(samples);
 
         var passed = 0;
-        var sealedProofs = 0;
         var failed = new List<string>();
 
         // The blob half, proved at the replica and against nothing else.
@@ -154,11 +179,13 @@ public static class ReplicaVerifier
         // themselves, so comparing would put a replica against itself. The
         // AEAD tag needs no second copy, because the destination never held
         // the key that computed it.
-        var sealedKeys = repository is null
-            ? []
-            : await SealedProofAsync(replica, samples, repository, failed, cancellationToken).ConfigureAwait(false);
+        var sealedProof = repository is null
+            ? new SealedProof([], 0, 0)
+            : await SealedProofAsync(
+                replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken)
+                .ConfigureAwait(false);
+        var sealedKeys = sealedProof.Proved;
         passed += sealedKeys.Count;
-        sealedProofs = sealedKeys.Count;
 
         foreach (var sample in samples)
         {
@@ -184,7 +211,7 @@ public static class ReplicaVerifier
             }
         }
 
-        return new VerificationOutcome(passed, failed, sealedProofs);
+        return new VerificationOutcome(passed, failed, sealedProof.ByTag, sealedProof.ByDigest);
     }
 
     /// <summary>
@@ -221,12 +248,16 @@ public static class ReplicaVerifier
     /// <param name="blobKeys">The blob store keys to prove.</param>
     /// <param name="repository">The opened repository, whose keys authenticate the records.</param>
     /// <param name="cancellationToken">Cancels the run.</param>
+    /// <param name="signedDigestOf">The signed whole-blob digest for a blob id, or null; see <see cref="VerifyAsync"/>.</param>
+    /// <param name="digestByteBudget">The most the digest tier may read this run.</param>
     /// <returns>What was proven and what was not.</returns>
     public static async Task<VerificationOutcome> ProveSealedAsync(
         IObjectStore replica,
         IReadOnlyList<string> blobKeys,
         Repository.OpenedRepository repository,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf = null,
+        long digestByteBudget = DigestByteBudget)
     {
         ThrowHelper.ThrowIfNull(replica);
         ThrowHelper.ThrowIfNull(blobKeys);
@@ -234,11 +265,15 @@ public static class ReplicaVerifier
 
         var failed = new List<string>();
         var samples = blobKeys.Select(key => new VerificationSample(key, 0, 0)).ToList();
-        var proved = await SealedProofAsync(replica, samples, repository, failed, cancellationToken)
+        var proof = await SealedProofAsync(
+            replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken)
             .ConfigureAwait(false);
 
-        return new VerificationOutcome(proved.Count, failed, proved.Count);
+        return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest);
     }
+
+    /// <summary>What the sealed half proved, and by which tier.</summary>
+    private sealed record SealedProof(HashSet<string> Proved, int ByTag, int ByDigest);
 
     /// <summary>
     /// Proves sampled blobs at the replica by opening them: the footer
@@ -252,20 +287,28 @@ public static class ReplicaVerifier
     /// exists to find.
     /// </para>
     /// <para>
-    /// A blob that opens but whose records will not decrypt is <b>not</b>
-    /// counted either way here. In a write-only repository (ADR-0042) the
-    /// service holds the structure key and not the content key, so its data
-    /// records are unreadable by construction rather than by damage; the
-    /// container is still proved, and saying "proved" of the payloads would be
-    /// a claim nobody checked. Those keys fall through to the comparison half,
-    /// which reports honestly when it has no independent side.
+    /// A blob that opens but whose records are sealed is proved by the
+    /// <b>digest tier</b> when the caller can name the digest the writer
+    /// signed for it: the whole blob short of its locator is streamed through
+    /// SHA-256 at the replica and compared in fixed time. A match proves the
+    /// payload bytes are the ones the writer sealed; a mismatch is rot under
+    /// a tag nobody here can open, and is a failure. Without a known digest,
+    /// or once the byte budget is spent, the blob is counted neither way. In a
+    /// write-only repository (ADR-0042) the service holds the structure key
+    /// and not the content key, so its data records are unreadable by
+    /// construction rather than by damage; saying "proved" of the payloads
+    /// without the digest would be a claim nobody checked. Such keys fall
+    /// through to the comparison half, which reports honestly when it has no
+    /// independent side.
     /// </para>
     /// </remarks>
-    private static async Task<HashSet<string>> SealedProofAsync(
+    private static async Task<SealedProof> SealedProofAsync(
         IObjectStore replica,
         IReadOnlyList<VerificationSample> samples,
         Repository.OpenedRepository repository,
         List<string> failed,
+        Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf,
+        long digestByteBudget,
         CancellationToken cancellationToken)
     {
         var blobKeys = samples
@@ -276,9 +319,11 @@ public static class ReplicaVerifier
             .ToList();
 
         var proved = new HashSet<string>(StringComparer.Ordinal);
+        var byTag = 0;
+        var byDigest = 0;
         if (blobKeys.Count == 0)
         {
-            return proved;
+            return new SealedProof(proved, 0, 0);
         }
 
         using var reader = new Repository.RepositoryReader(
@@ -290,7 +335,8 @@ public static class ReplicaVerifier
             failed.Add(skipped.Key.Value);
         }
 
-        foreach (var (storeKey, _, records) in reader.Blobs)
+        var budget = digestByteBudget;
+        foreach (var (storeKey, blobId, records) in reader.Blobs)
         {
             if (records.Count == 0)
             {
@@ -303,19 +349,106 @@ public static class ReplicaVerifier
             var record = records[System.Random.Shared.Next(records.Count)];
             var read = await reader.ReadSegmentAsync(record.ObjectId, cancellationToken).ConfigureAwait(false);
 
-            if (read.Outcome == Repository.Packing.RecordReadOutcome.Ok)
+            switch (read.Outcome)
             {
-                proved.Add(storeKey.Value);
-            }
-            else if (read.Outcome == Repository.Packing.RecordReadOutcome.AuthenticationFailed)
-            {
-                failed.Add(storeKey.Value);
-            }
+                case Repository.Packing.RecordReadOutcome.Ok:
+                    proved.Add(storeKey.Value);
+                    byTag++;
+                    break;
 
-            // Any other outcome — a sealed data plane this service cannot
-            // open — leaves the key to the comparison half.
+                case Repository.Packing.RecordReadOutcome.AuthenticationFailed:
+                    failed.Add(storeKey.Value);
+                    break;
+
+                case Repository.Packing.RecordReadOutcome.ContentSealed
+                    when signedDigestOf?.Invoke(blobId) is { Length: SHA256.HashSizeInBytes } digest:
+                    switch (await DigestProofAsync(replica, storeKey, digest, budget, cancellationToken).ConfigureAwait(false))
+                    {
+                        case (DigestVerdict.Proved, var spent):
+                            proved.Add(storeKey.Value);
+                            byDigest++;
+                            budget -= spent;
+                            break;
+
+                        case (DigestVerdict.Failed, var spent):
+                            failed.Add(storeKey.Value);
+                            budget -= spent;
+                            break;
+
+                        // Over budget: left for a later run's cursor, and
+                        // never blamed.
+                    }
+
+                    break;
+
+                // Any other outcome — a sealed data plane with no digest to
+                // check it against — leaves the key to the comparison half.
+            }
         }
 
-        return proved;
+        return new SealedProof(proved, byTag, byDigest);
+    }
+
+    private enum DigestVerdict
+    {
+        Proved,
+        Failed,
+        OverBudget,
+    }
+
+    /// <summary>
+    /// Hashes the blob at the replica, short of its sixteen-byte locator —
+    /// the digest's preimage (07 §2.2) — and compares in fixed time. A blob
+    /// the replica cannot produce whole is a failure, exactly as a short
+    /// range is for the comparison half.
+    /// </summary>
+    /// <returns>The verdict and the bytes it cost.</returns>
+    private static async Task<(DigestVerdict Verdict, long Spent)> DigestProofAsync(
+        IObjectStore replica,
+        ObjectKey storeKey,
+        ReadOnlyMemory<byte> expected,
+        long budget,
+        CancellationToken cancellationToken)
+    {
+        const int LocatorLength = 16;
+
+        var metadata = await replica.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+        if (metadata.Metadata is not { } found || found.Length <= LocatorLength)
+        {
+            return (DigestVerdict.Failed, 0);
+        }
+
+        var length = found.Length - LocatorLength;
+        if (length > budget)
+        {
+            return (DigestVerdict.OverBudget, 0);
+        }
+
+        using var read = await replica.OpenReadAsync(storeKey, new ObjectRange(0, length), cancellationToken)
+            .ConfigureAwait(false);
+        if (read.Outcome != OpenReadOutcome.Found || read.Content is null)
+        {
+            return (DigestVerdict.Failed, 0);
+        }
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        var remaining = length;
+        while (remaining > 0)
+        {
+            var count = await read.Content.ReadAsync(
+                buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+            if (count == 0)
+            {
+                return (DigestVerdict.Failed, length - remaining);
+            }
+
+            hash.AppendData(buffer, 0, count);
+            remaining -= count;
+        }
+
+        Span<byte> actual = stackalloc byte[SHA256.HashSizeInBytes];
+        hash.GetHashAndReset(actual);
+        return (CryptographicOperations.FixedTimeEquals(actual, expected.Span) ? DigestVerdict.Proved : DigestVerdict.Failed, length);
     }
 }
