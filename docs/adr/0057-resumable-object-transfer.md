@@ -172,6 +172,13 @@ resumed part and the session covers the tail, so it would add a field nothing
 yet needs — but it is the natural home for a replication receipt, and the
 absence is recorded here rather than left to be rediscovered.
 
+> **Amended 2026-09 ([ADR-0064](0064-replication-receipts.md)).** The
+> replication receipt was built, and not here: it rides the
+> `ReplicationAck` and attests the session's outcome — what was committed
+> and what the replica holds afterwards — rather than each object's
+> transit, which is the figure the ledger needed. A per-object digest
+> stays rejected for the reason above.
+
 **Put the offsets on the inventory,** as §5 nominated. Rejected in decision 2.
 
 **Resume by re-opening the store's own temp file.** `LocalFileSystemObjectStore`
@@ -186,3 +193,4 @@ peer protocol rather than to storage.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R7. Built: `Protocol/PeerReplicationMessages.cs` carries `ReplicationPartial` and the resume offset, `Protocol/PeerSessionNegotiation` the feature, `Agent/PartialSpool` the staged prefix and its lifecycle, `Agent/ReplicationResponder` the declaration and the re-anchored offset check, `Agent/ReplicationInitiator` the verification and the ranged send. Held by `Hosts.Tests/PeerResumeTests` and `Protocol.Tests/ReplicationMessageTests` |
+| 2026-09 | Accepted | The "natural home for a replication receipt" named among the alternatives is taken up by [ADR-0064](0064-replication-receipts.md), on the acknowledgement rather than on the transfer message; the per-object digest stays rejected |

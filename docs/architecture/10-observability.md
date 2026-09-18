@@ -17,6 +17,7 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 | Files awaiting backup | Scan queue depth |
 | Destination health, **per destination** | Replication state ([`04-concurrency-and-publication.md` §6.1](04-concurrency-and-publication.md#61-the-distinction)) |
 | Full-backup standing, **per destination** — when its baseline completed, and whether it is still owed its seed | Sync ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by contract 1.19 |
+| Completeness, **per destination** — the bytes it holds of what it is owed, and when they were counted | Sync ledger (contract 1.24): counted by the pass at a local path, which lists both sides; at a peer, only under the peer's signed replication receipt ([ADR-0064](../adr/0064-replication-receipts.md)) — the peer's attestation, never possession; uncounted, and drawn as uncounted, where neither has happened |
 | Last verified restore point | Verification coverage ([`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification)) |
 | Warnings requiring action | Damage reports, quota exhaustion, unusual deletion rates |
 

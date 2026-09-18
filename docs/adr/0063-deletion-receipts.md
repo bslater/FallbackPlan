@@ -200,11 +200,20 @@ the destination cannot follow.
 - Nothing here changes what a scheduled sync may do: it still holds no
   authority to delete ([ADR-0055 Amendment 2](0055-reclaim-authority.md#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant)),
   so it instructs nothing and receives nothing.
-- The console does not yet show receipts. The verb is the reader; a card
-  is a later slice's, and the `--json` output is what it would read.
+- ~~The console does not yet show receipts. The verb is the reader; a card
+  is a later slice's, and the `--json` output is what it would read.~~
+
+  > **Amended 2026-09 ([ADR-0064](0064-replication-receipts.md)).** The
+  > console shows them: a Receipts card on the Maintenance view over
+  > `list_receipts` (contract 1.33), which answers both kinds as facts
+  > with the service's own verdict on each signature. The filing this
+  > record decided is now the one both kinds share, each envelope naming
+  > its kind; a kind-less envelope filed under this record still reads as
+  > a deletion.
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Closes FR-GC-008's audit half on the peer plane, recorded as not met since [ADR-0055](0055-reclaim-authority.md) and restated by [ADR-0059](0059-session-bound-deletion-authority.md). Built over four commits: the statement, the ack's keys and the store (`Protocol/DeletionReceipt`, `Protocol/PeerReplicationMessages.cs`, `Protocol/DeletionReceiptStore`); the destination signing, filing and acking (`Agent/ReplicationResponder`, `Agent/RemoteServiceListener`); the commander verifying, filing and reporting (`Agent/ReplicationInitiator`, `Agent/FanOut`); the `receipts` verb on both hosts (`Agent/AgentHost`, `Cli/CliApplication`, `Protocol/DeletionReceiptReport`). Held by `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/AgentPairingVerbsTests` and `Cli.Tests/ReceiptsVerbValidationTests` |
+| 2026-09 | Accepted | Amended by [ADR-0064](0064-replication-receipts.md): the filing is shared with the replication receipts (`Protocol/PeerReceiptFiles`, each envelope naming its kind), the `receipts` verb lists both kinds and narrows with `--kind`, and the console's Receipts card over `list_receipts` closes the "not yet" this record stated |

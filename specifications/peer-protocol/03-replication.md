@@ -134,8 +134,37 @@ Staged bytes are **not** part of the replica. They answer no read, appear in no 
 | Key | Type | Meaning |
 |-----|------|---------|
 | 1 | `u64` | The number of objects the destination received and committed |
+| 2 | `bytes` | The replication receipt's signed bytes (§3.5) — optional |
+| 3 | `bytes[64]` | The destination's Ed25519 signature over key 2 under its device key — optional |
 
-The ack confirms receipt, not durability against a challenge — that is [04](README.md#documents)'s verification, which this document does not carry. A destination that committed fewer objects than the source sent has already refused the offending object (§7); the ack is reached only when the transfer completed.
+Keys 2 and 3 are present together or not at all; one without the other, or a receipt that does not parse, is `malformed`. They are additive and ungated ([02 §6](02-session.md#6-feature-negotiation)): a destination that predates receipts sends neither, a source that predates them skips both, and an absence can only mean less.
+
+The ack confirms receipt, not durability against a challenge — that is [04](README.md#documents)'s verification, which this document does not carry. A destination that committed fewer objects than the source sent has already refused the offending object (§7); the ack is reached only when the transfer completed. The receipt it carries is the destination's own statement of what this session created and what it holds afterwards ([ADR-0064](../../docs/adr/0064-replication-receipts.md)); it is checked by the source against what the source sent and what the inventory declared, and it is the one record on which a source may count a destination complete — as the destination's attestation, never as possession (§9).
+
+### 3.5 The replication receipt
+
+The destination's signed statement of what a push created and what its replica holds afterwards ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), issued after the last commit and before the acknowledgement, on every push — one that committed nothing included. It is signed under the device key because that is the only key the destination holds that the source can check, and carried in the acknowledgement because this session is the only place the source already trusts that identity — the same three choices as the deletion receipt ([06 §4.3](06-retention.md#43-the-deletion-receipt)).
+
+The signed bytes are a fixed, label-separated encoding rather than a CBOR map, so that the statement is exactly its bytes ([00 §4](00-conventions.md#4-domain-separation)); integers are big-endian.
+
+| Field | Width | Meaning |
+|-------|-------|---------|
+| label | 31 | `fbp-peer-v1:replication-receipt`, ASCII |
+| session_id | 32 | The session the push arrived in ([02 §3.5](02-session.md)) |
+| repository_id | 16 | The repository offered |
+| commander_public_key | 32 | The pushing device's Ed25519 public key |
+| issued_at | `u64` | Unix milliseconds |
+| committed_count | `u64` | Objects this session created — equal to key 1 |
+| listed_count | `u32` | At most 4096, and never more than committed_count |
+| committed | (`u32` length ‖ UTF-8 key) × listed_count | Those keys, in commit order; beyond the cap the count stands for the rest |
+| held_objects | `u64` | Objects held for the repository after this session — never less than committed_count |
+| held_bytes | `u64` | Bytes held for the repository after this session |
+
+The held figures are the destination's inventory walk (§3.2) plus what this session committed; a destination makes no third pass over its replica to issue one. A reader parses the statement as the exact inverse of this table and refuses anything left over: trailing bytes are `malformed`, because a reader must never show as attested what the signature does not cover.
+
+**What the source checks**, in order, stopping at the first failure and naming it: the signature is the pinned peer's; `session_id` is this session's; `repository_id` and `commander_public_key` are its own; `committed_count` equals key 1; every listed key was sent this session; and `held_objects` is at least the inventory's count plus `committed_count` — a smaller figure means something declared has gone since, and is not a figure to count on. A receipt that fails is not filed and is reported, never acted on: the objects have already been committed, so refusing the session would change nothing at the destination.
+
+**Both parties file their own copy** — the destination before it acknowledges, the source after it verifies — under `<state>/receipts/replications/<repository>/`, one immutable file per receipt in the same envelope the deletion receipts use, each naming its kind, and re-check the signature on every read. A copy the destination cannot write is reported on its side and does not withhold the acknowledgement. The `receipts` verb on either host reads both kinds back without the service, and the service answers them over the command contract (`list_receipts`, 1.33).
 
 ## 4 Scope
 
@@ -250,6 +279,8 @@ Replication reuses [02 §8](02-session.md#8-errors-and-refusal)'s `SessionRefuse
 **No key material and no plaintext, as [02 §9](02-session.md#9-what-a-session-does-not-carry) requires of every payload.** The objects that cross are encrypted repository objects; their keys are store keys, not file paths. A destination stores what it cannot read. → NFR-SEC-001, NFR-SEC-004, NFR-SEC-009
 
 **No storage location.** Where a destination keeps a replica is its own choice and never appears on this wire ([01 §4](01-identity-and-pairing.md#4-terms) keeps storage paths off the protocol). The offer names the repository; the destination decides where its objects live.
+
+**No possession proof.** The receipt (§3.5) is the destination's own statement of what it committed and holds, checked for consistency with what the source sent and what the inventory declared, and nothing more. A source that counts a destination complete on it counts the destination's word; whether the bytes are there is [04](04-verification.md)'s question, and a receipt MUST NOT be reported as verification of anything. → FR-VER-001, FR-GC-009
 
 ---
 
