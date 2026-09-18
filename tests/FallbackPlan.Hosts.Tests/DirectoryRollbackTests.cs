@@ -11,9 +11,14 @@ namespace FallbackPlan.Hosts.Tests;
 /// copy rolls the catalogue, the sequence file, the sync ledger and a
 /// direct-ship set's metadata store back together, so nothing local can
 /// notice — but the destination still holds the newer history, and the next
-/// fan-out pass asks it. Does not establish FR-DRL-001: nothing here is a
-/// recovery of content; it is the machine's own allocation state being put
-/// right from what it published.
+/// fan-out pass asks it. A staging set is healed the same way, content and
+/// metadata together and blobs first, bounded by the closure of the history
+/// being brought back, so the archive never lists a snapshot it cannot
+/// restore and the replication gate is never fooled (FR-GC-009;
+/// [ADR-0062 Amendment 2](../../docs/adr/0062-the-destination-is-the-rollback-witness.md)).
+/// Does not establish FR-DRL-001: nothing here is a recovery of content to a
+/// person; it is the machine's own state being put right from what it
+/// published.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -176,28 +181,165 @@ public sealed class DirectoryRollbackTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AStagingSet_RolledBackWithItsArchive_IsProtectedAndSaysSo()
+    public async Task AStagingSet_RolledBackWithItsArchive_IsHealedFromTheDestination_AndConvergesRightAfterwards()
     {
         // A staging set's archive lives outside the state directory, so a
         // rollback of the state directory alone is the case slice 3.2 already
         // handles at open. A machine restored whole — state directory and
         // archives root together — is the case only the destination can
-        // witness, and the pass protects it the same way; it does not heal a
-        // staging set, because the newer history it would copy back is
-        // content, not metadata, and the notice says where it is.
-        // A staging replica holds its keep-set — the newest snapshot alone
-        // under KeepDaily=1 — so what must survive is what is there, not a
-        // count: the second backup, which only the destination now holds.
+        // witness. What the staging archive lacks is content as well as
+        // metadata, and without it the next converging pass would trim the
+        // destination down to the keep-set the rolled-back archive can see:
+        // the newest backup deleted from the only place that holds it. So the
+        // pass copies it back — blobs, metadata, then the manifests — and
+        // the destination's newer history is at both ends before anything
+        // is converged.
         var replica = await TwoBackupsThenRollBackAsync(directShip: false);
         var before = ReplicaKeys(replica);
-        Assert.ContainsSingle(SnapshotObjects(replica));
+        var newest = Assert.ContainsSingle(SnapshotObjects(replica));
+        Assert.ContainsSingle(SnapshotObjects(Staging), "the rolled-back archive holds the first backup alone");
 
         await using var runtime = await StartAsync();
         await SyncAsync(runtime);
 
         var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
         Assert.Contains("staging", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("copied back", notice.Message, StringComparison.Ordinal);
         Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal), "the detecting pass must delete nothing at the destination");
+
+        // Healed: everything the destination holds is in the staging archive
+        // — the newer snapshot, every blob it needs, and the journal and
+        // index that account for it — and the catalogue lists both backups.
+        foreach (var key in before)
+        {
+            Assert.IsTrue(File.Exists(Path.Combine(Staging, key)), $"{key} was not copied back into the staging archive");
+        }
+
+        Assert.HasCount(2, SnapshotObjects(Staging));
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        Assert.HasCount(2, listed.Snapshots);
+
+        // Converged right: the next pass computes its keep-set from an
+        // archive that now knows the second backup, so under KeepDaily=1 the
+        // destination keeps exactly that one — the newest — rather than being
+        // trimmed to the first.
+        await SyncAsync(runtime);
+        Assert.AreEqual(newest, Assert.ContainsSingle(SnapshotObjects(replica)), "the converging pass trimmed the newer backup");
+        Assert.AreEqual(DestinationSyncState.InSync, runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!.State);
+
+        // And the healed archive restores the second backup, which is the
+        // proof its closure came back whole; then a third backup lists
+        // with the other two.
+        Assert.AreEqual("second content", await RestoreNewestAsync(handler, "restored-after-heal"));
+        _harness.WriteSourceFile("docs/a.txt", "third content");
+        await BackUpAsync(runtime);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var relisted);
+        Assert.HasCount(3, relisted.Snapshots);
+    }
+
+    [TestMethod]
+    public async Task AStagingHeal_BringsBackOnlyWhatTheNewerHistoryNeeds()
+    {
+        // Staging retirement sheds historic data blobs on purpose (ADR-0034
+        // §6, StagingTrim) and keeps the newest closure. A heal that copied
+        // back everything the destination holds would undo that on every
+        // pass, so the copy-back is bounded by the closure of the snapshots
+        // the staging archive lacks. Stood in for here: the destination is
+        // kept wide (MinGenerations=2) so it still holds the first backup's data
+        // blobs, and those are deleted from the rolled-back archive as a trim
+        // would have. After the heal they are still gone, the second backup's
+        // closure is whole, and it restores.
+        var replica = await TwoBackupsThenRollBackAsync(directShip: false, minGenerations: 2);
+        Assert.HasCount(2, SnapshotObjects(replica));
+        var historic = DataBlobs(Staging);
+        Assert.IsNotEmpty(historic, "the first backup sealed no data blob");
+        foreach (var blob in historic)
+        {
+            File.Delete(Path.Combine(Staging, blob));
+        }
+
+        var newer = DataBlobs(replica).Except(historic, StringComparer.Ordinal).ToList();
+        Assert.IsNotEmpty(newer, "the second backup sealed no data blob of its own");
+
+        await using var runtime = await StartAsync();
+        await SyncAsync(runtime);
+
+        var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
+        Assert.Contains("copied back", notice.Message, StringComparison.Ordinal);
+        foreach (var blob in newer)
+        {
+            Assert.IsTrue(File.Exists(Path.Combine(Staging, blob)), $"{blob} is needed by the newer backup and was not copied back");
+        }
+
+        foreach (var blob in historic)
+        {
+            Assert.IsFalse(File.Exists(Path.Combine(Staging, blob)), $"{blob} is history the archive had shed and came back");
+        }
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.AreEqual("second content", await RestoreNewestAsync(handler, "restored-bounded"));
+    }
+
+    [TestMethod]
+    public async Task AFailedStagingHeal_LeavesNoManifestWithoutItsBlobs_AndTheNextPassHeals()
+    {
+        // Blobs go back before the manifests that need them, so a heal that
+        // fails part-way leaves an archive that lists nothing it cannot
+        // restore (ADR-0062 §4's reason for not copying manifests alone).
+        // The obstacle: a directory squatting where one of the newer backup's
+        // blobs would land. The destination is untouched, the pass is
+        // recorded as failed, and the next pass — obstacle gone — heals.
+        var replica = await TwoBackupsThenRollBackAsync(directShip: false);
+        var before = ReplicaKeys(replica);
+        var blocked = DataBlobs(replica).Except(DataBlobs(Staging), StringComparer.Ordinal).First();
+        Directory.CreateDirectory(Path.Combine(Staging, blocked));
+
+        await using var runtime = await StartAsync();
+        await SyncAsync(runtime);
+
+        var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
+        Assert.Contains("could not be copied back", notice.Message, StringComparison.Ordinal);
+        Assert.ContainsSingle(SnapshotObjects(Staging), "a manifest was copied back before the blobs it needs");
+        Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal));
+        var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.AreEqual(DestinationSyncState.Failed, row!.State);
+
+        Directory.Delete(Path.Combine(Staging, blocked));
+        await SyncAsync(runtime);
+
+        Assert.AreEqual(DestinationSyncState.InSync, runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!.State);
+        Assert.HasCount(2, SnapshotObjects(Staging));
+        foreach (var key in before)
+        {
+            Assert.IsTrue(File.Exists(Path.Combine(Staging, key)), $"{key} was not copied back on the retry");
+        }
+    }
+
+    private string Staging => Path.Combine(_harness.ArchivesRoot, _harness.DocsSetId);
+
+    private static List<string> DataBlobs(string root) =>
+        [.. ReplicaKeys(root).Where(key => key.StartsWith("blobs/data/", StringComparison.Ordinal))];
+
+    /// <summary>Restores docs/a.txt from the newest snapshot of the set's own archive, under a grant.</summary>
+    private async Task<string> RestoreNewestAsync(ServiceCommandHandler handler, string into)
+    {
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var newest = listed.Snapshots.OrderByDescending(snapshot => snapshot.CapturedAt).First().SnapshotId;
+        var output = Path.Combine(_harness.WorkPath, into);
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    newest, null, output,
+                    Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId),
+                Timeout),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        var file = Assert.ContainsSingle(Directory.GetFiles(output, "a.txt", SearchOption.AllDirectories));
+        return await File.ReadAllTextAsync(file, Timeout);
     }
 
     /// <summary>
@@ -207,10 +349,10 @@ public sealed class DirectoryRollbackTests : IDisposable
     /// from an image taken after its first backup.
     /// </summary>
     /// <returns>The replica directory at the vault.</returns>
-    private async Task<string> TwoBackupsThenRollBackAsync(bool directShip)
+    private async Task<string> TwoBackupsThenRollBackAsync(bool directShip, int minGenerations = 1)
     {
         Directory.CreateDirectory(Vault);
-        WriteConfiguration(directShip);
+        WriteConfiguration(directShip, minGenerations);
         _harness.WriteSourceFile("docs/a.txt", "day one content");
 
         await using (var runtime = await StartAsync())
@@ -293,7 +435,7 @@ public sealed class DirectoryRollbackTests : IDisposable
         }
     }
 
-    private void WriteConfiguration(bool directShip) => new ClientConfiguration
+    private void WriteConfiguration(bool directShip, int minGenerations = 1) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -311,7 +453,7 @@ public sealed class DirectoryRollbackTests : IDisposable
                 Name = "docs",
                 Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                 Schedule = "every 4h",
-                Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+                Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = minGenerations },
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
                 DirectShip = directShip,
             },

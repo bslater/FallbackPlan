@@ -324,4 +324,11 @@ internal static partial class Log
         EventId = 3776, Level = LogLevel.Information,
         Message = "Set {SetId}: catalogue rebuild during the heal reported {Finding}")]
     internal static partial void HealRebuildFinding(ILogger logger, string setId, string finding);
+
+    [LoggerMessage(
+        EventId = 3777, Level = LogLevel.Warning,
+        Message = "Set {SetName}: {Objects} object(s), {Bytes} bytes of destination {Destination}'s newer history copied back "
+            + "into the staging archive and the catalogue rebuilt — the archive had fallen behind what it published")]
+    internal static partial void ContentHealedFromDestination(
+        ILogger logger, string setName, string destination, long objects, long bytes);
 }

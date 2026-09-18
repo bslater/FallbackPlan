@@ -548,36 +548,28 @@ public static class FanOut
             // and keyed on the metadata plane so a heal that failed is
             // retried on every pass until it succeeds. A staging set is not
             // healed: what it lacks is content, and the peer keeps it.
-            string? healFailure = null;
+            ServiceRuntime.HealOutcome? heal = null;
             if (archive.ShipSink is not null
                 && attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
                     .ConfigureAwait(false))
             {
-                healFailure = await HealFromPeerAsync(runtime, set, destination, archive, cancellationToken)
+                heal = await HealFromPeerAsync(runtime, set, destination, archive, cancellationToken)
                     .ConfigureAwait(false);
-                if (healFailure is null)
-                {
-                    Log.MetadataHealedFromDestination(runtime.LoggerFor(typeof(FanOut)), set.Name, destination.Name);
-                }
-                else
-                {
-                    Log.MetadataHealFailed(runtime.LoggerFor(typeof(FanOut)), set.Name, healFailure);
-                }
+                LogHeal(runtime, set, destination, archive, heal);
             }
 
             if (ahead is not null)
             {
                 ReportDestinationAhead(
-                    runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs,
+                    runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
                     peer: true);
             }
 
-            if (healFailure is not null)
+            if (heal?.Failure is { } peerHealFailure)
             {
                 ledger.RecordFailure(
                     set.Id, destination.Name, DestinationSyncState.Failed,
-                    $"the set's metadata is behind this destination and could not be copied back: {healFailure}",
-                    nowMs);
+                    HealFailureForLedger(archive, peerHealFailure), nowMs);
                 return;
             }
 
@@ -858,47 +850,42 @@ public static class FanOut
                 var ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
                 rolledBack = ahead is not null;
 
-                // The heal, for a direct-ship set: the destination's metadata
-                // copied back, the catalogue rebuilt in place, the writer
-                // moved past what the healed archive attests. Triggered by
-                // the metadata plane rather than by the allocator, so a heal
-                // that failed is retried on every pass until it succeeds —
-                // the sequence moved durably the first time and would never
-                // ask again. A staging set is not healed: what it lacks is
-                // content, and the notice says where it is.
-                string? healFailure = null;
-                if (archive.ShipSink is not null
-                    && attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                // The heal: the destination's metadata copied back — and,
+                // for a staging set, the content the newer history needs,
+                // blobs before the manifests that reference them — the
+                // catalogue rebuilt in place, the writer moved past what the
+                // healed archive attests. Triggered by the metadata plane
+                // rather than by the allocator, so a heal that failed is
+                // retried on every pass until it succeeds — the sequence
+                // moved durably the first time and would never ask again.
+                // It runs before the keep-set is computed, which is what
+                // keeps a converging pass from trimming the destination to a
+                // history the archive has not yet got back (ADR-0062
+                // Amendment 2).
+                ServiceRuntime.HealOutcome? heal = null;
+                if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
                         .ConfigureAwait(false))
                 {
-                    healFailure = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
+                    heal = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
                         .ConfigureAwait(false);
-                    if (healFailure is null)
-                    {
-                        Log.MetadataHealedFromDestination(runtime.LoggerFor(typeof(FanOut)), set.Name, destination.Name);
-                    }
-                    else
-                    {
-                        Log.MetadataHealFailed(runtime.LoggerFor(typeof(FanOut)), set.Name, healFailure);
-                    }
+                    LogHeal(runtime, set, destination, archive, heal);
                 }
 
                 if (ahead is not null)
                 {
                     ReportDestinationAhead(
-                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, healFailure, nowMs,
+                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
                         peer: false);
                 }
 
-                if (healFailure is not null)
+                if (heal?.Failure is { } healFailure)
                 {
                     // Nothing at the destination is touched and the ledger is
-                    // not advanced: the next pass finds the metadata still
+                    // not advanced: the next pass finds the archive still
                     // behind and heals again.
                     ledger.RecordFailure(
                         set.Id, destination.Name, DestinationSyncState.Failed,
-                        $"the set's metadata is behind this destination and could not be copied back: {healFailure}",
-                        nowMs);
+                        HealFailureForLedger(archive, healFailure), nowMs);
                     return;
                 }
             }
@@ -1290,7 +1277,7 @@ public static class FanOut
     /// closed. A peer that will not serve the session, or drops it, is a
     /// heal failure the next pass retries — never a finding.
     /// </summary>
-    private static async ValueTask<string?> HealFromPeerAsync(
+    private static async ValueTask<ServiceRuntime.HealOutcome> HealFromPeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
@@ -1304,9 +1291,33 @@ public static class FanOut
         }
         catch (Exception exception) when (exception is IOException or Protocol.PeerProtocolException)
         {
-            return exception.Message;
+            return new ServiceRuntime.HealOutcome(exception.Message, 0, 0);
         }
     }
+
+    private static void LogHeal(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, ServiceRuntime.HealOutcome heal)
+    {
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (heal.Failure is { } failure)
+        {
+            Log.MetadataHealFailed(log, set.Name, failure);
+        }
+        else if (archive.ShipSink is null)
+        {
+            Log.ContentHealedFromDestination(log, set.Name, destination.Name, heal.CopiedObjects, heal.CopiedBytes);
+        }
+        else
+        {
+            Log.MetadataHealedFromDestination(log, set.Name, destination.Name);
+        }
+    }
+
+    private static string HealFailureForLedger(ArchiveHandle archive, string failure) =>
+        archive.ShipSink is null
+            ? $"the set's staging archive is behind this destination and could not be copied back: {failure}"
+            : $"the set's metadata is behind this destination and could not be copied back: {failure}";
 
     /// <summary>
     /// What became of the deletion receipt a peer push brought back, for the
@@ -1399,28 +1410,45 @@ public static class FanOut
 
     private static void ReportDestinationAhead(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
-        SequenceAdoption.Adopted ahead, bool staging, string? healFailure, ulong nowMs, bool peer)
+        SequenceAdoption.Adopted ahead, bool staging, ServiceRuntime.HealOutcome? heal, ulong nowMs, bool peer)
     {
         var attested = ahead.To - 1;
         Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
 
-        var consequence = staging
-            ? peer
-                ? "This is a staging set, so its staging archive is behind the peer as well and is not healed "
-                  + "from it. The peer keeps what the staging archive no longer lists (ADR-0034 §6), so the "
-                  + "newer history survives there — as history this machine cannot see until it is restored "
-                  + "from the peer — and no convergence run will delete it."
-                : "This is a staging set, so its staging archive is behind the destination as well and is not "
-                  + "healed from it: the destination's newer history is only at the destination, and the next "
-                  + "converging pass will trim the destination to the staging archive's keep-set — restore or copy "
-                  + "that history aside first if it matters."
-            : healFailure is null
-                ? "The destination's metadata was copied back into the set's metadata store and the catalogue "
-                  + "was rebuilt from it, so the set is current again and the next backup is incremental. "
-                  + "Anything else kept beside the state directory deserves the same suspicion."
-                : $"The destination's metadata could not be copied back ({healFailure}); nothing at the "
+        string consequence;
+        if (staging && peer && heal is null)
+        {
+            consequence =
+                "This is a staging set, so its staging archive is behind the peer as well and is not healed "
+                + "from it. The peer keeps what the staging archive no longer lists (ADR-0034 §6), so the "
+                + "newer history survives there — as history this machine cannot see until it is restored "
+                + "from the peer — and no convergence run will delete it.";
+        }
+        else if (heal?.Failure is { } failure)
+        {
+            consequence = staging
+                ? $"This is a staging set, and its archive is behind the destination as well. The destination's "
+                  + $"newer history could not be copied back into the staging archive ({failure}); nothing at the "
+                  + "destination was changed, this destination was not recorded as synced, and the next pass "
+                  + "tries again."
+                : $"The destination's metadata could not be copied back ({failure}); nothing at the "
                   + "destination was changed, this destination was not recorded as synced, and the next pass "
                   + "tries again.";
+        }
+        else
+        {
+            consequence = staging
+                ? "This is a staging set, and its archive was behind the destination as well. The destination's "
+                  + $"newer history — {heal?.CopiedObjects ?? 0} object(s), {heal?.CopiedBytes ?? 0} bytes of content "
+                  + "and metadata, blobs before the manifests that need them — was copied back into the staging "
+                  + "archive and the catalogue rebuilt from it, so the set is current again and the next converging "
+                  + "pass keeps what it keeps everywhere. Anything else kept beside the state directory deserves "
+                  + "the same suspicion."
+                : "The destination's metadata was copied back into the set's metadata store and the catalogue "
+                  + "was rebuilt from it, so the set is current again and the next backup is incremental. "
+                  + "Anything else kept beside the state directory deserves the same suspicion.";
+        }
+
         runtime.Notices.Raise(
             $"destination-ahead:{set.Id}:{destinationName}",
             $"destination '{destinationName}' of set '{set.Name}' attests writer sequence {attested}; this machine's "

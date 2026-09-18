@@ -578,32 +578,113 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// different sources. Idempotent: every put is if-absent.
     /// </summary>
     internal static async ValueTask CopyMetadataAsync(
-        Storage.Abstractions.IObjectStore from, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken)
+        Storage.Abstractions.IObjectStore from, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken) =>
+        _ = await CopyBackAsync(from, metadata, admitBlob: null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>What a copy-back moved: objects and bytes, for the notice and the log.</summary>
+    internal readonly record struct CopiedBack(long Objects, long Bytes);
+
+    /// <summary>
+    /// Copies what <paramref name="from"/> holds and <paramref name="to"/>
+    /// lacks, if-absent, in publication order: the descriptor, the blobs
+    /// admitted, the journal and index, everything else, and the snapshot
+    /// manifests last — so an interrupted copy never leaves a manifest in
+    /// place without the blobs it references, and an archive never lists
+    /// history it cannot restore (FR-GC-009,
+    /// [ADR-0062 Amendment 2](../../docs/adr/0062-the-destination-is-the-rollback-witness.md)).
+    /// Tombstones and leases are the writer's own and never travel.
+    /// </summary>
+    /// <param name="from">The destination's copy, the newer one.</param>
+    /// <param name="to">The set's own store — a metadata store or a staging archive.</param>
+    /// <param name="admitBlob">Which blob keys travel; null admits none, which is the metadata-only copy.</param>
+    /// <param name="cancellationToken">Cancels the copy.</param>
+    /// <returns>What was copied.</returns>
+    internal static async ValueTask<CopiedBack> CopyBackAsync(
+        Storage.Abstractions.IObjectStore from, Storage.Abstractions.IObjectStore to,
+        Func<string, bool>? admitBlob, CancellationToken cancellationToken)
     {
+        // Listed once and bucketed, because a store lists in its own order
+        // and the order here is a correctness property, not a preference.
+        var phases = new List<Storage.Abstractions.ObjectEntry>[CopyBackPhases.Length + 1];
+        for (var index = 0; index < phases.Length; index++)
+        {
+            phases[index] = [];
+        }
+
         await foreach (var entry in from.ListAsync(
             Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
             var key = entry.Key.Value;
-            if (key.StartsWith("blobs/", StringComparison.Ordinal)
-                || key.StartsWith("tombstones/", StringComparison.Ordinal)
+            if (key.StartsWith("tombstones/", StringComparison.Ordinal)
                 || key.StartsWith("leases/", StringComparison.Ordinal))
             {
                 continue;
             }
 
-            _ = await metadata.PutAsync(
-                entry.Key,
-                async token =>
-                {
-                    var read = await from.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
-                    return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
-                        ? read.Content
-                        : throw new IOException($"Object {entry.Key.Value} listed but could not be read to copy.");
-                },
-                Storage.Abstractions.PutConditions.IfNotExists,
-                cancellationToken).ConfigureAwait(false);
+            if (key.StartsWith("blobs/", StringComparison.Ordinal) && (admitBlob is null || !admitBlob(key)))
+            {
+                continue;
+            }
+
+            phases[CopyBackPhaseOf(key)].Add(entry);
         }
+
+        var objects = 0L;
+        var bytes = 0L;
+        foreach (var phase in phases)
+        {
+            foreach (var entry in phase)
+            {
+                var put = await to.PutAsync(
+                    entry.Key,
+                    async token =>
+                    {
+                        var read = await from.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
+                        return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
+                            ? read.Content
+                            : throw new IOException($"Object {entry.Key.Value} listed but could not be read to copy.");
+                    },
+                    Storage.Abstractions.PutConditions.IfNotExists,
+                    cancellationToken).ConfigureAwait(false);
+                if (put.Outcome == Storage.Abstractions.PutOutcome.Created)
+                {
+                    objects++;
+                    bytes += entry.Length;
+                }
+            }
+        }
+
+        return new CopiedBack(objects, bytes);
+    }
+
+    /// <summary>Publication order for a copy-back; the catch-all phase sits between the named prefixes and the manifests.</summary>
+    private static readonly string[] CopyBackPhases =
+        ["repository-format", "blobs/", "journal/", "index/", "hints/", "audit/", "snapshots/"];
+
+    private static int CopyBackPhaseOf(string key)
+    {
+        if (key is "repository-format")
+        {
+            return 0;
+        }
+
+        if (key.StartsWith("snapshots/", StringComparison.Ordinal))
+        {
+            return CopyBackPhases.Length;
+        }
+
+        for (var index = 1; index < CopyBackPhases.Length - 1; index++)
+        {
+            if (key.StartsWith(CopyBackPhases[index], StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        // Anything unnamed lands after the named prefixes and before the
+        // manifests, which is where the copier's own catch-all phase sits.
+        return CopyBackPhases.Length - 1;
     }
 
     /// <summary>The set as configured, or null when the id names none — or the file will not load.</summary>
@@ -860,11 +941,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// </para>
     /// </remarks>
     /// <param name="setId">The set's 32-hex identity.</param>
-    /// <param name="archive">The set's open archive — a direct-ship one, whose store is the sink.</param>
+    /// <param name="archive">The set's open archive — a direct-ship one, whose store is the sink, or a staging one.</param>
     /// <param name="replica">The destination's replica, the newer copy.</param>
     /// <param name="cancellationToken">Cancels the heal.</param>
-    /// <returns>Null when healed; otherwise why not, in a sentence for the notice.</returns>
-    internal async ValueTask<string?> HealFromDestinationAsync(
+    /// <returns>What was copied back, or why the heal did not happen, in a sentence for the notice.</returns>
+    internal async ValueTask<HealOutcome> HealFromDestinationAsync(
         string setId, ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
@@ -873,15 +954,38 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
         try
         {
-            var metadata = new LocalFileSystemObjectStore(SetMetadataPath(setId), LoggerFor<LocalFileSystemObjectStore>());
-            await CopyMetadataAsync(replica, metadata, cancellationToken).ConfigureAwait(false);
+            CopiedBack copied;
+            Storage.Abstractions.IObjectStore rebuildFrom;
+            if (archive.ShipSink is null)
+            {
+                // A staging set lacks content as well as metadata, and the
+                // content it is owed is exactly the closure of the snapshots
+                // it does not list — never everything the destination holds,
+                // because staging retirement sheds historic data blobs on
+                // purpose and a heal must not bring history back. Metadata
+                // blobs all travel: retirement keeps every one, and the
+                // rebuild needs them.
+                var needed = await ClosureOfMissingSnapshotsAsync(archive, replica, cancellationToken)
+                    .ConfigureAwait(false);
+                copied = await CopyBackAsync(
+                    replica, archive.Store,
+                    key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) || needed.Contains(key),
+                    cancellationToken).ConfigureAwait(false);
+                rebuildFrom = archive.Store;
+            }
+            else
+            {
+                var metadata = new LocalFileSystemObjectStore(SetMetadataPath(setId), LoggerFor<LocalFileSystemObjectStore>());
+                copied = await CopyBackAsync(replica, metadata, admitBlob: null, cancellationToken).ConfigureAwait(false);
+                rebuildFrom = replica;
+            }
 
             var warnings = new List<string>();
-            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replica, archive.Repository, cancellationToken)
+            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(rebuildFrom, archive.Repository, cancellationToken)
                 .ConfigureAwait(false))
             {
                 await CatalogueRebuild.RebuildIntoAsync(
-                    this, archive.Catalogue, replica, archive.Repository, reader, warnings, cancellationToken)
+                    this, archive.Catalogue, rebuildFrom, archive.Repository, reader, warnings, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -895,12 +999,73 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // too: the pass moved the writer past the destination's journal
             // head before calling this, and this only ever raises further.
             await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
-            return null;
+            return new HealOutcome(null, copied.Objects, copied.Bytes);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         {
-            return exception.Message;
+            return new HealOutcome(exception.Message, 0, 0);
         }
+    }
+
+    /// <summary>How a heal from a destination ended.</summary>
+    /// <param name="Failure">Why it did not happen, or null when it did.</param>
+    /// <param name="CopiedObjects">Objects brought back.</param>
+    /// <param name="CopiedBytes">Bytes brought back.</param>
+    internal sealed record HealOutcome(string? Failure, long CopiedObjects, long CopiedBytes);
+
+    /// <summary>
+    /// The blob keys a staging archive is owed: the closure, walked at the
+    /// destination under the metadata key, of every snapshot the destination
+    /// lists and the archive does not. A destination snapshot that will not
+    /// decode, or a closure that will not walk, fails the heal rather than
+    /// narrowing it: the pass then converges nothing, which is the protection,
+    /// and the damage is the verifier's to name.
+    /// </summary>
+    private static async ValueTask<HashSet<string>> ClosureOfMissingSnapshotsAsync(
+        ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+    {
+        var listed = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in archive.Store.ListAsync(
+            Storage.Abstractions.ObjectPrefix.Parse("snapshots/"), Storage.Abstractions.ListOptions.Default,
+            cancellationToken).ConfigureAwait(false))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        var survey = await Retention.StagingMark.SurveyAsync(replica, archive.Repository, cancellationToken)
+            .ConfigureAwait(false);
+        if (survey.Undecodable.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"the destination holds a snapshot that will not decode ({survey.Undecodable[0]}), so what its history needs cannot be told");
+        }
+
+        var missing = survey.Snapshots.Where(snapshot => !listed.Contains(snapshot.StoreKey.Value)).ToList();
+        var needed = new HashSet<string>(StringComparer.Ordinal);
+        if (missing.Count == 0)
+        {
+            return needed;
+        }
+
+        using var reader = new Repository.RepositoryReader(archive.Repository.RepositoryId, archive.Repository.Keys, replica);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        var (reachable, unwalkable) = await Retention.StagingMark.MarkAsync(reader, missing, cancellationToken)
+            .ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"the destination's newer history would not walk ({unwalkable[0]}), so what it needs cannot be told");
+        }
+
+        foreach (var blob in reader.Blobs)
+        {
+            if (blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+            {
+                needed.Add(blob.StoreKey.Value);
+            }
+        }
+
+        return needed;
     }
 
     /// <summary>
