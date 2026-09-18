@@ -43,7 +43,20 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly EncryptionProfile _encryptionProfile;
     private readonly RepositoryId _repositoryId;
     private readonly byte[] _blobKey;
+    // Format 2's per-blob content key; in a format-3 sealed data blob the
+    // same slot holds the record-key SEED instead — one 32-byte secret per
+    // blob either way, which is what lets the checkpoint keep carrying one
+    // (05 §6.2). Nothing derives a record key from a seed but the writer.
     private readonly byte[]? _contentKey;
+
+    // Format 3 keys each record on its own (03 §5.4), so a writer holds what
+    // the derivation needs rather than one cipher: the class key a
+    // structure-plane record expands over its own identity, or — in the
+    // sealed data plane — the public key each record's share is sealed to,
+    // the seed being _contentKey above. Both null in every format-2 writer,
+    // where one key covers the whole blob.
+    private readonly byte[]? _recordClassKey;
+    private readonly byte[]? _recordSealingPublicKey;
 
     // One key schedule per blob rather than per record. The keys do not
     // change for the writer's life, and AesGcm is not safe for concurrent use —
@@ -52,8 +65,10 @@ public sealed class BlobWriter : IAsyncDisposable
     // footer alike; a sealed v2 data blob has two — records under the random
     // content key, the footer under the structure-derived blob key
     // (ADR-0042 §2) — and _footerCipher is the same instance as _cipher
-    // exactly when the blob is not sealed-content.
-    private readonly AesGcm _cipher;
+    // exactly when the blob is not sealed-content. A format-3 blob has no
+    // record cipher at all: its key changes with every record, so _cipher is
+    // null and each append builds its own schedule.
+    private readonly AesGcm? _cipher;
     private readonly AesGcm _footerCipher;
     private readonly string _spoolPath;
     private readonly FileStream _spool;
@@ -80,7 +95,9 @@ public sealed class BlobWriter : IAsyncDisposable
         SpoolPinnedConfiguration? pinned,
         byte[]? contentKey = null,
         ILogger? logger = null,
-        IncrementalHash? digest = null)
+        IncrementalHash? digest = null,
+        byte[]? recordClassKey = null,
+        byte[]? recordSealingPublicKey = null)
     {
         _log = logger ?? NullLogger.Instance;
         _envelope = envelope;
@@ -89,8 +106,19 @@ public sealed class BlobWriter : IAsyncDisposable
         _repositoryId = repositoryId;
         _blobKey = blobKey;
         _contentKey = contentKey;
-        _cipher = new AesGcm(contentKey ?? blobKey, RecordCipher.TagLength);
-        _footerCipher = contentKey is null ? _cipher : new AesGcm(blobKey, RecordCipher.TagLength);
+        _recordClassKey = recordClassKey;
+        _recordSealingPublicKey = recordSealingPublicKey;
+
+        // The question the envelope answers, not the caller: a format-3 blob
+        // keys per record, so there is no blob-wide record cipher to build,
+        // and the footer — which stays under the derived blob key in every
+        // version — gets a schedule of its own.
+        _cipher = FormatVersions.HasRelocatableRecords(envelope.FormatVersion)
+            ? null
+            : new AesGcm(contentKey ?? blobKey, RecordCipher.TagLength);
+        _footerCipher = _cipher is not null && contentKey is null
+            ? _cipher
+            : new AesGcm(blobKey, RecordCipher.TagLength);
         _spoolPath = spoolPath;
         _spool = spool;
         _pinned = pinned;
@@ -143,7 +171,8 @@ public sealed class BlobWriter : IAsyncDisposable
         string spoolDirectory,
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ushort formatVersion = FormatLimits.SymmetricFormatVersion)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -153,6 +182,25 @@ public sealed class BlobWriter : IAsyncDisposable
         {
             throw new ArgumentException(Strings.BlobWriter_FormatVersionAdmitsOneRecord,
                 nameof(encryptionProfile));
+        }
+
+        // Two containers come out of here and no others: the symmetric one
+        // format 1 defined and format 2 kept byte for byte, and format 3's
+        // relocatable one. A format-3 DATA blob is not among them — its
+        // records carry a key each, which needs a public key this overload is
+        // never given (05 §2.2).
+        if (formatVersion != FormatLimits.SymmetricFormatVersion &&
+            formatVersion != FormatVersions.RelocatableRecords)
+        {
+            throw new ArgumentException(
+                Strings.FormatBlobWriter_FormatVersionNotWritable(
+                    FormatLimits.SymmetricFormatVersion, FormatVersions.RelocatableRecords, formatVersion),
+                nameof(formatVersion));
+        }
+
+        if (FormatVersions.SealsContentPerRecord(formatVersion, blobClass == BlobClass.Data))
+        {
+            throw new ArgumentException(Strings.BlobWriter_DataBlobSealsPerRecord, nameof(blobClass));
         }
 
         Span<byte> salt = stackalloc byte[BlobKeyDeriver.BlobSaltLength];
@@ -170,7 +218,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
 
         var envelope = new BlobEnvelope(
-            FormatLimits.SymmetricFormatVersion,
+            formatVersion,
             blobClass,
             keyGeneration,
             BlobId.FromWriterCounter(writerId, blobCounter),
@@ -185,8 +233,14 @@ public sealed class BlobWriter : IAsyncDisposable
         var spoolPath = Path.Combine(spoolDirectory, $"blob-{envelope.BlobId}.spool");
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
+        // A format-3 record expands the class key over its own identity, so
+        // the writer keeps a copy; format 1 and 2 seal every record under the
+        // one derived blob key and keep none.
+        var recordClassKey = FormatVersions.HasRelocatableRecords(formatVersion) ? classKey.ToArray() : null;
+
         var writer = new BlobWriter(
-            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, logger: logger);
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, logger: logger,
+            recordClassKey: recordClassKey);
         WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
         return writer;
     }
@@ -213,7 +267,8 @@ public sealed class BlobWriter : IAsyncDisposable
         string spoolDirectory,
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ushort formatVersion = FormatLimits.FormatVersion)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -223,6 +278,15 @@ public sealed class BlobWriter : IAsyncDisposable
         {
             throw new ArgumentException(Strings.BlobWriter_FormatVersionAdmitsOneRecord,
                 nameof(encryptionProfile));
+        }
+
+        if (formatVersion != FormatLimits.FormatVersion &&
+            formatVersion != FormatVersions.RelocatableRecords)
+        {
+            throw new ArgumentException(
+                Strings.FormatBlobWriter_FormatVersionNotWritable(
+                    FormatLimits.FormatVersion, FormatVersions.RelocatableRecords, formatVersion),
+                nameof(formatVersion));
         }
 
         Span<byte> salt = stackalloc byte[BlobKeyDeriver.BlobSaltLength];
@@ -240,18 +304,34 @@ public sealed class BlobWriter : IAsyncDisposable
         }
 
         var blobId = BlobId.FromWriterCounter(writerId, blobCounter);
-        var contentKey = RandomNumberGenerator.GetBytes(32);
-        var sealedShare = SealedContentKey.Seal(sealingPublicKey, contentKey, repositoryId, blobId);
+        var relocatable = FormatVersions.HasRelocatableRecords(formatVersion);
 
-        var envelope = new BlobEnvelope(
-            FormatLimits.FormatVersion,
-            BlobClass.Data,
-            keyGeneration,
-            blobId,
-            salt,
-            blobCounter,
-            writerId,
-            sealedShare);
+        // One 32-byte secret per blob in both formats, meaning two different
+        // things. Format 2 seals it into the envelope and every record uses
+        // it; format 3 keeps it as the SEED each record's own key is expanded
+        // from, seals those keys one per record, and puts nothing in the
+        // envelope — which is why a format-3 data envelope is the same 88
+        // bytes a metadata one is (05 §2).
+        var contentKey = RandomNumberGenerator.GetBytes(32);
+
+        var envelope = relocatable
+            ? new BlobEnvelope(
+                formatVersion,
+                BlobClass.Data,
+                keyGeneration,
+                blobId,
+                salt,
+                blobCounter,
+                writerId)
+            : new BlobEnvelope(
+                formatVersion,
+                BlobClass.Data,
+                keyGeneration,
+                blobId,
+                salt,
+                blobCounter,
+                writerId,
+                SealedContentKey.Seal(sealingPublicKey, contentKey, repositoryId, blobId));
 
         var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
         BlobKeyDeriver.Derive(structureKey, salt, writerId, blobCounter, blobKey);
@@ -261,7 +341,8 @@ public sealed class BlobWriter : IAsyncDisposable
         var spool = new FileStream(spoolPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
 
         var writer = new BlobWriter(
-            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, contentKey, logger);
+            envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, pinned, contentKey, logger,
+            recordSealingPublicKey: relocatable ? sealingPublicKey.ToArray() : null);
         WriteEnvelopeAndCheckpoint(writer, envelope, pinned);
         return writer;
     }
@@ -372,7 +453,8 @@ public sealed class BlobWriter : IAsyncDisposable
         BlobWriteProfile profile,
         SpoolPinnedConfiguration current,
         ushort expectedFormatVersion = FormatLimits.SymmetricFormatVersion,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ReadOnlySpan<byte> sealingPublicKey = default)
     {
         logger ??= NullLogger.Instance;
 
@@ -453,15 +535,28 @@ public sealed class BlobWriter : IAsyncDisposable
             return Discard("format_version_changed");
         }
 
-        // A sealed v2 data blob's records authenticate only under the
-        // checkpointed content key (ADR-0042 §3); for it, classKey is the
-        // STRUCTURE (metadata) key the footer will seal under. A sealed
-        // checkpoint without its content key is unreadable state.
+        // A sealed data blob's records authenticate only under the secret the
+        // checkpoint carries (ADR-0042 §3); for it, classKey is the STRUCTURE
+        // (metadata) key the footer will seal under. In format 2 that secret
+        // is the blob's one content key; in format 3 it is the seed each
+        // record's key is expanded from. A sealed checkpoint without it is
+        // unreadable state either way.
         var sealedContent =
-            checkpoint.FormatVersion >= FormatLimits.FormatVersion && checkpoint.BlobClass == BlobClass.Data;
+            FormatVersions.SealsContent(checkpoint.FormatVersion, checkpoint.BlobClass == BlobClass.Data);
         if (sealedContent && checkpoint.ContentKey is null)
         {
             return Discard("content_key_missing");
+        }
+
+        var relocatable = FormatVersions.HasRelocatableRecords(checkpoint.FormatVersion);
+
+        // A format-3 data blob seals a key into every record it appends, so a
+        // writer resumed over one must be able to go on doing that. Refused
+        // rather than discarded: a caller that forgot the key has damaged
+        // nothing, and restarting would throw away work that is still good.
+        if (relocatable && sealedContent && sealingPublicKey.IsEmpty)
+        {
+            throw new ArgumentException(Strings.BlobWriter_ResumeNeedsSealingKey, nameof(sealingPublicKey));
         }
 
         if (checkpoint.KeyGeneration != keyGeneration)
@@ -544,6 +639,12 @@ public sealed class BlobWriter : IAsyncDisposable
         var contentKey = sealedContent ? checkpoint.ContentKey!.Value.ToArray() : null;
         var walkKey = contentKey ?? blobKey;
 
+        // Format 3 has no blob-wide walk key: each record's is expanded from
+        // the class key or from the seed, exactly as the appends that wrote
+        // them did (03 §5.4), so the walk re-derives per record.
+        var recordClassKey = relocatable && !sealedContent ? classKey.ToArray() : null;
+        var recordPrefixLength = RecordFraming.PrefixLength(envelope.FormatVersion, envelope.BlobClass);
+
         // Accumulated as the walk goes, then adopted by the writer below: a
         // streaming walk cannot hand the bytes back afterwards, and re-reading
         // the spool to hash it would spend the I/O this change saves.
@@ -571,6 +672,11 @@ public sealed class BlobWriter : IAsyncDisposable
                 CryptographicOperations.ZeroMemory(contentKey);
             }
 
+            if (recordClassKey is not null)
+            {
+                CryptographicOperations.ZeroMemory(recordClassKey);
+            }
+
             CryptographicOperations.ZeroMemory(scratch);
             CryptographicOperations.ZeroMemory(sealedBytes);
             digest.Dispose();
@@ -579,6 +685,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
         Span<byte> aad = stackalloc byte[RecordAad.Length];
+        Span<byte> recordKey = stackalloc byte[RecordKeyDeriver.RecordKeyLength];
 
         while (offset < spoolLength)
         {
@@ -599,9 +706,12 @@ public sealed class BlobWriter : IAsyncDisposable
                 return DiscardTail();
             }
 
-            // Ordinals are dense and ascending (05 §3.1, 04 §2.1) — and the
-            // ordinal is the nonce, so a gap would name a nonce this key
-            // never covered.
+            // Ordinals are dense and ascending in every format (05 §3.1,
+            // 04 §2.1). Under format 2 that is also a nonce rule — the
+            // ordinal IS the nonce, so a gap would name a nonce this key
+            // never covered; under format 3 the nonce is carried and the
+            // density is the table's invariant alone. Held in both, because
+            // a footer whose entries are not dense is damage either way.
             if (header.Ordinal != entries.Count)
             {
                 return DiscardTail();
@@ -609,17 +719,18 @@ public sealed class BlobWriter : IAsyncDisposable
 
             // Parse already refused a stored_length past the 64 MiB limit;
             // this bounds the record against the file before allocating.
-            var recordLength = RecordHeader.Length + (long)header.StoredLength + RecordCipher.TagLength;
+            var recordLength = RecordFraming.RecordLength(
+                envelope.FormatVersion, envelope.BlobClass, header.StoredLength);
             if (offset + recordLength > spoolLength)
             {
                 return DiscardTail();
             }
 
             var storedLength = (int)header.StoredLength;
-            var sealedLength = storedLength + RecordCipher.TagLength;
-            if (sealedBytes.Length < sealedLength)
+            var bodyLength = recordPrefixLength + storedLength + RecordCipher.TagLength;
+            if (sealedBytes.Length < bodyLength)
             {
-                sealedBytes = new byte[sealedLength];
+                sealedBytes = new byte[bodyLength];
             }
 
             if (scratch.Length < storedLength)
@@ -627,20 +738,54 @@ public sealed class BlobWriter : IAsyncDisposable
                 scratch = new byte[storedLength];
             }
 
-            spoolRead.ReadExactly(sealedBytes.AsSpan(0, sealedLength));
+            spoolRead.ReadExactly(sealedBytes.AsSpan(0, bodyLength));
 
-            RecordNonce.Write(header.Ordinal, nonce);
-            RecordAad.Write(repositoryId, envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
+            scoped ReadOnlySpan<byte> aadForRecord;
+            scoped ReadOnlySpan<byte> keyForRecord;
 
-            // The AAD binds the repository, the object and the ordinal, so
-            // this also refuses a spool belonging to another repository or a
-            // record moved between ordinals (04 §4).
+            if (recordPrefixLength == 0)
+            {
+                RecordNonce.Write(header.Ordinal, nonce);
+                RecordAad.Write(
+                    repositoryId, envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
+                aadForRecord = aad;
+                keyForRecord = walkKey;
+            }
+            else
+            {
+                // The prefix the append wrote is the walk's input: the nonce
+                // it drew, read back rather than recomputed, and — for a data
+                // record — a sealed share this writer does not open, because
+                // the seed reproduces the same key directly (05 §6.2).
+                sealedBytes.AsSpan(RecordFraming.NonceOffset, RecordNonce.AesGcmLength).CopyTo(nonce);
+                RecordAad.WriteRelocatable(
+                    repositoryId, envelope.FormatVersion, header.ObjectType, header.ObjectId,
+                    aad[..RecordAad.RelocatableLength]);
+                aadForRecord = aad[..RecordAad.RelocatableLength];
+
+                if (recordClassKey is not null)
+                {
+                    RecordKeyDeriver.Derive(recordClassKey, header.ObjectType, header.ObjectId, recordKey);
+                }
+                else
+                {
+                    RecordKeyDeriver.DeriveFromSeed(contentKey!, header.ObjectId, recordKey);
+                }
+
+                keyForRecord = recordKey;
+            }
+
+            // The AAD binds the repository and the object — and, in format 2,
+            // the ordinal — so this also refuses a spool belonging to another
+            // repository (04 §4). What it no longer refuses under format 3 is
+            // a record at a different ordinal, which is the point: the
+            // density check above is what holds the table together there.
             if (!RecordCipher.TryOpen(
-                    walkKey,
+                    keyForRecord,
                     nonce,
-                    aad,
-                    sealedBytes.AsSpan(0, storedLength),
-                    sealedBytes.AsSpan(storedLength, RecordCipher.TagLength),
+                    aadForRecord,
+                    sealedBytes.AsSpan(recordPrefixLength, storedLength),
+                    sealedBytes.AsSpan(recordPrefixLength + storedLength, RecordCipher.TagLength),
                     scratch.AsSpan(0, storedLength)))
             {
                 return DiscardTail();
@@ -649,7 +794,7 @@ public sealed class BlobWriter : IAsyncDisposable
             // Hashed only once the tag has passed, so the digest covers
             // exactly the bytes the walk accepted.
             digest.AppendData(headerBytes);
-            digest.AppendData(sealedBytes.AsSpan(0, sealedLength));
+            digest.AppendData(sealedBytes.AsSpan(0, bodyLength));
 
             entries.Add(new RecordTableEntry(
                 header.ObjectId,
@@ -669,6 +814,7 @@ public sealed class BlobWriter : IAsyncDisposable
         // it is the one place a whole record still sits in memory.
         CryptographicOperations.ZeroMemory(scratch);
         CryptographicOperations.ZeroMemory(sealedBytes);
+        CryptographicOperations.ZeroMemory(recordKey);
 
         // Released before the append handle below claims the file: that one
         // takes FileShare.None, which this read handle would refuse.
@@ -681,7 +827,9 @@ public sealed class BlobWriter : IAsyncDisposable
 
         var writer = new BlobWriter(
             envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger,
-            digest);
+            digest,
+            recordClassKey,
+            relocatable && sealedContent ? sealingPublicKey.ToArray() : null);
         writer._entries.AddRange(entries);
         writer.CurrentLength = spoolLength;
 
@@ -705,7 +853,11 @@ public sealed class BlobWriter : IAsyncDisposable
             return false;
         }
 
-        var recordSize = RecordHeader.Length + (long)storedLength + RecordCipher.TagLength;
+        // Through RecordFraming so the bound counts a format-3 record's
+        // prefix: a blob sized as though its records were bare would pass
+        // this check and then exceed the profile's maximum by twelve bytes a
+        // record, or ninety-two in the sealed data plane.
+        var recordSize = RecordFraming.RecordLength(_envelope.FormatVersion, _envelope.BlobClass, (uint)storedLength);
         var footerReserve = BlobFooter.HeaderLength + RecordCipher.TagLength + 96L * (_entries.Count + 1);
 
         return CurrentLength + recordSize + footerReserve + FooterLocator.Length <= _profile.MaximumSizeBytes;
@@ -742,21 +894,56 @@ public sealed class BlobWriter : IAsyncDisposable
             (uint)storedPayload.Length,
             objectId);
 
-        var record = new byte[RecordHeader.Length + storedPayload.Length + RecordCipher.TagLength];
+        var prefixLength = RecordFraming.PrefixLength(_envelope.FormatVersion, _envelope.BlobClass);
+        var record = new byte[RecordHeader.Length + prefixLength + storedPayload.Length + RecordCipher.TagLength];
         header.WriteTo(record.AsSpan(0, RecordHeader.Length));
 
-        Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
-        RecordNonce.Write(ordinal, nonce);
-        Span<byte> aad = stackalloc byte[RecordAad.Length];
-        RecordAad.Write(_repositoryId, _envelope.FormatVersion, objectType, objectId, ordinal, aad);
+        var ciphertext = record.AsSpan(RecordHeader.Length + prefixLength, storedPayload.Length);
+        var tag = record.AsSpan(
+            RecordHeader.Length + prefixLength + storedPayload.Length, RecordCipher.TagLength);
 
-        RecordCipher.Seal(
-            _cipher,
-            nonce,
-            aad,
-            storedPayload.Span,
-            record.AsSpan(RecordHeader.Length, storedPayload.Length),
-            record.AsSpan(RecordHeader.Length + storedPayload.Length, RecordCipher.TagLength));
+        if (prefixLength == 0)
+        {
+            Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
+            RecordNonce.Write(ordinal, nonce);
+            Span<byte> aad = stackalloc byte[RecordAad.Length];
+            RecordAad.Write(_repositoryId, _envelope.FormatVersion, objectType, objectId, ordinal, aad);
+
+            RecordCipher.Seal(_cipher!, nonce, aad, storedPayload.Span, ciphertext, tag);
+        }
+        else
+        {
+            // Format 3. The nonce is drawn per record and carried in the
+            // prefix rather than being the ordinal, and the key is the
+            // object's rather than the blob's — which together are the whole
+            // of what lets these bytes be copied into another blob and still
+            // open there (ADR-0052 Amendment 1, 04 §3). A data record's key
+            // is sealed after the nonce, so the share travels with it too.
+            var nonce = record.AsSpan(RecordHeader.Length + RecordFraming.NonceOffset, RecordNonce.AesGcmLength);
+            RecordNonce.DrawRandom(nonce);
+
+            Span<byte> aad = stackalloc byte[RecordAad.RelocatableLength];
+            RecordAad.WriteRelocatable(_repositoryId, _envelope.FormatVersion, objectType, objectId, aad);
+
+            Span<byte> recordKey = stackalloc byte[RecordKeyDeriver.RecordKeyLength];
+            try
+            {
+                DeriveRecordKey(objectType, objectId, recordKey);
+
+                if (_recordSealingPublicKey is not null)
+                {
+                    SealedRecordKey.Seal(_recordSealingPublicKey, recordKey, _repositoryId, objectId)
+                        .CopyTo(record.AsSpan(
+                            RecordHeader.Length + RecordFraming.SealedKeyOffset, SealedRecordKey.SealedLength));
+                }
+
+                RecordCipher.Seal(recordKey, nonce, aad, storedPayload.Span, ciphertext, tag);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(recordKey);
+            }
+        }
 
         await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(record);
@@ -780,6 +967,113 @@ public sealed class BlobWriter : IAsyncDisposable
         // sidecar rewrites per 128 MiB blob, both blocking, for a guarantee
         // the tags already give (ADR-0029 §6, serial cost 1).
         return ordinal;
+    }
+
+    /// <summary>
+    /// Copies one already-sealed format-3 record into this blob verbatim,
+    /// re-framing only its 54-byte header with the ordinal it now carries —
+    /// the relocation primitive a compactor is built from
+    /// ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md) §4).
+    /// </summary>
+    /// <remarks>
+    /// The sealed bytes are never opened, and this writer holds no key that
+    /// would open them: the record's key is its object's and its nonce
+    /// travels in its prefix, so it authenticates here exactly as it did
+    /// where it came from. That is the point of format 3, and it is why a
+    /// keyless compactor becomes possible — though none is built.
+    /// </remarks>
+    /// <param name="source">The source blob's record-table entry.</param>
+    /// <param name="sealedRecord">
+    /// Everything after the record's header — prefix, ciphertext and tag —
+    /// exactly as the source blob holds it.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the spool write.</param>
+    /// <returns>The ordinal the record now carries in this blob.</returns>
+    /// <exception cref="InvalidOperationException">The writer is sealed, the record does not fit, or this blob is not format 3.</exception>
+    /// <exception cref="ArgumentException">The bytes are not the length the entry declares, or name a profile this writer does not implement.</exception>
+    public async ValueTask<uint> AppendSealedRecordAsync(
+        RecordTableEntry source,
+        ReadOnlyMemory<byte> sealedRecord,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfDisposed(_sealed, nameof(BlobWriter));
+
+        if (!FormatVersions.HasRelocatableRecords(_envelope.FormatVersion))
+        {
+            throw new InvalidOperationException(Strings.BlobWriter_RelocationNeedsFormatThree);
+        }
+
+        if (!CompressionProfile.TryFromValue(source.CompressionProfileValue, out var compressionProfile) ||
+            !EncryptionProfile.TryFromValue(source.EncryptionProfileValue, out var encryptionProfile) ||
+            encryptionProfile != EncryptionProfile.Aes256GcmV1)
+        {
+            throw new ArgumentException(Strings.BlobWriter_RelocatedProfileUnsupported, nameof(source));
+        }
+
+        var prefixLength = RecordFraming.PrefixLength(_envelope.FormatVersion, _envelope.BlobClass);
+        var expected = prefixLength + (int)source.StoredLength + RecordCipher.TagLength;
+        if (sealedRecord.Length != expected)
+        {
+            throw new ArgumentException(
+                Strings.FormatBlobWriter_RelocatedRecordLength(sealedRecord.Length, expected), nameof(sealedRecord));
+        }
+
+        if (!CanAppend((int)source.StoredLength))
+        {
+            throw new InvalidOperationException(Strings.BlobWriter_RecordDoesNotFitBlob);
+        }
+
+        // Everything but the ordinal is the source record's, because
+        // everything but the ordinal is bound into the AAD the sealed bytes
+        // were made under (04 §4). The ordinal is not, which is exactly why
+        // it may be renumbered here.
+        var ordinal = (uint)_entries.Count;
+        var header = new RecordHeader(
+            source.ObjectType,
+            compressionProfile!,
+            encryptionProfile,
+            ordinal,
+            source.LogicalLength,
+            source.StoredLength,
+            source.ObjectId);
+
+        var record = new byte[RecordHeader.Length + sealedRecord.Length];
+        header.WriteTo(record.AsSpan(0, RecordHeader.Length));
+        sealedRecord.Span.CopyTo(record.AsSpan(RecordHeader.Length));
+
+        await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
+        _digest.AppendData(record);
+
+        _entries.Add(new RecordTableEntry(
+            source.ObjectId,
+            ordinal,
+            (ulong)CurrentLength,
+            source.StoredLength,
+            source.LogicalLength,
+            source.CompressionProfileValue,
+            source.EncryptionProfileValue,
+            source.ObjectType));
+
+        CurrentLength += record.Length;
+        return ordinal;
+    }
+
+    // Which of format 3's two derivations a record takes is the blob's
+    // question and not the record's (03 §5.4): a structure-plane record
+    // expands the class key over its own identity, so any reader holding the
+    // class key reaches it, while a sealed data record expands the blob's
+    // seed — a key no reader ever derives, because every reader opens the
+    // share the writer sealed from it instead.
+    private void DeriveRecordKey(ObjectType objectType, ObjectId objectId, Span<byte> destination)
+    {
+        if (_recordClassKey is not null)
+        {
+            RecordKeyDeriver.Derive(_recordClassKey, objectType, objectId, destination);
+        }
+        else
+        {
+            RecordKeyDeriver.DeriveFromSeed(_contentKey!, objectId, destination);
+        }
     }
 
     /// <summary>
@@ -976,7 +1270,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
     private void DisposeCiphers()
     {
-        _cipher.Dispose();
+        _cipher?.Dispose();
         if (!ReferenceEquals(_footerCipher, _cipher))
         {
             _footerCipher.Dispose();
@@ -986,6 +1280,11 @@ public sealed class BlobWriter : IAsyncDisposable
         if (_contentKey is not null)
         {
             CryptographicOperations.ZeroMemory(_contentKey);
+        }
+
+        if (_recordClassKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_recordClassKey);
         }
     }
 }

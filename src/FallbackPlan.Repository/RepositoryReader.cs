@@ -58,8 +58,7 @@ public sealed class RepositoryReader : IDisposable
     private readonly RepositoryKeySet _keys;
     private readonly IObjectStore _store;
     private readonly ObjectIdDeriver _objectIdDeriver;
-    private readonly byte[]? _sealingPrivateKey;
-    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
+    private readonly SealedContentKeyOpener? _sealedContentKeyOpener;
     private readonly List<BlobReader> _blobReaders = [];
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
@@ -98,10 +97,10 @@ public sealed class RepositoryReader : IDisposable
 
         if (readAuthority is not null)
         {
-            var sealingPrivateKey = readAuthority.SealingPrivateKey.ToArray();
-            _sealingPrivateKey = sealingPrivateKey;
-            _sealedContentKeyOpener = envelope =>
-                SealedContentKey.Open(sealingPrivateKey, envelope.SealedContentKey, _repositoryId, envelope.BlobId);
+            // The opener copies the scalar and zeroes it on dispose, so the
+            // authority stays the caller's and this reader holds no second
+            // copy of its own.
+            _sealedContentKeyOpener = new SealedContentKeyOpener(readAuthority.SealingPrivateKey, repositoryId);
         }
     }
 
@@ -383,10 +382,6 @@ public sealed class RepositoryReader : IDisposable
         }
 
         _objectIdDeriver.Dispose();
-
-        if (_sealingPrivateKey is not null)
-        {
-            CryptographicOperations.ZeroMemory(_sealingPrivateKey);
-        }
+        _sealedContentKeyOpener?.Dispose();
     }
 }

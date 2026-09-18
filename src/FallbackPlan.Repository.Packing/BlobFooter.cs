@@ -76,7 +76,8 @@ public static class BlobFooter
     public static IReadOnlyList<RecordTableEntry> DecodeRecordTable(
         ReadOnlyMemory<byte> plaintextCbor,
         uint declaredRecordCount,
-        long blobLength)
+        long blobLength,
+        int recordPrefixLength = 0)
     {
         var reader = new CanonicalCborReader(plaintextCbor);
         var count = reader.ReadStartArray(maxCount: FormatLimits.MaxRecordsPerBlob);
@@ -158,7 +159,8 @@ public static class BlobFooter
                 throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableOffsetsMustStrictly(position, physicalOffset));
             }
 
-            var recordEnd = physicalOffset.Value + Format.Records.RecordHeader.Length + storedLength.Value + (ulong)Crypto.RecordCipher.TagLength;
+            var recordEnd = physicalOffset.Value + Format.Records.RecordHeader.Length + (ulong)recordPrefixLength
+                + storedLength.Value + (ulong)Crypto.RecordCipher.TagLength;
             if (recordEnd > (ulong)blobLength)
             {
                 throw new BlobFormatException(Strings.FormatBlobFooter_RecordTableEntryExtendsByte(position, recordEnd, blobLength));

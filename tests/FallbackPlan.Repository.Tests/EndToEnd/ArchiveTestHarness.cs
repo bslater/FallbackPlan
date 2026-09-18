@@ -20,7 +20,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// root, so every suite here archives sealed data blobs — which is the only
 /// shape the product writes. Reading content back therefore needs the
 /// derived scalar: readers take <see cref="Authority"/>, and a blob opened
-/// by hand takes <see cref="OpenContentKey"/>. The dedup trust domain is
+/// by hand takes <see cref="ContentKeyOpener"/>. The dedup trust domain is
 /// the device domain, because the repository domain verifies another
 /// writer's segments by reading their content and a write-only holder
 /// cannot (ADR-0042 §7).
@@ -83,9 +83,8 @@ public abstract class ArchiveTestHarness : IDisposable
     /// <summary>The read authority a reader needs to open sealed content; shared, never disposed.</summary>
     protected static RepositoryReadAuthority Authority => TestAuthority.Shared;
 
-    /// <summary>Opens a sealed data blob's content key — for a <see cref="BlobReader"/> opened by hand.</summary>
-    protected static byte[] OpenContentKey(BlobEnvelope envelope) =>
-        SealedContentKey.Open(SealingPrivateKey, envelope.SealedContentKey, Repo, envelope.BlobId);
+    /// <summary>The grant a <see cref="BlobReader"/> opened by hand needs for sealed content; shared, never disposed.</summary>
+    protected static SealedContentKeyOpener ContentKeyOpener { get; } = new(SealingPrivateKey, Repo);
 
     protected FileArchiver CreateArchiver(LocalFileSystemObjectStore store, RepositoryKeySet keys) =>
         CreateArchiver(store, keys, SmallBlobPolicy, firstCounter: 1);

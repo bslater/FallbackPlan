@@ -51,9 +51,8 @@ public sealed class SealedBlobTests : IDisposable
             ? credential.DeriveMetadataKey(generation)
             : throw new InvalidOperationException("a write-only holder was asked for a data key");
 
-    private static Func<BlobEnvelope, byte[]> Grant(RepositoryReadAuthority authority) =>
-        envelope => SealedContentKey.Open(
-            authority.SealingPrivateKey, envelope.SealedContentKey, Repo, envelope.BlobId);
+    private static SealedContentKeyOpener Grant(RepositoryReadAuthority authority) =>
+        new(authority.SealingPrivateKey, Repo);
 
     private static ObjectId IdFor(byte[] plaintext, ObjectIdDeriver deriver) =>
         deriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext));

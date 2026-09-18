@@ -42,7 +42,18 @@ public sealed class BlobReader : IDisposable
     private readonly RepositoryId _repositoryId;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly byte[] _blobKey;
+
+    // How this blob's records are keyed, which its envelope decides and its
+    // caller does not. Format 1 and 2: one key for every record — the blob
+    // key, or the content key a grant opened — in _recordKey. Format 3: a key
+    // per record, expanded from _classKey on the structure plane, or opened
+    // one share at a time through _opener in the sealed data plane. Exactly
+    // one of the three is non-null; all three null means the records are
+    // sealed to an authority this reader was not given.
     private readonly byte[]? _recordKey;
+    private readonly byte[]? _classKey;
+    private readonly SealedContentKeyOpener? _opener;
+    private readonly int _recordPrefixLength;
     private readonly ZstdSegmentDecompressor _decompressor = new();
     private readonly Lock _decompressorGate = new();
 
@@ -55,6 +66,8 @@ public sealed class BlobReader : IDisposable
         BlobEnvelope envelope,
         byte[] blobKey,
         byte[]? recordKey,
+        byte[]? classKey,
+        SealedContentKeyOpener? opener,
         IReadOnlyList<RecordTableEntry> recordTable)
     {
         _store = store;
@@ -65,6 +78,9 @@ public sealed class BlobReader : IDisposable
         Envelope = envelope;
         _blobKey = blobKey;
         _recordKey = recordKey;
+        _classKey = classKey;
+        _opener = opener;
+        _recordPrefixLength = RecordFraming.PrefixLength(envelope.FormatVersion, envelope.BlobClass);
         RecordTable = recordTable;
     }
 
@@ -95,10 +111,10 @@ public sealed class BlobReader : IDisposable
     /// <param name="objectIdDeriver">The caller-owned deriver used for content verification.</param>
     /// <param name="cancellationToken">Cancels the reads.</param>
     /// <param name="sealedContentKeyOpener">
-    /// Opens a sealed v2 data blob's content key from its envelope — a
-    /// restore grant's capability. Null means structure-only: the record
-    /// table opens, record reads answer
-    /// <see cref="RecordReadOutcome.ContentSealed"/>.
+    /// A restore grant's capability to open sealed content keys: one per blob
+    /// from a format-2 envelope, one per record from a format-3 record's
+    /// prefix. Null means structure-only — the record table opens and record
+    /// reads answer <see cref="RecordReadOutcome.ContentSealed"/>.
     /// </param>
     /// <param name="logger">Where the open and any contained sealed-share refusal are recorded.</param>
     /// <exception cref="BlobFormatException">The blob is damaged — every refusal names its finding.</exception>
@@ -110,7 +126,7 @@ public sealed class BlobReader : IDisposable
         Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
         ObjectIdDeriver objectIdDeriver,
         CancellationToken cancellationToken,
-        Func<BlobEnvelope, byte[]>? sealedContentKeyOpener = null,
+        SealedContentKeyOpener? sealedContentKeyOpener = null,
         ILogger? logger = null)
     {
         var log = logger ?? NullLogger.Instance;
@@ -149,12 +165,16 @@ public sealed class BlobReader : IDisposable
         var envelopeBytes = await ReadRangeAsync(store, key, 0, envelopeLength, cancellationToken).ConfigureAwait(false);
         var envelope = BlobEnvelope.Parse(envelopeBytes);
 
-        // A sealed v2 data blob's STRUCTURE lives on the metadata plane
-        // (ADR-0042 §2): its footer key derives from the metadata class key,
-        // and only its records need the sealed content key below.
-        var sealedContent =
-            envelope.FormatVersion >= FormatLimits.FormatVersion && envelope.BlobClass == BlobClass.Data;
-        var structureClass = sealedContent ? BlobClass.Metadata : envelope.BlobClass;
+        // A sealed data blob's STRUCTURE lives on the metadata plane
+        // (ADR-0042 §2) in both formats that have one: its footer key derives
+        // from the metadata class key, and only its records need a content
+        // key. Asked by version and class rather than by "at least version
+        // 2", because format 3 seals per record and would answer the second
+        // question wrongly.
+        var isData = envelope.BlobClass == BlobClass.Data;
+        var sealedPerBlob = FormatVersions.SealsContentPerBlob(envelope.FormatVersion, isData);
+        var sealedPerRecord = FormatVersions.SealsContentPerRecord(envelope.FormatVersion, isData);
+        var structureClass = sealedPerBlob || sealedPerRecord ? BlobClass.Metadata : envelope.BlobClass;
 
         var classKey = classKeyProvider(structureClass, envelope.KeyGeneration);
         var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
@@ -180,12 +200,30 @@ public sealed class BlobReader : IDisposable
             throw new BlobFormatException(Strings.BlobReader_RecoveryFooterFailedAuthentication);
         }
 
-        var entries = BlobFooter.DecodeRecordTable(table, recordCount, blobLength);
+        var entries = BlobFooter.DecodeRecordTable(
+            table, recordCount, blobLength, RecordFraming.PrefixLength(envelope.FormatVersion, envelope.BlobClass));
 
-        // v1 and metadata blobs read records under the structure key itself;
-        // a sealed blob's records need the content key a grant can open.
-        byte[]? recordKey;
-        if (!sealedContent)
+        // Three ways a record is keyed, and the envelope picks one. A
+        // format-3 blob keys per record, so nothing is opened here: a
+        // structure-plane record expands the class key (kept for the reads),
+        // and a data record's share is opened one at a time, where a refusal
+        // costs that record and not the blob.
+        byte[]? recordKey = null;
+        byte[]? retainedClassKey = null;
+        SealedContentKeyOpener? recordOpener = null;
+
+        if (FormatVersions.HasRelocatableRecords(envelope.FormatVersion))
+        {
+            if (sealedPerRecord)
+            {
+                recordOpener = sealedContentKeyOpener;
+            }
+            else
+            {
+                retainedClassKey = classKey.AsSpan().ToArray();
+            }
+        }
+        else if (!sealedPerBlob)
         {
             recordKey = blobKey;
         }
@@ -193,7 +231,7 @@ public sealed class BlobReader : IDisposable
         {
             try
             {
-                recordKey = sealedContentKeyOpener(envelope);
+                recordKey = sealedContentKeyOpener.OpenBlobKey(envelope);
             }
             catch (Exception refusal) when (refusal is SealedContentException or ArgumentException)
             {
@@ -213,14 +251,12 @@ public sealed class BlobReader : IDisposable
                 throw;
             }
         }
-        else
-        {
-            recordKey = null;
-        }
 
         Log.BlobOpened(log, envelope.BlobId, entries.Count);
 
-        return new BlobReader(store, key, blobLength, repositoryId, objectIdDeriver, envelope, blobKey, recordKey, entries);
+        return new BlobReader(
+            store, key, blobLength, repositoryId, objectIdDeriver, envelope, blobKey, recordKey, retainedClassKey,
+            recordOpener, entries);
     }
 
     /// <summary>
@@ -229,7 +265,7 @@ public sealed class BlobReader : IDisposable
     /// </summary>
     public async ValueTask<RecordReadResult> ReadRecordAsync(RecordTableEntry entry, CancellationToken cancellationToken)
     {
-        if (_recordKey is null)
+        if (_recordKey is null && _classKey is null && _opener is null)
         {
             return RecordReadResult.Failure(RecordReadOutcome.ContentSealed, Strings.BlobReader_ContentKeySealed);
         }
@@ -249,7 +285,7 @@ public sealed class BlobReader : IDisposable
                 $"logical_length {entry.LogicalLength} exceeds the 64 MiB segment bound (specification 00 §8) — refused before allocation.");
         }
 
-        var recordLength = RecordHeader.Length + entry.StoredLength + RecordCipher.TagLength;
+        var recordLength = RecordHeader.Length + _recordPrefixLength + entry.StoredLength + RecordCipher.TagLength;
         var recordBytes = await ReadRangeAsync(
             _store, _key, (long)entry.PhysicalOffset, recordLength, cancellationToken).ConfigureAwait(false);
 
@@ -277,18 +313,75 @@ public sealed class BlobReader : IDisposable
         }
 
         Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
-        RecordNonce.Write(header.Ordinal, nonce);
         Span<byte> aad = stackalloc byte[RecordAad.Length];
-        RecordAad.Write(_repositoryId, Envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
+        Span<byte> derived = stackalloc byte[RecordKeyDeriver.RecordKeyLength];
+        scoped ReadOnlySpan<byte> aadForRecord;
+        scoped ReadOnlySpan<byte> keyForRecord;
+
+        if (_recordPrefixLength == 0)
+        {
+            RecordNonce.Write(header.Ordinal, nonce);
+            RecordAad.Write(
+                _repositoryId, Envelope.FormatVersion, header.ObjectType, header.ObjectId, header.Ordinal, aad);
+            aadForRecord = aad;
+            keyForRecord = _recordKey!;
+        }
+        else
+        {
+            // Format 3: the nonce travels in the prefix and the key is the
+            // object's, so neither depends on where the record now sits —
+            // which is why these same bytes read identically after being
+            // copied into another blob (04 §3, 05 §2.2).
+            recordBytes.AsSpan(RecordHeader.Length + RecordFraming.NonceOffset, RecordNonce.AesGcmLength)
+                .CopyTo(nonce);
+            RecordAad.WriteRelocatable(
+                _repositoryId, Envelope.FormatVersion, header.ObjectType, header.ObjectId,
+                aad[..RecordAad.RelocatableLength]);
+            aadForRecord = aad[..RecordAad.RelocatableLength];
+
+            if (_classKey is not null)
+            {
+                RecordKeyDeriver.Derive(_classKey, header.ObjectType, header.ObjectId, derived);
+            }
+            else
+            {
+                byte[] shareKey;
+                try
+                {
+                    shareKey = _opener!.OpenRecordKey(
+                        recordBytes.AsSpan(
+                            RecordHeader.Length + RecordFraming.SealedKeyOffset, SealedRecordKey.SealedLength),
+                        header.ObjectId);
+                }
+                catch (Exception refusal) when (refusal is SealedContentException or ArgumentException)
+                {
+                    // Contained to the record, not the blob: a share
+                    // transplanted onto another object's record refuses here
+                    // while every other record in the blob still reads. The
+                    // per-blob equivalent has to fail the open, because there
+                    // the one share is the whole plane.
+                    return RecordReadResult.Failure(
+                        RecordReadOutcome.AuthenticationFailed, Strings.BlobReader_RecordShareDoesNotOpen);
+                }
+
+                shareKey.CopyTo(derived);
+                CryptographicOperations.ZeroMemory(shareKey);
+            }
+
+            keyForRecord = derived;
+        }
 
         var storedPayload = new byte[header.StoredLength];
         var opened = RecordCipher.TryOpen(
-            _recordKey,
+            keyForRecord,
             nonce,
-            aad,
-            recordBytes.AsSpan(RecordHeader.Length, (int)header.StoredLength),
-            recordBytes.AsSpan(RecordHeader.Length + (int)header.StoredLength, RecordCipher.TagLength),
+            aadForRecord,
+            recordBytes.AsSpan(RecordHeader.Length + _recordPrefixLength, (int)header.StoredLength),
+            recordBytes.AsSpan(
+                RecordHeader.Length + _recordPrefixLength + (int)header.StoredLength, RecordCipher.TagLength),
             storedPayload);
+
+        CryptographicOperations.ZeroMemory(derived);
 
         if (!opened)
         {
@@ -345,6 +438,11 @@ public sealed class BlobReader : IDisposable
         if (_recordKey is not null && !ReferenceEquals(_recordKey, _blobKey))
         {
             CryptographicOperations.ZeroMemory(_recordKey);
+        }
+
+        if (_classKey is not null)
+        {
+            CryptographicOperations.ZeroMemory(_classKey);
         }
 
         _decompressor.Dispose();

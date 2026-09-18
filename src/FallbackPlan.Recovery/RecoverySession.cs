@@ -33,7 +33,7 @@ public sealed class RecoverySession : IDisposable
     private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly RepositoryReadAuthority? _authority;
-    private readonly Func<BlobEnvelope, byte[]>? _sealedContentKeyOpener;
+    private readonly SealedContentKeyOpener? _sealedContentKeyOpener;
     private readonly List<BlobReader> _readers = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
 
@@ -48,8 +48,7 @@ public sealed class RecoverySession : IDisposable
 
         if (authority is not null)
         {
-            _sealedContentKeyOpener = envelope => SealedContentKey.Open(
-                authority.SealingPrivateKey, envelope.SealedContentKey, RepositoryId, envelope.BlobId);
+            _sealedContentKeyOpener = new SealedContentKeyOpener(authority.SealingPrivateKey, RepositoryId);
         }
     }
 
@@ -521,6 +520,7 @@ public sealed class RecoverySession : IDisposable
 
         _objectIdDeriver.Dispose();
         _credential.Dispose();
+        _sealedContentKeyOpener?.Dispose();
         _authority?.Dispose();
     }
 

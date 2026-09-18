@@ -96,7 +96,7 @@ public sealed class CatalogueRebuildTests : ArchiveTestHarness
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         using var blobReader = await BlobReader.OpenAsync(
             store, blobStoreKey, blobLength, Repo, keys.DeriveClassKey, objectIdDeriver, CancellationToken.None,
-            OpenContentKey);
+            ContentKeyOpener);
 
         var tableEntry = blobReader.RecordTable.Single(entry => entry.ObjectId == target.ObjectId);
         Assert.AreEqual(located.PhysicalOffset, tableEntry.PhysicalOffset);
