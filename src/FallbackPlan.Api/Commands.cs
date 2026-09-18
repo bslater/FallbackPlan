@@ -24,6 +24,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
 [JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
+[JsonDerivedType(typeof(ListReceiptsCommand), "list_receipts")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
 [JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
@@ -312,6 +313,23 @@ public sealed record UnpairCommand(string Fingerprint, bool Notify = true, strin
 /// §3) — the operator's view of the attribution ledger. Local callers only.
 /// </summary>
 public sealed record ListReplicaAttributionsCommand : ServiceCommand;
+
+/// <summary>
+/// The receipts filed under this installation's state directory (contract
+/// 1.33): deletion receipts
+/// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)) and replication
+/// receipts ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), the
+/// ones this device signed as a destination and the ones it verified as a
+/// commander, interleaved newest first. An audit listing of facts the peer
+/// already stated under its own signature, so any signed-in role and any
+/// caller scope may read it.
+/// </summary>
+/// <param name="Kind"><c>deletion</c> or <c>replication</c>, or null for both.</param>
+/// <param name="Set">Only receipts this installation filed as the commander of the named set, or null.</param>
+/// <param name="Repository">Only receipts for one repository, by its id as 32 hex digits, or null.</param>
+/// <param name="Limit">At most this many, newest first; null for every one.</param>
+public sealed record ListReceiptsCommand(
+    string? Kind = null, string? Set = null, string? Repository = null, int? Limit = null) : ServiceCommand;
 
 /// <summary>
 /// Points a replica stored here at a different paired device (contract 1.31;

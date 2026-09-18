@@ -68,7 +68,8 @@ public static class AgentHost
                                             [--set <name>] [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
-                  fallbackplan-agent receipts --state <dir> [--set <name>] [--repository <hex>] [--json]
+                  fallbackplan-agent receipts --state <dir> [--kind deletion|replication] [--set <name>]
+                                            [--repository <hex>] [--json]
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
@@ -286,14 +287,17 @@ public static class AgentHost
                 .ConfigureAwait(false);
         }
 
-        // `receipts` reads back the deletion receipts filed here (ADR-0063):
-        // the ones this device signed as a destination and the ones it
-        // verified as a commander. File-direct always — the store is
-        // append-only and this verb only reads, so there is no writer to
-        // race and no reason to need the service up at breakfast.
+        // `receipts` reads back the receipts filed here — deletion
+        // (ADR-0063) and replication (ADR-0064): the ones this device signed
+        // as a destination and the ones it verified as a commander.
+        // File-direct always — the stores are append-only and this verb only
+        // reads, so there is no writer to race and no reason to need the
+        // service up at breakfast.
         if (args[0] == "receipts")
         {
-            return Receipts(stateDirectory, Get("--set"), Get("--repository"), args.Contains("--json"), output, error);
+            return Receipts(
+                stateDirectory, Get("--kind"), Get("--set"), Get("--repository"), args.Contains("--json"),
+                output, error);
         }
 
         // `reattribute` re-points a replica stored here (ADR-0053 §3), routed
@@ -1373,13 +1377,21 @@ public static class AgentHost
     }
 
     private static int Receipts(
-        string stateDirectory, string? set, string? repository, bool json, TextWriter output, TextWriter error)
+        string stateDirectory, string? kind, string? set, string? repository, bool json,
+        TextWriter output, TextWriter error)
     {
-        // A mistyped path holds nothing, and "no deletion receipts" for it
-        // would be the one answer this verb must never give by accident.
+        // A mistyped path holds nothing, and "no receipts" for it would be
+        // the one answer this verb must never give by accident.
         if (!Directory.Exists(stateDirectory))
         {
             error.WriteLine($"error: no state directory at '{stateDirectory}' — nothing has been filed there.");
+            return 1;
+        }
+
+        if (kind is not null && kind is not (DeletionReceiptStore.Kind or ReplicationReceiptStore.Kind))
+        {
+            error.WriteLine(
+                $"error: --kind takes '{DeletionReceiptStore.Kind}' or '{ReplicationReceiptStore.Kind}', not '{kind}'.");
             return 1;
         }
 
@@ -1395,19 +1407,25 @@ public static class AgentHost
             repositoryIdHex = parsed;
         }
 
-        IReadOnlyList<FiledDeletionReceipt> listed = DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex);
+        IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
+            ? []
+            : DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex);
+        IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
+            ? []
+            : ReplicationReceiptStore.Open(stateDirectory).List(repositoryIdHex);
         if (set is not null)
         {
-            listed = [.. listed.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+            deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+            replications = [.. replications.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
         }
 
         if (json)
         {
-            output.WriteLine(DeletionReceiptReport.ToJson(listed));
+            output.WriteLine(ReceiptReport.ToJson(deletions, replications));
         }
         else
         {
-            DeletionReceiptReport.Write(output, listed);
+            ReceiptReport.Write(output, deletions, replications, kind);
         }
 
         return 0;

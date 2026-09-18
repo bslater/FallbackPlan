@@ -56,7 +56,7 @@ public sealed record FiledDeletionReceipt(
 public sealed class DeletionReceiptStore
 {
     /// <summary>The kind an envelope names for a deletion receipt.</summary>
-    internal const string Kind = "deletion";
+    public const string Kind = "deletion";
 
     private readonly string _root;
 

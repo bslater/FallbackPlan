@@ -247,8 +247,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// set's data plane has, its records being sealed to a key the service
     /// does not hold. Additive with zero defaults; a pre-1.32 client reads
     /// the row as before, with the coverage it always had.
+    /// 1.33 adds `list_receipts` (ADR-0063, ADR-0064): every receipt filed
+    /// under the state directory — deletion and replication, the ones this
+    /// device signed as a destination and the ones it verified as a
+    /// commander — answered as `receipts_listed` rows of facts newest
+    /// first: kind, role, the service's verdict on the signature over the
+    /// bytes on disk now, the signer's fingerprint, the set and destination
+    /// the commander filed under, the repository, issue time and session
+    /// prefix, and the kind's counts. No path and no signed or key bytes
+    /// cross. Narrowed by kind, set, repository and count. Any signed-in
+    /// role, any caller scope: it is an audit listing of what a peer already
+    /// said under its own signature. Additive.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 32);
+    public static ContractVersion Current { get; } = new(1, 33);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

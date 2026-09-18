@@ -158,6 +158,54 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheReceiptsWireNames_AreThePublishedOnes()
+    {
+        // Contract 1.33 (ADR-0063, ADR-0064): the receipts filed here, both
+        // kinds, as facts only — the status is the service's verdict on the
+        // bytes on disk now, and neither a path nor a signed byte crosses.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new ReceiptsResult(
+            [
+                new ReceiptDescriptor(
+                    "replication", "commander", 5, "verified", true, null, "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                    "docs", "friend", new string('c', 32), 4, "0123456789abcdef",
+                    DeletedCount: null, NotHeld: null, CommittedCount: 2, HeldObjects: 7, HeldBytes: 1234),
+                new ReceiptDescriptor(
+                    "deletion", "destination", 3, "signature-invalid", false, "edited", "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                    null, null, new string('c', 32), 2, "0123456789abcdef",
+                    DeletedCount: 1, NotHeld: 2, CommittedCount: null, HeldObjects: null, HeldBytes: null),
+            ]),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"receipts_listed\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"replication\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"role\":\"commander\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"filed_at\":5", listed, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"signature-invalid\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"verified\":false", listed, StringComparison.Ordinal);
+        Assert.Contains("\"problem\":\"edited\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"signer_fingerprint\":\"ABCDEFGHIJ", listed, StringComparison.Ordinal);
+        Assert.Contains("\"destination\":\"friend\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"repository_id\":\"cccc", listed, StringComparison.Ordinal);
+        Assert.Contains("\"issued_at\":4", listed, StringComparison.Ordinal);
+        Assert.Contains("\"session_prefix\":\"0123456789abcdef\"", listed, StringComparison.Ordinal);
+        Assert.Contains("\"committed_count\":2", listed, StringComparison.Ordinal);
+        Assert.Contains("\"held_objects\":7", listed, StringComparison.Ordinal);
+        Assert.Contains("\"held_bytes\":1234", listed, StringComparison.Ordinal);
+        Assert.Contains("\"deleted_count\":1", listed, StringComparison.Ordinal);
+        Assert.Contains("\"not_held\":2", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("path", listed, StringComparison.Ordinal);
+        Assert.DoesNotContain("signed", listed, StringComparison.Ordinal);
+
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new ListReceiptsCommand("deletion", "docs", new string('c', 32), 50), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"list_receipts\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"deletion\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"set\":\"docs\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"repository\":\"cccc", command, StringComparison.Ordinal);
+        Assert.Contains("\"limit\":50", command, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheAdoptionWireNames_AreThePublishedOnes()
     {
         // Contract 1.30 (ADR-0061): the discovery row and the adoption

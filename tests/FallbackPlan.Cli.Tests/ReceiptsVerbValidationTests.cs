@@ -34,7 +34,7 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("no state directory", result.Error, StringComparison.Ordinal);
         Assert.Contains(_state, result.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain("no deletion receipts", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no receipts", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]
@@ -56,7 +56,7 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
         var result = await CliHarness.RunRawAsync("receipts", "--state", _state);
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
-        Assert.Contains("no deletion receipts", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no receipts", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]
@@ -91,6 +91,57 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
             attested.GetProperty("commander_fingerprint").GetString());
     }
 
+    [TestMethod]
+    public async Task Receipts_ListsBothKindsNewestFirst_AndKindNarrowsToOne()
+    {
+        // ADR-0064: one verb over both stores, interleaved by issue time, and
+        // `--kind` narrows to one — the empty answer naming the kind asked for.
+        using var peer = PeerKeypair.Generate();
+        var deletion = Receipt().EncodeForSigning();
+        DeletionReceiptStore.Open(_state).File(
+            DeletionReceiptRole.Commander, deletion, peer.Sign(deletion), peer.Identity, "docs", "friend");
+        var replication = Replication().EncodeForSigning();
+        ReplicationReceiptStore.Open(_state).File(
+            DeletionReceiptRole.Commander, replication, peer.Sign(replication), peer.Identity, "docs", "friend");
+
+        var both = await CliHarness.RunRawAsync("receipts", "--state", _state, "--json");
+        Assert.AreEqual(0, both.ExitCode, both.Error);
+        using (var document = JsonDocument.Parse(both.Output))
+        {
+            var entries = document.RootElement.EnumerateArray().ToList();
+            Assert.HasCount(2, entries);
+            Assert.AreEqual("replication", entries[0].GetProperty("kind").GetString(), "the newer receipt comes first");
+            Assert.AreEqual("deletion", entries[1].GetProperty("kind").GetString());
+            Assert.AreEqual(2, entries[0].GetProperty("receipt").GetProperty("committed_count").GetInt32());
+        }
+
+        var one = await CliHarness.RunRawAsync("receipts", "--state", _state, "--kind", "deletion", "--json");
+        Assert.AreEqual(0, one.ExitCode, one.Error);
+        using (var document = JsonDocument.Parse(one.Output))
+        {
+            var entry = Assert.ContainsSingle(document.RootElement.EnumerateArray().ToList());
+            Assert.AreEqual("deletion", entry.GetProperty("kind").GetString());
+        }
+
+        var text = await CliHarness.RunRawAsync("receipts", "--state", _state, "--kind", "replication");
+        Assert.AreEqual(0, text.ExitCode, text.Error);
+        Assert.Contains("replication", text.Output, StringComparison.Ordinal);
+        Assert.Contains("2 object(s) this session", text.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("not held", text.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Receipts_WithAKindThatDoesNotExist_NamesTheTwoThatDo()
+    {
+        Directory.CreateDirectory(_state);
+
+        var result = await CliHarness.RunRawAsync("receipts", "--state", _state, "--kind", "refund");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("deletion", result.Error, StringComparison.Ordinal);
+        Assert.Contains("replication", result.Error, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_state))
@@ -98,6 +149,16 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
             Directory.Delete(_state, recursive: true);
         }
     }
+
+    private static ReplicationReceipt Replication() => new(
+        SessionId: Enumerable.Repeat((byte)0xCD, ReplicationReceipt.SessionIdLength).ToArray(),
+        RepositoryId: Enumerable.Repeat((byte)0x01, ReplicationOffer.RepositoryIdLength).ToArray(),
+        CommanderPublicKey: Enumerable.Repeat((byte)0xC0, PeerIdentity.KeyLength).ToArray(),
+        IssuedAtUnixMilliseconds: 2_000,
+        CommittedCount: 2,
+        Committed: ["blobs/data/aa/one", "snapshots/aa/two"],
+        HeldObjects: 7,
+        HeldBytes: 1_234);
 
     private static DeletionReceipt Receipt() => new(
         SessionId: Enumerable.Repeat((byte)0xAB, DeletionReceipt.SessionIdLength).ToArray(),

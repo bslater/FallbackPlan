@@ -38,7 +38,7 @@ public sealed record FiledReplicationReceipt(
 public sealed class ReplicationReceiptStore
 {
     /// <summary>The kind an envelope names for a replication receipt.</summary>
-    internal const string Kind = "replication";
+    public const string Kind = "replication";
 
     private readonly string _root;
 

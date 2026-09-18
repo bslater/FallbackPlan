@@ -72,6 +72,7 @@ const S = {
   destinations: [],         // DestinationDescriptor[]
   pairings: [],             // PairingDescriptor[]
   attributions: [],         // ReplicaAttributionDescriptor[] — replicas stored here (contract 1.31); [] where the service predates it
+  receipts: null,           // ReceiptDescriptor[] newest first (contract 1.33); null until first list_receipts, [] where the service predates it
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
@@ -530,6 +531,7 @@ function route() {
      diagnostics: renderDiagnostics })[S.view]();
   if (S.view === "config") refreshConfigData();
   if (S.view === "notices") refreshNotices();
+  if (S.view === "maintenance") refreshReceipts();
   if (S.view === "diagnostics") refreshDiagnostics();
 }
 
@@ -1159,7 +1161,68 @@ function renderMaintenance() {
         </div>
       </div>
 
+      <div class="card" id="receipts-card"></div>
+
     </div>`;
+  renderReceiptsCard();
+}
+
+// The Receipts card (contract 1.33): every fact is what the peer signed,
+// and the status is the service's own verdict on the signature over the
+// bytes on disk now — three states, rendered distinctly, never derived on
+// the page from the absence of a problem. Not yet fetched is not empty.
+function renderReceiptsCard() {
+  const el = document.getElementById("receipts-card");
+  if (!el) return;
+
+  const status = row => {
+    switch (row.status) {
+      case "verified": return badge({ cls: "ok", icon: "✓" }, "verified");
+      case "signature-invalid": return badge({ cls: "bad", icon: "✗" }, "signature invalid");
+      case "unreadable": return badge({ cls: "warn", icon: "?" }, "unreadable");
+      default: return badge({ cls: "", icon: "·" }, esc(row.status ?? "unknown"));
+    }
+  };
+  const summary = row => {
+    if (row.status === "unreadable") return row.problem ?? "could not be read as a receipt";
+    if (row.kind === "deletion") {
+      return `${fmtCount(row.deletedCount)} deleted${row.notHeld ? `, ${fmtCount(row.notHeld)} not held` : ""}`;
+    }
+    return `${fmtCount(row.committedCount)} committed · holds ${fmtCount(row.heldObjects)} objects, ${fmtBytes(row.heldBytes)}`;
+  };
+  const where = row => row.set
+    ? `${esc(row.set)} → ${esc(row.destination ?? "?")}`
+    : `<span class="mono">${esc((row.repositoryId ?? "").slice(0, 12) || "—")}</span>`;
+
+  let body;
+  if (S.receipts === null) {
+    body = `<p class="sub">Reading the receipts filed here…</p>`;
+  } else if (S.receipts.length === 0) {
+    body = `<p class="sub">Nothing filed yet. A peer's signed statement — of what it deleted on this installation's
+              instruction, or of what it holds after a push — is filed here as it arrives, and this installation's
+              own statements to its peers beside them.</p>`;
+  } else {
+    body = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>When</th><th>Kind</th><th>Set → destination</th><th>Role</th><th>Summary</th><th>Status</th></tr></thead>
+        <tbody>${S.receipts.map(row => `
+          <tr>
+            <td>${esc(fmtWhen(row.issuedAt ?? row.filedAt))}</td>
+            <td>${esc(row.kind)}</td>
+            <td>${where(row)}</td>
+            <td>${esc(row.role)}</td>
+            <td>${esc(summary(row))}</td>
+            <td>${status(row)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>`;
+  }
+
+  el.innerHTML = `
+    <h3>🧾 Receipts</h3>
+    <p class="sub">What peers attested under their own signatures — deletions on this installation's instruction,
+       and what they hold after each push (ADR-0063, ADR-0064). Newest fifty; every signature re-checked as it is read.</p>
+    ${body}`;
 }
 
 /* ---------------------------------------------------------------- dialogs */
@@ -2409,6 +2472,19 @@ async function refreshConfigData() {
   S.attributions = attributions?.result === "replica_attributions" ? attributions.attributions : [];
   await refreshSets();
   if (S.view === "config") renderConfigBody();
+  if (S.view === "maintenance") refreshReceipts();
+}
+
+// The receipts filed here (contract 1.33; ADR-0063, ADR-0064): what peers
+// attested under their own signatures. Read on entering the Maintenance
+// view and never by the pollers — an audit listing changes when a pass
+// runs, not second by second — and asked for directly rather than through
+// run(): a service that predates the verb refuses it by name, and that is
+// an empty card, not a toast on every visit.
+async function refreshReceipts() {
+  const listed = await api({ command: "list_receipts", limit: 50 }).catch(() => null);
+  S.receipts = listed?.result === "receipts_listed" ? listed.receipts : [];
+  if (S.view === "maintenance") renderReceiptsCard();
 }
 
 function renderConfig() {

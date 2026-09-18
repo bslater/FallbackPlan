@@ -1991,8 +1991,12 @@ public static class CliApplication
         {
             var receiptsStateOption = new Option<string>("--state")
             {
-                Description = "The state directory whose filed deletion receipts to read.",
+                Description = "The state directory whose filed receipts to read.",
                 Required = true,
+            };
+            var receiptsKindOption = new Option<string?>("--kind")
+            {
+                Description = "Only one kind of receipt: 'deletion' or 'replication'.",
             };
             var receiptsSetOption = new Option<string?>("--set")
             {
@@ -2008,11 +2012,12 @@ public static class CliApplication
             };
             var command = new Command(
                 "receipts",
-                "Read back the deletion receipts filed under a state directory — what peers attested deleting on "
-                + "this installation's instruction, and what this installation attested deleting on theirs "
-                + "(ADR-0063). Every fact shown is taken from the signed bytes, and each receipt's signature is "
-                + "checked again as it is read.");
+                "Read back the receipts filed under a state directory — what peers attested deleting on this "
+                + "installation's instruction and holding after its pushes, and what this installation attested "
+                + "on theirs (ADR-0063, ADR-0064). Every fact shown is taken from the signed bytes, and each "
+                + "receipt's signature is checked again as it is read.");
             command.Options.Add(receiptsStateOption);
+            command.Options.Add(receiptsKindOption);
             command.Options.Add(receiptsSetOption);
             command.Options.Add(receiptsRepositoryOption);
             command.Options.Add(receiptsJsonOption);
@@ -2026,6 +2031,13 @@ public static class CliApplication
                     throw new CliFailureException($"no state directory at '{state}' — nothing has been filed there.");
                 }
 
+                var kind = parse.GetValue(receiptsKindOption);
+                if (kind is not null && kind is not (DeletionReceiptStore.Kind or ReplicationReceiptStore.Kind))
+                {
+                    throw new CliFailureException(
+                        $"--kind takes '{DeletionReceiptStore.Kind}' or '{ReplicationReceiptStore.Kind}', not '{kind}'.");
+                }
+
                 string? repositoryIdHex = null;
                 if (parse.GetValue(receiptsRepositoryOption) is { } repository)
                 {
@@ -2037,19 +2049,26 @@ public static class CliApplication
                     repositoryIdHex = parsed;
                 }
 
-                IReadOnlyList<FiledDeletionReceipt> listed = DeletionReceiptStore.Open(state).List(repositoryIdHex);
+                IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
+                    ? []
+                    : DeletionReceiptStore.Open(state).List(repositoryIdHex);
+                IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
+                    ? []
+                    : ReplicationReceiptStore.Open(state).List(repositoryIdHex);
                 if (parse.GetValue(receiptsSetOption) is { } set)
                 {
-                    listed = [.. listed.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+                    deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+                    replications =
+                        [.. replications.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
                 }
 
                 if (parse.GetValue(receiptsJsonOption))
                 {
-                    output.WriteLine(DeletionReceiptReport.ToJson(listed));
+                    output.WriteLine(ReceiptReport.ToJson(deletions, replications));
                 }
                 else
                 {
-                    DeletionReceiptReport.Write(output, listed);
+                    ReceiptReport.Write(output, deletions, replications, kind);
                 }
 
                 return Task.FromResult(0);

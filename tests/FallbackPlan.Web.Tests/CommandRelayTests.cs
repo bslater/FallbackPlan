@@ -94,6 +94,40 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task Receipts_RelayLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.33 (ADR-0064): the receipts card rides the generic
+        // relay — the rows reach the page camelCased and the command arrives
+        // typed with its filters.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ListReceiptsCommand
+            ? new ReceiptsResult(
+            [
+                new ReceiptDescriptor(
+                    "replication", "commander", 5, "verified", true, null, "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                    "docs", "friend", new string('c', 32), 4, "0123456789abcdef",
+                    DeletedCount: null, NotHeld: null, CommittedCount: 2, HeldObjects: 7, HeldBytes: 1234),
+            ])
+            : new AcknowledgedResult();
+
+        using var list = harness.Command("""{"command":"list_receipts","kind":"replication","limit":50}""");
+        using var listed = await harness.Http.SendAsync(list);
+        Assert.AreEqual(HttpStatusCode.OK, listed.StatusCode);
+        using (var body = JsonDocument.Parse(await listed.Content.ReadAsStringAsync()))
+        {
+            Assert.AreEqual("receipts_listed", body.RootElement.GetProperty("result").GetString());
+            var row = body.RootElement.GetProperty("receipts")[0];
+            Assert.AreEqual("replication", row.GetProperty("kind").GetString());
+            Assert.AreEqual("ABCDEFGHIJKLMNOPQRSTUVWXYZ", row.GetProperty("signerFingerprint").GetString());
+            Assert.AreEqual(7UL, row.GetProperty("heldObjects").GetUInt64());
+        }
+
+        Assert.IsInstanceOfType<ListReceiptsCommand>(harness.Clients.Client.Received[^1], out var command);
+        Assert.AreEqual("replication", command.Kind);
+        Assert.AreEqual(50, command.Limit);
+    }
+
+    [TestMethod]
     public async Task JobRunStats_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.22's job-row stats ride the same generic relay: the

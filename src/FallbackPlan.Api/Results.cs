@@ -63,6 +63,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DestinationsResult), "destinations")]
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
 [JsonDerivedType(typeof(ReplicaAttributionsResult), "replica_attributions")]
+[JsonDerivedType(typeof(ReceiptsResult), "receipts_listed")]
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
@@ -271,6 +272,53 @@ public sealed record ReplicaAttributionDescriptor(
 /// <summary>The replicas stored here, ids ascending.</summary>
 /// <param name="Attributions">One row per attributed repository.</param>
 public sealed record ReplicaAttributionsResult(IReadOnlyList<ReplicaAttributionDescriptor> Attributions) : ServiceResult;
+
+/// <summary>
+/// One filed peer receipt (contract 1.33), as facts: what the signed bytes
+/// attest and the service's verdict on whether the signature still holds
+/// over the bytes on disk. Neither the file's path nor any byte of the
+/// signed statement or of a key crosses — a client that needs those reads
+/// the file on the machine that holds it.
+/// </summary>
+/// <param name="Kind"><c>deletion</c> or <c>replication</c>.</param>
+/// <param name="Role"><c>destination</c> (this device signed it) or <c>commander</c> (this device verified it).</param>
+/// <param name="FiledAt">When it was filed here, Unix milliseconds by the filer's clock.</param>
+/// <param name="Status"><c>verified</c>, <c>signature-invalid</c> or <c>unreadable</c>.</param>
+/// <param name="Verified">Whether the signature verifies under the named signer over the bytes on disk now.</param>
+/// <param name="Problem">Why the file could not be read as a receipt, or why it is not verified; null when verified.</param>
+/// <param name="SignerFingerprint">The fingerprint of the device the file names as the signer.</param>
+/// <param name="Set">The commander's set name, when the commander filed it.</param>
+/// <param name="Destination">The commander's destination name, when the commander filed it.</param>
+/// <param name="RepositoryId">The repository the receipt names, lower-hex; null when unreadable.</param>
+/// <param name="IssuedAt">When the destination issued it, Unix milliseconds; null when unreadable.</param>
+/// <param name="SessionPrefix">The first eight bytes of the session it was issued in, lower-hex; null when unreadable.</param>
+/// <param name="DeletedCount">A deletion receipt's count of objects deleted.</param>
+/// <param name="NotHeld">A deletion receipt's count of instructed keys the destination did not hold.</param>
+/// <param name="CommittedCount">A replication receipt's count of objects the push created.</param>
+/// <param name="HeldObjects">A replication receipt's count of objects held for the repository after the push.</param>
+/// <param name="HeldBytes">A replication receipt's bytes held for the repository after the push.</param>
+public sealed record ReceiptDescriptor(
+    string Kind,
+    string Role,
+    ulong FiledAt,
+    string Status,
+    bool Verified,
+    string? Problem,
+    string SignerFingerprint,
+    string? Set,
+    string? Destination,
+    string? RepositoryId,
+    ulong? IssuedAt,
+    string? SessionPrefix,
+    ulong? DeletedCount,
+    ulong? NotHeld,
+    ulong? CommittedCount,
+    ulong? HeldObjects,
+    ulong? HeldBytes);
+
+/// <summary>The receipts filed here, newest first by issue time (contract 1.33).</summary>
+/// <param name="Receipts">One row per filed receipt, both kinds interleaved.</param>
+public sealed record ReceiptsResult(IReadOnlyList<ReceiptDescriptor> Receipts) : ServiceResult;
 
 /// <summary>One directory on the service's machine, for a folder picker.</summary>
 /// <param name="Name">The directory's name.</param>

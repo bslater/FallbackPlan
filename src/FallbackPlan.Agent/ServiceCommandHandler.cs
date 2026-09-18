@@ -414,6 +414,7 @@ public sealed partial class ServiceCommandHandler(
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
         ListReplicaAttributionsCommand => ListReplicaAttributions(),
         ReattributeReplicaCommand reattribute => ReattributeReplica(reattribute),
+        ListReceiptsCommand listReceipts => ListReceipts(listReceipts),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),

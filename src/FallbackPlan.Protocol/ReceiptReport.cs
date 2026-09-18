@@ -29,10 +29,12 @@ public static class ReceiptReport
     /// <param name="output">Where to write.</param>
     /// <param name="deletions">What the deletion store listed.</param>
     /// <param name="replications">What the replication store listed.</param>
+    /// <param name="kind">The one kind the reader asked for, named in the empty answer; null for both.</param>
     public static void Write(
         TextWriter output,
         IReadOnlyList<FiledDeletionReceipt> deletions,
-        IReadOnlyList<FiledReplicationReceipt> replications)
+        IReadOnlyList<FiledReplicationReceipt> replications,
+        string? kind = null)
     {
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(deletions);
@@ -41,7 +43,7 @@ public static class ReceiptReport
         var entries = Interleave(deletions, replications);
         if (entries.Count == 0)
         {
-            output.WriteLine("no receipts.");
+            output.WriteLine(kind is null ? "no receipts." : $"no {kind} receipts.");
             return;
         }
 
