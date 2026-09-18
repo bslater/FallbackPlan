@@ -82,10 +82,43 @@ Spoke → commander, once, after the last page's deletions.
 | Key | Type | Meaning |
 |-----|------|---------|
 | 1 | `u64` | Objects actually deleted |
+| 2 | `bytes` | The deletion receipt (§4.3): the spoke's signed statement of what it did |
+| 3 | `bytes[64]` | Ed25519 signature over key 2 under the spoke's **device** key ([01](01-identity-and-pairing.md)) |
+
+Keys 2 and 3 are present together or not at all. One without the other, a signature of another width, or a receipt that does not parse is `malformed`. A spoke that predates receipts sends neither and a commander that predates them skips both, so no feature gates them ([02 §6](02-session.md#6-feature-negotiation)): an absence that can only mean less needs no negotiation, and a commander states "no receipt" rather than refusing.
+
+### 4.3 The deletion receipt
+
+The spoke's signed statement of what it did on the instruction ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)), issued after the deletions and before the acknowledgement. It is signed under the device key because that is the only key the spoke holds that the commander can check — pinned at pairing and proved at this session's start — and it is carried in the acknowledgement because this session is the only place the commander already trusts that identity. It is a record of what the spoke *says* it deleted: it licenses nothing (the reclaim signature of §3 does that) and it proves nothing about what the spoke still holds (that is [04](04-verification.md)'s job).
+
+The signed bytes are a fixed, label-separated encoding rather than a CBOR map, so that the statement is exactly its bytes ([00 §4](00-conventions.md#4-domain-separation)); integers are big-endian.
+
+| Field | Width | Meaning |
+|-------|-------|---------|
+| label | 28 | `fbp-peer-v1:deletion-receipt`, ASCII |
+| session_id | 32 | The session the instruction arrived in ([02 §3.5](02-session.md)) — the real identifier, whatever the pages' signatures were bound to |
+| repository_id | 16 | The repository instructed |
+| commander_public_key | 32 | The commanding device's Ed25519 public key |
+| issued_at | `u64` | Unix milliseconds |
+| floor_generations | `u32` | The retention floor in force (§3) |
+| has_reclaim_key | `u8` | 1 when the next field is present |
+| reclaim_public_key | 32 or 0 | The key the pages were verified against (§3), absent when the spoke held none |
+| page_count | `u32` | At most 4096 |
+| page_digests | 32 × page_count | SHA-256 of each page's signed bytes (§4.1), in the order accepted |
+| deleted_count | `u64` | Keys actually removed |
+| listed_count | `u32` | At most 4096, and never more than deleted_count |
+| deleted | (`u32` length ‖ UTF-8 key) × listed_count | The removed keys, in instruction order; beyond the cap the count and the page digests stand for the rest |
+| not_held | `u32` | Keys the instruction named that the spoke did not hold — counted, never listed as deleted |
+
+A reader parses the statement as the exact inverse of this table and refuses anything left over: trailing bytes are `malformed`, because a reader must never show as attested what the signature does not cover. An instruction of more pages than a receipt can attest is refused by the spoke before anything is deleted, not after.
+
+**What the commander checks**, in order, stopping at the first failure and naming it: the signature is the pinned peer's; `session_id` is this session's; `repository_id` and `commander_public_key` are its own; the page digests equal, one for one and in order, the digests of the pages it sent; `deleted_count` equals key 1; and every listed key was in the instruction it composed. A receipt that fails is not filed and is reported, never acted on — the deletion has already happened, so a refusal would change nothing at the spoke and would hide the one fact worth a human's attention.
+
+**Both parties file their own copy** — the spoke before it acknowledges, the commander after it verifies — under `<state>/receipts/deletions/<repository>/`, one immutable file per receipt, and re-check the signature on every read. A copy the spoke cannot write is reported on its side and does not withhold the acknowledgement. The `receipts` verb on either host reads them back without the service.
 
 ## 5 What this does not carry
 
-No object ids, no manifests, no reasons: the store keys are the whole vocabulary, because they are the only names both sides share for objects one of them cannot read. The hub's *why* — which policy, which keep-set — stays on the hub, in its dry-run report (FR-GC-005); the spoke's answer to "why is this gone" is "the peering's commander instructed it, on this date, within my floor", which its own audit trail records.
+No object ids, no manifests, no reasons: the store keys are the whole vocabulary, because they are the only names both sides share for objects one of them cannot read. The hub's *why* — which policy, which keep-set — stays on the hub, in its dry-run report (FR-GC-005); the spoke's answer to "why is this gone" is "the peering's commander instructed it, in this session, within my floor" — and since [ADR-0063](../../docs/adr/0063-deletion-receipts.md) that answer is a statement the spoke signed and both sides filed (§4.3), not a line in a log. The receipt carries the same vocabulary and no more, and it attests what was done, never why or what remains.
 
 ---
 

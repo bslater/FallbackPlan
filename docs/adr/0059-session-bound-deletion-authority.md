@@ -163,6 +163,13 @@ legitimate exchange to be refused, to defend against nobody.
 
 **Unchanged, and still not met**
 
+> **Closed by [ADR-0063](0063-deletion-receipts.md) (2026-09).** The artefact
+> this paragraph described now exists: a deletion receipt signed under the
+> destination's device key, carried in the `RetentionAck`, verified by the
+> commander against the instruction it sent and filed by both parties, with
+> `receipts` as its reader. The paragraph stands as written for what this
+> record decided and left open.
+
 `FR-GC-008` promises signed **audit records**, and a destination still keeps no
 signed record of what it deleted — only the count it acknowledges. A receipt
 would have to be signed under the destination's own device key, since it holds
@@ -204,4 +211,5 @@ weaker record of the same thing, with a first-use window the key does not have.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (audit half closed) | The half this record left as "still not met" — a destination's signed record of what it deleted — is built by [ADR-0063](0063-deletion-receipts.md) as the deletion receipt, carried in the acknowledgement this record's signature already bound to the session; the scoped note at that paragraph points there. `Hosts.Tests/PeerRetentionReplayTests` holds the receipt off the same listener it holds the replay refusal off |
 | 2026-09 | Accepted | Closes the replay window [ADR-0055](0055-reclaim-authority.md) §5 recorded, and the larger downgrade found while closing it. Built: `Protocol/SessionBinding` derives the session identifier, `Protocol/PeerAuthenticator` and `Protocol/PeerSessionDriver` surface it as `PeerSession.Binding`, `Protocol/PeerReplicationMessages` signs over it, `Protocol/PeerSessionNegotiation` carries the feature, `Agent/ReplicationResponder` enforces on the recorded reclaim key rather than on the hello, `Agent/RemoteServiceListener` decides the requirement from what it offered, and `Agent/FanOut` binds only where the spoke can check it. Held by `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests` and `Protocol.Tests/ReplicationMessageTests` |

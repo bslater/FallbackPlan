@@ -86,6 +86,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
 | [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the policy manifest records the set's shape, `discover_archives` / `adopt_archive` take an archive back under its original repository and set ids with the passphrase, the writer identity is resumed, the next backup is incremental; console, CLI and peers; contract 1.30 | Built | `Repository.Format/Manifests/PolicyManifest` · `Agent/ServiceCommandHandler.Adoption.cs` · `Application/LocalState` · `Web/ConsoleRestoreGate` · `Cli/CliApplication` · `Cli/OperationGateway` · `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests`, `Cli.Tests/AdoptVerbValidationTests`, `Repository.Tests/ManifestCodecTests` · [notes](#0061--the-rebuilt-machine-resumes) |
 | [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer — a local path's by listing, a peer's from the inventory every push already declares (Amendment 1) — moves the sequence past it, deletes nothing there on the sync pass or the granted collection run, and heals a direct-ship set's metadata store and catalogue in place from the destination, over the retrieval session for a peer | Built | `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceRuntime` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
+| [0063](adr/0063-deletion-receipts.md) | Deletion receipts: a destination that deletes on a retention instruction answers with a statement signed under its own device key — the session, the commander, each page as accepted, the keys removed and the count never held — carried in the acknowledgement, verified by the commander against what it sent, filed by both parties and read back by a file-direct verb | Built | `Protocol/DeletionReceipt` · `Protocol/DeletionReceiptStore` · `Protocol/DeletionReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/AgentHost` · `Cli/CliApplication` · `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests`, `Cli.Tests/ReceiptsVerbValidationTests`; [notes](#0063--the-peer-planes-audit-record) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -404,9 +405,11 @@ Three limits, stated because the alternative is a reader inferring more:
   closed; replay of a page captured inside an authenticated session is not, and
   [06 §4.1](../specifications/peer-protocol/06-retention.md#41-retentionoffer)
   says so rather than leaving it to be assumed.
-- **A destination keeps no signed record of what it deleted**, only the count
-  it acknowledges. The signed audit record exists on the repository plane — the
-  tombstone — and not on the spoke's side of the instruction.
+- ~~**A destination keeps no signed record of what it deleted**, only the count
+  it acknowledges.~~ Closed by [ADR-0063](adr/0063-deletion-receipts.md): the
+  destination answers every instruction with a deletion receipt under its own
+  device key, and both parties file it beside the tombstone's repository-plane
+  record.
 
 The headless operator has the same grant the console sends, without building
 it by hand: `fallbackplan-agent retention --apply --passphrase-env <VAR>` on a
@@ -592,11 +595,12 @@ replayable one — so its retention is refused by name until it is upgraded. Tha
 is a deletion not made, never a backup not taken, and it is the right way round
 for a backup product.
 
-**What is still not met.** `FR-GC-008` also promises signed audit records, and
-a destination keeps no signed record of what it deleted, only the count it
-acknowledges. A receipt would be signed under the destination's own device key,
-since it holds no repository keys — a different artefact with its own lifetime.
-It stays in the requirement as not met.
+**What was still not met, and now is.** `FR-GC-008` also promises signed audit
+records, and this note used to say a destination kept no signed record of what
+it deleted — that a receipt would be a different artefact under the
+destination's own device key, with its own lifetime and reader. It is, and it
+exists ([ADR-0063](adr/0063-deletion-receipts.md)): filed under
+`<state>/receipts/deletions` at both ends, read by `receipts`.
 
 ### 0045 — the product can say who is acting
 
@@ -730,6 +734,56 @@ journal that silently diverges; `Hosts.Tests/PeerRollbackTests` holds both.
 The heal dials the retrieval session and hands `HealFromDestinationAsync` a
 `PeerRetrievalObjectStore`; a dial failure is a failed pass, retried, never a
 finding.
+
+### 0063 — the peer plane's audit record
+
+Built over four commits, one seam at a time. The statement first
+(`Protocol/DeletionReceipt`): a fixed encoding under its own label, parsed
+as its exact inverse so that trailing bytes are refused, capped at 4096
+listed keys and 4096 page digests with the count and the digests standing
+for the rest; two additive keys on the `RetentionAck` (present together or
+not at all; no feature, because an absence can only mean less); and a
+store (`Protocol/DeletionReceiptStore`) in the protocol library, since the
+CLI must reach it and does not reference the agent, whose every read
+re-checks the signature so that a file edited after filing reads as
+unverified rather than as something the peer attested.
+
+Then the destination (`Agent/ReplicationResponder`): it hashes each page's
+signed bytes as it validates them, deletes as before, keeps the keys it
+actually removed and counts the ones it never held, signs under the device
+key the listener already holds, files first and acks second. The session
+it names is the real identifier whatever the pages' signatures were bound
+to. A copy it cannot write is a warning (event 3725), never a refusal — the
+deletion has happened, and the commander's copy is the commander's.
+
+Then the commander (`Agent/ReplicationInitiator`, `Agent/FanOut`): the
+push digests each page as it goes out, and `VerifyReceipt` holds the
+answer against the pinned identity, the session, the repository, its own
+key, the digests in order, the acknowledged count and the drop list — in
+that order, stopping at the first failure and naming it. A verified receipt
+is filed with the set and destination names; a rejected one raises
+`deletion-receipt-invalid:<set>:<destination>`, never auto-resolved, and is
+logged (3726); a verified one that could not be written is logged (3727)
+and said in the report. The granted run's line per peer now reads
+"converged under the grant: N object(s) deleted, receipt <file>", or says
+that nothing was to delete, that the receipt was rejected and why, or that
+the peer predates receipts.
+
+Then the reader: `receipts` on both hosts, file-direct, rendered by one
+routine (`Protocol/DeletionReceiptReport`) so they print the same thing from
+the same bytes, and refusing a mistyped state directory by path rather than
+answering "no deletion receipts" — the one answer the verb must never give
+by accident.
+
+The commander's checks are held at their pure seam
+(`Hosts.Tests/DeletionReceiptVerificationTests`) rather than over a live
+listener, because a dishonest destination cannot be built from this
+repository's own responder without teaching it to lie; the honest path is
+held end to end by `Hosts.Tests/PeerRetentionReplayTests` off a real
+listener and by `Retention.Tests/PeerRetentionTests` off a granted run.
+One test found the row's v1 exception stale rather than unproved: format 1
+being withdrawn, no service derives the reclaim key, so proof row 69 goes
+to Proved with nothing left in it that is "not true".
 
 ### 0044 — the ceremony that two requirements have been waiting for
 
