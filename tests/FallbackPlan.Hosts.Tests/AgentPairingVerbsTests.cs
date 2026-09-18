@@ -9,7 +9,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// device holds and revoking one — the revocation being unilateral at the
 /// service, the party at risk — and re-pointing a replica stored here at a
 /// different paired device with no service listening (ADR-0053 §3,
-/// FR-REP-001), the file-direct arm of the verb.
+/// FR-REP-001), the file-direct arm of the verb — and reading back the
+/// deletion receipts filed here, every printed fact taken from the signed
+/// bytes and never from the envelope around them
+/// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), FR-GC-008).
 /// </summary>
 [TestClass]
 public sealed class AgentPairingVerbsTests : IDisposable
@@ -92,6 +95,63 @@ public sealed class AgentPairingVerbsTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Receipts_WithAFiledReceipt_PrintsWhatWasSignedAndThatItVerifies()
+    {
+        using var spoke = PeerKeypair.Generate();
+        var signed = Receipt().EncodeForSigning();
+        DeletionReceiptStore.Open(_state).File(
+            DeletionReceiptRole.Commander, signed, spoke.Sign(signed), spoke.Identity, "docs", "friend");
+
+        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "receipts", "--state", _state);
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.Contains("verified", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("SIGNATURE INVALID", result.Output, StringComparison.Ordinal);
+        Assert.Contains("commander", result.Output, StringComparison.Ordinal);
+        Assert.Contains("docs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("friend", result.Output, StringComparison.Ordinal);
+        Assert.Contains("snapshots/aa/bb/gone", result.Output, StringComparison.Ordinal);
+        Assert.Contains(spoke.Identity.Fingerprint, result.Output, StringComparison.Ordinal);
+        Assert.Contains("2 not held", result.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Receipts_AFileEditedAfterFiling_PrintsSignatureInvalidFromTheSignedBytes()
+    {
+        using var spoke = PeerKeypair.Generate();
+        var signed = Receipt().EncodeForSigning();
+        var path = DeletionReceiptStore.Open(_state).File(
+            DeletionReceiptRole.Destination, signed, spoke.Sign(signed), spoke.Identity, null, null);
+
+        // The statement's last four bytes are the not-held count. Changing
+        // its last digit keeps the receipt parsing and makes the signature a
+        // signature of something else — the edit an operator's disk could
+        // suffer, or an operator could make.
+        var text = File.ReadAllText(path);
+        var hex = Convert.ToHexStringLower(signed);
+        Assert.Contains(hex, text, StringComparison.Ordinal);
+        File.WriteAllText(path, text.Replace(hex, hex[..^1] + "1", StringComparison.Ordinal));
+
+        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "receipts", "--state", _state);
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.Contains("SIGNATURE INVALID", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("verified", result.Output, StringComparison.Ordinal);
+        Assert.Contains("1 not held", result.Output, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Receipts_WithAMalformedRepositoryId_IsUsage()
+    {
+        Directory.CreateDirectory(_state);
+
+        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "receipts", "--state", _state, "--repository", "xyz");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("32 hex", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Reattribute_WithoutItsArguments_IsUsage()
     {
         var result = await HostHarness.RunAsync(AgentHost.RunAsync, "reattribute", "--state", _state, "--to", "ABCDEF");
@@ -149,6 +209,18 @@ public sealed class AgentPairingVerbsTests : IDisposable
         Assert.Contains("more of the fingerprint", result.Error, StringComparison.Ordinal);
         Assert.AreEqual(gone.Fingerprint, ReplicaOwnerStore.Open(_state).Find(RepositoryIdHex)!.Fingerprint);
     }
+
+    private static DeletionReceipt Receipt() => new(
+        SessionId: Enumerable.Repeat((byte)0xAB, DeletionReceipt.SessionIdLength).ToArray(),
+        RepositoryId: Enumerable.Repeat((byte)0x01, ReplicationOffer.RepositoryIdLength).ToArray(),
+        CommanderPublicKey: Enumerable.Repeat((byte)0xC0, PeerIdentity.KeyLength).ToArray(),
+        IssuedAtUnixMilliseconds: 1_000,
+        FloorGenerations: 3,
+        ReclaimPublicKey: ReadOnlyMemory<byte>.Empty,
+        PageDigests: [new byte[DeletionReceipt.DigestLength]],
+        DeletedCount: 1,
+        Deleted: ["snapshots/aa/bb/gone"],
+        NotHeld: 2);
 
     public void Dispose()
     {

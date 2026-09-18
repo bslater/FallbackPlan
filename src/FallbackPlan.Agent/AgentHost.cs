@@ -68,6 +68,7 @@ public static class AgentHost
                                             [--set <name>] [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
+                  fallbackplan-agent receipts --state <dir> [--set <name>] [--repository <hex>] [--json]
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
@@ -218,10 +219,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "receipts" or "retention" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, or `retention` — no other verb exists.");
             return 1;
         }
 
@@ -283,6 +284,16 @@ public static class AgentHost
         {
             return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
                 .ConfigureAwait(false);
+        }
+
+        // `receipts` reads back the deletion receipts filed here (ADR-0063):
+        // the ones this device signed as a destination and the ones it
+        // verified as a commander. File-direct always — the store is
+        // append-only and this verb only reads, so there is no writer to
+        // race and no reason to need the service up at breakfast.
+        if (args[0] == "receipts")
+        {
+            return Receipts(stateDirectory, Get("--set"), Get("--repository"), args.Contains("--json"), output, error);
         }
 
         // `reattribute` re-points a replica stored here (ADR-0053 §3), routed
@@ -1359,6 +1370,47 @@ public static class AgentHost
                 error.WriteLine($"error: the service answered a re-attribution with {result.GetType().Name}.");
                 return 1;
         }
+    }
+
+    private static int Receipts(
+        string stateDirectory, string? set, string? repository, bool json, TextWriter output, TextWriter error)
+    {
+        // A mistyped path holds nothing, and "no deletion receipts" for it
+        // would be the one answer this verb must never give by accident.
+        if (!Directory.Exists(stateDirectory))
+        {
+            error.WriteLine($"error: no state directory at '{stateDirectory}' — nothing has been filed there.");
+            return 1;
+        }
+
+        string? repositoryIdHex = null;
+        if (repository is not null)
+        {
+            if (!DeletionReceiptReport.TryParseRepositoryId(repository, out var parsed))
+            {
+                error.WriteLine("error: --repository takes the repository id as 32 hex digits.");
+                return 1;
+            }
+
+            repositoryIdHex = parsed;
+        }
+
+        IReadOnlyList<FiledDeletionReceipt> listed = DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex);
+        if (set is not null)
+        {
+            listed = [.. listed.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+        }
+
+        if (json)
+        {
+            output.WriteLine(DeletionReceiptReport.ToJson(listed));
+        }
+        else
+        {
+            DeletionReceiptReport.Write(output, listed);
+        }
+
+        return 0;
     }
 
     private static void WriteNotices(TextWriter output, IReadOnlyList<(string Id, ulong RaisedAt, string Message)> pending)

@@ -1989,6 +1989,74 @@ public static class CliApplication
         }
 
         {
+            var receiptsStateOption = new Option<string>("--state")
+            {
+                Description = "The state directory whose filed deletion receipts to read.",
+                Required = true,
+            };
+            var receiptsSetOption = new Option<string?>("--set")
+            {
+                Description = "Only receipts this installation filed as the commander of the named set.",
+            };
+            var receiptsRepositoryOption = new Option<string?>("--repository")
+            {
+                Description = "Only receipts for one repository, by its id (32 hex digits).",
+            };
+            var receiptsJsonOption = new Option<bool>("--json")
+            {
+                Description = "Print the receipts as a JSON array instead of text.",
+            };
+            var command = new Command(
+                "receipts",
+                "Read back the deletion receipts filed under a state directory — what peers attested deleting on "
+                + "this installation's instruction, and what this installation attested deleting on theirs "
+                + "(ADR-0063). Every fact shown is taken from the signed bytes, and each receipt's signature is "
+                + "checked again as it is read.");
+            command.Options.Add(receiptsStateOption);
+            command.Options.Add(receiptsSetOption);
+            command.Options.Add(receiptsRepositoryOption);
+            command.Options.Add(receiptsJsonOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, _) => GuardAsync(() =>
+            {
+                var state = parse.GetValue(receiptsStateOption)!;
+                if (!Directory.Exists(state))
+                {
+                    throw new CliFailureException($"no state directory at '{state}' — nothing has been filed there.");
+                }
+
+                string? repositoryIdHex = null;
+                if (parse.GetValue(receiptsRepositoryOption) is { } repository)
+                {
+                    if (!DeletionReceiptReport.TryParseRepositoryId(repository, out var parsed))
+                    {
+                        throw new CliFailureException("--repository takes the repository id as 32 hex digits.");
+                    }
+
+                    repositoryIdHex = parsed;
+                }
+
+                IReadOnlyList<FiledDeletionReceipt> listed = DeletionReceiptStore.Open(state).List(repositoryIdHex);
+                if (parse.GetValue(receiptsSetOption) is { } set)
+                {
+                    listed = [.. listed.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+                }
+
+                if (parse.GetValue(receiptsJsonOption))
+                {
+                    output.WriteLine(DeletionReceiptReport.ToJson(listed));
+                }
+                else
+                {
+                    DeletionReceiptReport.Write(output, listed);
+                }
+
+                return Task.FromResult(0);
+            }));
+        }
+
+        {
             var destinationOption = new Option<string>("--destination")
             {
                 Description = "The declared destination to look in, by name.",
