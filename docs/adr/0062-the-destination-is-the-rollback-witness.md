@@ -3,9 +3,9 @@
 **Status:** Accepted
 **Date:** 2026-09
 **Requirements:** FR-DEST-018, NFR-SEC-005
-**Related:** [ADR-0046](0046-direct-to-destination-publication.md), [ADR-0008](0008-index-generations-and-checkpoints.md), [ADR-0056](0056-incremental-reconciliation.md), [ADR-0061](0061-adopt-a-destinations-archives.md), [architecture 03 §6](../architecture/03-crypto.md#6-authentication-of-repository-state), [architecture 09 §4](../architecture/09-replication-and-peers.md#4-durability-policy)
+**Related:** [ADR-0046](0046-direct-to-destination-publication.md), [ADR-0008](0008-index-generations-and-checkpoints.md), [ADR-0056](0056-incremental-reconciliation.md), [ADR-0058](0058-peer-write-adapter.md), [ADR-0061](0061-adopt-a-destinations-archives.md), [architecture 03 §6](../architecture/03-crypto.md#6-authentication-of-repository-state), [architecture 09 §4](../architecture/09-replication-and-peers.md#4-durability-policy)
 
-**Built:** `Agent/FanOut` (the detector, the protection and the heal's trigger in the local-path pass), `Agent/ServiceRuntime` (`HealFromDestinationAsync`), `Repository.Index/ObservedHead` (`JournalHeadAsync`), `Agent/CatalogueRebuild` (the rebuild in place); `Hosts.Tests/DirectoryRollbackTests`, `Repository.Tests/ObservedHeadTests`.
+**Built:** `Agent/FanOut` (the detector, the protection and the heal's trigger in the local-path pass and, since Amendment 1, in the peer push), `Agent/ReplicationInitiator` (the inventory hook a push consults before it filters or drops anything), `Agent/ServiceRuntime` (`HealFromDestinationAsync`, over a local replica or a `PeerRetrievalObjectStore`), `Repository.Index/ObservedHead` (`JournalHeadAsync`, and `JournalHeadOf` over keys already in hand), `Agent/CatalogueRebuild` (the rebuild in place); `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests`.
 
 ---
 
@@ -158,6 +158,10 @@ about to hand out a number the destination holds.
   same head read over a `PeerRetrievalObjectStore` opened once per pass is
   the follow-up, and until it lands a set whose only destination is a peer
   is witnessed by nothing but the colliding-put refusal.
+
+  > **Amended 2026-09.** Built, and not the way this bullet expected: a peer
+  > is asked nothing, because it already answers. See
+  > [Amendment 1](#amendment-1--the-peer-is-a-witness-too-from-the-inventory-it-already-declares-2026-09).
 - **A rollback that reaches the only destination too is undetectable.** If
   the state directory and every destination are restored from one older
   image, nothing is ahead of anything, and there is no witness. That is
@@ -228,8 +232,65 @@ convergence, with nothing healed. Protecting the pass and healing inside it
 turns a refusal into a repair and leaves a notice where the refusal would
 have left a log line.
 
+## Amendment 1 — the peer is a witness too, from the inventory it already declares (2026-09)
+
+§4 left a peer destination out and named a retrieval-session read as the
+follow-up. Building it found a cheaper witness already on the wire: every
+push opens by reading the peer's **complete** inventory — every key it holds
+for the repository, journal keys included
+([peer-protocol 03 §3.2](../../specifications/peer-protocol/03-replication.md)).
+The journal head for this writer is a fold over that list
+(`ObservedHead.JournalHeadOf`), so the peer is witnessed on every sync pass
+with no second session and no read at all.
+
+What made it more than a listing was the order of events inside a push. The
+retention instruction is decided **before** the inventory arrives: the
+keep-set is computed from local — possibly rolled-back — metadata, filters
+the push, and drives the drop half in the same session. A detector that ran
+after the push would have watched the rolled-back keep-set act. So
+`ReplicationInitiator.PushAndConvergeAsync` takes a hook invoked once, after
+the inventory and before anything is filtered or dropped: `FanOut` offers
+the attested head to the allocator exactly as decision 1 does for a local
+path, and when it is adopted the hook withholds convergence for the whole
+session — the push goes unfiltered, no instruction is sent, and the outcome
+says so (`ConvergenceWithheld`). The granted collection run
+([ADR-0055](0055-reclaim-authority.md) §6) reaches the peer through the same
+push, so one hook protects both paths.
+
+The harm on the peer path is not the local path's, and the drill that pins
+it is shaped accordingly. A peer keeps what the source no longer lists
+([ADR-0034 §6](0034-hub-and-spoke-destinations.md)), so a rolled-back
+keep-set cannot condemn the newer history's *metadata* — only keys the
+source lists can be dropped. What it can reach is a blob the older history
+owns and the newer history shares: a direct-ship set lists its blobs
+through the destinations themselves, so under a keep-newest policy the
+granted convergence run would drop that blob at the peer while keeping the
+manifests that point at it. And short of any deletion, the next backup
+hands out sequences the peer already holds under different bytes: the push
+skips a key the inventory declares, and the replica's journal silently
+stops matching the source's. `Hosts.Tests/PeerRollbackTests` holds both —
+three backups reverting to the first, so the third dedups against a blob
+the rolled-back policy no longer keeps; and a third backup after the heal
+whose every journal record is at the peer byte for byte.
+
+The heal is decision 3's, over the retrieval session: keyed on the metadata
+plane being behind the peer's attested head, `FanOut` dials
+`PeerRetrievalClient`, wraps a `PeerRetrievalObjectStore`, and hands it to
+`HealFromDestinationAsync` unchanged. A dial or protocol failure is a heal
+failure — the pair recorded as failed with the reason, no success stamp, the
+next pass retrying — and never a finding against the peer. A staging set is
+protected and told, as at a local path; its notice says the peer keeps what
+the staging archive no longer lists.
+
+What stays out: `PeerShipStore` reads the same inventory at run open and is
+left alone — detection belongs to the sync pass on both kinds of
+destination, and a run is not the place to start healing. The last stated
+limit stands: a rollback that reaches every destination too has no witness
+anywhere.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | [Amendment 1](#amendment-1--the-peer-is-a-witness-too-from-the-inventory-it-already-declares-2026-09): a peer destination is witnessed from the inventory every push already reads, before the push filters or drops anything. `Agent/ReplicationInitiator` takes the inventory hook and reports a withheld convergence; `Agent/FanOut` adopts, protects both the sync pass and the granted collection run, and heals a direct-ship set over the retrieval session; `Repository.Index/ObservedHead` folds the head from keys already in hand. `Hosts.Tests/PeerRollbackTests` is the drill, including the mixed-set convergence that would have dropped a shared blob |
 | 2026-09 | Accepted | Built over four commits: the journal head on its own and the catalogue rebuild in one place (`Repository.Index/ObservedHead`, `Agent/CatalogueRebuild`); the detector, the protection and the notice in `Agent/FanOut`; the heal in `Agent/ServiceRuntime`; `Hosts.Tests/DirectoryRollbackTests` is the drill — a direct-ship set's state directory restored from a copy taken between two backups, the next pass noticing, deleting nothing, healing and running a third backup, plus the cry-wolf guard, the staging variant and a failed copy-back retried — with `Repository.Tests/ObservedHeadTests` on the primitive. `eng/recovery-drill.sh` green on the Release binaries |

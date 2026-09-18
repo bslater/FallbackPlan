@@ -223,6 +223,31 @@ Nothing on the wire distinguishes "lost it" from "never had it"; the ledger the
 verifier keeps is what tells those apart, and either way the destination is not
 currently protecting that data.
 
+### 5.1 What a source with no copy of its own can prove
+
+The challenge above needs an expected proof computed from bytes the source
+holds. A source that ships straight to this destination and keeps no content
+of its own has none, and MUST NOT stamp a proof drawn from the metadata plane
+alone. It proves the replica by **reading it back** over the retrieval session
+([07](07-retrieval.md)) instead: a sample of the blobs the destination
+declared in its inventory, each opened where it sits — the footer
+authenticated under the metadata key — and then, per blob, one of two proofs
+the destination cannot forge because it never held the key:
+
+- a **record's AEAD tag**, opened under the repository's keys, where the
+  source holds them; or
+- the **whole-blob digest**, where the records are sealed to a key the
+  source does not hold (a write-only repository): the blob short of its
+  sixteen-byte locator is hashed at the source as it streams back and
+  compared in fixed time with the digest the writer signed into the index
+  delta ([repository format 07 §2.2](../repository-format/07-index.md)).
+
+The digest proof reads the whole blob and is budgeted per pass on the
+source's side; a blob it cannot afford is left unproved, never blamed. A
+message in which the destination hashes its own copy and answers with the
+digest — sparing the link the blob — is not defined by this revision and
+would be a new message type behind a new feature.
+
 ---
 
 **Previous:** [03 — Replication](03-replication.md) · **Next:** [05 — Quotas](05-quotas.md)

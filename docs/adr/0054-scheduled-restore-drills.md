@@ -156,6 +156,11 @@ protocol, which is peer-protocol work rather than a cadence. Stated rather
 than silently skipped, so the gap is visible on the
 [proof obligations](../proof-obligations.md) rather than implied by an absence.
 
+> **Amended 2026-09.** A peer is drilled — on a cadence the source's
+> operator writes down for it, never by default, and under a byte cap. The
+> read path across the protocol turned out to exist already. See
+> [Amendment 3](#amendment-3--a-peer-is-drilled-on-a-stated-cadence-and-under-a-byte-cap-2026-09).
+
 ### 7 Sampling
 
 A bounded number of files (three), chosen by descending the newest snapshot at
@@ -281,10 +286,50 @@ qualifier, not a fourth state: a surface shows the limit, and must not fold it
 into "could not restore" — which it is not — or into a plain pass, which
 overstates by exactly what the limit says.
 
+## Amendment 3 — a peer is drilled on a stated cadence and under a byte cap (2026-09)
+
+§6 excluded peers on consent, not on mechanism, and the mechanism was
+already there: the drill opens its source by destination name through the
+same verb a person's restore uses, which dispatches to the peer over the
+retrieval session ([peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)),
+and on a write-only set it takes [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09)'s
+sealed-limit path — a plan over the retrieval store — without ever needing
+the passphrase. The one thing keeping a peer out was the kind filter in the
+scheduler. Proof row 91 was the table's only Unproved row for it.
+
+**Decision.** The consent question is answered on the source side:
+
+- A local path keeps its default cadence. A **peer drills only on a cadence
+  the source's operator writes down** for that destination
+  (`drill_interval_days`); absent means never. The peer agreed to serve
+  restores when it granted retrieval, and a drill is a small restore — but a
+  cadence is a standing cost on somebody else's link, and this service does
+  not put one there by default. Zero is still refused for both kinds; for a
+  peer the absence is the decision, and the configuration's own words say
+  so.
+- The bytes one drill may pull from a peer are **capped**: a file over
+  64 MiB is not chosen, and once the chosen files reach 128 MiB no more
+  are — deliberately below three times the per-file cap, so the total is a
+  number that can bite. A file the cap excludes is left where it is and the
+  random descent tries again; the drill states how many files it left, as a
+  limit beside the sealed-content limit where both apply, never as a
+  failure. A snapshot whose every reached file is over the cap records a
+  stamp, no files, no failure and the limit: the replica opened and listed
+  over the wire, and what was not read is named. A local path is not
+  capped. The deep-verify sweep is untouched and remains local-path only.
+- Everything else is §1–§4 unchanged: the ledger fields, the three answers,
+  the `drill-failed` notice on damage, and Amendment 1's silence on
+  interruption. Rot at the peer fails the drill exactly as it does at a
+  local path.
+
+§6's heading stands as written — the default is still that a peer is not
+drilled — with the amendment's blockquote beside it.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | [Amendment 3](#amendment-3--a-peer-is-drilled-on-a-stated-cadence-and-under-a-byte-cap-2026-09): a peer is drilled on a cadence the source's operator states, never by default, and under a byte cap. `Agent/Scheduler` admits a peer only with an explicit interval; `Agent/RecoveryDrillJob` samples under a budget and states what it left; `Application/DestinationConfiguration` says what absence means per kind. `Hosts.Tests/PeerRecoveryDrillTests` drills over the retrieval session, fails on rot at the peer, and holds both caps |
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R11. Built: `Agent/RecoveryDrillJob` drills through the guided-restore verbs, `Agent/Scheduler` decides when, `Application/DestinationSyncStore` carries the answer, and contract 1.25 puts it on the status matrix. The scheduled drill deliberately proves less than [the operator drill](../../eng/recovery-drill.sh), and §5 says what |
 | 2026-09 | Amended | [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09): an interrupted drill states nothing. `Agent/RecoveryDrillJob` translates a cancelled command answer back into a cancellation, `Agent/AgentPass` waits for the drill phase, and `Agent/JobScheduler` refuses work once stopped instead of posting to disposed semaphores |
 | 2026-09 | Amended | [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09): on a write-only set the scheduled drill proves the road back as far as the sealed content and states that limit as a pass, never as a failure. `Agent/RecoveryDrillJob` recognises a sealed-only refusal and confirms the plan finds every segment; `Application/DestinationSyncStore` and contract 1.27 carry `drill_limit`; `Hosts.Tests/RecoveryDrillTests` runs on a set-up installation |

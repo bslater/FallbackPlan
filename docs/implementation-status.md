@@ -78,14 +78,14 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
-| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, and (Amendment 1) an interrupted drill recording nothing at all | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
+| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, (Amendment 1) an interrupted drill recording nothing at all, and (Amendment 3) a peer drilled on a cadence its source's operator states, never by default, under a byte cap | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Application/DestinationConfiguration` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Hosts.Tests/PeerRecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/RepositoryWriteCredential` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
 | [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
-| [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead, and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0058--what-the-adapter-does-not-carry) |
+| [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead — its sealed data plane by the digest tier, which a rebuilt catalogue feeds — and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Repository.Catalogue/Catalogue` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`, `Hosts.Tests/DirectShipVerificationTests`, `Replication.Tests/ReplicaVerifierTests`; [notes](#0058--what-the-adapter-does-not-carry) |
 | [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
 | [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the policy manifest records the set's shape, `discover_archives` / `adopt_archive` take an archive back under its original repository and set ids with the passphrase, the writer identity is resumed, the next backup is incremental; console, CLI and peers; contract 1.30 | Built | `Repository.Format/Manifests/PolicyManifest` · `Agent/ServiceCommandHandler.Adoption.cs` · `Application/LocalState` · `Web/ConsoleRestoreGate` · `Cli/CliApplication` · `Cli/OperationGateway` · `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests`, `Cli.Tests/AdoptVerbValidationTests`, `Repository.Tests/ManifestCodecTests` · [notes](#0061--the-rebuilt-machine-resumes) |
-| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer, moves the sequence past it, deletes nothing there, and heals a direct-ship set's metadata store and catalogue in place from the destination | Built | `Agent/FanOut` · `Agent/ServiceRuntime` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
+| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer — a local path's by listing, a peer's from the inventory every push already declares (Amendment 1) — moves the sequence past it, deletes nothing there on the sync pass or the granted collection run, and heals a direct-ship set's metadata store and catalogue in place from the destination, over the retrieval session for a peer | Built | `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceRuntime` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -361,10 +361,15 @@ stated limit, on the ledger and the status matrix as `drill_limit` (contract
 Damage before the content plane still fails and still raises the notice.
 `Agent/RecoveryDrillJob`, `Hosts.Tests/RecoveryDrillTests`.
 
-Peer destinations are not drilled: restoring across the wire on a cadence the
-peer never agreed to is peer-protocol work rather than a schedule, and the gap
-is carried openly on [proof obligations](proof-obligations.md) rather than
-implied by an absence.
+A peer destination is drilled only on a cadence its source's operator writes
+down for it, never by default, and under a byte cap ([Amendment 3](adr/0054-scheduled-restore-drills.md#amendment-3--a-peer-is-drilled-on-a-stated-cadence-and-under-a-byte-cap-2026-09)):
+the read path across the protocol already existed — the drill opens its
+source by destination name, which dispatches to the peer over the retrieval
+session — and only the scheduler's kind filter kept peers out. The consent
+question is answered on the source side, since a cadence is a standing cost
+on somebody else's link; a file over the cap is left unsampled and said, not
+blamed. `Agent/Scheduler`, `Agent/RecoveryDrillJob`,
+`Hosts.Tests/PeerRecoveryDrillTests`.
 
 A fourth answer was added by [Amendment 1](adr/0054-scheduled-restore-drills.md#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09),
 and it is silence: a drill interrupted because the service is stopping records
@@ -515,15 +520,20 @@ survive.
 Three things it deliberately does not do, so nobody reads the row as more than
 it is.
 
-**It does not verify.** A challenge is answered by the peer and judged against
-bytes this side reads for itself, and a set shipping only to a peer has none —
-the sink can offer the metadata plane it keeps locally and no content at all.
-Sampling that population would prove nine small objects and stamp the pair
-verified, which is the emptiness the verification-independence work already
-found once. So the pass challenges nothing, stamps nothing, and raises a
-durable notice. A second destination closes it today; closing it for a single
-peer wants the record-tag proof reaching through the retrieval session, and
-that is not built.
+**It does not challenge.** A challenge is answered by the peer and judged
+against bytes this side reads for itself, and a set shipping only to a peer
+has none — the sink can offer the metadata plane it keeps locally and no
+content at all. Sampling that population would prove nine small objects and
+stamp the pair verified, which is the emptiness the verification-independence
+work already found once. So the pass challenges nothing and **reads the
+replica back** instead (§8 as amended): a sample of the blobs the spoke
+declared, opened over the retrieval session, each proved by a record's AEAD
+tag where the service can open one and by the **digest tier** where it cannot
+— a write-only set's sealed data plane, hashed whole against the digest the
+writer signed into the index. The ledger says which tier proved what
+(contract 1.32). A digest challenge on the wire, in which the peer hashes its
+own copy, is the named follow-up; until then the digest tier costs the peer's
+link the blob.
 
 **It does not read a peer outside a run.** A peer shipment is a live session,
 not a directory, so `ReadOrder` still resolves local paths only. A catch-up
@@ -700,8 +710,22 @@ what the next converging pass will do.
 copied aside between two backups and put back; one fixture fact is worth
 keeping — a backup run stamps the ledger with its scheduled time, so a sync
 stamped with the real clock records an earlier success and the sink refuses
-the destination as one that missed a run. Peers are the stated limit: the
-same head read over a retrieval session is the follow-up.
+the destination as one that missed a run.
+
+A peer is witnessed too, and more cheaply than the record expected
+([Amendment 1](adr/0062-the-destination-is-the-rollback-witness.md#amendment-1--the-peer-is-a-witness-too-from-the-inventory-it-already-declares-2026-09)):
+every push already reads the peer's complete inventory, journal keys
+included, so the head is a fold over keys in hand. What mattered was the
+order inside a push — the retention instruction is decided before the
+inventory arrives — so `Agent/ReplicationInitiator` takes a hook invoked
+between the inventory and the first filtered object, and a pass that adopts
+the head withholds convergence for the session on the scheduled sync and on
+the granted collection run alike. The harm on this path is a shared blob
+dropped by a granted run under a rolled-back keep-set on a mixed set, and a
+journal that silently diverges; `Hosts.Tests/PeerRollbackTests` holds both.
+The heal dials the retrieval session and hands `HealFromDestinationAsync` a
+`PeerRetrievalObjectStore`; a dial failure is a failed pass, retried, never a
+finding.
 
 ### 0044 — the ceremony that two requirements have been waiting for
 

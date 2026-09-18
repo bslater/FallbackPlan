@@ -164,6 +164,22 @@ separate piece of work and is recorded as a gap rather than implied away.
 > diff, so a key omitted to avoid being asked about is a key the same session
 > re-ships. Held by `Hosts.Tests/PeerReadBackVerificationTests`.
 
+> **Note (2026-09): the sealed data plane, and how far it reaches a peer.**
+> The record-tag proof stops at the container on a write-only set, whose
+> records are sealed to a key the service does not hold (FR-WOR-003). The
+> **digest tier** proves those: the whole blob short of its locator is
+> hashed at the destination and compared with the digest the writer signed
+> into the index ([07 §2.2](../../specifications/repository-format/07-index.md)),
+> which a rebuilt catalogue now keeps. The tier reads whole blobs and is
+> budgeted per pass, and the ledger says which tier proved what (contract
+> 1.32). Over a peer it runs through the same read-back — a whole-blob read
+> over the retrieval session — which is correct and costs the peer's link
+> the blob; a **digest challenge**, in which the peer hashes its own copy
+> and answers with the digest, is a new message type and negotiated feature
+> and is the named follow-up. Until it lands the digest tier is proved at a
+> local path (`Hosts.Tests/DirectShipVerificationTests`) and runs, untested
+> at scale, over retrieval.
+
 ### 9 A peer-only set still *defaults* to staging
 
 The capability and the default are different questions, and letting them
@@ -252,4 +268,5 @@ is that it has none.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R0, and the discharge of [ADR-0046](0046-direct-to-destination-publication.md)'s stated tail. Built: `Agent/PeerShipStore` is the adapter, `Agent/DestinationShipSink` admits peer destinations and closes their sessions when the run's books close, `Agent/BackupRunner` awaits that close, `Agent/FanOut` withholds the verification stamp from a pair with no independent copy, and `Agent/ServiceCommandHandler` stops refusing a direct-ship set for having a peer where a local path was demanded, while leaving the peer-only default at staging. Held by `Hosts.Tests/DirectShipPeerTests` and `Hosts.Tests/DirectShipTests` |
+| 2026-09 | Noted | The digest tier (`Replication/ReplicaVerifier`, fed by `Repository.Catalogue/Catalogue`'s signed digests) proves a write-only set's sealed data plane at a destination; over a peer it rides the §8 read-back as a whole-blob read, and a digest challenge on the wire is the named follow-up |
 | 2026-09 | Amended (the proof arrives) | Amendment at §8: a set whose only destination is a peer is no longer unprovable. `Replication/ReplicaVerifier` gained `ProveSealedAsync`, the copy-free half of its own verification exposed on its own, and `Agent/FanOut` reaches it through the retrieval session when there is no ground truth to challenge against. The red that named the gap is the one worth remembering: every data blob at the peer rotted, a pass ran, and the destination was recorded in sync. `Hosts.Tests/PeerReadBackVerificationTests` holds it |

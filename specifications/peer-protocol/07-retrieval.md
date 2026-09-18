@@ -152,3 +152,12 @@ pinned-identity authentication like every other payload. Availability is the
 honest limit: a destination can refuse or stall a retrieval exactly as it
 could withhold data at any restore — which is what verification (04) and
 multiple destinations exist to bound.
+
+A source may also use retrieval to **drill** a restore from this replica on a
+cadence, and to read whole blobs back for the digest proof of
+[04 §5.1](04-verification.md#51-what-a-source-with-no-copy-of-its-own-can-prove).
+No read budget is a term of pairing in this revision: what bounds those reads
+is the source's own policy — a drill cadence its operator states per peer,
+never a default, and a byte cap per drill and per verification pass — and a
+destination that finds them excessive has the same remedy it has for any
+retrieval, which is to refuse or stall it.
