@@ -124,7 +124,7 @@ Status per record. **Fifty-six of the sixty-three are Accepted.** Among them: 00
 | [0059](adr/0059-session-bound-deletion-authority.md) | A deletion instruction is bound to the session it was authorised in |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential; the recovery kit is withdrawn |
 | [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the rebuilt machine resumes its sets under their original ids, from the shape the archive records |
-| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a whole state directory rolled back is noticed from what it published, protected, and healed |
+| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a whole state directory rolled back is noticed from what it published, protected, and healed — a direct-ship set's metadata, a staging set's content too |
 | [0063](adr/0063-deletion-receipts.md) | Deletion receipts: the destination's signed statement of what it deleted on whose instruction, carried in the acknowledgement, verified by the commander and filed by both parties |
 
 Template: [0000](adr/0000-template.md)

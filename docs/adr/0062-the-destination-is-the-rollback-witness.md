@@ -5,7 +5,7 @@
 **Requirements:** FR-DEST-018, NFR-SEC-005
 **Related:** [ADR-0046](0046-direct-to-destination-publication.md), [ADR-0008](0008-index-generations-and-checkpoints.md), [ADR-0056](0056-incremental-reconciliation.md), [ADR-0058](0058-peer-write-adapter.md), [ADR-0061](0061-adopt-a-destinations-archives.md), [architecture 03 §6](../architecture/03-crypto.md#6-authentication-of-repository-state), [architecture 09 §4](../architecture/09-replication-and-peers.md#4-durability-policy)
 
-**Built:** `Agent/FanOut` (the detector, the protection and the heal's trigger in the local-path pass and, since Amendment 1, in the peer push), `Agent/ReplicationInitiator` (the inventory hook a push consults before it filters or drops anything), `Agent/ServiceRuntime` (`HealFromDestinationAsync`, over a local replica or a `PeerRetrievalObjectStore`), `Repository.Index/ObservedHead` (`JournalHeadAsync`, and `JournalHeadOf` over keys already in hand), `Agent/CatalogueRebuild` (the rebuild in place); `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests`.
+**Built:** `Agent/FanOut` (the detector, the protection and the heal's trigger in the local-path pass and, since Amendment 1, in the peer push — for every set since Amendment 2), `Agent/ReplicationInitiator` (the inventory hook a push consults before it filters or drops anything), `Agent/ServiceRuntime` (`HealFromDestinationAsync`, over a local replica or a `PeerRetrievalObjectStore`; since Amendment 2 its staging arm and `CopyBackAsync`, the ordered if-absent copy bounded by the closure of the history the archive lacks), `Agent/PeerRetrievalObjectStore` (a read served one chunk at a time, since Amendment 2), `Repository.Index/ObservedHead` (`JournalHeadAsync`, and `JournalHeadOf` over keys already in hand), `Agent/CatalogueRebuild` (the rebuild in place); `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests`.
 
 ---
 
@@ -152,6 +152,14 @@ about to hand out a number the destination holds.
   the staging archive's keep-set — restore or copy it aside first if it
   matters. A content copy-back is the same seam reversed and is the named
   follow-up if a staging set ever wants it.
+
+  > **Amended 2026-09.** Built, as the same seam reversed: a staging set is
+  > healed too — content and metadata, blobs before the manifests that
+  > reference them, bounded by the closure of the snapshots the archive
+  > lacks so that history staging shed on purpose never comes back. See
+  > [Amendment 2](#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09).
+  > The reason this bullet gave is what shaped the copy, and the
+  > "next converging pass will trim" consequence is what it closes.
 - **Peers are not asked.** The read is a journal listing over the replica,
   which a peer serves through the retrieval session
   ([peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)); the
@@ -197,9 +205,15 @@ about to hand out a number the destination holds.
 - A rollback under a per-destination policy leaves the destination holding
   its keep-set *plus* whatever the rollback's older metadata still lists;
   the next pass converges it. One pass of slack, by design.
-- A staging set gets a warning where a direct-ship set gets a repair. The
+- ~~A staging set gets a warning where a direct-ship set gets a repair. The
   asymmetry is the archive's, not the witness's, and is written above
-  rather than smoothed over.
+  rather than smoothed over.~~ Closed by [Amendment 2](#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09):
+  both kinds of set are healed, each from what it is owed.
+- A staging heal reads the destination's snapshots and walks their closure
+  there — a survey and a mark over the replica, over the wire for a peer —
+  before it copies a byte. It is a rare pass and the cost is stated rather
+  than avoided, because the bound is what keeps a heal from undoing
+  staging retirement.
 
 ## Alternatives considered
 
@@ -280,7 +294,8 @@ plane being behind the peer's attested head, `FanOut` dials
 failure — the pair recorded as failed with the reason, no success stamp, the
 next pass retrying — and never a finding against the peer. A staging set is
 protected and told, as at a local path; its notice says the peer keeps what
-the staging archive no longer lists.
+the staging archive no longer lists. *(Since [Amendment 2](#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09)
+it is healed from the peer too, over the same session.)*
 
 What stays out: `PeerShipStore` reads the same inventory at run open and is
 left alone — detection belongs to the sync pass on both kinds of
@@ -288,9 +303,87 @@ destination, and a run is not the place to start healing. The last stated
 limit stands: a rollback that reaches every destination too has no witness
 anywhere.
 
+## Amendment 2 — a staging set is healed too, bounded by the history it lacks (2026-09)
+
+§4 left a staging set protected and told, and told it the one thing that
+was true: the newer history was only at the destination, and the next
+converging pass would trim the destination to the staging archive's
+keep-set. That sentence described a deletion one pass away. The detecting
+pass deletes nothing because the keep filter is set aside; the pass after
+it computes the filter from an archive that still lacks the newer
+snapshots, and convergence removes them from the only place that holds
+them. The record's reason for not copying — manifests without their blobs
+would produce an archive that lists history it cannot restore and a
+replication gate (FR-GC-009) that believes it holds it — is not a reason
+against a copy-back; it is the shape of one.
+
+**Decisions.**
+
+1. **The trigger is unchanged.** The destination's journal head for this
+   writer above the staging archive's own, keyed on the metadata plane so
+   a heal that failed is retried on every pass. Only the guard that
+   excluded a staging set goes, at both call sites.
+2. **Content and metadata together, blobs first, manifests last.**
+   `ServiceRuntime.CopyBackAsync` lists the destination once and copies in
+   publication order — the descriptor, the blobs admitted, the journal and
+   index, everything else, the snapshot manifests — every put if-absent.
+   An interrupted heal therefore never leaves a manifest in the archive
+   without the blobs it references, and the gate stays honest at every
+   point. The metadata-only copy a direct-ship set gets is the same routine
+   with no blob admitted.
+3. **Bounded by the history being brought back.** Staging retirement
+   ([ADR-0034 §6](0034-hub-and-spoke-destinations.md)) sheds historic data
+   blobs on purpose and keeps every metadata record, so a heal that copied
+   back everything the destination holds would undo it on every pass. The
+   staging arm surveys the destination's snapshots, takes the ones the
+   archive does not list, walks their closure at the destination under the
+   metadata key — the same `StagingMark` walk convergence uses — and admits
+   exactly the data blobs that closure lives in, plus every metadata blob.
+   A stray or historic blob at the destination does not come back. A
+   destination snapshot that will not decode, or a closure that will not
+   walk, fails the heal rather than narrowing it: the pass converges
+   nothing, which is the protection, and the damage is the verifier's to
+   name.
+4. **The catalogue is rebuilt over the healed archive** and the writer
+   moved past what it attests, as for a direct-ship set. What the rebuild
+   reads is authenticated — every copied blob's footer under the metadata
+   key, every manifest's signature — and a footer that fails is a finding,
+   not a silent copy. Records are not opened here; the set's ordinary
+   verification covers them on later passes.
+5. **A peer heals over the retrieval session, one chunk at a time.** The
+   same dial Amendment 1 made; and `PeerRetrievalObjectStore` now serves a
+   read of any size as a stream that fetches the next chunk as the previous
+   is consumed, so a blob copied back — or restored to a person — holds one
+   chunk in memory and never the object (NFR-PERF-001). That was a limit
+   restore already carried and this heal would have made worse.
+6. **This is not the healing of [architecture 07 §6](../architecture/07-retention-and-gc.md#6-healing-from-replicas).**
+   That section's rule — explicitly invoked, never a silent side effect of
+   a verification pass — is about repairing damage a verifier found. A
+   rollback heal repairs no damage: it is the fan-out pass making its own
+   source of truth current again from a destination that is ahead,
+   invoked by the detection, reported by a notice that is never withdrawn,
+   and bounded by the closure of the history restored. 07 §6 now says so,
+   and its doctrine stands.
+
+**What stays out.** A rollback that reaches every destination too has no
+witness anywhere, as before. A destination that holds *less* than the
+archive is not a rollback and is the copier's ordinary work. And the heal
+does not verify what it did not copy: a staging archive whose own blobs
+rotted while it was rolled back is verification's to find.
+
+**Held by** `Hosts.Tests/DirectoryRollbackTests` — the staging case as a
+heal that converges right afterwards and restores the second backup; the
+bound, with the destination kept wide and the first backup's data blobs
+deleted from the rolled-back archive as a trim would have, still gone
+after the heal while the newer closure is whole; and the ordering, a heal
+that fails at a blob leaving no manifest behind and the next pass healing
+— and `Hosts.Tests/PeerRollbackTests`, the same over the retrieval session
+with a file longer than one chunk, byte for byte against the peer's copy.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended | [Amendment 2](#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09): a staging set is healed too — its content and metadata copied back from the destination that is ahead, blobs before the manifests that reference them, bounded by the closure of the snapshots the archive lacks so that history staging retirement shed never returns; over the retrieval session for a peer, which `Agent/PeerRetrievalObjectStore` now serves one chunk at a time. `Agent/ServiceRuntime` (`CopyBackAsync`, the staging arm of `HealFromDestinationAsync`), `Agent/FanOut`; `Hosts.Tests/DirectoryRollbackTests` and `Hosts.Tests/PeerRollbackTests` are the drills |
 | 2026-09 | Amended | [Amendment 1](#amendment-1--the-peer-is-a-witness-too-from-the-inventory-it-already-declares-2026-09): a peer destination is witnessed from the inventory every push already reads, before the push filters or drops anything. `Agent/ReplicationInitiator` takes the inventory hook and reports a withheld convergence; `Agent/FanOut` adopts, protects both the sync pass and the granted collection run, and heals a direct-ship set over the retrieval session; `Repository.Index/ObservedHead` folds the head from keys already in hand. `Hosts.Tests/PeerRollbackTests` is the drill, including the mixed-set convergence that would have dropped a shared blob |
 | 2026-09 | Accepted | Built over four commits: the journal head on its own and the catalogue rebuild in one place (`Repository.Index/ObservedHead`, `Agent/CatalogueRebuild`); the detector, the protection and the notice in `Agent/FanOut`; the heal in `Agent/ServiceRuntime`; `Hosts.Tests/DirectoryRollbackTests` is the drill — a direct-ship set's state directory restored from a copy taken between two backups, the next pass noticing, deleting nothing, healing and running a third backup, plus the cry-wolf guard, the staging variant and a failed copy-back retried — with `Repository.Tests/ObservedHeadTests` on the primitive. `eng/recovery-drill.sh` green on the Release binaries |

@@ -166,6 +166,8 @@ Healing is:
 
 Rebuild never repairs ([`02-repository-format.md` §8.3](02-repository-format.md#83-rebuild-never-repairs)). Diagnosis and repair stay separate so that a damage report is always a statement about the repository as it is, not as some automatic process has already altered it.
 
+The rollback heal of [ADR-0062](../adr/0062-the-destination-is-the-rollback-witness.md) is a different thing and is not an exception to the rule above. It repairs no damage: when a destination turns out to be *ahead* of a state directory restored from an older copy, the fan-out pass makes its own source of truth current again from that destination — a direct-ship set's metadata, a staging set's metadata and the content its missing snapshots need — invoked by the detection, reported by a notice that is never withdrawn, bounded by the closure of the history restored (never what staging retirement shed), and with every copied blob's footer and every manifest's signature authenticated by the rebuild that follows. What it copies is what this machine published; what it finds damaged, it reports.
+
 ## 7. Storage-class awareness
 
 Retention and collection consult the store's capability record ([`05-storage-providers.md` §3](05-storage-providers.md#3-capabilities)):

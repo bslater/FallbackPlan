@@ -327,6 +327,7 @@ folder stayed empty.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Built (qualified) | A staging archive that turns out to be behind a destination — the whole machine restored from an older image — is healed from that destination by the fan-out pass ([ADR-0062 Amendment 2](0062-the-destination-is-the-rollback-witness.md#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09)): the closure of the snapshots it lacks copied back, blobs first, and never the historic data blobs §6's trim shed. `Agent/ServiceRuntime`; `Hosts.Tests/DirectoryRollbackTests` |
 | 2026-08 | Accepted | Decided ahead of implementation, with the config, orchestration and retention slices to follow. Amends ADR-0009/0010/0011/0012/0018/0025/0027/0028/0029/0030 as recorded in each. |
 | 2026-08 | Built | All eleven arc slices landed, the §6 staging trim included, plus the sync/retention operator verbs; the trim's convergence hazard is closed by the per-set gate of [ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate). |
 | 2026-08 | Built (amended) | Amendment 1: destination verification ([peer-protocol 04](../../specifications/peer-protocol/04-verification.md)) is built and required, and the §6 trim gate now takes a proof rather than a claim for every destination kind. |
