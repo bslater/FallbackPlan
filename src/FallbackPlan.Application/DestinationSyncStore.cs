@@ -97,6 +97,24 @@ public sealed record DestinationSyncRecord
     public int VerifiedPopulation { get; init; }
 
     /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed verification
+    /// proved by opening a record's AEAD tag at the destination (schema 3).
+    /// Zero on a ledger written before the tiers were recorded, which is
+    /// honest: nobody counted them.
+    /// </summary>
+    [JsonPropertyName("verified_sealed")]
+    public int VerifiedSealed { get; init; }
+
+    /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed verification
+    /// proved by hashing the whole sealed blob at the destination against the
+    /// digest the writer signed (schema 3) — a write-only set's data plane's
+    /// proof.
+    /// </summary>
+    [JsonPropertyName("verified_digest")]
+    public int VerifiedDigest { get; init; }
+
+    /// <summary>
     /// Where the sync-time challenge rotation resumes — the highest key the
     /// last passed verification asked about, or null to start at the
     /// beginning of the key space.
@@ -333,7 +351,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -438,6 +456,10 @@ public sealed class DestinationSyncStore
     /// </summary>
     private static List<DestinationSyncRecord> Migrate(LedgerFile file)
     {
+        // Schema 3 added the verification tiers as plain additive columns: a
+        // schema-2 row reads them as zero, which says exactly what is true of
+        // it — the tiers were not counted — so 2 → 3 needs no rewrite. Only
+        // 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -668,9 +690,11 @@ public sealed class DestinationSyncStore
     /// end of the key space and the rotation starts over.
     /// </param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="sealed">How many of <paramref name="objects"/> were proved by a record's AEAD tag.</param>
+    /// <param name="digest">How many of <paramref name="objects"/> were proved by the signed whole-blob digest.</param>
     public DestinationSyncRecord RecordVerification(
         string setId, string destination, int objects, int population, ulong verifiedSequence,
-        string? sampleCursor, ulong nowUnixMilliseconds)
+        string? sampleCursor, ulong nowUnixMilliseconds, int @sealed = 0, int digest = 0)
     {
         // A verification touches only the stamps: the sync half of the row —
         // state, attempt, success, the synced sequence — is carried forward
@@ -686,6 +710,8 @@ public sealed class DestinationSyncStore
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
             VerifiedPopulation = population,
+            VerifiedSealed = @sealed,
+            VerifiedDigest = digest,
             SampleCursor = sampleCursor,
         });
     }

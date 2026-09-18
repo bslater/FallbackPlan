@@ -178,6 +178,63 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordVerification_CarriesTheTiers_AndTheyRoundTrip()
+    {
+        // Schema 3: which proof the pass rested on rides beside the count, so
+        // a write-only set's "proven" can say it was the digest that proved
+        // the data plane and not a tag nobody could open.
+        DestinationSyncStore.Open(_state).RecordVerification(
+            SetId, "vault", objects: 7, population: 20, verifiedSequence: 3, sampleCursor: null,
+            nowUnixMilliseconds: 1_000, @sealed: 4, digest: 3);
+
+        var reopened = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(7, reopened.VerifiedObjects);
+        Assert.AreEqual(4, reopened.VerifiedSealed);
+        Assert.AreEqual(3, reopened.VerifiedDigest);
+    }
+
+    [TestMethod]
+    public void Open_ASchemaTwoLedger_ReadsItsRowsWithZeroTiers()
+    {
+        // A ledger written before the tiers were counted: the row is kept
+        // whole and the tiers read as zero — honest, since nobody counted
+        // them — rather than the file being set aside as foreign.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 2, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "last_success_at": 1000, "synced_sequence": 42,
+                  "verified_at": 1000, "verified_objects": 4, "verified_population": 12 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-2 ledger must migrate, not quarantine");
+        Assert.IsFalse(File.Exists(path + ".corrupt"));
+        Assert.AreEqual(4, record.VerifiedObjects);
+        Assert.AreEqual(0, record.VerifiedSealed);
+        Assert.AreEqual(0, record.VerifiedDigest);
+    }
+
+    [TestMethod]
+    public void Open_AFileOneSchemaAhead_IsSetAside()
+    {
+        // The downgrade rule, pinned at the edge rather than at 99: the very
+        // next schema is already foreign to this build.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 4, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "synced_sequence": 42 } ] }
+            """);
+
+        var store = DestinationSyncStore.Open(_state);
+
+        Assert.IsNull(store.Find(SetId, "vault"));
+        Assert.IsTrue(File.Exists(path + ".corrupt"), "the newer file's bytes must be preserved");
+    }
+
+    [TestMethod]
     public void Open_AFileFromANewerBuild_SetsItAsideRatherThanReadingItAsDefaults()
     {
         // A downgrade must not read a newer row as defaults and then overwrite
@@ -202,7 +259,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 2", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 3", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

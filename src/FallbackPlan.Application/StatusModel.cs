@@ -158,6 +158,8 @@ public static class DestinationStatus
             VerifiedSequence = record?.VerifiedSequence ?? 0,
             VerifiedObjects = record?.VerifiedObjects ?? 0,
             VerifiedPopulation = record?.VerifiedPopulation ?? 0,
+            VerifiedSealed = record?.VerifiedSealed ?? 0,
+            VerifiedDigest = record?.VerifiedDigest ?? 0,
             VerificationAgeDays = AgeInDays(record?.VerifiedAt, nowUnixMilliseconds),
             VerificationBoundDays = BoundFor(declared.Kind),
             AddressDefect = declared.AddressDefect,
@@ -335,6 +337,12 @@ public sealed record DestinationStatusInput
 
     /// <summary>Objects eligible when that sample was drawn — the coverage denominator.</summary>
     public int VerifiedPopulation { get; init; }
+
+    /// <summary>Of <see cref="VerifiedObjects"/>, how many a record's AEAD tag proved.</summary>
+    public int VerifiedSealed { get; init; }
+
+    /// <summary>Of <see cref="VerifiedObjects"/>, how many the signed whole-blob digest proved.</summary>
+    public int VerifiedDigest { get; init; }
 
     /// <summary>
     /// Whether this destination is required to prove possession (FR-VER-006),

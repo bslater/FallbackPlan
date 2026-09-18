@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Repository.Crypto;
 
@@ -26,6 +27,14 @@ namespace FallbackPlan.Hosts.Tests;
 /// tag: a record read back from the destination opens under a key the
 /// destination has never held, so rot cannot survive it and no second copy is
 /// needed.
+/// </para>
+/// <para>
+/// <b>And that it reaches the sealed data plane.</b> Every set setup produces
+/// is write-only (FR-WOR-003): its data records are sealed to a key the
+/// service does not hold, so the tag proof stops at the container. The
+/// digest tier proves the payloads from the whole-blob digest the writer
+/// signed into the index, and the ledger says which tier proved what
+/// (contract 1.32).
 /// </para>
 /// <para>
 /// This does not establish FR-DRL-001 — nothing here restores anything.
@@ -112,6 +121,78 @@ public sealed class DirectShipVerificationTests : IDisposable
         Assert.AreEqual(
             DestinationSyncState.Failed, record.State,
             $"corrupted content must fail verification: verifiedAt={record.VerifiedAt} error={record.LastError}");
+        Assert.Contains("verification failed", record.LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sync_AWriteOnlySetsSealedBlobs_AreProvedByDigestAndSaidSo()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 80_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+
+        var first = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        Assert.AreEqual(1, first.Ran);
+        await first.Transfers.WaitAsync(Timeout);
+
+        var later = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddMinutes(30), Timeout);
+        await later.Transfers.WaitAsync(Timeout);
+
+        // The data plane is sealed, so a tag can only ever prove a metadata
+        // blob here; the data blobs are proved by the digest, and the row
+        // says so rather than folding both into one count.
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.IsNotNull(record?.VerifiedAt, $"the clean pass must earn a stamp: error={record?.LastError}");
+        Assert.IsGreaterThan(0, record.VerifiedDigest, "a write-only set's data blobs are proved by digest, and the ledger must say so");
+        Assert.IsGreaterThanOrEqualTo(record.VerifiedSealed + record.VerifiedDigest, record.VerifiedObjects);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
+        var row = Assert.ContainsSingle(Assert.ContainsSingle(status.Sets).Destinations);
+        Assert.AreEqual(record.VerifiedDigest, row.VerifiedDigest, "the tiers reach the matrix (contract 1.32)");
+        Assert.AreEqual(record.VerifiedSealed, row.VerifiedSealed);
+    }
+
+    [TestMethod]
+    public async Task Sync_OneRottedByteUnderASealedRecord_FailsByDigest()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 80_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+
+        var first = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        Assert.AreEqual(1, first.Ran);
+        await first.Transfers.WaitAsync(Timeout);
+
+        var clean = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddMinutes(30), Timeout);
+        await clean.Transfers.WaitAsync(Timeout);
+        Assert.IsNotNull(runtime.DestinationSync.Find(_harness.DocsSetId, "vault")?.VerifiedAt, "the clean pass must earn a stamp, or this proves nothing");
+
+        // One byte, inside a sealed record, with the footer left whole. The
+        // container still opens, the record's tag would refuse but nobody
+        // here holds the key to try it, and before the digest tier this was
+        // a replica quietly holding damaged bytes for ever while reading
+        // "proven".
+        var replicaRoot = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        foreach (var path in Directory.GetFiles(Path.Combine(replicaRoot, "blobs", "data"), "*", SearchOption.AllDirectories))
+        {
+            var bytes = File.ReadAllBytes(path);
+            bytes[200] ^= 0xFF;
+            File.WriteAllBytes(path, bytes);
+        }
+
+        var after = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddHours(8), Timeout);
+        await after.Transfers.WaitAsync(Timeout);
+
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(
+            DestinationSyncState.Failed, record.State,
+            $"rot under a sealed record must fail by digest: verifiedAt={record.VerifiedAt} error={record.LastError}");
         Assert.Contains("verification failed", record.LastError!, StringComparison.Ordinal);
     }
 

@@ -737,6 +737,18 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// 1.27. A limit is not a failure: <paramref name="DrillFailure"/> is null
 /// beside it, and a client must not render it as one.
 /// </param>
+/// <param name="VerifiedSealed">
+/// Of the objects the last passed verification proved, how many were proved
+/// by opening a record's AEAD tag at the destination (contract 1.32). Zero
+/// from services before 1.32, which had the tier and did not count it.
+/// </param>
+/// <param name="VerifiedDigest">
+/// Of the objects the last passed verification proved, how many were proved
+/// by hashing the whole sealed blob at the destination against the digest
+/// the writer signed into the index (contract 1.32) — the proof a write-only
+/// set's data plane has, since its records are sealed to a key the service
+/// does not hold. Zero from services before 1.32, which had no such tier.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -754,7 +766,9 @@ public sealed record DestinationStatusDescriptor(
     ulong? DrilledAt = null,
     int DrillFiles = 0,
     string? DrillFailure = null,
-    string? DrillLimit = null);
+    string? DrillLimit = null,
+    int VerifiedSealed = 0,
+    int VerifiedDigest = 0);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

@@ -617,6 +617,18 @@ function destCompletion(d) {
 // shown to work"; only the third means something is wrong, and collapsing
 // "never" into either of the others is how an unexercised destination comes
 // to look reassuring.
+// Which proof the last verification rested on (contract 1.32): a record's
+// AEAD tag opened at the destination, or the whole sealed blob hashed against
+// the digest the writer signed. Said beside the possession word so a
+// write-only set's "proven" is legible — its data plane can only ever be
+// proved by digest. Nothing when the service counted neither (pre-1.32).
+function verificationTiers(d) {
+  const parts = [];
+  if (d.verifiedSealed > 0) parts.push(`${fmtCount(d.verifiedSealed)} by tag`);
+  if (d.verifiedDigest > 0) parts.push(`${fmtCount(d.verifiedDigest)} by digest`);
+  return parts.length ? ` · ${parts.join(", ")}` : "";
+}
+
 function drillLabel(d) {
   if (d.drilledAt == null) {
     return `<span class="detail">never drilled</span>`;
@@ -744,7 +756,7 @@ function renderSetCard(set) {
       <div class="dest-body">
         <div><span class="detail">Full backup</span><span>${baseline}</span></div>
         <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
-        <div><span class="detail">Possession</span><span>${esc(d.verification)}</span></div>
+        <div><span class="detail">Possession</span><span>${esc(d.verification)}${verificationTiers(d)}</span></div>
         <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}

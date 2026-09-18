@@ -240,8 +240,15 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// key existed by a machine that died before publishing one. Owner-only
     /// and local callers only, like `restart_service`; refused by name for a
     /// replica its owner can claim with the passphrase. Additive.
+    /// 1.32 adds the verification tiers to each destination row:
+    /// `verified_sealed` and `verified_digest` say how many of the proved
+    /// objects a record's AEAD tag proved and how many the signed
+    /// whole-blob digest proved — the latter being the proof a write-only
+    /// set's data plane has, its records being sealed to a key the service
+    /// does not hold. Additive with zero defaults; a pre-1.32 client reads
+    /// the row as before, with the coverage it always had.
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 31);
+    public static ContractVersion Current { get; } = new(1, 32);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

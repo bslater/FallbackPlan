@@ -186,8 +186,13 @@ public static class FanOut
                 runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
                 .ConfigureAwait(false);
 
+            // The catalogue's signed digests feed the digest tier, which is
+            // what proves a write-only set's sealed data plane over the wire:
+            // a whole-blob read over retrieval, budgeted, until the digest
+            // challenge lands (ADR-0058 §8).
             verification = await Replication.ReplicaVerifier.ProveSealedAsync(
-                new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken)
+                new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken,
+                archive.Catalogue.SignedDigestOf)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (
@@ -209,9 +214,10 @@ public static class FanOut
         if (!verification.ProvedSomething)
         {
             // Every sampled blob was a sealed data plane this service cannot
-            // open — a write-only set (FR-WOR-003). The containers held; the
-            // payloads were not examined, and claiming them would be a claim
-            // nobody checked.
+            // open and had no signed digest on record to check it against —
+            // a write-only set (FR-WOR-003) whose deltas carried none. The
+            // containers held; the payloads were not examined, and claiming
+            // them would be a claim nobody checked.
             return false;
         }
 
@@ -219,7 +225,8 @@ public static class FanOut
             .ConfigureAwait(false);
         ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         ledger.RecordVerification(
-            set.Id, destination.Name, verification.Passed, blobs.Count, syncedSequence, null, nowMs);
+            set.Id, destination.Name, verification.Passed, blobs.Count, syncedSequence, null, nowMs,
+            verification.Sealed, verification.Digest);
         return true;
     }
 
@@ -579,7 +586,7 @@ public static class FanOut
                 {
                     ledger.RecordVerification(
                         set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs);
+                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
                 }
 
                 // Else: every sample was skipped because staging could not read
@@ -1075,8 +1082,13 @@ public static class FanOut
                 // independent to compare against — archive.Store reads blobs
                 // back from the destinations themselves (ADR-0046), so the
                 // comparison would put this replica against itself.
+                // The catalogue's signed digests feed the digest tier: a
+                // write-only set's data records are sealed to a key this
+                // service does not hold, so the whole-blob digest the writer
+                // signed into the index is what proves them at the replica.
                 var verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository)
+                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
+                    archive.Catalogue.SignedDigestOf)
                     .ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
@@ -1091,7 +1103,7 @@ public static class FanOut
                 {
                     ledger.RecordVerification(
                         set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs);
+                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
                 }
 
                 return;

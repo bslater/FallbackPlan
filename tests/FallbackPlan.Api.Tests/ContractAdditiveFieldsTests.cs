@@ -533,6 +533,34 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheVerificationTiers_WireNamesAndPre132Defaults()
+    {
+        // Contract 1.32: which proof the last verification rested on — a
+        // record's tag opened at the destination, or the whole sealed blob
+        // hashed against the digest the writer signed.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
+                "other-drive", "proven", VerifiedSealed: 5, VerifiedDigest: 2),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"verified_sealed\":5", modern, StringComparison.Ordinal);
+        Assert.Contains("\"verified_digest\":2", modern, StringComparison.Ordinal);
+
+        // A pre-1.32 frame carries neither and reads as zero of each: the
+        // coverage the row always had, with no claim about which tier.
+        var old = modern
+            .Replace(",\"verified_sealed\":5", "", StringComparison.Ordinal)
+            .Replace(",\"verified_digest\":2", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.AreEqual(0, row.VerifiedSealed);
+        Assert.AreEqual(0, row.VerifiedDigest);
+        Assert.AreEqual("proven", row.Verification);
+    }
+
+    [TestMethod]
     public void TheDrillLimit_WireNameAndPre127Default()
     {
         // Contract 1.27 (ADR-0054 Amendment 2): a drill on a write-only set

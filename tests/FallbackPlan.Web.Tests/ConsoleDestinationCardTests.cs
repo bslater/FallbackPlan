@@ -155,6 +155,24 @@ public sealed class ConsoleDestinationCardTests
     }
 
     [TestMethod]
+    public void Possession_TheTiers_AreTheServicesCountsNamedByProof()
+    {
+        var script = AppJs();
+        var body = FunctionBody(script, "verificationTiers");
+
+        // Contract 1.32: which proof the possession word rests on. Both
+        // counts come from the service's row — never re-derived — and a
+        // zero tier is left unsaid rather than printed as "0 by digest",
+        // which a pre-1.32 service would otherwise say of every row.
+        Assert.Contains("d.verifiedSealed", body, StringComparison.Ordinal);
+        Assert.Contains("d.verifiedDigest", body, StringComparison.Ordinal);
+        Assert.Contains("by tag", body, StringComparison.Ordinal);
+        Assert.Contains("by digest", body, StringComparison.Ordinal);
+        Assert.Contains("> 0", body, StringComparison.Ordinal);
+        Assert.Contains("esc(d.verification)}${verificationTiers(d)}", script, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void Drill_TheFailureText_ComesFromTheServiceAndIsEscaped()
     {
         var body = FunctionBody(AppJs(), "drillLabel");
