@@ -18,7 +18,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// Phase-2 peer criterion (a source destroyed and recovered from its
 /// destination) in its first concrete form. The role a grant carries decides
 /// whether a peer replicates or commands; the exchange is idempotent on re-run.
-/// Establishes FR-REP-001 and FR-REP-003.
+/// Establishes FR-REP-001 and FR-REP-003, and since
+/// [ADR-0064](../../docs/adr/0064-replication-receipts.md) the destination's
+/// signed statement of what a push created (FR-DEST-004).
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -62,6 +64,18 @@ public sealed class PeerReplicationTests : IDisposable
             Assert.IsTrue(replica.TryGetValue(key, out var copied), $"the replica is missing {key}");
             Assert.IsTrue(bytes.SequenceEqual(copied!), $"the replica's {key} differs from the source's");
         }
+
+        // And the destination's own signed statement of what this push
+        // created is on file: every key the replica now holds arrived this
+        // session, and the replica is exactly that big (ADR-0064).
+        var filed = Assert.ContainsSingle(ReplicationReceiptStore.Open(_destinationState).List());
+        Assert.AreEqual(DeletionReceiptRole.Destination, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        var receipt = filed.Receipt!;
+        Assert.AreEqual((ulong)replica.Count, receipt.CommittedCount);
+        CollectionAssert.AreEquivalent(replica.Keys.ToList(), receipt.Committed.ToList());
+        Assert.AreEqual((ulong)replica.Count, receipt.HeldObjects);
+        Assert.AreEqual((ulong)replica.Values.Sum(bytes => bytes.LongLength), receipt.HeldBytes);
 
         // The headline: the standalone recovery tool restores from the replica —
         // a repository the destination holds but cannot read — with only the

@@ -109,7 +109,7 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 3725, Level = LogLevel.Warning,
-        Message = "Deletion receipt for {Fingerprint} was sent but could not be filed here: {Detail}")]
+        Message = "A receipt for {Fingerprint} was sent but could not be filed here: {Detail}")]
     internal static partial void DeletionReceiptNotFiled(ILogger logger, string fingerprint, string detail);
 
     [LoggerMessage(

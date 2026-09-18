@@ -21,10 +21,12 @@ internal static class ReplicationResponder
     /// <param name="Termination">Present when the peer announced the peering's end instead of replicating (01 §3).</param>
     /// <param name="RetentionDeleted">Objects deleted under a retention instruction this session (06).</param>
     /// <param name="ReceiptFilingProblem">
-    /// Why the deletion receipt this session issued could not be kept here,
-    /// or null. The commander was sent it regardless: the deletion had
-    /// already happened, and a receipt the destination cannot file is still
-    /// one the commander can ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)).
+    /// Why a receipt this session issued — the replication receipt of every
+    /// push ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), the
+    /// deletion receipt of an instruction ([ADR-0063](../../docs/adr/0063-deletion-receipts.md))
+    /// — could not be kept here, or null. The commander was sent it
+    /// regardless: what it attests had already happened, and a receipt the
+    /// destination cannot file is still one the commander can.
     /// </param>
     public sealed record Outcome(
         string RepositoryId, long Committed, PeeringTermination? Termination = null, long RetentionDeleted = 0,
@@ -42,8 +44,13 @@ internal static class ReplicationResponder
     /// fact about the session and not about how its pages were signed.
     /// </param>
     /// <param name="Keypair">This device's key; the receipt is its statement.</param>
-    /// <param name="Store">Where this side files its copy, or null to keep none.</param>
-    public sealed record ReceiptIssuer(ReadOnlyMemory<byte> SessionId, PeerKeypair Keypair, DeletionReceiptStore? Store);
+    /// <param name="Store">Where this side files its copy of a deletion receipt, or null to keep none.</param>
+    /// <param name="Replications">Where this side files its copy of a replication receipt, or null to keep none.</param>
+    public sealed record ReceiptIssuer(
+        ReadOnlyMemory<byte> SessionId,
+        PeerKeypair Keypair,
+        DeletionReceiptStore? Store,
+        ReplicationReceiptStore? Replications = null);
 
     /// <summary>What a retention exchange did, for the session's outcome.</summary>
     private readonly record struct RetentionServed(long Deleted, string? FilingProblem);
@@ -185,8 +192,11 @@ internal static class ReplicationResponder
 
             // The same two numbers the boundary stop is enforced from, told
             // to the source up front so it learns the ceiling is close before
-            // a push runs into it rather than only when one does (05 §4).
-            await SendInventoryAsync(
+            // a push runs into it rather than only when one does (05 §4). The
+            // walk counts what it lists, because the receipt below states
+            // what the replica holds and a second walk to say so would cost
+            // what this one already paid.
+            var inventory = await SendInventoryAsync(
                 replica, stream, quota > 0 ? quota - Math.Min(usage, quota) : null, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -201,12 +211,50 @@ internal static class ReplicationResponder
                 await SendPartialsAsync(replica, spoolDirectory, stream, cancellationToken).ConfigureAwait(false);
             }
 
-            var committed = await ReceiveAsync(
+            var received = await ReceiveAsync(
                 replica, spoolDirectory, stream, quota, usage, resumeNegotiated, cancellationToken)
                 .ConfigureAwait(false);
+            var committed = received.Committed;
 
-            await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
-                .ConfigureAwait(false);
+            // The replication receipt (ADR-0064): what this session created
+            // and what the replica holds now, under this device's key, filed
+            // first and acknowledged second. Issued for every push, an empty
+            // one included — a statement that nothing arrived is still a
+            // signed statement of what is held. A copy this side cannot keep
+            // is reported, not fatal: the commander's copy is the commander's.
+            string? replicationFilingProblem = null;
+            var ack = new ReplicationAck((ulong)committed);
+            if (receiptIssuer is not null)
+            {
+                var receipt = new ReplicationReceipt(
+                    SessionId: receiptIssuer.SessionId,
+                    RepositoryId: offer.RepositoryId,
+                    CommanderPublicKey: peer.Identity.PublicKey.ToArray(),
+                    IssuedAtUnixMilliseconds: (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    CommittedCount: (ulong)committed,
+                    Committed: received.Keys,
+                    HeldObjects: inventory.Objects + (ulong)committed,
+                    HeldBytes: inventory.Bytes + received.Bytes);
+                var signed = receipt.EncodeForSigning();
+                var signature = receiptIssuer.Keypair.Sign(signed);
+                if (receiptIssuer.Replications is { } replications)
+                {
+                    try
+                    {
+                        replications.File(
+                            DeletionReceiptRole.Destination, signed, signature, receiptIssuer.Keypair.Identity,
+                            set: null, destination: null);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                    {
+                        replicationFilingProblem = $"replication receipt: {exception.Message}";
+                    }
+                }
+
+                ack = new ReplicationAck((ulong)committed, signed, signature);
+            }
+
+            await PeerFrame.WriteAsync(stream, ack, cancellationToken).ConfigureAwait(false);
 
             var retention = await ServeAfterAckAsync(
                 replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated, sessionBinding,
@@ -215,7 +263,14 @@ internal static class ReplicationResponder
 
             return new Outcome(
                 repositoryIdHex, committed,
-                RetentionDeleted: retention.Deleted, ReceiptFilingProblem: retention.FilingProblem);
+                RetentionDeleted: retention.Deleted,
+                ReceiptFilingProblem: (replicationFilingProblem, retention.FilingProblem) switch
+                {
+                    (null, null) => null,
+                    ({ } one, null) => one,
+                    (null, { } two) => $"deletion receipt: {two}",
+                    ({ } one, { } two) => $"{one}; deletion receipt: {two}",
+                });
         }
         catch (PeerProtocolException exception)
         {
@@ -624,13 +679,23 @@ internal static class ReplicationResponder
         return new RetentionServed(deleted.Count, filingProblem);
     }
 
-    private static async Task SendInventoryAsync(
+    /// <summary>What the inventory walk counted as it declared: the replica's size before this session's commits.</summary>
+    private readonly record struct Inventoried(ulong Objects, ulong Bytes);
+
+    /// <summary>What a session received: the commits, the created keys up to the receipt's cap, and their bytes.</summary>
+    private readonly record struct Received(long Committed, IReadOnlyList<string> Keys, ulong Bytes);
+
+    private static async Task<Inventoried> SendInventoryAsync(
         LocalFileSystemObjectStore replica, Stream stream, ulong? headroom, CancellationToken cancellationToken)
     {
+        var objects = 0UL;
+        var bytes = 0UL;
         var page = new List<string>(ReplicationInventory.MaximumKeys);
         await foreach (var entry in replica.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
+            objects++;
+            bytes += (ulong)Math.Max(entry.Length, 0);
             page.Add(entry.Key.Value);
             if (page.Count == ReplicationInventory.MaximumKeys)
             {
@@ -645,6 +710,7 @@ internal static class ReplicationResponder
         await PeerFrame.WriteAsync(
             stream, new ReplicationInventory([.. page], More: false, headroom), cancellationToken)
             .ConfigureAwait(false);
+        return new Inventoried(objects, bytes);
     }
 
     /// <summary>Declares what this replica part holds, so a cut object can be finished.</summary>
@@ -672,11 +738,16 @@ internal static class ReplicationResponder
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<long> ReceiveAsync(
+    private static async Task<Received> ReceiveAsync(
         LocalFileSystemObjectStore replica, string spoolDirectory, Stream stream,
         ulong quota, ulong usage, bool resumeNegotiated, CancellationToken cancellationToken)
     {
         var committed = 0L;
+        var bytes = 0UL;
+        // The keys a receipt lists, capped at one inventory page: the count
+        // carries the rest, and a session that creates more than the cap
+        // does not grow a list in memory to say so.
+        var keys = new List<string>();
         Incoming? current = null;
         try
         {
@@ -693,7 +764,7 @@ internal static class ReplicationResponder
                                 PeerRefusalReason.Malformed, "Replication completed with an object still unfinished.");
                         }
 
-                        return committed;
+                        return new Received(committed, keys, bytes);
 
                     case PeerMessageType.ReplicationObject:
                         if (current is not null)
@@ -744,6 +815,12 @@ internal static class ReplicationResponder
                             {
                                 await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
                                 committed++;
+                                bytes += current.Length;
+                                if (keys.Count < ReplicationReceipt.MaximumListedKeys)
+                                {
+                                    keys.Add(current.Key);
+                                }
+
                                 usage += owing;
                                 current.Dispose();
                                 current = null;
@@ -770,6 +847,12 @@ internal static class ReplicationResponder
                             {
                                 await current.CommitAsync(replica, cancellationToken).ConfigureAwait(false);
                                 committed++;
+                                bytes += current.Length;
+                                if (keys.Count < ReplicationReceipt.MaximumListedKeys)
+                                {
+                                    keys.Add(current.Key);
+                                }
+
                                 usage += current.Length - current.Resumed;
                                 current.Dispose();
                                 current = null;
@@ -864,6 +947,8 @@ internal static class ReplicationResponder
         public bool Complete => _received == _length;
 
         public ulong Length => _length;
+
+        public string Key => _key;
 
         /// <summary>How many bytes of this object this session did not have to receive.</summary>
         public ulong Resumed { get; init; }

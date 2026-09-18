@@ -451,7 +451,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     OffersSessionBoundRetention ? session.Binding : default,
                     new ReplicationResponder.ReceiptIssuer(
                         session.Binding, _keypair,
-                        _stateDirectory is null ? null : DeletionReceiptStore.Open(_stateDirectory)),
+                        _stateDirectory is null ? null : DeletionReceiptStore.Open(_stateDirectory),
+                        _stateDirectory is null ? null : ReplicationReceiptStore.Open(_stateDirectory)),
                     _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);

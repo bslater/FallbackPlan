@@ -63,6 +63,8 @@ public sealed class PeerRetentionReplayTests : IDisposable
     private CancellationToken Timeout => _timeout.Token;
 
     private IPEndPoint? _endpoint;
+    private ReplicationAck? _lastReplicationAck;
+    private ReadOnlyMemory<byte> _lastSessionId;
     private RemoteServiceListener? _listener;
     private PeerKeypair? _listenerKeypair;
     private Protocol.PeerIdentity? _destinationIdentity;
@@ -258,6 +260,51 @@ public sealed class PeerRetentionReplayTests : IDisposable
         Assert.AreEqual(DeletionReceipt.Parse(ack.Receipt.Span), filed.Receipt);
     }
 
+    [TestMethod]
+    public async Task ReplicationAck_CarriesAReceiptTheDestinationSigned_EvenWhenNothingWasPushed()
+    {
+        // The replication receipt (ADR-0064) rides the acknowledgement of
+        // every push, this fixture's empty one included: a statement that
+        // nothing was created and what the replica holds is still a signed
+        // statement of what the peer says it holds.
+        await SeedAsync();
+        var replica = await ReplicaPathAsync();
+
+        _ = await InstructAsync(async binding => [await SignedDropAsync(binding, Condemned.Value)]);
+
+        var ack = _lastReplicationAck!;
+        Assert.IsFalse(ack.Receipt.IsEmpty, "the push was acknowledged with a bare count");
+        Assert.IsTrue(
+            _destinationIdentity!.Verify(ack.Receipt.Span, ack.Signature.Span),
+            "the receipt is not the destination's own statement");
+
+        var receipt = ReplicationReceipt.Parse(ack.Receipt.Span);
+        Assert.IsFalse(_lastSessionId.IsEmpty);
+        CollectionAssert.AreEqual(_lastSessionId.ToArray(), receipt.SessionId.ToArray(), "the receipt names another session");
+        CollectionAssert.AreEqual(await RepositoryIdAsync(), receipt.RepositoryId.ToArray());
+        using var commander = PeerKeypairStore.Open(_source.StateDirectory);
+        CollectionAssert.AreEqual(commander.Identity.PublicKey.ToArray(), receipt.CommanderPublicKey.ToArray());
+        Assert.AreEqual(0UL, receipt.CommittedCount);
+        Assert.IsEmpty(receipt.Committed);
+
+        var held = Directory.GetFiles(replica, "*", SearchOption.AllDirectories)
+            .Where(path => !Path.GetRelativePath(replica, path).StartsWith(".fbp-tmp", StringComparison.Ordinal))
+            .Select(path => new FileInfo(path).Length)
+            .ToList();
+        Assert.AreEqual((ulong)held.Count, receipt.HeldObjects, "the receipt does not say what the replica holds");
+        Assert.AreEqual((ulong)held.Sum(), receipt.HeldBytes);
+
+        // The seeding backup's push filed a receipt of its own; this
+        // session's is the one to find, and it must be on file beside it.
+        var listed = ReplicationReceiptStore.Open(_destinationState).List(await RepositoryIdHexAsync());
+        Assert.HasCount(2, listed);
+        var filed = Assert.ContainsSingle(
+            listed.Where(entry => entry.Receipt is not null && entry.Receipt.SessionId.Span.SequenceEqual(_lastSessionId.Span)));
+        Assert.AreEqual(DeletionReceiptRole.Destination, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.AreEqual(receipt, filed.Receipt);
+    }
+
     /// <summary>A backup, so the destination holds a replica and has recorded the reclaim key.</summary>
     private async Task SeedAsync(bool spokeUnderstandsSessionBinding = true)
     {
@@ -396,8 +443,9 @@ public sealed class PeerRetentionReplayTests : IDisposable
         }
 
         await PeerFrame.WriteAsync(session.Stream, new ReplicationComplete(0), Timeout);
-        _ = await ReplicationWire.ReadAsync(
+        _lastReplicationAck = await ReplicationWire.ReadAsync(
             session.Stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, Timeout);
+        _lastSessionId = session.Binding;
 
         // The same rule the fan-out applies: bind only to a spoke that says it
         // verifies over one (02 §6).
