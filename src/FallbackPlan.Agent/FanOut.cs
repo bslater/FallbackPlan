@@ -543,14 +543,15 @@ public static class FanOut
             // this pass concludes (ADR-0063).
             RecordReceipt(runtime, set, destination, outcome, receiptFate, nowMs);
 
-            // The heal, for a direct-ship set whose metadata plane is behind
-            // the peer: over the retrieval session, dialled only for this,
-            // and keyed on the metadata plane so a heal that failed is
-            // retried on every pass until it succeeds. A staging set is not
-            // healed: what it lacks is content, and the peer keeps it.
+            // The heal, for a set whose archive is behind the peer: over the
+            // retrieval session, dialled only for this, and keyed on the
+            // metadata plane so a heal that failed is retried on every pass
+            // until it succeeds. A staging set gets its content back too —
+            // the closure of the history it lacks, one chunk in memory at a
+            // time — because the peer keeps what staging no longer lists
+            // (ADR-0034 §6), and a heal is exactly reading it back.
             ServiceRuntime.HealOutcome? heal = null;
-            if (archive.ShipSink is not null
-                && attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+            if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
                     .ConfigureAwait(false))
             {
                 heal = await HealFromPeerAsync(runtime, set, destination, archive, cancellationToken)
@@ -1416,15 +1417,7 @@ public static class FanOut
         Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
 
         string consequence;
-        if (staging && peer && heal is null)
-        {
-            consequence =
-                "This is a staging set, so its staging archive is behind the peer as well and is not healed "
-                + "from it. The peer keeps what the staging archive no longer lists (ADR-0034 §6), so the "
-                + "newer history survives there — as history this machine cannot see until it is restored "
-                + "from the peer — and no convergence run will delete it.";
-        }
-        else if (heal?.Failure is { } failure)
+        if (heal?.Failure is { } failure)
         {
             consequence = staging
                 ? $"This is a staging set, and its archive is behind the destination as well. The destination's "

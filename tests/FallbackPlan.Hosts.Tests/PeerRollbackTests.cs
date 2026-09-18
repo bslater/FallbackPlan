@@ -190,14 +190,24 @@ public sealed class PeerRollbackTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AStagingSet_RolledBackWithItsArchive_IsNoticedAtThePeerAndTold()
+    public async Task AStagingSet_RolledBackWithItsArchive_IsHealedOverTheRetrievalSession()
     {
-        // A staging set's peer keeps what staging no longer lists, so the
-        // newer history survives there on its own; what the pass owes the
-        // operator is the notice and the moved writer, and it does not heal
-        // content it cannot see.
-        var replica = await TwoBackupsThenRollBackAsync(directShip: false);
+        // A staging set's peer keeps what staging no longer lists, and the
+        // retrieval session is exactly how this machine reads it back: the
+        // pass notices from the inventory, moves the writer, and copies the
+        // newer history — content and metadata, blobs first, one chunk in
+        // memory at a time — into the staging archive. The second backup
+        // carries a file longer than one retrieval chunk, so the copy has
+        // to reassemble it, and the healed archive is held byte for byte
+        // against the peer's copy.
+        var replica = await TwoBackupsThenRollBackAsync(directShip: false, bigSecondBackup: true);
+        // A scheduled sync holds no authority to delete at a peer (ADR-0055
+        // §6), so the peer holds both backups; the rolled-back archive lists
+        // the first alone, and the second is what it is owed.
         var before = ReplicaKeys(replica);
+        Assert.HasCount(2, SnapshotObjects(replica));
+        Assert.ContainsSingle(SnapshotObjects(Staging), "the rolled-back archive holds the first backup alone");
+        var newest = Assert.ContainsSingle(SnapshotObjects(replica).Except(SnapshotObjects(Staging), StringComparer.Ordinal));
         var sequenceBefore = await SequenceFileAsync();
 
         await using var runtime = await StartAsync();
@@ -205,15 +215,68 @@ public sealed class PeerRollbackTests : IDisposable
 
         var notice = Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
         Assert.Contains("staging", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("copied back", notice.Message, StringComparison.Ordinal);
         Assert.AreNotEqual(sequenceBefore, await SequenceFileAsync());
         Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal));
+
+        var spansChunks = false;
+        foreach (var key in before)
+        {
+            var theirs = await File.ReadAllBytesAsync(Path.Combine(replica, key), Timeout);
+            var mine = Path.Combine(Staging, key);
+            Assert.IsTrue(File.Exists(mine), $"{key} was not copied back into the staging archive");
+            var ours = await File.ReadAllBytesAsync(mine, Timeout);
+            Assert.IsTrue(theirs.AsSpan().SequenceEqual(ours), $"{key} came back from the peer as different bytes");
+            spansChunks |= theirs.Length > RetrieveRead.MaximumLength;
+        }
+
+        Assert.IsTrue(spansChunks, "no object at the peer was longer than one retrieval chunk, so the reassembly went unexercised");
+        Assert.HasCount(2, SnapshotObjects(Staging));
+
+        // The granted run converges from an archive that now knows the
+        // second backup: under KeepDaily=1 the peer keeps exactly the newest.
+        await ApplyRetentionAsync(runtime);
+        Assert.AreEqual(newest, Assert.ContainsSingle(SnapshotObjects(replica)), "the granted run trimmed the newer backup");
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.AreEqual("second content", await RestoreNewestAsync(handler, "restored-after-peer-heal", "a.txt"));
+        _harness.WriteSourceFile("docs/a.txt", "third content");
+        await BackUpAsync(runtime);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var relisted);
+        Assert.HasCount(3, relisted.Snapshots);
+    }
+
+    private string Staging => Path.Combine(_harness.ArchivesRoot, _harness.DocsSetId);
+
+    private static List<string> SnapshotObjects(string root) =>
+        [.. Directory.GetFiles(Path.Combine(root, "snapshots"), "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))];
+
+    /// <summary>Restores one file from the newest snapshot of the set's own archive, under a grant.</summary>
+    private async Task<string> RestoreNewestAsync(ServiceCommandHandler handler, string into, string fileName)
+    {
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), Timeout), out var listed);
+        var newest = listed.Snapshots.OrderByDescending(snapshot => snapshot.CapturedAt).First().SnapshotId;
+        var output = Path.Combine(_harness.WorkPath, into);
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    newest, null, output,
+                    Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout)).SourceId),
+                Timeout),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        var file = Assert.ContainsSingle(Directory.GetFiles(output, fileName, SearchOption.AllDirectories));
+        return await File.ReadAllTextAsync(file, Timeout);
     }
 
     /// <summary>
     /// Two backups to the peer, the state directory (and, for a staging set,
     /// the archives root) copied aside between them and put back afterwards.
     /// </summary>
-    private async Task<string> TwoBackupsThenRollBackAsync(bool directShip)
+    private async Task<string> TwoBackupsThenRollBackAsync(bool directShip, bool bigSecondBackup = false)
     {
         var fingerprint = await StartDestinationAsync();
         WriteConfiguration(fingerprint, directShip);
@@ -236,6 +299,15 @@ public sealed class PeerRollbackTests : IDisposable
         await using (var runtime = await StartAsync())
         {
             _harness.WriteSourceFile("docs/a.txt", "second content");
+            if (bigSecondBackup)
+            {
+                // Incompressible and longer than one retrieval chunk, so the
+                // blob that seals it is too.
+                var big = new byte[(2 * RetrieveRead.MaximumLength) + 4_097];
+                Random.Shared.NextBytes(big);
+                await File.WriteAllBytesAsync(Path.Combine(_harness.SourceRoot, "docs", "big.bin"), big, Timeout);
+            }
+
             await BackUpAsync(runtime);
             await SyncAsync(runtime);
         }

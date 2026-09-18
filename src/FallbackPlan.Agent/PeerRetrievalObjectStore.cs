@@ -10,10 +10,13 @@ namespace FallbackPlan.Agent;
 /// ADR-0041): reads and listings travel the retrieval session; writes and
 /// deletes do not exist — the replica is the destination's to hold and the
 /// owner's to read, and a store that could write through this path would be
-/// replication wearing the wrong hat. Ranged reads larger than one chunk are
-/// fetched chunk by chunk; every consumer downstream — the repository open,
-/// the catalogue rebuild, the blob reader — goes through this one interface,
-/// which is the whole point.
+/// replication wearing the wrong hat. A read of any size is served as a
+/// stream that fetches one chunk at a time as it is consumed, so a whole
+/// blob copied back into a staging archive or restored to a person holds
+/// one chunk in memory and never the object (NFR-PERF-001); every consumer
+/// downstream — the repository open, the catalogue rebuild, the blob
+/// reader, the heal — goes through this one interface, which is the whole
+/// point.
 /// </summary>
 internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IObjectStore
 {
@@ -33,11 +36,12 @@ internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IOb
     public async ValueTask<OpenReadResult> OpenReadAsync(
         ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
     {
-        var buffered = new MemoryStream();
         var offset = (ulong)(range?.Offset ?? 0);
         ulong? want = range is { } bounded ? (ulong)bounded.Length : null;
-        ulong total;
 
+        // The first chunk is fetched eagerly: it answers whether the object
+        // exists and how long it is, which the caller needs now. The rest is
+        // fetched as the stream is read.
         var first = await client.ReadAsync(
             key.Value, offset, Math.Min(want ?? RetrieveRead.MaximumLength, RetrieveRead.MaximumLength),
             cancellationToken).ConfigureAwait(false);
@@ -46,31 +50,104 @@ internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IOb
             return OpenReadResult.NotFound;
         }
 
-        total = first.TotalLength;
+        var total = first.TotalLength;
         if (range is { } asked && (ulong)asked.Offset >= Math.Max(total, 1) && total > 0)
         {
             return OpenReadResult.RangeNotSatisfiable;
         }
 
-        buffered.Write(first.Bytes.Span);
         var end = want is { } length ? Math.Min(offset + length, total) : total;
-        var position = offset + (ulong)first.Bytes.Length;
-        while (position < end)
-        {
-            var chunk = await client.ReadAsync(
-                key.Value, position, Math.Min(end - position, RetrieveRead.MaximumLength), cancellationToken)
-                .ConfigureAwait(false);
-            if (!chunk.Found || chunk.Bytes.Length == 0)
-            {
-                break;
-            }
+        return new OpenReadResult(new ChunkedReadStream(client, key.Value, first.Bytes, offset, end));
+    }
 
-            buffered.Write(chunk.Bytes.Span);
-            position += (ulong)chunk.Bytes.Length;
+    /// <summary>
+    /// A forward-only read over one object, one chunk in memory at a time:
+    /// the chunk already fetched, then each next one as the previous is
+    /// consumed, up to the end of the range asked for.
+    /// </summary>
+    private sealed class ChunkedReadStream : Stream
+    {
+        private readonly PeerRetrievalClient _client;
+        private readonly string _key;
+        private readonly ulong _start;
+        private readonly ulong _end;
+        private ReadOnlyMemory<byte> _chunk;
+        private int _consumed;
+        private ulong _fetched;
+        private ulong _position;
+
+        public ChunkedReadStream(PeerRetrievalClient client, string key, ReadOnlyMemory<byte> first, ulong start, ulong end)
+        {
+            _client = client;
+            _key = key;
+            _start = start;
+            _end = end;
+            _chunk = first;
+            _fetched = start + (ulong)first.Length;
+            _position = start;
         }
 
-        buffered.Position = 0;
-        return new OpenReadResult(buffered);
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => (long)(_end - _start);
+
+        public override long Position
+        {
+            get => (long)(_position - _start);
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_consumed == _chunk.Length)
+            {
+                if (_fetched >= _end)
+                {
+                    return 0;
+                }
+
+                var next = await _client.ReadAsync(
+                    _key, _fetched, Math.Min(_end - _fetched, RetrieveRead.MaximumLength), cancellationToken)
+                    .ConfigureAwait(false);
+                if (!next.Found || next.Bytes.Length == 0)
+                {
+                    // The object shrank or vanished under the read: end the
+                    // stream short rather than spin, and let the consumer's
+                    // own length or authentication check name it.
+                    return 0;
+                }
+
+                _chunk = next.Bytes;
+                _consumed = 0;
+                _fetched += (ulong)next.Bytes.Length;
+            }
+
+            var count = Math.Min(buffer.Length, _chunk.Length - _consumed);
+            _chunk.Span.Slice(_consumed, count).CopyTo(buffer.Span);
+            _consumed += count;
+            _position += (ulong)count;
+            return count;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <inheritdoc/>
