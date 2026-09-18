@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
@@ -19,8 +20,33 @@ internal static class ReplicationResponder
     /// <param name="Committed">How many objects were committed.</param>
     /// <param name="Termination">Present when the peer announced the peering's end instead of replicating (01 §3).</param>
     /// <param name="RetentionDeleted">Objects deleted under a retention instruction this session (06).</param>
+    /// <param name="ReceiptFilingProblem">
+    /// Why the deletion receipt this session issued could not be kept here,
+    /// or null. The commander was sent it regardless: the deletion had
+    /// already happened, and a receipt the destination cannot file is still
+    /// one the commander can ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)).
+    /// </param>
     public sealed record Outcome(
-        string RepositoryId, long Committed, PeeringTermination? Termination = null, long RetentionDeleted = 0);
+        string RepositoryId, long Committed, PeeringTermination? Termination = null, long RetentionDeleted = 0,
+        string? ReceiptFilingProblem = null);
+
+    /// <summary>
+    /// What this side needs to issue a deletion receipt
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)): the session it
+    /// will name, the device key it will sign under, and where to keep its own
+    /// copy.
+    /// </summary>
+    /// <param name="SessionId">
+    /// This session's identifier (02 §3.5), whatever the negotiated features —
+    /// the receipt states which session an instruction arrived in, which is a
+    /// fact about the session and not about how its pages were signed.
+    /// </param>
+    /// <param name="Keypair">This device's key; the receipt is its statement.</param>
+    /// <param name="Store">Where this side files its copy, or null to keep none.</param>
+    public sealed record ReceiptIssuer(ReadOnlyMemory<byte> SessionId, PeerKeypair Keypair, DeletionReceiptStore? Store);
+
+    /// <summary>What a retention exchange did, for the session's outcome.</summary>
+    private readonly record struct RetentionServed(long Deleted, string? FilingProblem);
 
     /// <summary>Serves one replication session from a source.</summary>
     /// <param name="replicasRoot">The directory under which per-repository replica stores live.</param>
@@ -41,6 +67,10 @@ internal static class ReplicationResponder
     /// Without it nothing is declared, nothing is kept, and a resume offset is
     /// refused — which is this build's behaviour towards every older peer.
     /// </param>
+    /// <param name="receiptIssuer">
+    /// How a deletion receipt is issued after a retention instruction, or
+    /// null to acknowledge with the bare count as builds before receipts did.
+    /// </param>
     /// <param name="cancellationToken">Cancels serving.</param>
     /// <param name="preread">The first payload frame, when the caller already read it to route the session (ADR-0041).</param>
     /// <returns>What was received.</returns>
@@ -51,6 +81,7 @@ internal static class ReplicationResponder
         bool verificationNegotiated,
         bool resumeNegotiated,
         ReadOnlyMemory<byte> sessionBinding,
+        ReceiptIssuer? receiptIssuer,
         CancellationToken cancellationToken,
         (PeerMessageType Type, System.Formats.Cbor.CborReader Body)? preread = null)
     {
@@ -177,12 +208,14 @@ internal static class ReplicationResponder
             await PeerFrame.WriteAsync(stream, new ReplicationAck((ulong)committed), cancellationToken)
                 .ConfigureAwait(false);
 
-            var retentionDeleted = await ServeAfterAckAsync(
+            var retention = await ServeAfterAckAsync(
                 replica, offer.RepositoryId, peer, retentionNegotiated, verificationNegotiated, sessionBinding,
-                stream, owners, cancellationToken)
+                stream, owners, receiptIssuer, cancellationToken)
                 .ConfigureAwait(false);
 
-            return new Outcome(repositoryIdHex, committed, RetentionDeleted: retentionDeleted);
+            return new Outcome(
+                repositoryIdHex, committed,
+                RetentionDeleted: retention.Deleted, ReceiptFilingProblem: retention.FilingProblem);
         }
         catch (PeerProtocolException exception)
         {
@@ -202,7 +235,7 @@ internal static class ReplicationResponder
     /// session then deletes proves nothing anyone keeps. The session ends
     /// when the peer closes.
     /// </summary>
-    private static async Task<long> ServeAfterAckAsync(
+    private static async Task<RetentionServed> ServeAfterAckAsync(
         LocalFileSystemObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
@@ -211,9 +244,10 @@ internal static class ReplicationResponder
         ReadOnlyMemory<byte> sessionBinding,
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
+        ReceiptIssuer? receiptIssuer,
         CancellationToken cancellationToken)
     {
-        var retentionDeleted = 0L;
+        var retention = new RetentionServed(0, null);
         var retentionServed = false;
         var challengeServed = false;
 
@@ -224,7 +258,7 @@ internal static class ReplicationResponder
             var frame = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
             if (frame is null)
             {
-                return retentionDeleted;
+                return retention;
             }
 
             switch (frame.Value.Type)
@@ -240,9 +274,9 @@ internal static class ReplicationResponder
                             "A retention instruction arrived without the retention-instruction feature in effect.");
                     }
 
-                    retentionDeleted = await ServeRetentionAsync(
+                    retention = await ServeRetentionAsync(
                         replica, offeredRepositoryId, peer, frame.Value.Body, stream,
-                        owners, sessionBinding, cancellationToken)
+                        owners, sessionBinding, receiptIssuer, cancellationToken)
                         .ConfigureAwait(false);
                     retentionServed = true;
                     break;
@@ -421,14 +455,26 @@ internal static class ReplicationResponder
     }
 
     /// <summary>
+    /// <para>
     /// Serves a retention instruction (peer-protocol 06): the commander
     /// computed, this side deletes exactly what it is told — bounded below
     /// by the granted retention floor, which is the one safeguard that holds
     /// when the hub is compromised. The floor check needs no decryption:
     /// snapshot objects are counted by prefix, so a spoke that cannot read a
     /// single manifest can still refuse to breach it.
+    /// </para>
+    /// <para>
+    /// What it then did is attested in a deletion receipt signed under this
+    /// device's key and sent back in the acknowledgement
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)): the session,
+    /// the commander, a digest of each page exactly as it was accepted, the
+    /// keys removed and how many were never held. This side files its own
+    /// copy first; a copy it cannot file is reported, not fatal, because the
+    /// deletion has already happened and the commander's copy is the
+    /// commander's.
+    /// </para>
     /// </summary>
-    private static async Task<long> ServeRetentionAsync(
+    private static async Task<RetentionServed> ServeRetentionAsync(
         LocalFileSystemObjectStore replica,
         ReadOnlyMemory<byte> offeredRepositoryId,
         Protocol.PeerGrant peer,
@@ -436,12 +482,15 @@ internal static class ReplicationResponder
         Stream stream,
         FallbackPlan.Application.ReplicaOwnerStore owners,
         ReadOnlyMemory<byte> sessionBinding,
+        ReceiptIssuer? receiptIssuer,
         CancellationToken cancellationToken)
     {
         // Every page is read before anything is deleted: the floor check is
         // over the whole instruction, or a piecewise pass could breach it in
         // total (06 §4.1).
         var drops = new List<string>();
+        var pageDigests = new List<ReadOnlyMemory<byte>>();
+        var repositoryIdHex = Convert.ToHexStringLower(offeredRepositoryId.Span);
         var page = RetentionOffer.Read(firstBody);
         while (true)
         {
@@ -452,8 +501,21 @@ internal static class ReplicationResponder
                     "A retention page names a repository other than the one this session replicated.");
             }
 
-            RequireReclaimSignature(
-                page, Convert.ToHexStringLower(offeredRepositoryId.Span), owners, sessionBinding);
+            RequireReclaimSignature(page, repositoryIdHex, owners, sessionBinding);
+
+            // The receipt commits to the page over the same bytes its
+            // signature covered, so the commander can match it against what
+            // it sent and nobody without the page can forge the match. An
+            // instruction longer than a receipt can attest is refused before
+            // anything is deleted, not after.
+            if (pageDigests.Count == DeletionReceipt.MaximumPages)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A retention instruction may not run to more than {DeletionReceipt.MaximumPages} pages.");
+            }
+
+            pageDigests.Add(SHA256.HashData(page.EncodeForSigning(sessionBinding.Span)));
 
             foreach (var key in page.Keys)
             {
@@ -496,20 +558,70 @@ internal static class ReplicationResponder
                 + $"{peer.Terms.RetentionFloorGenerations} (06 §3).");
         }
 
-        var deleted = 0L;
+        var deleted = new List<string>();
+        var notHeld = 0u;
         foreach (var key in drops)
         {
             var outcome = await replica.DeleteAsync(
                 Storage.Abstractions.ObjectKey.Parse(key), DeleteConditions.None, cancellationToken)
                 .ConfigureAwait(false);
-            if (outcome.Outcome == DeleteOutcome.Deleted)
+            switch (outcome.Outcome)
             {
-                deleted++;
+                case DeleteOutcome.Deleted:
+                    deleted.Add(key);
+                    break;
+                case DeleteOutcome.NotFound:
+                    notHeld++;
+                    break;
             }
         }
 
-        await PeerFrame.WriteAsync(stream, new RetentionAck((ulong)deleted), cancellationToken).ConfigureAwait(false);
-        return deleted;
+        if (receiptIssuer is null)
+        {
+            await PeerFrame.WriteAsync(stream, new RetentionAck((ulong)deleted.Count), cancellationToken)
+                .ConfigureAwait(false);
+            return new RetentionServed(deleted.Count, null);
+        }
+
+        // The receipt attests what was done, never what was asked: the keys
+        // listed are the ones removed, capped at what a receipt may carry,
+        // with the count and the page digests standing for the rest.
+        var receipt = new DeletionReceipt(
+            SessionId: receiptIssuer.SessionId,
+            RepositoryId: offeredRepositoryId,
+            CommanderPublicKey: peer.Identity.PublicKey.ToArray(),
+            IssuedAtUnixMilliseconds: (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            FloorGenerations: peer.Terms.RetentionFloorGenerations,
+            ReclaimPublicKey: owners.Find(repositoryIdHex)?.ReclaimPublicKey is { Length: > 0 } reclaimHex
+                ? Convert.FromHexString(reclaimHex)
+                : ReadOnlyMemory<byte>.Empty,
+            PageDigests: pageDigests,
+            DeletedCount: (ulong)deleted.Count,
+            Deleted: deleted.Count <= DeletionReceipt.MaximumListedKeys
+                ? deleted
+                : deleted.GetRange(0, DeletionReceipt.MaximumListedKeys),
+            NotHeld: notHeld);
+        var signed = receipt.EncodeForSigning();
+        var signature = receiptIssuer.Keypair.Sign(signed);
+
+        string? filingProblem = null;
+        if (receiptIssuer.Store is { } store)
+        {
+            try
+            {
+                store.File(
+                    DeletionReceiptRole.Destination, signed, signature, receiptIssuer.Keypair.Identity,
+                    set: null, destination: null);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                filingProblem = exception.Message;
+            }
+        }
+
+        await PeerFrame.WriteAsync(stream, new RetentionAck((ulong)deleted.Count, signed, signature), cancellationToken)
+            .ConfigureAwait(false);
+        return new RetentionServed(deleted.Count, filingProblem);
     }
 
     private static async Task SendInventoryAsync(

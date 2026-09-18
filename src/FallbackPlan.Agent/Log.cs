@@ -108,6 +108,11 @@ internal static partial class Log
     internal static partial void Replicated(ILogger logger, long committed, string fingerprint);
 
     [LoggerMessage(
+        EventId = 3725, Level = LogLevel.Warning,
+        Message = "Deletion receipt for {Fingerprint} was sent but could not be filed here: {Detail}")]
+    internal static partial void DeletionReceiptNotFiled(ILogger logger, string fingerprint, string detail);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);

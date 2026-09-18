@@ -84,7 +84,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
             return [recorded];
         });
 
-        Assert.AreEqual(1UL, honest, "the genuine instruction did not delete what it named");
+        Assert.AreEqual(1UL, honest.Deleted, "the genuine instruction did not delete what it named");
         Assert.IsFalse((await replica.GetMetadataAsync(Condemned, Timeout)).Found);
 
         // The object comes back — the source re-shipped it, a later capture
@@ -160,8 +160,102 @@ public sealed class PeerRetentionReplayTests : IDisposable
             return [await SignedDropAsync(binding, Condemned.Value)];
         });
 
-        Assert.AreEqual(1UL, deleted);
+        Assert.AreEqual(1UL, deleted.Deleted);
         Assert.IsFalse((await replica.GetMetadataAsync(Condemned, Timeout)).Found);
+    }
+
+    [TestMethod]
+    public async Task RetentionAck_CarriesAReceiptTheDestinationSigned_OverTheSessionThePageAndTheKeys()
+    {
+        // The audit half of FR-GC-008 on the peer plane: the destination
+        // holds no repository key, so what it can attest is signed under its
+        // own device key — and what it attests is exactly what it was told,
+        // in which session, and what it did about it (ADR-0063).
+        await SeedAsync();
+        var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
+        await PlantAsync(replica);
+
+        ReadOnlyMemory<byte> session = default;
+        RetentionOffer? sent = null;
+        var ack = await InstructAsync(async binding =>
+        {
+            session = binding;
+            sent = await SignedDropAsync(binding, Condemned.Value);
+            return [sent];
+        });
+
+        Assert.AreEqual(1UL, ack.Deleted);
+        Assert.IsFalse(ack.Receipt.IsEmpty, "the spoke deleted and sent no receipt");
+        Assert.IsTrue(
+            _destinationIdentity!.Verify(ack.Receipt.Span, ack.Signature.Span),
+            "the receipt is not the destination's own statement");
+
+        var receipt = DeletionReceipt.Parse(ack.Receipt.Span);
+        Assert.IsFalse(session.IsEmpty, "the spoke under test binds signatures to the session");
+        CollectionAssert.AreEqual(session.ToArray(), receipt.SessionId.ToArray(), "the receipt names another session");
+        CollectionAssert.AreEqual(await RepositoryIdAsync(), receipt.RepositoryId.ToArray());
+
+        using var commander = PeerKeypairStore.Open(_source.StateDirectory);
+        CollectionAssert.AreEqual(commander.Identity.PublicKey.ToArray(), receipt.CommanderPublicKey.ToArray());
+
+        Assert.AreEqual(0u, receipt.FloorGenerations, "this pairing's terms carry no floor");
+        var owner = ReplicaOwnerStore.Open(_destinationState).Find(await RepositoryIdHexAsync());
+        CollectionAssert.AreEqual(
+            Convert.FromHexString(owner!.ReclaimPublicKey!), receipt.ReclaimPublicKey.ToArray(),
+            "the receipt must name the key the instruction was verified against");
+
+        var digest = Assert.ContainsSingle(receipt.PageDigests);
+        CollectionAssert.AreEqual(
+            SHA256.HashData(sent!.EncodeForSigning(session.Span)), digest.ToArray(),
+            "the receipt does not commit to the page that was sent");
+
+        Assert.AreEqual(1UL, receipt.DeletedCount);
+        Assert.AreEqual(Condemned.Value, Assert.ContainsSingle(receipt.Deleted));
+        Assert.AreEqual(0u, receipt.NotHeld);
+    }
+
+    [TestMethod]
+    public async Task RetentionAck_AKeyTheDestinationNeverHeld_IsCountedInTheReceiptAndNotListedAsDeleted()
+    {
+        // An instruction can name what the destination lost, never took, or
+        // already deleted under an earlier one. The receipt says how many
+        // such keys there were and lists only what was actually removed —
+        // listing them as deleted would attest to a deletion that did not
+        // happen.
+        await SeedAsync();
+        var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
+        await PlantAsync(replica);
+
+        var ack = await InstructAsync(async binding =>
+            [await SignedDropAsync(binding, Condemned.Value, "blobs/data/zz/never-held")]);
+
+        Assert.AreEqual(1UL, ack.Deleted);
+        var receipt = DeletionReceipt.Parse(ack.Receipt.Span);
+        Assert.AreEqual(Condemned.Value, Assert.ContainsSingle(receipt.Deleted));
+        Assert.AreEqual(1UL, receipt.DeletedCount);
+        Assert.AreEqual(1u, receipt.NotHeld);
+    }
+
+    [TestMethod]
+    public async Task RetentionAck_TheDestinationFilesItsOwnCopyBeforeAnswering()
+    {
+        // Both parties keep the receipt and neither depends on the other's
+        // copy: the destination's is the record of what it did on whose
+        // instruction, kept where its operator can read it back.
+        await SeedAsync();
+        var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
+        await PlantAsync(replica);
+
+        var ack = await InstructAsync(async binding => [await SignedDropAsync(binding, Condemned.Value)]);
+
+        var filed = Assert.ContainsSingle(
+            DeletionReceiptStore.Open(_destinationState).List(await RepositoryIdHexAsync()));
+        Assert.AreEqual(DeletionReceiptRole.Destination, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.IsNull(filed.Problem);
+        Assert.IsNull(filed.Set, "a destination files under no set name of the commander's");
+        Assert.AreEqual(_destinationIdentity!.Fingerprint, filed.SignerFingerprint);
+        Assert.AreEqual(DeletionReceipt.Parse(ack.Receipt.Span), filed.Receipt);
     }
 
     /// <summary>A backup, so the destination holds a replica and has recorded the reclaim key.</summary>
@@ -232,8 +326,8 @@ public sealed class PeerRetentionReplayTests : IDisposable
     /// the push half emptied out.
     /// </summary>
     /// <param name="pages">Builds the retention pages, given the session's identifier.</param>
-    /// <returns>What the spoke acknowledged deleting.</returns>
-    private Task<ulong> InstructAsync(Func<ReadOnlyMemory<byte>, Task<RetentionOffer[]>> pages) =>
+    /// <returns>The spoke's acknowledgement — the count, and the receipt when it sends one.</returns>
+    private Task<RetentionAck> InstructAsync(Func<ReadOnlyMemory<byte>, Task<RetentionOffer[]>> pages) =>
         InstructAsync(offerSignedRetention: true, pages);
 
     /// <summary>
@@ -248,8 +342,8 @@ public sealed class PeerRetentionReplayTests : IDisposable
     /// signed over this session's identifier — or, for a replay, so a page
     /// built for an earlier one may be returned unchanged.
     /// </param>
-    /// <returns>What the spoke acknowledged deleting.</returns>
-    private async Task<ulong> InstructAsync(
+    /// <returns>The spoke's acknowledgement — the count, and the receipt when it sends one.</returns>
+    private async Task<RetentionAck> InstructAsync(
         bool offerSignedRetention, Func<ReadOnlyMemory<byte>, Task<RetentionOffer[]>> pages)
     {
         using var passphrase = Passphrase.Create(
@@ -316,9 +410,8 @@ public sealed class PeerRetentionReplayTests : IDisposable
             await PeerFrame.WriteAsync(session.Stream, page, Timeout);
         }
 
-        var ack = await ReplicationWire.ReadAsync(
+        return await ReplicationWire.ReadAsync(
             session.Stream, PeerMessageType.RetentionAck, RetentionAck.Read, Timeout);
-        return ack.Deleted;
     }
 
     private async Task<string> ReplicaPathAsync()

@@ -449,9 +449,17 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     // checked decide it (02 §6). What this build offers is a
                     // fact about this build.
                     OffersSessionBoundRetention ? session.Binding : default,
+                    new ReplicationResponder.ReceiptIssuer(
+                        session.Binding, _keypair,
+                        _stateDirectory is null ? null : DeletionReceiptStore.Open(_stateDirectory)),
                     _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);
+
+                if (outcome.ReceiptFilingProblem is { } filingProblem)
+                {
+                    Log.DeletionReceiptNotFiled(_log, peer, filingProblem);
+                }
 
                 if (outcome.Termination is { } termination)
                 {
