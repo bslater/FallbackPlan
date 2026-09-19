@@ -501,6 +501,27 @@ public sealed class ServiceRuntime : IAsyncDisposable
             {
             }
 
+            // Peer receipts are filed one per exchange at both ends and bound
+            // themselves as they are written (NFR-OPS-008). This is what
+            // reaches a pair that has stopped filing — a set deleted, a
+            // pairing ended, a peer gone — and a pile a build without a bound
+            // left behind. Names only, so it costs a listing; a failure is
+            // housekeeping's, never a reason a service will not start.
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                var deletions = Protocol.DeletionReceiptStore.Open(options.StateDirectory).Sweep(now);
+                var replications = Protocol.ReplicationReceiptStore.Open(options.StateDirectory).Sweep(now);
+                if (deletions + replications > 0)
+                {
+                    var log = Logger(options, typeof(ServiceRuntime));
+                    Log.ReceiptsSwept(log, deletions, replications);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+
             return ValueTask.FromResult(
                 new ServiceRuntime(options, writerRole, state, jobs)
                 {

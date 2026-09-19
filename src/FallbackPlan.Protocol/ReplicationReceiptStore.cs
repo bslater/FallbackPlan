@@ -40,6 +40,16 @@ public sealed class ReplicationReceiptStore
     /// <summary>The kind an envelope names for a replication receipt.</summary>
     public const string Kind = "replication";
 
+    /// <summary>
+    /// How long a replication receipt is kept (NFR-OPS-008). Shorter than a
+    /// deletion receipt's: one is issued on every push, including one that
+    /// committed nothing, and each is superseded by the next push's statement
+    /// of what the peer holds. The newest few survive any age, so a pair that
+    /// has gone quiet keeps a history.
+    /// </summary>
+    public static ReceiptRetentionPolicy Policy { get; } = new(
+        MinimumRetained: 8, MaximumRetained: 1024, RetainedDays: 90);
+
     private readonly string _root;
 
     private ReplicationReceiptStore(string root) => _root = root;
@@ -72,7 +82,7 @@ public sealed class ReplicationReceiptStore
         var receipt = ReplicationReceipt.Parse(signedBytes);
         return PeerReceiptFiles.File(
             _root, Kind, role, signedBytes, signature, signer, set, destination,
-            receipt.RepositoryId.Span, receipt.IssuedAtUnixMilliseconds, receipt.SessionId.Span);
+            receipt.RepositoryId.Span, receipt.IssuedAtUnixMilliseconds, receipt.SessionId.Span, Policy);
     }
 
     /// <summary>
@@ -88,6 +98,25 @@ public sealed class ReplicationReceiptStore
             .OrderByDescending(entry => entry.Receipt?.IssuedAtUnixMilliseconds ?? 0)
             .ThenBy(entry => entry.Path, StringComparer.Ordinal),
     ];
+
+    /// <summary>
+    /// Applies a retention policy across every repository filed here, or one,
+    /// and answers how many files went. Filing applies <see cref="Policy"/> to
+    /// the repository it writes into, so this is what reaches a pair that has
+    /// stopped filing — a set deleted, a pairing ended, a peer gone — and a
+    /// pile left by a build that had no bound at all.
+    /// </summary>
+    /// <param name="policy">How many, and how long.</param>
+    /// <param name="now">The clock.</param>
+    /// <param name="repositoryIdHex">One repository, lower-hex, or null for all.</param>
+    /// <returns>How many files were deleted.</returns>
+    public int Sweep(ReceiptRetentionPolicy policy, DateTimeOffset now, string? repositoryIdHex = null) =>
+        PeerReceiptFiles.Sweep(_root, policy, now, repositoryIdHex);
+
+    /// <summary>Applies <see cref="Policy"/> across every repository filed here.</summary>
+    /// <param name="now">The clock.</param>
+    /// <returns>How many files were deleted.</returns>
+    public int Sweep(DateTimeOffset now) => Sweep(Policy, now);
 
     private static FiledReplicationReceipt Interpret(PeerReceiptFiles.Reading reading)
     {

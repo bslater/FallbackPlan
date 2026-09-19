@@ -16,6 +16,12 @@ namespace FallbackPlan.Protocol;
 /// </summary>
 internal static class PeerReceiptFiles
 {
+    /// <summary>
+    /// How many digits of issue time a file name begins with. Fixed width so
+    /// an ordinal sort over the names is a sort by issue time.
+    /// </summary>
+    internal const int IssuedAtDigits = 20;
+
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
@@ -47,7 +53,8 @@ internal static class PeerReceiptFiles
         string? destination,
         ReadOnlySpan<byte> repositoryId,
         ulong issuedAtUnixMilliseconds,
-        ReadOnlySpan<byte> sessionId)
+        ReadOnlySpan<byte> sessionId,
+        ReceiptRetentionPolicy policy)
     {
         var directory = System.IO.Path.Combine(root, Convert.ToHexStringLower(repositoryId));
         Directory.CreateDirectory(directory);
@@ -68,7 +75,126 @@ internal static class PeerReceiptFiles
             Destination = destination,
         };
         AtomicFile.WriteAllText(path, JsonSerializer.Serialize(envelope, SerializerOptions));
+
+        // The bound is applied where the file is made, so a live pair stays
+        // bounded between restarts rather than only at one. It costs a name
+        // listing over a directory this same call keeps under the ceiling,
+        // after a network round trip that cost far more.
+        _ = SweepDirectory(directory, policy, DateTimeOffset.UtcNow);
         return path;
+    }
+
+    /// <summary>
+    /// Applies <paramref name="policy"/> to every repository under
+    /// <paramref name="root"/>, or to one.
+    /// </summary>
+    /// <remarks>
+    /// Names only: no receipt is opened, no signature checked and no JSON
+    /// parsed. So a pile that has gone unreadable is still bounded, and a
+    /// receipt whose bytes are corrupt ages out by the same rule as a sound
+    /// one rather than being immortal for being unparseable.
+    /// </remarks>
+    /// <param name="root">The kind's root.</param>
+    /// <param name="policy">How many, and how long.</param>
+    /// <param name="now">The clock.</param>
+    /// <param name="repositoryIdHex">One repository, lower-hex, or null for all.</param>
+    /// <returns>How many files were deleted.</returns>
+    internal static int Sweep(string root, ReceiptRetentionPolicy policy, DateTimeOffset now, string? repositoryIdHex)
+    {
+        if (!Directory.Exists(root))
+        {
+            return 0;
+        }
+
+        var directories = repositoryIdHex is null
+            ? Directory.GetDirectories(root)
+            : [System.IO.Path.Combine(root, repositoryIdHex)];
+        var swept = 0;
+        foreach (var directory in directories.Where(Directory.Exists))
+        {
+            swept += SweepDirectory(directory, policy, now);
+        }
+
+        return swept;
+    }
+
+    /// <summary>One repository's directory, oldest candidates first.</summary>
+    private static int SweepDirectory(string directory, ReceiptRetentionPolicy policy, DateTimeOffset now)
+    {
+        string[] names;
+        try
+        {
+            names = Directory.GetFiles(directory, "*.json");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+
+        // The name begins with the issue time, zero-padded to a fixed width,
+        // so an ordinal sort is newest-last by that time and costs no read.
+        // The name is used to order and to bound, never to describe: every
+        // fact a reader shows still comes from the signed bytes.
+        var ours = names
+            .Select(path => (Path: path, IssuedAt: IssuedAtFromName(path)))
+            .Where(entry => entry.IssuedAt is not null)
+            .OrderBy(entry => entry.Path, StringComparer.Ordinal)
+            .ToArray();
+
+        var cutoff = now.AddDays(-policy.RetainedDays).ToUnixTimeMilliseconds();
+        var swept = 0;
+        for (var i = 0; i < ours.Length; i++)
+        {
+            // Rank from the newest end: 0 is the newest file here.
+            var rank = ours.Length - 1 - i;
+            if (rank < policy.MinimumRetained)
+            {
+                // Kept whatever its age: a pair that has gone quiet keeps a
+                // history rather than ageing out of its own record entirely.
+                continue;
+            }
+
+            var pastTheCeiling = rank >= policy.MaximumRetained;
+            if (!pastTheCeiling && (long)ours[i].IssuedAt!.Value >= cutoff)
+            {
+                continue;
+            }
+
+            if (Delete(ours[i].Path))
+            {
+                swept++;
+            }
+        }
+
+        return swept;
+    }
+
+    /// <summary>The issue time a receipt's file name carries, or null when the name is not one of ours.</summary>
+    private static ulong? IssuedAtFromName(string path)
+    {
+        var name = System.IO.Path.GetFileName(path.AsSpan());
+        var separator = name.IndexOf('-');
+        return separator == IssuedAtDigits
+            && ulong.TryParse(
+                name[..separator], System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var issuedAt)
+            ? issuedAt
+            : null;
+    }
+
+    private static bool Delete(string path)
+    {
+        try
+        {
+            System.IO.File.Delete(path);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Housekeeping never fails the work it rides on: a file that will
+            // not go is tried again by the next filing or the next start.
+            return false;
+        }
     }
 
     /// <summary>Every envelope under the root, or one repository's, in no particular order.</summary>

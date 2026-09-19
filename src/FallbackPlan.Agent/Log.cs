@@ -136,6 +136,11 @@ internal static partial class Log
         ILogger logger, string destination, string set, string detail);
 
     [LoggerMessage(
+        EventId = 3780, Level = LogLevel.Information,
+        Message = "Swept {Deletions} deletion receipt(s) and {Replications} replication receipt(s) past their retention")]
+    internal static partial void ReceiptsSwept(ILogger logger, int deletions, int replications);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);
