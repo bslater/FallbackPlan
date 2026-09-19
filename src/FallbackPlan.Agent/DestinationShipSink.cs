@@ -298,6 +298,85 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>
+    /// Files the receipt a run's peer signed for what it committed, and
+    /// counts the pair complete on its strength
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A source cannot cheaply list a peer's replica, so the acknowledgement
+    /// that closes the run is the only measurement this shipment will get —
+    /// and it is worth most now, the capture having just reached the peer.
+    /// Before this the run read the acknowledgement's count and dropped the
+    /// statement behind it, leaving the pair uncounted until a sync pass over
+    /// the same peer happened to fall due.
+    /// </para>
+    /// <para>
+    /// A rejected receipt is a notice and never a refusal: the objects are at
+    /// the peer, acknowledged and counted against what was sent, and what is
+    /// missing is a statement of it that holds up. The run's own success is
+    /// untouched; what the pair does not get is a completeness figure, because
+    /// the only thing that would have supported one is the receipt.
+    /// </para>
+    /// </remarks>
+    /// <param name="destinationName">The peer destination, for the ledger and the notice.</param>
+    /// <param name="completed">What closing the exchange yielded.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    private void RecordShipmentReceipt(
+        string destinationName, CompletedShipment completed, ulong nowUnixMilliseconds)
+    {
+        var set = _runtime.Configuration.BackupSets.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, _setId, StringComparison.Ordinal));
+        var setName = set?.Name ?? _setId;
+
+        if (completed.Problem is { } problem)
+        {
+            Log.ReplicationReceiptRejected(_log, destinationName, setName, problem);
+            _runtime.Notices.Raise(
+                $"replication-receipt-invalid:{_setId}:{destinationName}",
+                $"peer '{destinationName}' acknowledged set '{setName}'s capture with a receipt this installation "
+                + $"will not file: {problem}. The peer acknowledged committing {completed.Committed} object(s) and "
+                + "that stands; what is missing is a statement of what it holds under its own signature that "
+                + "holds up, so this peer is not counted complete on this run. A peer that misattests once "
+                + "deserves a look.",
+                nowUnixMilliseconds);
+            return;
+        }
+
+        if (completed.Receipt is not { } receipt)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Protocol.ReplicationReceiptStore.Open(_runtime.Options.StateDirectory).File(
+                Protocol.DeletionReceiptRole.Commander, receipt.SignedBytes.Span, receipt.Signature.Span,
+                receipt.Signer, setName, destinationName);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Log.ReplicationReceiptNotFiledByCommander(_log, destinationName, setName, exception.Message);
+        }
+
+        // Verified is what counts, filed or not: the attestation was made and
+        // checked, and a copy this side could not keep changes nothing about
+        // what the peer holds.
+        //
+        // Held and owed are both the peer's own attested figure, because a
+        // direct-ship run has no other: it ships as it captures and never
+        // computes what the destination is owed the way a sync pass does. The
+        // pair therefore reads complete, which it is — everything this run
+        // sent was acknowledged and signed for. A later sync pass over the
+        // same pair overwrites both with its own arithmetic; the two agree on
+        // completeness and may differ slightly in magnitude, which is the
+        // honest consequence of measuring the same thing two ways.
+        var attested = (long)Math.Min(receipt.Receipt.HeldBytes, long.MaxValue);
+        _runtime.DestinationSync.RecordCompleteness(
+            _setId, destinationName, attested, attested, nowUnixMilliseconds);
+    }
+
+    /// <summary>
     /// Closes the run's books, whatever ended it: on success a ledger row
     /// (and, first time, the baseline) for every destination that stayed in
     /// scope; on ANY ending, the named failure for every destination dropped
@@ -349,7 +428,8 @@ public sealed class DestinationShipSink : IObjectStore
             {
                 if (succeeded)
                 {
-                    _ = await peer.CompleteAsync(closing.Token).ConfigureAwait(false);
+                    var completed = await peer.CompleteAsync(closing.Token).ConfigureAwait(false);
+                    RecordShipmentReceipt(peer.DestinationName, completed, nowUnixMilliseconds);
                 }
             }
             catch (Exception exception) when (

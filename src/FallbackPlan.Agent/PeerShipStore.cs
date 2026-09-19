@@ -55,6 +55,14 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     private readonly PeerTlsConnection _connection;
     private readonly PeerSession _session;
     private readonly HashSet<string> _held;
+
+    // The receipt is checked against what this session actually put on the
+    // wire, so the sent keys are kept apart from the inventory: `_held` starts
+    // as what the peer declared and grows with this session's creates, and a
+    // receipt listing something the run never sent is a different lie from one
+    // that miscounts.
+    private readonly HashSet<string> _sentKeys = [];
+    private readonly int _heldAtStart;
     private readonly Lock _inventory = new();
     private readonly SemaphoreSlim _wire = new(1, 1);
     private readonly SemaphoreSlim _readGate = new(1, 1);
@@ -82,6 +90,7 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
         _connection = connection;
         _session = session;
         _held = held;
+        _heldAtStart = held.Count;
     }
 
     /// <summary>How many objects this session has put on the wire.</summary>
@@ -249,6 +258,7 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
             lock (_inventory)
             {
                 _held.Add(key.Value);
+                _sentKeys.Add(key.Value);
             }
 
             Interlocked.Increment(ref _sent);
@@ -284,9 +294,14 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     /// this destination as failed rather than as holding the capture.
     /// </remarks>
     /// <param name="cancellationToken">Cancels the exchange.</param>
-    /// <returns>How many objects the destination acknowledged committing.</returns>
+    /// <returns>
+    /// How many objects the destination acknowledged committing, the receipt
+    /// it signed for them, and why one that arrived was not believed — the
+    /// last two null when the destination sent none, which is a fact about an
+    /// older peer and never a fault.
+    /// </returns>
     /// <exception cref="IOException">The peer refused, went away, or under-acknowledged.</exception>
-    public async Task<long> CompleteAsync(CancellationToken cancellationToken)
+    public async Task<CompletedShipment> CompleteAsync(CancellationToken cancellationToken)
     {
         await _wire.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -301,11 +316,35 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
                 _session.Stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, cancellationToken)
                 .ConfigureAwait(false);
 
-            return (long)ack.Count < sent
-                ? throw new IOException(
+            if ((long)ack.Count < sent)
+            {
+                throw new IOException(
                     $"Peer destination '{_destination.Name}' acknowledged committing {ack.Count} object(s) "
-                    + $"of the {sent} this run sent it.")
-                : (long)ack.Count;
+                    + $"of the {sent} this run sent it.");
+            }
+
+            // The acknowledgement carries the peer's signed statement of what
+            // it committed and what it now holds (ADR-0064), and the run is
+            // the moment that statement is worth most — the capture has just
+            // reached the peer, and a source cannot cheaply list a peer's
+            // replica to learn the same thing later. It goes through the very
+            // seam the sync pass verifies at, never a second construction:
+            // the same checks or none.
+            string[] sentKeys;
+            lock (_inventory)
+            {
+                sentKeys = [.. _sentKeys];
+            }
+
+            var (receipt, problem) = ReplicationInitiator.VerifyReplicationReceipt(
+                ack,
+                new ReplicationInitiator.ReceiptExpectation(
+                    _session.Peer.Identity, _session.Binding, _keypair.Identity.PublicKey.ToArray()),
+                _repositoryId,
+                new HashSet<string>(sentKeys, StringComparer.Ordinal),
+                _heldAtStart);
+
+            return new CompletedShipment((long)ack.Count, receipt, problem);
         }
         catch (OperationCanceledException)
         {
@@ -594,3 +633,19 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     private static IOException Fault(string destinationName, Exception exception) =>
         new($"Peer destination '{destinationName}': {exception.Message}", exception);
 }
+
+/// <summary>
+/// What closing a run's peer exchange yielded: the count the destination
+/// acknowledged, the receipt it signed for it
+/// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), and why a
+/// receipt that arrived was not believed.
+/// </summary>
+/// <param name="Committed">How many objects the destination acknowledged committing.</param>
+/// <param name="Receipt">The verified receipt, or null when the destination sent none.</param>
+/// <param name="Problem">
+/// Why a receipt that arrived was rejected; null both when one was accepted
+/// and when none came, which are different facts the caller tells apart by
+/// <paramref name="Receipt"/>.
+/// </param>
+internal sealed record CompletedShipment(
+    long Committed, ReplicationInitiator.VerifiedReplicationReceipt? Receipt, string? Problem);

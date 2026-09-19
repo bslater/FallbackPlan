@@ -264,6 +264,49 @@ public sealed class DirectShipPeerTests : IDisposable
     /// Every object the planning copy holds is at the peer, byte for byte —
     /// the metadata plane is what makes the replica openable on its own.
     /// </summary>
+    [TestMethod]
+    public async Task DirectShipSet_ItsRunAcknowledged_FilesAndCountsTheReceiptThePeerSigned()
+    {
+        // ADR-0064 left this as its own named follow-up: the adapter "receives
+        // the receipt with the run's acknowledgement and reads only its
+        // count", leaving the peer's strongest statement about what it holds
+        // — made at the moment the capture reached it — on the floor, and the
+        // pair counted only if a later sync pass happened to fall due.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, withVault: false);
+        _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
+
+        await RunOnceAsync();
+
+        var filed = Assert.ContainsSingle(
+            ReplicationReceiptStore.Open(_harness.StateDirectory).List());
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.AreEqual(DeletionReceiptRole.Commander, filed.Role);
+        Assert.AreEqual("docs", filed.Set);
+        Assert.AreEqual("friend", filed.Destination);
+        Assert.IsNotNull(filed.Receipt);
+        Assert.AreEqual(fingerprint, filed.SignerFingerprint);
+        Assert.IsTrue(
+            filed.Receipt!.CommittedCount > 0,
+            "the run shipped this capture, and the receipt is the peer's statement of committing it");
+        Assert.IsTrue(filed.Receipt.HeldObjects >= filed.Receipt.CommittedCount);
+
+        // The destination filed its own copy of the same exchange, and the two
+        // sides' files share a name because they share a session and an issue
+        // time — neither depends on the other's.
+        var theirs = Assert.ContainsSingle(ReplicationReceiptStore.Open(_destinationState).List());
+        Assert.AreEqual(Path.GetFileName(filed.Path), Path.GetFileName(theirs.Path));
+
+        // Counted on the strength of what the peer signed for, without a sync
+        // pass: a source cannot cheaply list a peer's replica, so the run's
+        // own acknowledgement is the only measurement it will get today.
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.IsNotNull(record.MeasuredAt, "the pair is counted complete under the receipt it verified");
+        Assert.IsTrue(record.HeldBytes > 0);
+        Assert.AreEqual(record.OwedBytes, record.HeldBytes);
+    }
+
     private async Task AssertReplicaHoldsTheMetadataPlaneAsync(string replicaPath)
     {
         var metadata = new LocalFileSystemObjectStore(MetadataRoot);
