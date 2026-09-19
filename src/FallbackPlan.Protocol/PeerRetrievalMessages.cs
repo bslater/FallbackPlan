@@ -429,3 +429,259 @@ public sealed record RetrieveData(bool Found, ulong TotalLength, ReadOnlyMemory<
     /// <inheritdoc/>
     public override int GetHashCode() => HashCode.Combine(Found, TotalLength, Bytes.Length);
 }
+
+/// <summary>
+/// A request for one leaf of a blob's Merkle commitment (07 §3.6). Strictly
+/// request/response: each challenge is answered by exactly one
+/// <see cref="MerkleProof"/>, and the verifier sends no second challenge
+/// before the previous proof arrives.
+/// </summary>
+/// <param name="RepositoryId">The repository whose replica is challenged.</param>
+/// <param name="Key">The object key of the blob, as the replica holds it.</param>
+/// <param name="LeafIndex">Which one-mebibyte leaf of the blob's preimage to produce.</param>
+public sealed record MerkleChallenge(ReadOnlyMemory<byte> RepositoryId, string Key, uint LeafIndex) : IPeerMessage
+{
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.MerkleChallenge;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => 3;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Encoding.UTF8.GetByteCount(Key) > RetrieveList.MaximumKeyBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A challenged key exceeds the {RetrieveList.MaximumKeyBytes}-byte limit.");
+        }
+
+        if (RepositoryId.Length != 16)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A repository identifier is 16 bytes.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteByteString(RepositoryId.Span);
+        writer.WriteInt32(2);
+        writer.WriteTextString(Key);
+        writer.WriteInt32(3);
+        writer.WriteUInt32(LeafIndex);
+    }
+
+    /// <summary>Reads a challenge from a body positioned after the message type.</summary>
+    /// <exception cref="PeerProtocolException">The body violates 07 §3.6 or a 00 §2.3 limit.</exception>
+    public static MerkleChallenge Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        byte[]? repositoryId = null;
+        string? key = null;
+        uint leafIndex = 0;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            switch (entry)
+            {
+                case 1:
+                    repositoryId = reader.ReadByteString();
+                    break;
+                case 2:
+                    key = reader.ReadTextString();
+                    break;
+                case 3:
+                    leafIndex = reader.ReadUInt32();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        if (repositoryId is not { Length: 16 }
+            || key is null
+            || Encoding.UTF8.GetByteCount(key) > RetrieveList.MaximumKeyBytes)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, "A Merkle challenge is not the shape 07 §3.6 defines.");
+        }
+
+        return new MerkleChallenge(repositoryId, key, leafIndex);
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(MerkleChallenge? other) =>
+        other is not null
+        && string.Equals(Key, other.Key, StringComparison.Ordinal)
+        && LeafIndex == other.LeafIndex
+        && RepositoryId.Span.SequenceEqual(other.RepositoryId.Span);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Key, LeafIndex, RepositoryId.Length);
+}
+
+/// <summary>
+/// The answer to one Merkle challenge (07 §3.6): the leaf's bytes and the
+/// sibling hashes that carry them to the root, or an honest inability to
+/// produce either.
+/// </summary>
+/// <remarks>
+/// The <b>bytes</b> are the proof and the path is not. A path is public
+/// arithmetic over hashes the destination may freely cache, so producing one
+/// establishes nothing; producing the chunk it commits to establishes that
+/// the chunk is held. That is the whole difference between this message and
+/// the digest answer [ADR-0058] refuses as a self-report.
+/// </remarks>
+/// <param name="Held">Whether the destination could produce the leaf.</param>
+/// <param name="Leaf">The leaf's bytes; empty when not held.</param>
+/// <param name="Path">The authentication path, leaf-upward; empty when not held, and legitimately empty for a one-leaf blob.</param>
+public sealed record MerkleProof(bool Held, ReadOnlyMemory<byte> Leaf, IReadOnlyList<ReadOnlyMemory<byte>> Path)
+    : IPeerMessage
+{
+    /// <summary>
+    /// The most bytes one leaf may carry. The repository format fixes the
+    /// leaf at one mebibyte (repository-format 05 §5.2); this protocol's
+    /// chunk limit is the same number, arrived at independently, and a test
+    /// in the agent holds the two together.
+    /// </summary>
+    public const int MaximumLeafBytes = ReplicationChunk.MaximumBytes;
+
+    /// <summary>Each path step's width.</summary>
+    public const int StepLength = 32;
+
+    /// <summary>
+    /// The most steps a path may carry. A blob is bounded at 512 MiB, so
+    /// nine would do; the bound exists to stop an answer allocating.
+    /// </summary>
+    public const int MaximumSteps = 32;
+
+    /// <inheritdoc/>
+    public PeerMessageType Type => PeerMessageType.MerkleProof;
+
+    /// <inheritdoc/>
+    public int BodyEntryCount => Held ? 3 : 1;
+
+    /// <inheritdoc/>
+    public void WriteBody(CborWriter writer)
+    {
+        ThrowHelper.ThrowIfNull(writer);
+
+        if (Held && (Leaf.Length is 0 or > MaximumLeafBytes || Path.Count > MaximumSteps))
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                $"A Merkle proof carries {Leaf.Length} leaf byte(s) and {Path.Count} step(s), "
+                + $"outside the 1..{MaximumLeafBytes} and 0..{MaximumSteps} this protocol permits.");
+        }
+
+        writer.WriteInt32(1);
+        writer.WriteUInt32(Held ? 0u : 1u);
+
+        if (!Held)
+        {
+            return;
+        }
+
+        writer.WriteInt32(2);
+        writer.WriteByteString(Leaf.Span);
+        writer.WriteInt32(3);
+        writer.WriteStartArray(Path.Count);
+        foreach (var step in Path)
+        {
+            if (step.Length != StepLength)
+            {
+                throw new PeerProtocolException(
+                    PeerRefusalReason.Malformed,
+                    $"A Merkle path step is {step.Length} bytes; 07 §3.6 defines {StepLength}.");
+            }
+
+            writer.WriteByteString(step.Span);
+        }
+
+        writer.WriteEndArray();
+    }
+
+    /// <summary>Reads a proof from a body positioned after the message type.</summary>
+    /// <exception cref="PeerProtocolException">The body violates 07 §3.6 or a 00 §2.3 limit.</exception>
+    public static MerkleProof Read(CborReader reader)
+    {
+        ThrowHelper.ThrowIfNull(reader);
+
+        uint status = 1;
+        byte[]? leaf = null;
+        List<ReadOnlyMemory<byte>>? path = null;
+
+        PeerCbor.ReadEntries(reader, entry =>
+        {
+            switch (entry)
+            {
+                case 1:
+                    status = reader.ReadUInt32();
+                    break;
+                case 2:
+                    leaf = reader.ReadByteString();
+                    break;
+                case 3:
+                    var count = reader.ReadStartArray();
+                    if (count is null || count > MaximumSteps)
+                    {
+                        throw new PeerProtocolException(
+                            PeerRefusalReason.Malformed,
+                            $"A Merkle path carried more than the {MaximumSteps} steps this protocol permits.");
+                    }
+
+                    path = new List<ReadOnlyMemory<byte>>(count.Value);
+                    for (var index = 0; index < count.Value; index++)
+                    {
+                        var step = reader.ReadByteString();
+
+                        // Fatal rather than dropped, on ReplicationPartial's
+                        // rule: a step of the wrong width is the check this
+                        // message exists for, arriving broken.
+                        if (step.Length != StepLength)
+                        {
+                            throw new PeerProtocolException(
+                                PeerRefusalReason.Malformed,
+                                $"A Merkle path step is {step.Length} bytes; 07 §3.6 defines {StepLength}.");
+                        }
+
+                        path.Add(step);
+                    }
+
+                    reader.ReadEndArray();
+                    break;
+                default:
+                    reader.SkipValue();
+                    break;
+            }
+        });
+
+        // Status and payload must agree, on VerificationProof's rule: a
+        // "cannot prove" carrying bytes, or a proof carrying none, is a peer
+        // that does not mean what this message means.
+        return (status, leaf, path) switch
+        {
+            (0, { Length: > 0 and <= MaximumLeafBytes }, not null) =>
+                new MerkleProof(true, leaf, path),
+            (1, null, null) => new MerkleProof(false, ReadOnlyMemory<byte>.Empty, []),
+            _ => throw new PeerProtocolException(
+                PeerRefusalReason.Malformed,
+                "A Merkle proof's status and payload disagree (07 §3.6)."),
+        };
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(MerkleProof? other) =>
+        other is not null
+        && Held == other.Held
+        && Leaf.Span.SequenceEqual(other.Leaf.Span)
+        && Path.Count == other.Path.Count
+        && Path.Zip(other.Path).All(pair => pair.First.Span.SequenceEqual(pair.Second.Span));
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Held, Leaf.Length, Path.Count);
+}

@@ -97,6 +97,23 @@ local content — its staging lost, or none by design — learns what to ask for
 claimed ([03 §6](03-replication.md#6-the-claim)), which is why the claim asks the destination which
 derivations to run rather than asking this page which repositories to name.
 
+### 3.6 `merkle_challenge` (278) / `merkle_proof` (279)
+
+Gated by the `chunk-possession` feature ([02 §6](02-session.md#6-feature-negotiation)).
+
+`merkle_challenge`: key 1 `repository_id` (bytes[16]), key 2 `key` (text), key 3 `leaf_index` (uint32).
+`merkle_proof`: key 1 `status` (uint: `0` produced, `1` cannot produce), key 2 `leaf` (bytes, 1…1 MiB), key 3 `path` (array of bytes[32], at most 32 entries).
+
+Strictly request/response, one outstanding challenge: each challenge is answered by exactly one proof, and the verifier MUST NOT send a second before the first is answered. Status `1` carrying key 2 or key 3, status `0` carrying neither, a `path` step that is not 32 bytes, a `path` longer than the bound, or a `leaf` outside 1…1 MiB is `malformed` — a step of the wrong width is the check this message exists for, arriving broken, and dropping it would turn a verification into a shrug. An **empty** `path` with status `0` is not an error: a blob of one leaf has none.
+
+The destination reads its own copy of the blob, hashes its leaves, and answers with the challenged leaf's **bytes** and the sibling hashes that carry them to the root ([repository-format 05 §5.2](../repository-format/05-blob.md#52-the-merkle-commitment)). A key it does not hold, or a `leaf_index` beyond its copy, is not an error — it is status `1`, and it is the interesting answer. A key under `tombstones/` or `leases/` is refused as it is for [04 §4.1](04-verification.md#4-messages)'s challenge.
+
+**The bytes are the proof and the path is not.** A path is public arithmetic over hashes a destination may freely cache, so producing one establishes nothing; producing the chunk it commits to establishes that the chunk is held. That is the whole difference between this message and the bare digest answer [ADR-0058](../../docs/adr/0058-peer-write-adapter.md) refuses as a self-report.
+
+**The verifier checks against the root the writer signed**, published in the index delta ([repository-format 07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)) and never against anything the destination said. The tree's size comes from the length the destination declares for its own copy, which can only fail closed: the published root binds the preimage's length, so a length that disagrees with the one the writer signed produces a root that does not match, and a destination that understates its copy to exempt its last leaf is refused rather than excused.
+
+**A wrong proof is a finding, not a protocol error**, exactly as [04 §2](04-verification.md#2-the-challenge) requires: the session continues and the verifier records the failure durably.
+
 ## 4 Authorization
 
 The destination MUST serve a replica only when **both** hold: the attribution

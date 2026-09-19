@@ -117,6 +117,18 @@ public enum PeerMessageType : ushort
 
     /// <summary>The answer to one read (07 §3.4).</summary>
     RetrieveData = 277,
+
+    /// <summary>
+    /// A request for one leaf of a blob's Merkle commitment and its
+    /// authentication path (07 §3.6; feature-gated as "chunk-possession").
+    /// </summary>
+    MerkleChallenge = 278,
+
+    /// <summary>
+    /// The leaf's bytes and its path, or the destination's honest inability
+    /// to produce them (07 §3.6).
+    /// </summary>
+    MerkleProof = 279,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

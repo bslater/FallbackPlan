@@ -255,7 +255,8 @@ public sealed class PeerAuthenticator
             or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
             or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
-            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData =>
+            or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData
+            or PeerMessageType.MerkleChallenge or PeerMessageType.MerkleProof =>
             state == PeerSessionState.Open,
 
         _ => false,

@@ -117,6 +117,21 @@ public static class PeerSessionNegotiation
     /// </remarks>
     public const string ReplicaClaimFeature = "replica-claim";
 
+    /// <summary>
+    /// The peer answers a Merkle chunk challenge over its replica of a blob
+    /// (07 §3.6): one leaf's bytes and its authentication path, checked at
+    /// the source against the root the writer signed into the index.
+    /// </summary>
+    /// <remarks>
+    /// Offered, never required, and a gate is safe here for the reason
+    /// 02 §6 permits one — its absence can only mean <b>more</b> work for
+    /// the destination, not less scrutiny. A peer that does not offer it is
+    /// read back whole, exactly as every peer is today; the feature buys the
+    /// destination its own bandwidth, so declining it is self-harm rather
+    /// than evasion.
+    /// </remarks>
+    public const string ChunkPossessionFeature = "chunk-possession";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
     [
@@ -128,6 +143,7 @@ public static class PeerSessionNegotiation
         RetrievalFeature,
         PartialObjectResumeFeature,
         ReplicaClaimFeature,
+        ChunkPossessionFeature,
     ];
 
     /// <summary>Builds the hello this build sends.</summary>
