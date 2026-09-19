@@ -2,6 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Recovery;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
@@ -454,6 +455,70 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
                 content,
                 await File.ReadAllBytesAsync(
                     Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)), CancellationToken.None));
+        }
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_TheIndexDelta_CarriesMerkleRootsOnlyAtFormatThree()
+    {
+        // The publication gate, at the engine rather than at a frozen
+        // fixture (07 §2.3). A reader that predates key 11 refuses a delta
+        // carrying it outright, so the repository's declared format version
+        // — not a policy, not a flag — is what decides, and a format-2
+        // archive an older build may read never contains one.
+        foreach (var version in new[] { FormatVersions.SealedDataPlane, FormatVersions.RelocatableRecords })
+        {
+            var store = new LocalFileSystemObjectStore(
+                Path.Combine(_root, $"roots-{version}"));
+            var (opened, authority, catalogue, _) = await CreateAndBackUpAsync(store, version);
+            using var _1 = opened;
+            using var _2 = authority;
+            using var _3 = catalogue;
+
+            using var loader = new FallbackPlan.Repository.Index.IndexLoader(store, opened.RepositoryId, opened.Credential);
+            var state = await loader.LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+                blobState: null, CancellationToken.None);
+            Assert.IsEmpty(state.Findings);
+
+            var delta = Assert.ContainsSingle(state.Deltas).Delta;
+            Assert.IsNotEmpty(delta.CoveredBlobIds);
+            Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
+
+            if (version == FormatVersions.SealedDataPlane)
+            {
+                Assert.IsEmpty(delta.CoveredBlobMerkleRoots);
+                continue;
+            }
+
+            Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobMerkleRoots);
+
+            // And each root is the tree over that blob's own bytes, read
+            // back from the store rather than taken from the publisher.
+            using var storeKeys = new StoreBlobKeyDeriver(opened.Credential.KeyIdKey.ToArray());
+            for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+            {
+                var derived = storeKeys.Derive(delta.CoveredBlobIds[i]);
+                var key = BlobStoreKeys.ForBlob(BlobClass.Data, derived);
+                var metadata = await store.GetMetadataAsync(key, CancellationToken.None);
+                if (metadata.Metadata is null)
+                {
+                    key = BlobStoreKeys.ForBlob(BlobClass.Metadata, derived);
+                    metadata = await store.GetMetadataAsync(key, CancellationToken.None);
+                }
+
+                Assert.IsNotNull(metadata.Metadata);
+                var bytes = new byte[metadata.Metadata.Length];
+                using (var content = await store.OpenReadAsync(key, null, CancellationToken.None))
+                {
+                    Assert.AreEqual(OpenReadOutcome.Found, content.Outcome);
+                    await content.Content!.ReadExactlyAsync(bytes, CancellationToken.None);
+                }
+
+                SequenceAssert.AreEqual(
+                    BlobMerkle.Root(bytes.AsSpan(0, bytes.Length - FooterLocator.Length)),
+                    delta.CoveredBlobMerkleRoots[i].ToArray());
+            }
         }
     }
 

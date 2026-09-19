@@ -239,6 +239,18 @@ public sealed class Catalogue : IDisposable
             }
         }
 
+        // And the Merkle commitment beside it (07 §2.3), on the same terms:
+        // a delta that carries none records nothing, and never clears a root
+        // an earlier delta established.
+        if (delta.CoveredBlobMerkleRoots.Count > 0
+            && delta.CoveredBlobMerkleRoots.Count == delta.CoveredBlobIds.Count)
+        {
+            for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+            {
+                UpsertMerkleRoot(transaction, delta.CoveredBlobIds[i], delta.CoveredBlobMerkleRoots[i]);
+            }
+        }
+
         transaction.Commit();
     }
 
@@ -265,6 +277,35 @@ public sealed class Catalogue : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// The signed Merkle commitment over a blob's sealed bytes, or
+    /// <see langword="null"/> when none is on record — which is every blob
+    /// of a repository below format 3, and every blob whose delta a reader
+    /// applied before this column existed.
+    /// </summary>
+    /// <remarks>
+    /// Its provenance is the digest's: a delta this reader authenticated or
+    /// this writer's own seal, never a destination. That is what makes it
+    /// something to challenge a replica against rather than something to
+    /// compare a replica with itself.
+    /// </remarks>
+    public ReadOnlyMemory<byte>? SignedMerkleRootOf(BlobId blobId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT merkle_root FROM blobs WHERE blob_id = $id;";
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+
+        // Spelled out for the reason SignedDigestOf is: a null byte[] would
+        // convert to an empty memory, and "no root on record" must never
+        // read as "a root of nothing".
+        if (command.ExecuteScalar() is byte[] root)
+        {
+            return root;
+        }
+
+        return null;
+    }
+
     private static void UpsertDigest(SqliteTransaction transaction, BlobId blobId, ReadOnlyMemory<byte> digest)
     {
         using var command = transaction.Connection!.CreateCommand();
@@ -276,6 +317,24 @@ public sealed class Catalogue : IDisposable
             """;
         command.Parameters.AddWithValue("$id", blobId.ToArray());
         command.Parameters.AddWithValue("$digest", digest.ToArray());
+        command.ExecuteNonQuery();
+    }
+
+    private static void UpsertMerkleRoot(SqliteTransaction transaction, BlobId blobId, ReadOnlyMemory<byte> root)
+    {
+        using var command = transaction.Connection!.CreateCommand();
+        command.Transaction = transaction;
+
+        // Its own statement rather than a column on the digest's: a delta
+        // that carries digests and no roots must leave a root already on
+        // record alone, and one UPDATE over both columns would erase it.
+        command.CommandText = """
+            INSERT INTO blobs (blob_id, store_blob_key, blob_class, key_generation, record_count, length, merkle_root)
+            VALUES ($id, $id, 0, 0, 0, 0, $root)
+            ON CONFLICT (blob_id) DO UPDATE SET merkle_root = excluded.merkle_root;
+            """;
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+        command.Parameters.AddWithValue("$root", root.ToArray());
         command.ExecuteNonQuery();
     }
 

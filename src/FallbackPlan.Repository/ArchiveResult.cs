@@ -16,6 +16,7 @@ public sealed record ArchivedBlob(
     StoreBlobKey StoreBlobKey,
     ObjectKey StoreKey,
     IReadOnlyList<byte> Digest,
+    IReadOnlyList<byte> MerkleRoot,
     int RecordCount,
     long Length,
     IReadOnlyList<RecordTableEntry> RecordTable);

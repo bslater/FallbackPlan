@@ -62,7 +62,8 @@ public sealed class IndexPublisher : IDisposable
         CancellationToken cancellationToken)
     {
         var (deltaId, _) = await PublishDeltaDetailedAsync(
-            generation, coveredBlobIds, entries, coveredBlobDigests: [], cancellationToken).ConfigureAwait(false);
+            generation, coveredBlobIds, entries, coveredBlobDigests: [], coveredBlobMerkleRoots: [],
+            cancellationToken).ConfigureAwait(false);
         return deltaId;
     }
 
@@ -80,12 +81,20 @@ public sealed class IndexPublisher : IDisposable
     /// (specification 07 §2.2). This is what makes a blob's digest checkable
     /// by a participant other than the device that sealed it.
     /// </param>
+    /// <param name="coveredBlobMerkleRoots">
+    /// The Merkle commitment over each covered blob's sealed bytes, parallel
+    /// to <paramref name="coveredBlobIds"/>, or empty to publish none
+    /// (specification 07 §2.3). Only a writer at repository format 3 or
+    /// above may pass these: below it, an older reader is entitled to read
+    /// the delta and would refuse key 11 outright.
+    /// </param>
     /// <param name="cancellationToken">Cancels the publication.</param>
     public async ValueTask<(DeltaId DeltaId, IndexDelta Delta)> PublishDeltaDetailedAsync(
         ulong generation,
         IReadOnlyList<BlobId> coveredBlobIds,
         IReadOnlyList<IndexEntry> entries,
         IReadOnlyList<ReadOnlyMemory<byte>> coveredBlobDigests,
+        IReadOnlyList<ReadOnlyMemory<byte>> coveredBlobMerkleRoots,
         CancellationToken cancellationToken)
     {
         var sequence = _sequence.AllocateNext();
@@ -98,6 +107,7 @@ public sealed class IndexPublisher : IDisposable
             Generation = generation,
             CoveredBlobIds = coveredBlobIds,
             CoveredBlobDigests = coveredBlobDigests,
+            CoveredBlobMerkleRoots = coveredBlobMerkleRoots,
             Entries = entries,
         };
 

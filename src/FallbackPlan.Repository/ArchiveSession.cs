@@ -878,6 +878,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 storeBlobKey,
                 storeKey,
                 sealedBlob.Digest,
+                sealedBlob.MerkleRoot,
                 sealedBlob.RecordTable.Count,
                 sealedBlob.Length,
                 sealedBlob.RecordTable);

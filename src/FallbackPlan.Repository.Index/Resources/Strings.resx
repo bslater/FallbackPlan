@@ -82,8 +82,17 @@
   <data name="IndexDeltaCodec_CoveredBlobDigestsElementsAgainst" xml:space="preserve">
     <value>covered_blob_digests has {0} elements against {1} covered blobs; the arrays are parallel or absent (specification 07 §2.2).</value>
   </data>
+  <data name="IndexDeltaCodec_CoveredBlobMerkleRootByte" xml:space="preserve">
+    <value>A covered blob Merkle root is 32 bytes (specification 07 §2.3).</value>
+  </data>
+  <data name="IndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst" xml:space="preserve">
+    <value>covered_blob_merkle_roots has {0} elements against {1} covered blobs; the arrays are parallel or absent (specification 07 §2.3).</value>
+  </data>
+  <data name="IndexDeltaCodec_MerkleRootsWithoutDigests" xml:space="preserve">
+    <value>A delta carrying covered_blob_merkle_roots carries covered_blob_digests too; the Merkle root is the stronger commitment and never the only one (specification 07 §2.3).</value>
+  </data>
   <data name="IndexDeltaCodec_DeltaCarriesUnknownKeySpecification" xml:space="preserve">
-    <value>The delta carries an unknown key; specification 07 §2 assigns keys 1-10 only.</value>
+    <value>The delta carries an unknown key; specification 07 §2 assigns keys 1-11 only.</value>
   </data>
   <data name="IndexDeltaCodec_DeltaDeclaresShardButCarries" xml:space="preserve">
     <value>The delta declares shard {0} but carries an entry in shard {1} (ADR-0022 §Decision 4).</value>

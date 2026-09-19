@@ -229,6 +229,93 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
+    public void ApplyDelta_TheCoveredBlobMerkleRoots_SurviveARebuildAndNeverErasedByALaterDelta()
+    {
+        // The root rides the same placeholder-aware path as the digest
+        // (07 §2.3), and its own statement rather than a second column on
+        // the digest's: a later delta that carries digests and no roots —
+        // which is every delta a format-2 writer publishes — must leave a
+        // root already on record alone rather than clearing it.
+        using var catalogue = Open();
+        var digest = System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8);
+        var root = System.Security.Cryptography.SHA256.HashData("the tree over the sealed bytes"u8);
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [digest],
+            CoveredBlobMerkleRoots = [root],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.IsTrue(root.AsSpan().SequenceEqual(catalogue.SignedMerkleRootOf(Blob(1))!.Value.Span));
+        Assert.IsFalse(catalogue.SignedMerkleRootOf(Blob(2)).HasValue, "no delta named blob 2");
+        Assert.IsFalse(
+            catalogue.ResolveLocation(Object(1))!.StoreBlobKey.HasValue,
+            "a placeholder row must not answer with the blob id as a store key");
+
+        catalogue.ApplyDelta(Delta(2), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 2,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [digest],
+            Entries = [new IndexEntry(Object(2), Blob(1), 188, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.IsTrue(root.AsSpan().SequenceEqual(catalogue.SignedMerkleRootOf(Blob(1))!.Value.Span));
+    }
+
+    [TestMethod]
+    public void ApplyDelta_ARowTheWriterRecorded_KeepsItsStoreKeyAndGainsTheMerkleRoot()
+    {
+        using var catalogue = Open();
+        var storeKey = StoreBlobKey.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
+        var digest = System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8);
+        var root = System.Security.Cryptography.SHA256.HashData("the tree over the sealed bytes"u8);
+
+        catalogue.RecordBlob(Blob(1), storeKey, BlobClass.Data, KeyGeneration.Zero, 1, 4096, digest: default);
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [digest],
+            CoveredBlobMerkleRoots = [root],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.AreEqual(storeKey, catalogue.ResolveLocation(Object(1))!.StoreBlobKey);
+        Assert.IsTrue(root.AsSpan().SequenceEqual(catalogue.SignedMerkleRootOf(Blob(1))!.Value.Span));
+    }
+
+    [TestMethod]
+    public void ApplyDelta_ADeltaWithoutMerkleRoots_RecordsNoRoot()
+    {
+        // Every format-2 delta, and the case the tier reads as "this blob
+        // cannot be challenged by chunk" rather than as damage.
+        using var catalogue = Open();
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(1),
+            Sequence = 1,
+            Generation = 0,
+            CoveredBlobIds = [Blob(1)],
+            CoveredBlobDigests = [System.Security.Cryptography.SHA256.HashData("the sealed bytes"u8)],
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+
+        Assert.IsTrue(catalogue.SignedDigestOf(Blob(1)).HasValue);
+        Assert.IsFalse(catalogue.SignedMerkleRootOf(Blob(1)).HasValue, "the delta carried no Merkle root");
+    }
+
+    [TestMethod]
     public void Open_RepositoryIdentityDiffers_DropsAndRebuildsTheCache()
     {
         using (var catalogue = Open())

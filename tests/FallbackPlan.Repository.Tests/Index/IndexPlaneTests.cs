@@ -116,6 +116,114 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
+    public void IndexDelta_CoveredBlobMerkleRoots_RoundTripAndAreCoveredByTheSignature()
+    {
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+
+        var digest = Enumerable.Repeat((byte)0x5A, 32).ToArray();
+        var root = Enumerable.Repeat((byte)0x6B, 32).ToArray();
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 21,
+            Generation = 0,
+            CoveredBlobIds = [BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray())],
+            CoveredBlobDigests = [digest],
+            CoveredBlobMerkleRoots = [root],
+            Entries = [Entry(1, 6)],
+        };
+
+        var signedBytes = IndexDeltaCodec.EncodeForSigning(delta);
+        var decoded = IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(signedBytes)));
+
+        SequenceAssert.AreEqual(root, Assert.ContainsSingle(decoded.Delta.CoveredBlobMerkleRoots).ToArray());
+        SequenceAssert.AreEqual(digest, Assert.ContainsSingle(decoded.Delta.CoveredBlobDigests).ToArray());
+        Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+
+        // Key 11 is the second key to sort after the signature and be signed
+        // by it, on the rule 07 §2 states rather than on a numeric range.
+        var altered = delta with { CoveredBlobMerkleRoots = [Enumerable.Repeat((byte)0x6C, 32).ToArray()] };
+        Assert.AreNotEqual(signedBytes, IndexDeltaCodec.EncodeForSigning(altered));
+    }
+
+    [TestMethod]
+    public void IndexDelta_CoveredBlobMerkleRoots_AreParallelToTheCoveredBlobsAndNeverAloneOrMalformed()
+    {
+        var blobs = new[]
+        {
+            BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray()),
+            BlobId.FromBytes(Enumerable.Repeat((byte)7, 16).ToArray()),
+        };
+
+        var digests = new[] { Enumerable.Repeat((byte)0x5A, 32).ToArray(), Enumerable.Repeat((byte)0x5B, 32).ToArray() };
+
+        IndexDelta Build(IReadOnlyList<ReadOnlyMemory<byte>> roots, IReadOnlyList<ReadOnlyMemory<byte>>? blobDigests = null) =>
+            new()
+            {
+                WriterId = Writer,
+                Sequence = 22,
+                Generation = 0,
+                CoveredBlobIds = blobs,
+                CoveredBlobDigests = blobDigests ?? [.. digests.Select(value => (ReadOnlyMemory<byte>)value)],
+                CoveredBlobMerkleRoots = roots,
+                Entries = [Entry(1, 6)],
+            };
+
+        // One root, two blobs: pairing what can be paired would attach one
+        // blob's commitment to another, and a challenge under it would fail
+        // for a peer that holds exactly what it was sent.
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(Build([Enumerable.Repeat((byte)0x6B, 32).ToArray()])));
+
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(Build([new byte[31], new byte[31]])));
+
+        // Roots without digests: a reader that cannot afford the tree must
+        // still have the flat digest to fall back on, so the stronger
+        // commitment never arrives alone (07 §2.3).
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(
+                Build([.. digests.Select(value => (ReadOnlyMemory<byte>)value)], [])));
+    }
+
+    [TestMethod]
+    public void IndexDelta_WithoutMerkleRoots_EncodesTheBytesAnOlderWriterProduced()
+    {
+        // The compatibility pin. A delta carrying no roots must encode
+        // exactly as it did before key 11 existed, because an older reader
+        // refuses an unknown key outright (07 §2.4) and every format-2
+        // repository still on disk depends on that byte for byte.
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 23,
+            Generation = 0,
+            CoveredBlobIds = [BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray())],
+            CoveredBlobDigests = [Enumerable.Repeat((byte)0x5A, 32).ToArray()],
+            Entries = [Entry(1, 6)],
+        };
+
+        // Captured from the encoder before key 11 was added.
+        const string Expected =
+            "a60150a0a1a2a3a4a5a6a7a8a9aaabacadaeaf021704000681500606060606060606060606060606060607818658"
+            + "200101010101010101010101010101010101010101010101010101010101010101500606060606060606060606"
+            + "060606060618581910001a00010001010a81582"
+            + "05a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+
+        Assert.AreEqual(
+            Expected,
+            Convert.ToHexStringLower(IndexDeltaCodec.EncodeForSigning(delta)),
+            "a delta with no Merkle roots must not change shape");
+
+        Assert.IsEmpty(IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(
+            IndexDeltaCodec.EncodeForSigning(delta)))).Delta.CoveredBlobMerkleRoots);
+    }
+
+    [TestMethod]
     public void IndexDelta_SignedInTwoPasses_RoundTripsAndVerifies()
     {
         using var credential = TestAuthority.Shared.Credential.Clone();

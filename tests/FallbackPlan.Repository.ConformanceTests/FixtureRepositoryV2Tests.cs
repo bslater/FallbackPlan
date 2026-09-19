@@ -149,6 +149,30 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         }
     }
 
+    [TestMethod]
+    public async Task FixtureRepositoryV2_ItsIndexDelta_CarriesNoMerkleCommitment()
+    {
+        // The other half of the format-version gate (07 §2.3). A delta is
+        // refused outright by a reader that does not know one of its keys,
+        // so a format-2 repository — which an older build is entitled to
+        // read — must never contain key 11. The digest it does carry is
+        // unaffected.
+        var committed = CommittedFixturePath();
+        Assert.IsTrue(Directory.Exists(committed), "the committed v2 fixture must exist");
+
+        var store = new LocalFileSystemObjectStore(committed);
+        using var authority = FixtureRepositoryV2.DeriveAuthority();
+
+        using var loader = new IndexLoader(store, FixtureRepositoryV2.Repo, authority.Credential);
+        var state = await loader.LoadAsync(currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, blobState: null, CancellationToken.None);
+        Assert.IsEmpty(state.Findings);
+
+        var delta = Assert.ContainsSingle(state.Deltas).Delta;
+        Assert.IsNotEmpty(delta.CoveredBlobIds);
+        Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
+        Assert.IsEmpty(delta.CoveredBlobMerkleRoots);
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

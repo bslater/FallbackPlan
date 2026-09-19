@@ -492,10 +492,24 @@ public sealed partial class PublicationOrchestrator
             // something the writer signed rather than against a record kept
             // on the writer's own machine.
             var digests = new List<ReadOnlyMemory<byte>>();
+
+            // And, at format 3 and above, the Merkle commitment over the
+            // same bytes (07 §2.3) — the one a peer can be challenged under
+            // without the blob crossing the wire. Withheld below format 3
+            // because a reader that predates key 11 refuses a delta carrying
+            // it, and such a reader is entitled to read a format-2
+            // repository.
+            var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
+            var merkleRoots = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in session.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
                 digests.Add(blob.Digest.ToArray());
+                if (publishRoots)
+                {
+                    merkleRoots.Add(blob.MerkleRoot.ToArray());
+                }
+
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -510,7 +524,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
+                _generation.Value, covered, entries, digests, merkleRoots, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 

@@ -143,6 +143,8 @@ internal static class FixtureRepositoryBuilder
             var content = FileContent();
             var references = new List<SegmentReference>();
             var entries = new List<IndexEntry>();
+            var blobDigests = new List<ReadOnlyMemory<byte>>();
+            var blobMerkleRoots = new List<ReadOnlyMemory<byte>>();
 
             var structureKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
             var dataWriter = BlobWriter.CreateSealed(
@@ -162,7 +164,7 @@ internal static class FixtureRepositoryBuilder
                 references.Add(new SegmentReference(offset, length, objectId));
             }
 
-            await SealAndUploadAsync(store, storeKeys, dataWriter, entries, cancellationToken).ConfigureAwait(false);
+            await SealAndUploadAsync(store, storeKeys, dataWriter, entries, blobDigests, blobMerkleRoots, cancellationToken).ConfigureAwait(false);
 
             // --- metadata blob (counter 3): the structure plane, which is
             // what keeps the hub able to browse and plan without content.
@@ -240,7 +242,7 @@ internal static class FixtureRepositoryBuilder
                 metaWriter, objectIds, ObjectType.SnapshotManifest, encodedSnapshot, cancellationToken)
                 .ConfigureAwait(false);
 
-            await SealAndUploadAsync(store, storeKeys, metaWriter, entries, cancellationToken).ConfigureAwait(false);
+            await SealAndUploadAsync(store, storeKeys, metaWriter, entries, blobDigests, blobMerkleRoots, cancellationToken).ConfigureAwait(false);
 
             // --- standalone snapshot (counter 4). Format 1 in every
             // repository, format 3 included: a standalone record is never in
@@ -259,6 +261,13 @@ internal static class FixtureRepositoryBuilder
                 Sequence = 5,
                 Generation = 0,
                 CoveredBlobIds = [dataBlobId, metaBlobId],
+                CoveredBlobDigests = blobDigests,
+
+                // Key 11 rides only at format 3 and above (07 §2.3): a
+                // reader that predates it refuses a delta carrying it, and
+                // such a reader is entitled to read the format-2 fixture.
+                CoveredBlobMerkleRoots =
+                    FormatVersions.HasRelocatableRecords(identity.FormatVersion) ? blobMerkleRoots : [],
                 Entries = entries,
             };
             byte[] storedDelta;
@@ -347,6 +356,8 @@ internal static class FixtureRepositoryBuilder
         StoreBlobKeyDeriver storeKeys,
         BlobWriter writer,
         List<IndexEntry> entries,
+        List<ReadOnlyMemory<byte>> digests,
+        List<ReadOnlyMemory<byte>> merkleRoots,
         CancellationToken cancellationToken)
     {
         var sealedBlob = await writer.SealAsync(cancellationToken).ConfigureAwait(false);
@@ -358,6 +369,12 @@ internal static class FixtureRepositoryBuilder
                     entry.ObjectId, sealedBlob.BlobId, entry.PhysicalOffset, entry.StoredLength,
                     entry.CompressionProfileValue, entry.EncryptionProfileValue, IndexEntryType.Insertion));
             }
+
+            // The two commitments the delta publishes over this blob
+            // (07 §2.2, §2.3), collected in the order the covered-blob array
+            // is built so the arrays stay parallel by construction.
+            digests.Add(sealedBlob.Digest.ToArray());
+            merkleRoots.Add(sealedBlob.MerkleRoot.ToArray());
 
             var storeKey = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeKeys.Derive(sealedBlob.BlobId));
             var result = await store.PutAsync(

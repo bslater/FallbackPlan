@@ -235,6 +235,57 @@ public sealed class FixtureRepositoryV3Tests : IDisposable
         SequenceAssert.AreEqual(expected, relocated.Plaintext);
     }
 
+    [TestMethod]
+    public async Task FixtureRepositoryV3_ItsIndexDelta_CarriesAMerkleCommitmentPerCoveredBlob()
+    {
+        // The format-version gate, proved on frozen bytes: a repository at
+        // format 3 publishes key 11 for every blob its delta covers
+        // (07 §2.3), and the root is the tree over that blob's own sealed
+        // bytes short of the locator — recomputed here from the object in
+        // the store, never taken from the writer's word for it.
+        var committed = CommittedFixturePath();
+        Assert.IsTrue(Directory.Exists(committed), "the committed v3 fixture must exist");
+
+        var store = new LocalFileSystemObjectStore(committed);
+        using var authority = FixtureRepositoryV3.DeriveAuthority();
+
+        using var loader = new IndexLoader(store, FixtureRepositoryV3.Repo, authority.Credential);
+        var state = await loader.LoadAsync(currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, blobState: null, CancellationToken.None);
+        Assert.IsEmpty(state.Findings);
+
+        var delta = Assert.ContainsSingle(state.Deltas).Delta;
+        Assert.IsNotEmpty(delta.CoveredBlobIds);
+        Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobMerkleRoots);
+        Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
+
+        using var storeKeys = new StoreBlobKeyDeriver(authority.Credential.KeyIdKey.ToArray());
+        for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+        {
+            var storeKey = BlobStoreKeys.ForBlob(
+                BlobClass.Data, storeKeys.Derive(delta.CoveredBlobIds[i]));
+            var metadata = await store.GetMetadataAsync(storeKey, CancellationToken.None);
+            if (metadata.Metadata is null)
+            {
+                storeKey = BlobStoreKeys.ForBlob(
+                    BlobClass.Metadata, storeKeys.Derive(delta.CoveredBlobIds[i]));
+                metadata = await store.GetMetadataAsync(storeKey, CancellationToken.None);
+            }
+
+            Assert.IsNotNull(metadata.Metadata);
+            var bytes = new byte[metadata.Metadata.Length];
+            using (var opened = await store.OpenReadAsync(storeKey, null, CancellationToken.None))
+            {
+                Assert.AreEqual(OpenReadOutcome.Found, opened.Outcome);
+                await opened.Content!.ReadExactlyAsync(bytes, CancellationToken.None);
+            }
+
+            var preimage = bytes.AsSpan(0, bytes.Length - FooterLocator.Length);
+            SequenceAssert.AreEqual(BlobMerkle.Root(preimage), delta.CoveredBlobMerkleRoots[i].ToArray());
+            SequenceAssert.AreEqual(
+                System.Security.Cryptography.SHA256.HashData(preimage), delta.CoveredBlobDigests[i].ToArray());
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

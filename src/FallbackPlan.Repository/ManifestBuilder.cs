@@ -383,6 +383,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 storeBlobKey,
                 storeKey,
                 sealedBlob.Digest,
+                sealedBlob.MerkleRoot,
                 sealedBlob.RecordTable.Count,
                 sealedBlob.Length,
                 sealedBlob.RecordTable));

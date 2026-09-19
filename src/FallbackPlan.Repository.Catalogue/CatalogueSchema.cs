@@ -40,7 +40,7 @@ public static class CatalogueSchema
     /// the covering parent index is untouched.
     /// </para>
     /// </remarks>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -57,6 +57,7 @@ public static class CatalogueSchema
             record_count   INTEGER NOT NULL,
             length         INTEGER NOT NULL,
             digest         BLOB,
+            merkle_root    BLOB,
             state          INTEGER NOT NULL DEFAULT 1
         ) WITHOUT ROWID;
 
