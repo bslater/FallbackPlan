@@ -430,7 +430,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 {
                     await RetrievalResponder.ServeAsync(
                         _replicasRoot, session.Stream, session.Peer, _owners!,
-                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token)
+                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token,
+                        session.Supports(PeerSessionNegotiation.ChunkPossessionFeature))
                         .ConfigureAwait(false);
                     Log.RetrievalServed(_log, peer);
                     return;

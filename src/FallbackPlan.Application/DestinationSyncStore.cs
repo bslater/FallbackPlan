@@ -115,6 +115,18 @@ public sealed record DestinationSyncRecord
     public int VerifiedDigest { get; init; }
 
     /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed
+    /// verification proved by asking the destination for one leaf of the
+    /// blob's Merkle commitment and its authentication path, checked against
+    /// the root the writer signed (schema 4). A <b>sampled</b> proof of the
+    /// blob rather than a whole-blob one, counted apart from
+    /// <see cref="VerifiedDigest"/> so that the cheaper tier cannot be read
+    /// as the stronger one.
+    /// </summary>
+    [JsonPropertyName("verified_chunk")]
+    public int VerifiedChunk { get; init; }
+
+    /// <summary>
     /// Where the sync-time challenge rotation resumes — the highest key the
     /// last passed verification asked about, or null to start at the
     /// beginning of the key space.
@@ -351,7 +363,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -692,9 +704,10 @@ public sealed class DestinationSyncStore
     /// <param name="nowUnixMilliseconds">The clock.</param>
     /// <param name="sealed">How many of <paramref name="objects"/> were proved by a record's AEAD tag.</param>
     /// <param name="digest">How many of <paramref name="objects"/> were proved by the signed whole-blob digest.</param>
+    /// <param name="chunk">How many of <paramref name="objects"/> were proved by one leaf of the signed Merkle commitment.</param>
     public DestinationSyncRecord RecordVerification(
         string setId, string destination, int objects, int population, ulong verifiedSequence,
-        string? sampleCursor, ulong nowUnixMilliseconds, int @sealed = 0, int digest = 0)
+        string? sampleCursor, ulong nowUnixMilliseconds, int @sealed = 0, int digest = 0, int chunk = 0)
     {
         // A verification touches only the stamps: the sync half of the row —
         // state, attempt, success, the synced sequence — is carried forward
@@ -712,6 +725,7 @@ public sealed class DestinationSyncStore
             VerifiedPopulation = population,
             VerifiedSealed = @sealed,
             VerifiedDigest = digest,
+            VerifiedChunk = chunk,
             SampleCursor = sampleCursor,
         });
     }

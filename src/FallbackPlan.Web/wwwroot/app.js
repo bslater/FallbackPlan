@@ -619,15 +619,19 @@ function destCompletion(d) {
 // shown to work"; only the third means something is wrong, and collapsing
 // "never" into either of the others is how an unexercised destination comes
 // to look reassuring.
-// Which proof the last verification rested on (contract 1.32): a record's
-// AEAD tag opened at the destination, or the whole sealed blob hashed against
-// the digest the writer signed. Said beside the possession word so a
-// write-only set's "proven" is legible — its data plane can only ever be
-// proved by digest. Nothing when the service counted neither (pre-1.32).
+// Which proof the last verification rested on (contract 1.32, 1.34): a
+// record's AEAD tag opened at the destination, the whole sealed blob hashed
+// against the digest the writer signed, or one leaf of the blob's Merkle
+// commitment checked against the signed root. Said beside the possession word
+// so a write-only set's "proven" is legible — its data plane can never be
+// proved by tag. The three are named apart rather than summed because they
+// are different strengths: a chunk proof samples the blob where a digest
+// proof reads all of it. Nothing when the service counted none (pre-1.32).
 function verificationTiers(d) {
   const parts = [];
   if (d.verifiedSealed > 0) parts.push(`${fmtCount(d.verifiedSealed)} by tag`);
   if (d.verifiedDigest > 0) parts.push(`${fmtCount(d.verifiedDigest)} by digest`);
+  if (d.verifiedChunk > 0) parts.push(`${fmtCount(d.verifiedChunk)} by chunk`);
   return parts.length ? ` · ${parts.join(", ")}` : "";
 }
 

@@ -16,14 +16,25 @@ internal sealed class PeerRetrievalClient : IAsyncDisposable
     private readonly PeerKeypair _keypair;
     private readonly PeerTlsConnection _connection;
     private readonly PeerSession _session;
+    private readonly ReadOnlyMemory<byte> _repositoryId;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private PeerRetrievalClient(PeerKeypair keypair, PeerTlsConnection connection, PeerSession session)
+    private PeerRetrievalClient(
+        PeerKeypair keypair, PeerTlsConnection connection, PeerSession session, ReadOnlyMemory<byte> repositoryId)
     {
         _keypair = keypair;
         _connection = connection;
         _session = session;
+        _repositoryId = repositoryId;
     }
+
+    /// <summary>
+    /// Whether this session admits a Merkle chunk challenge (07 §3.6).
+    /// Offered and never required: a peer that does not have it is read back
+    /// whole instead, which costs it more rather than proving it less.
+    /// </summary>
+    public bool SupportsChunkPossession =>
+        _session.Supports(PeerSessionNegotiation.ChunkPossessionFeature);
 
     /// <summary>
     /// Dials the destination, opens the named replica, and returns the live
@@ -68,7 +79,7 @@ internal sealed class PeerRetrievalClient : IAsyncDisposable
                 session.Stream, PeerMessageType.RetrieveReady, RetrieveReady.Read, cancellationToken)
                 .ConfigureAwait(false);
 
-            return new PeerRetrievalClient(keypair, connection, session);
+            return new PeerRetrievalClient(keypair, connection, session, repositoryId);
         }
         catch
         {
@@ -112,6 +123,30 @@ internal sealed class PeerRetrievalClient : IAsyncDisposable
                 .ConfigureAwait(false);
             return await ReplicationWire.ReadAsync(
                 _session.Stream, PeerMessageType.RetrieveData, RetrieveData.Read, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asks the destination for one leaf of a blob's Merkle commitment and
+    /// its authentication path (07 §3.6). The answer proves nothing by
+    /// itself — the caller checks it against the root the writer signed.
+    /// </summary>
+    public async ValueTask<MerkleProof> ChallengeChunkAsync(
+        string key, uint leafIndex, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await PeerFrame.WriteAsync(
+                _session.Stream, new MerkleChallenge(_repositoryId, key, leafIndex), cancellationToken)
+                .ConfigureAwait(false);
+            return await ReplicationWire.ReadAsync(
+                _session.Stream, PeerMessageType.MerkleProof, MerkleProof.Read, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally

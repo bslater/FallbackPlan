@@ -203,9 +203,19 @@ public static class FanOut
             // peer budget. The bytes crossing the wire are the proof — a
             // digest the peer computed of its own copy would be a claim
             // (ADR-0058 §8).
+            // And, where both ends can, the chunk tier ahead of it: the
+            // peer hashes its own copy to build a path but sends back one
+            // leaf's bytes, so a mebibyte crosses the link instead of a
+            // blob. The path is not the proof — the bytes are, checked
+            // against the root the writer signed (07 §2.3) — which is what
+            // makes this a proof rather than the self-report ADR-0058
+            // refuses. A peer that does not offer the feature falls to the
+            // whole-blob read, which costs it more and proves no less.
             verification = await Replication.ReplicaVerifier.ProveSealedAsync(
                 new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken,
-                archive.Catalogue.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget)
+                archive.Catalogue.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget,
+                archive.Catalogue.SignedMerkleRootOf,
+                client.SupportsChunkPossession ? ChunkProverFor(client) : null)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (
@@ -238,9 +248,20 @@ public static class FanOut
         ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
         ledger.RecordVerification(
             set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, plan.NextCursor, nowMs,
-            verification.Sealed, verification.Digest);
+            verification.Sealed, verification.Digest, verification.Chunk);
         return true;
     }
+
+    /// <summary>
+    /// The wire half of the chunk tier: one challenge, one proof, over the
+    /// retrieval session the read-back already holds.
+    /// </summary>
+    private static Replication.SealedChunkProver ChunkProverFor(PeerRetrievalClient client) =>
+        async (storeKey, leafIndex, token) =>
+        {
+            var proof = await client.ChallengeChunkAsync(storeKey, leafIndex, token).ConfigureAwait(false);
+            return new Replication.ChunkAnswer(proof.Held, proof.Leaf, proof.Path);
+        };
 
     /// <summary>Whether the store can answer for anything under a prefix.</summary>
     /// <param name="store">The store to ask.</param>

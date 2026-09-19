@@ -790,6 +790,14 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// by opening a record's AEAD tag at the destination (contract 1.32). Zero
 /// from services before 1.32, which had the tier and did not count it.
 /// </param>
+/// <param name="VerifiedChunk">
+/// Of the objects the last passed verification proved, how many were proved
+/// by asking the destination for one leaf of the blob's Merkle commitment
+/// and its authentication path, checked against the root the writer signed
+/// into the index (contract 1.34). A sampled proof of the blob, not a
+/// whole-blob one, and counted apart from <paramref name="VerifiedDigest"/>
+/// for that reason. Zero from services before 1.34.
+/// </param>
 /// <param name="VerifiedDigest">
 /// Of the objects the last passed verification proved, how many were proved
 /// by hashing the whole sealed blob at the destination against the digest
@@ -816,7 +824,8 @@ public sealed record DestinationStatusDescriptor(
     string? DrillFailure = null,
     string? DrillLimit = null,
     int VerifiedSealed = 0,
-    int VerifiedDigest = 0);
+    int VerifiedDigest = 0,
+    int VerifiedChunk = 0);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

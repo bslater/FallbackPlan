@@ -258,8 +258,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// cross. Narrowed by kind, set, repository and count. Any signed-in
     /// role, any caller scope: it is an audit listing of what a peer already
     /// said under its own signature. Additive.
+    /// <para>
+    /// 1.34 adds `verified_chunk` to each destination row (ADR-0065): of the
+    /// objects the last passed verification proved, how many were proved by
+    /// asking the destination for one leaf of the blob's Merkle commitment
+    /// and its authentication path, checked against the root the writer
+    /// signed into the index. It is a <b>sampled</b> proof of the blob and
+    /// is counted apart from `verified_digest`, which reads every byte, so
+    /// that the cheaper tier cannot be rendered as the stronger one.
+    /// Additive with a zero default; a pre-1.34 client reads the row as it
+    /// did and a pre-1.34 service answers zero, which is true of it.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 33);
+    public static ContractVersion Current { get; } = new(1, 34);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

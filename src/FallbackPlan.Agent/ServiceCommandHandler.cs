@@ -2579,7 +2579,8 @@ public sealed partial class ServiceCommandHandler(
                 DrillFailure: ledger?.DrillFailure,
                 DrillLimit: ledger?.DrillLimit,
                 VerifiedSealed: ledger?.VerifiedSealed ?? 0,
-                VerifiedDigest: ledger?.VerifiedDigest ?? 0));
+                VerifiedDigest: ledger?.VerifiedDigest ?? 0,
+                VerifiedChunk: ledger?.VerifiedChunk ?? 0));
         }
 
         return (inputs, rows, lastCompleted);

@@ -214,6 +214,31 @@ public sealed class DestinationSyncStoreTests
         Assert.AreEqual(4, record.VerifiedObjects);
         Assert.AreEqual(0, record.VerifiedSealed);
         Assert.AreEqual(0, record.VerifiedDigest);
+        Assert.AreEqual(0, record.VerifiedChunk);
+    }
+
+    [TestMethod]
+    public void Open_ASchemaThreeLedger_ReadsItsTiersAndZeroChunks()
+    {
+        // The same rule one schema on: a ledger written before the chunk
+        // tier existed keeps the two tiers it counted and reads the third as
+        // zero, which is true of it — nothing had asked a peer for a leaf.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 3, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "last_success_at": 1000, "synced_sequence": 42,
+                  "verified_at": 1000, "verified_objects": 7, "verified_population": 12,
+                  "verified_sealed": 4, "verified_digest": 3 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-3 ledger must migrate, not quarantine");
+        Assert.IsFalse(File.Exists(path + ".corrupt"));
+        Assert.AreEqual(4, record.VerifiedSealed);
+        Assert.AreEqual(3, record.VerifiedDigest);
+        Assert.AreEqual(0, record.VerifiedChunk);
     }
 
     [TestMethod]
@@ -223,7 +248,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 4, "destinations": [
+            { "schema_version": 5, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -259,7 +284,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 3", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 4", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

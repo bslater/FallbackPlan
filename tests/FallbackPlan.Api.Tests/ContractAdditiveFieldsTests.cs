@@ -589,22 +589,28 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var modern = JsonSerializer.Serialize(
             new DestinationStatusDescriptor(
                 "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
-                "other-drive", "proven", VerifiedSealed: 5, VerifiedDigest: 2),
+                "other-drive", "proven", VerifiedSealed: 5, VerifiedDigest: 2, VerifiedChunk: 3),
             FrameCodec.SerializerOptions);
 
         Assert.Contains("\"verified_sealed\":5", modern, StringComparison.Ordinal);
         Assert.Contains("\"verified_digest\":2", modern, StringComparison.Ordinal);
 
-        // A pre-1.32 frame carries neither and reads as zero of each: the
-        // coverage the row always had, with no claim about which tier.
+        // Contract 1.34: the chunk tier, counted apart from the digest tier
+        // because it samples the blob where the digest reads all of it.
+        Assert.Contains("\"verified_chunk\":3", modern, StringComparison.Ordinal);
+
+        // A pre-1.32 frame carries none of them and reads as zero of each:
+        // the coverage the row always had, with no claim about which tier.
         var old = modern
             .Replace(",\"verified_sealed\":5", "", StringComparison.Ordinal)
-            .Replace(",\"verified_digest\":2", "", StringComparison.Ordinal);
+            .Replace(",\"verified_digest\":2", "", StringComparison.Ordinal)
+            .Replace(",\"verified_chunk\":3", "", StringComparison.Ordinal);
         Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
 
         var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
         Assert.AreEqual(0, row.VerifiedSealed);
         Assert.AreEqual(0, row.VerifiedDigest);
+        Assert.AreEqual(0, row.VerifiedChunk);
         Assert.AreEqual("proven", row.Verification);
     }
 

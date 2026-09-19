@@ -138,14 +138,22 @@ public static class BlobMerkle
     /// the sibling subtree roots from the leaf upward, as RFC 6962 §2.1.1
     /// consumes them.
     /// </summary>
-    public static byte[][] AuthenticationPath(ReadOnlySpan<byte> preimage, int leafIndex)
+    public static byte[][] AuthenticationPath(ReadOnlySpan<byte> preimage, int leafIndex) =>
+        AuthenticationPath(LeafHashes(preimage), leafIndex);
+
+    /// <summary>
+    /// The authentication path for one leaf, from hashes already computed —
+    /// what a party that streamed a blob past itself can answer without
+    /// holding the blob in memory.
+    /// </summary>
+    public static byte[][] AuthenticationPath(IReadOnlyList<byte[]> leafHashes, int leafIndex)
     {
-        var leaves = LeafHashes(preimage);
+        ArgumentNullException.ThrowIfNull(leafHashes);
         ArgumentOutOfRangeException.ThrowIfNegative(leafIndex);
-        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(leafIndex, leaves.Length);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(leafIndex, leafHashes.Count);
 
         var path = new List<byte[]>();
-        AppendPath(leaves, leafIndex, path);
+        AppendPath([.. leafHashes], leafIndex, path);
         return [.. path];
     }
 
@@ -348,6 +356,28 @@ public sealed class BlobMerkleAccumulator : IDisposable
         _leaves.Clear();
         _length = 0;
         return root;
+    }
+
+    /// <summary>
+    /// Finishes the tree and hands over its leaf hashes, which is what a
+    /// party building an authentication path needs and a party publishing a
+    /// root does not. At the blob ceiling this is 512 hashes; the bytes they
+    /// cover were streamed past and never held.
+    /// </summary>
+    public (IReadOnlyList<byte[]> LeafHashes, long PreimageLength) CompleteAndReset()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_inLeaf > 0)
+        {
+            CloseLeaf();
+        }
+
+        var leaves = _leaves.ToArray();
+        var length = _length;
+        _leaves.Clear();
+        _length = 0;
+        return (leaves, length);
     }
 
     /// <inheritdoc />

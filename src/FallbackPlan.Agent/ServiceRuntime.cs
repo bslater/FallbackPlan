@@ -113,6 +113,17 @@ public sealed record ServiceOptions
 /// </remarks>
 public sealed class ServiceRuntime : IAsyncDisposable
 {
+    /// <summary>
+    /// The repository format version a set's archive is created at. A
+    /// property rather than the constant so the peer suite can stand up a
+    /// format-3 archive through the real pipeline — nothing at format 2
+    /// publishes a Merkle commitment, so nothing at format 2 can be
+    /// challenged by chunk. The service never sets it, and creation stays at
+    /// <see cref="Domain.FormatLimits.FormatVersion"/> until a creation surface asks
+    /// for otherwise (ADR-0052 Amendment 1).
+    /// </summary>
+    internal static ushort ArchiveFormatVersion { get; set; } = Domain.FormatLimits.FormatVersion;
+
     private readonly StateDirectoryLock _writerRole;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
@@ -765,7 +776,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
                     createdBy: Environment.MachineName,
                     (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
-                    LoggerFor(typeof(RepositoryLifecycle)))
+                    LoggerFor(typeof(RepositoryLifecycle)),
+                    ArchiveFormatVersion)
                 .ConfigureAwait(false);
         }
 

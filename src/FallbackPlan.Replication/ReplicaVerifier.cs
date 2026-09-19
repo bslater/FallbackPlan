@@ -34,7 +34,16 @@ public sealed record VerificationSample(string Key, ulong Offset, uint Length);
 /// records are sealed to a key this side does not hold (FR-WOR-003). Weaker
 /// than a tag only in cost: it reads the whole blob rather than one record.
 /// </param>
-public sealed record VerificationOutcome(int Passed, IReadOnlyList<string> Failed, int Sealed = 0, int Digest = 0)
+/// <param name="Chunk">
+/// How many of <paramref name="Passed"/> were proved by asking the party
+/// that holds the replica for one leaf of the blob's Merkle commitment and
+/// its authentication path, checked against the root the writer signed into
+/// the index (07 §2.3). It proves possession of <b>that leaf</b>, not of the
+/// whole blob — a sampled proof, and named separately from
+/// <paramref name="Digest"/> for that reason rather than folded into it.
+/// </param>
+public sealed record VerificationOutcome(
+    int Passed, IReadOnlyList<string> Failed, int Sealed = 0, int Digest = 0, int Chunk = 0)
 {
     /// <summary>Whether this run established anything at all.</summary>
     public bool ProvedSomething => Passed > 0;
@@ -122,6 +131,28 @@ public static class RangeReader
 /// from bytes on the destination's disk, never from a copy having reported
 /// success (FR-VER-001).
 /// </summary>
+/// <summary>
+/// One party's answer to a Merkle chunk challenge (peer-protocol 07 §3.6).
+/// </summary>
+/// <param name="Held">Whether the leaf could be produced.</param>
+/// <param name="Leaf">The leaf's bytes.</param>
+/// <param name="Path">The sibling hashes carrying the leaf to the root.</param>
+public readonly record struct ChunkAnswer(
+    bool Held, ReadOnlyMemory<byte> Leaf, IReadOnlyList<ReadOnlyMemory<byte>> Path);
+
+/// <summary>
+/// Asks whoever holds the replica for one leaf of a blob and its path, or
+/// answers <see langword="null"/> when this replica cannot be challenged
+/// that way at all — a local path, or a peer that does not offer the
+/// feature. This project stays free of the peer protocol; the caller closes
+/// over the session.
+/// </summary>
+/// <param name="storeKey">The blob's key at the replica.</param>
+/// <param name="leafIndex">Which leaf to produce.</param>
+/// <param name="cancellationToken">Cancels the challenge.</param>
+public delegate ValueTask<ChunkAnswer?> SealedChunkProver(
+    string storeKey, uint leafIndex, CancellationToken cancellationToken);
+
 public static class ReplicaVerifier
 {
     /// <summary>
@@ -189,7 +220,7 @@ public static class ReplicaVerifier
         // AEAD tag needs no second copy, because the destination never held
         // the key that computed it.
         var sealedProof = repository is null
-            ? new SealedProof([], 0, 0)
+            ? new SealedProof([], 0, 0, 0)
             : await SealedProofAsync(
                 replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken)
                 .ConfigureAwait(false);
@@ -220,7 +251,8 @@ public static class ReplicaVerifier
             }
         }
 
-        return new VerificationOutcome(passed, failed, sealedProof.ByTag, sealedProof.ByDigest);
+        return new VerificationOutcome(
+            passed, failed, sealedProof.ByTag, sealedProof.ByDigest, sealedProof.ByChunk);
     }
 
     /// <summary>
@@ -259,6 +291,8 @@ public static class ReplicaVerifier
     /// <param name="cancellationToken">Cancels the run.</param>
     /// <param name="signedDigestOf">The signed whole-blob digest for a blob id, or null; see <see cref="VerifyAsync"/>.</param>
     /// <param name="digestByteBudget">The most the digest tier may read this run.</param>
+    /// <param name="signedMerkleRootOf">The signed Merkle root for a blob id, or null when none is on record (07 §2.3).</param>
+    /// <param name="chunkProver">Asks whoever holds the replica for one leaf and its path, or null where that cannot be asked.</param>
     /// <returns>What was proven and what was not.</returns>
     public static async Task<VerificationOutcome> ProveSealedAsync(
         IObjectStore replica,
@@ -266,7 +300,9 @@ public static class ReplicaVerifier
         Repository.OpenedRepository repository,
         CancellationToken cancellationToken,
         Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf = null,
-        long digestByteBudget = DigestByteBudget)
+        long digestByteBudget = DigestByteBudget,
+        Func<BlobId, ReadOnlyMemory<byte>?>? signedMerkleRootOf = null,
+        SealedChunkProver? chunkProver = null)
     {
         ThrowHelper.ThrowIfNull(replica);
         ThrowHelper.ThrowIfNull(blobKeys);
@@ -275,14 +311,15 @@ public static class ReplicaVerifier
         var failed = new List<string>();
         var samples = blobKeys.Select(key => new VerificationSample(key, 0, 0)).ToList();
         var proof = await SealedProofAsync(
-            replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken)
+            replica, samples, repository, failed, signedDigestOf, digestByteBudget, cancellationToken,
+            signedMerkleRootOf, chunkProver)
             .ConfigureAwait(false);
 
-        return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest);
+        return new VerificationOutcome(proof.Proved.Count, failed, proof.ByTag, proof.ByDigest, proof.ByChunk);
     }
 
     /// <summary>What the sealed half proved, and by which tier.</summary>
-    private sealed record SealedProof(HashSet<string> Proved, int ByTag, int ByDigest);
+    private sealed record SealedProof(HashSet<string> Proved, int ByTag, int ByDigest, int ByChunk);
 
     /// <summary>
     /// Proves sampled blobs at the replica by opening them: the footer
@@ -318,7 +355,9 @@ public static class ReplicaVerifier
         List<string> failed,
         Func<BlobId, ReadOnlyMemory<byte>?>? signedDigestOf,
         long digestByteBudget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<BlobId, ReadOnlyMemory<byte>?>? signedMerkleRootOf = null,
+        SealedChunkProver? chunkProver = null)
     {
         var blobKeys = samples
             .Select(sample => sample.Key)
@@ -330,9 +369,10 @@ public static class ReplicaVerifier
         var proved = new HashSet<string>(StringComparer.Ordinal);
         var byTag = 0;
         var byDigest = 0;
+        var byChunk = 0;
         if (blobKeys.Count == 0)
         {
-            return new SealedProof(proved, 0, 0);
+            return new SealedProof(proved, 0, 0, 0);
         }
 
         using var reader = new Repository.RepositoryReader(
@@ -369,8 +409,37 @@ public static class ReplicaVerifier
                     failed.Add(storeKey.Value);
                     break;
 
-                case Repository.Packing.RecordReadOutcome.ContentSealed
-                    when signedDigestOf?.Invoke(blobId) is { Length: SHA256.HashSizeInBytes } digest:
+                case Repository.Packing.RecordReadOutcome.ContentSealed:
+                    // The chunk tier first, because it is the cheap one: one
+                    // leaf and a path instead of every byte. It answers
+                    // Unavailable when this replica cannot be challenged
+                    // that way, and the whole-blob digest decides then.
+                    var chunk = signedMerkleRootOf?.Invoke(blobId) is { Length: SHA256.HashSizeInBytes } root
+                        ? await ChunkProofAsync(replica, storeKey, root, chunkProver, cancellationToken)
+                            .ConfigureAwait(false)
+                        : DigestVerdict.OverBudget;
+
+                    if (chunk == DigestVerdict.Proved)
+                    {
+                        proved.Add(storeKey.Value);
+                        byChunk++;
+                        break;
+                    }
+
+                    if (chunk == DigestVerdict.Failed)
+                    {
+                        failed.Add(storeKey.Value);
+                        break;
+                    }
+
+                    if (signedDigestOf?.Invoke(blobId) is not { Length: SHA256.HashSizeInBytes } digest)
+                    {
+                        // A sealed data plane with neither commitment to
+                        // check it against leaves the key to the comparison
+                        // half.
+                        break;
+                    }
+
                     switch (await DigestProofAsync(replica, storeKey, digest, budget, cancellationToken).ConfigureAwait(false))
                     {
                         case (DigestVerdict.Proved, var spent):
@@ -389,13 +458,72 @@ public static class ReplicaVerifier
                     }
 
                     break;
-
-                // Any other outcome — a sealed data plane with no digest to
-                // check it against — leaves the key to the comparison half.
             }
         }
 
-        return new SealedProof(proved, byTag, byDigest);
+        return new SealedProof(proved, byTag, byDigest, byChunk);
+    }
+
+    /// <summary>
+    /// Challenges one random leaf of a blob at the replica and checks the
+    /// answer against the root the writer signed (07 §2.3, peer-protocol
+    /// 07 §3.6).
+    /// </summary>
+    /// <remarks>
+    /// The <b>bytes</b> are what is checked. A path is public arithmetic
+    /// over hashes the examined party may cache, so it proves nothing on its
+    /// own; hashing the leaf it commits to is what makes this a proof of
+    /// possession rather than the self-report [ADR-0058] refuses. The tree's
+    /// size comes from the length the replica declares for its own copy,
+    /// which can only fail closed: the published root binds the preimage's
+    /// length, so an understated copy produces a root that does not match.
+    /// </remarks>
+    private static async ValueTask<DigestVerdict> ChunkProofAsync(
+        IObjectStore replica,
+        ObjectKey storeKey,
+        ReadOnlyMemory<byte> root,
+        SealedChunkProver? prover,
+        CancellationToken cancellationToken)
+    {
+        const int LocatorLength = 16;
+
+        if (prover is null)
+        {
+            return DigestVerdict.OverBudget;
+        }
+
+        var metadata = await replica.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+        if (metadata.Metadata is not { } found || found.Length <= LocatorLength)
+        {
+            return DigestVerdict.Failed;
+        }
+
+        var preimageLength = found.Length - LocatorLength;
+        var leafCount = Repository.Packing.BlobMerkle.LeafCount(preimageLength);
+
+        // Drawn at random rather than fixed: a party that discarded part of
+        // a blob survives a fixed choice for ever, and rotation across
+        // passes is what turns one leaf a pass into coverage.
+        var leafIndex = (uint)System.Random.Shared.Next(leafCount);
+
+        var answer = await prover(storeKey.Value, leafIndex, cancellationToken).ConfigureAwait(false);
+        if (answer is not { } given)
+        {
+            return DigestVerdict.OverBudget;
+        }
+
+        // "Cannot produce" from a party that declared it holds this blob is
+        // a finding, not a shrug — it is the truncation the challenge exists
+        // to catch (peer-protocol 04 §2).
+        if (!given.Held)
+        {
+            return DigestVerdict.Failed;
+        }
+
+        return Repository.Packing.BlobMerkle.VerifyLeaf(
+            root.Span, preimageLength, (int)leafIndex, given.Leaf.Span, given.Path)
+            ? DigestVerdict.Proved
+            : DigestVerdict.Failed;
     }
 
     private enum DigestVerdict

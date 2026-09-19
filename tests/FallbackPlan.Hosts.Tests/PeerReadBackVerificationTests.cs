@@ -224,6 +224,76 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         Assert.AreNotEqual(cursors[1], cursors[2], $"the third pass must resume after the second: {string.Join(", ", cursors)}");
     }
 
+    [TestMethod]
+    public async Task Pass_AFormatThreeSetsSealedBlobsAtThePeer_AreProvedByChunkAndTheBlobDoesNotCross()
+    {
+        // The whole point of the slice, end to end over the real wire. A
+        // format-3 archive publishes a Merkle root per covered blob
+        // (07 §2.3), so the read-back can ask the peer for ONE leaf and its
+        // authentication path instead of pulling the blob back and hashing
+        // it. What is checked is the leaf's bytes against the root the
+        // writer signed — the path is public arithmetic the peer could have
+        // cached, and proves nothing on its own, which is exactly why the
+        // bare digest answer ADR-0058 refuses is a self-report and this is
+        // not.
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatVersions.RelocatableRecords;
+        await SeedAsync();
+        await SyncAsync();
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
+        Assert.IsGreaterThan(
+            0, record.VerifiedChunk,
+            "a format-3 set's sealed data plane at the peer is proved by chunk, and the ledger must say so");
+
+        // And the cheap tier really is the one that ran: nothing was proved
+        // by hauling a whole blob back.
+        Assert.AreEqual(
+            0, record.VerifiedDigest,
+            "the chunk tier runs ahead of the digest tier, so no blob should have crossed whole");
+    }
+
+    [TestMethod]
+    public async Task Pass_AFormatThreeBlobRottedUnderASealedRecordAtThePeer_FailsByChunk()
+    {
+        // The chunk tier has to bite, or it is a cheaper way of stamping
+        // nothing. One byte flipped inside a sealed record, footer intact:
+        // the container still opens, the tag is unreadable here, and the
+        // leaf the peer sends back no longer hashes into the signed root.
+        // Which leaf is drawn is random, so the damaged blob's every leaf
+        // must be able to catch it — it is small enough to be one leaf.
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatVersions.RelocatableRecords;
+        await SeedAsync();
+
+        var replica = await ReplicaPathAsync();
+        var blob = Assert.ContainsSingle(
+            Directory.GetFiles(Path.Combine(replica, "blobs", "data"), "*", SearchOption.AllDirectories));
+        var bytes = await File.ReadAllBytesAsync(blob, Timeout);
+        bytes[200] ^= 0xFF;
+        await File.WriteAllBytesAsync(blob, bytes, Timeout);
+
+        await SyncAsync();
+
+        var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(
+            DestinationSyncState.Failed, record.State,
+            $"one rotted byte under a sealed record must fail by chunk (verified {record.VerifiedObjects}, chunk {record.VerifiedChunk})");
+        Assert.Contains("verification failed", record.LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheProtocolsLeafBound_IsTheFormatsLeafSize()
+    {
+        // Two constants arrived at independently — the format fixes the leaf
+        // at one mebibyte (05 §5.2) and the protocol bounds a chunk at the
+        // same number — and a proof that carried a whole leaf would be
+        // refused at the wire if they ever parted.
+        Assert.AreEqual(
+            FallbackPlan.Repository.Packing.BlobMerkle.LeafSize, MerkleProof.MaximumLeafBytes);
+    }
+
     private string? Cursor()
     {
         var record = DestinationSyncStore.Open(_harness.StateDirectory).Find(_harness.DocsSetId, "friend");
@@ -347,6 +417,7 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     public void Dispose()
     {
         FanOut.ReadBackBudget = VerificationSampler.DefaultBudget;
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion;
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
         _timeout.Dispose();
