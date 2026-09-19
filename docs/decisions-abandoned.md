@@ -110,6 +110,7 @@ Grouped by what they would have changed. One line each; the reasoning is at the 
 | Declare NFR-PERF-002 aspirational | A requirement nobody intends to meet should be deleted, not left implying a guarantee | [0029](adr/0029-pipeline-and-service-concurrency.md#alternatives-considered) |
 | Relax the position invariant for compacted blobs | Preserves zero-decrypt relocation only for transplants the key schedule cannot express anyway | [0025](adr/0025-compaction-reseals-records.md#alternatives-considered) |
 | Drop the record ordinal from the AAD | A real format change that surrenders in-blob reordering protection and still enables nothing | [0025](adr/0025-compaction-reseals-records.md#alternatives-considered) |
+| ~~Relax the position invariant~~ and ~~drop the ordinal from the AAD~~ — **both reversed for format 3** | Kept here rather than deleted, because the reasoning above was sound and the conclusion was still wrong. Each was rejected on the grounds that the other two changes existed, so no one change bought anything; taken together with scoping the key to the object they buy relocation outright, and the reordering protection they surrender moves to the footer's record table, which the reader already cross-checks. Built at format 3, with format 2 unchanged | [0052](adr/0052-relocatable-records-format-v3.md), [0025 Amendment 3](adr/0025-compaction-reseals-records.md) |
 
 ### Capture, scheduling and status
 

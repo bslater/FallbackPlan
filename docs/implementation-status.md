@@ -4,7 +4,7 @@
 
 ---
 
-Forty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Sixty-four decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -76,7 +76,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: the journal reconciled at start with a notice, cancel settling a run the queue no longer knows, deletion deferring only to queue-active runs, the Owner-only in-process `restart_service` (contract 1.21) on the console and CLI, and the startup configuration record with provenance | Built | `Application/JobStateStore` · `Agent/ServiceRuntime` · `Agent/AgentHost` (the recycle loop and events 3760–3763) · `Agent/AuthenticatingService` · `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AgentServiceLifetimeTests`, `Hosts.Tests/AgentHostTests`, `Web.Tests/ConsoleAdminScriptTests` |
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
-| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Specified only** | [notes](#0052--nothing-writes-v3-and-that-is-the-point) |
+| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Partly built** | `Domain/FormatVersions` · `Repository.Crypto/RecordKeyDeriver` · `Repository.Packing/SealedRecordKey`, `Repository.Packing/RecordFraming`, `Repository.Packing/SealedContentKeyOpener` · `Repository.Packing/BlobWriter`, `Repository.Packing/BlobReader` · `Repository.Tests/Packing/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` · [notes](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, (Amendment 1) an interrupted drill recording nothing at all, and (Amendment 3) a peer drilled on a cadence its source's operator states, never by default, under a byte cap | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Application/DestinationConfiguration` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Hosts.Tests/PeerRecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/RepositoryWriteCredential` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
@@ -139,16 +139,21 @@ It is still one provider. A contract with a single implementation has not yet be
 
 Format 1 was withdrawn before any freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), with no installed base
 to migrate: the one live installation went through setup and only ever wrote
-format 2. `Domain/FormatLimits` names one format version, and
-`Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a descriptor
-stamped `1` as its own finding — *refuse, never misread* — naming re-seeding as
-the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
+format 2. `Domain/FormatLimits` named one format version when this was written and now
+names two — 2 at creation, 3 accepted and opt-in ([0052](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not)) —
+and `Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a
+descriptor stamped `1` as its own finding — *refuse, never misread* — naming
+re-seeding as the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
 `Repository.Tests/Format/RepositoryDescriptorCodecTests` hold both halves.
 The freeze gate's items are unchanged and read against format 2.
 
 One fact is recorded because it looks like an error until it is explained:
 format 2's symmetric containers — metadata blobs and standalone records —
-still stamp `1` in their envelopes and associated data. The symmetric
+still stamp `1` in their envelopes and associated data. (A format-3
+repository stamps its metadata blobs `3`; its standalone records stay `1`,
+because a standalone record is never inside a blob and so is never relocated.
+`Domain/FormatVersions.ContainerVersion` is the one place that arithmetic
+lives.) The symmetric
 construction is the one format 1 defined and format 2 kept byte for byte, and
 the stamp is authenticated data over bytes already on disk, so
 `Domain/FormatLimits` carries it as `SymmetricFormatVersion` beside the format
@@ -163,7 +168,9 @@ No legacy reader exists and none should yet: it is phase 5 and gated on a legal 
 
 ### 0025 — nothing compacts yet, so nothing re-seals yet
 
-The decision is sound and unexercised because the collector, though built, deliberately stops before compaction (architecture 07 steps 6–9): deletion-only GC never moves a record, so nothing re-seals. What *is* built is the constraint the decision protects — the record ordinal stays in the AAD, and `Repository.Tests/Index/IndexPrecedenceTests` holds the supersession rules a compaction would rely on.
+The decision is sound and unexercised because the collector, though built, deliberately stops before compaction (architecture 07 steps 6–9): deletion-only GC never moves a record, so nothing re-seals. What *is* built is the constraint the decision protects — for format 2 the record ordinal stays in the AAD, and `Repository.Tests/Index/IndexPrecedenceTests` holds the supersession rules a compaction would rely on.
+
+Since [0052](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not) shipped, this record is superseded *in the built code* for format 3 and not merely on paper: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` moves a sealed record between blobs without opening it. Decrypt-and-reseal remains the only answer for format 2, and still nothing compacts in either.
 
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 
@@ -247,29 +254,44 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 
 Everything the row names is held by tests, including the 04 §5.1 kill matrix through a two-destination sink (`Hosts.Tests/DirectShipFaultSweepTests`). The gate has since been discharged for local-path sets (ADR-0046 Decision 7's amendment): `direct_ship` rides the contract (1.23) and the console's set editor, a shape flip migrates in-process with its seed queued at once, the retention-with-trimming drill ran (`Hosts.Tests/DirectShipRetentionTests` — and caught the sink stopping sweep deletes at the metadata store, now fanned to the destinations under the replication gate's licence), and a **new set referencing a local-path destination is born direct-ship**. Verification was corrected in 2026-09 on two counts, both of which bit the default shape of a new local-path set. It never ran: challenges live in the sync path and `Agent/Scheduler` queues a pair only when there is something to copy, and a direct-ship set has nothing to copy the moment it converges — so a destination was challenged once and then never again. And what would have run proved nothing: the verifier compared the replica against `Agent/DestinationShipSink`, whose blob reads the destinations themselves answer, so with one destination it was a replica against itself. Challenges are now due on the age of the last proof, and a sampled blob is proved by being *opened* at the replica — its footer and a record's AEAD tag, evidence the destination never held the key to forge (`Hosts.Tests/DirectShipVerificationTests`). Retirement's gate was regated in 2026-09 (Amendment 2) after a live install could not use it: it demanded every non-lifecycle object staging held be present at a destination, and nothing carries an object no live snapshot reaches, so the archive was refused for ever and its disk space held. It now refuses only over a blob the live history reaches that no destination has, or a non-blob object the flip's migration never carried across, and names example keys instead of a bare count. What keeps the row at **Partly built** is one tail: the peer write adapter (a declared peer is a stated `NotSupported` ledger row for direct-ship; peer-only sets default to staging until it lands).
 
-### 0052 — nothing writes v3, and that is the point
+### 0052 — the record and blob planes are built, the index plane is not
 
-The record is a **design**, taken at the moment when taking it is cheap. Under
-[ADR-0025](adr/0025-compaction-reseals-records.md) a record's key comes from
-its blob, its nonce is its position in that blob, and its AAD binds that
+Under [ADR-0025](adr/0025-compaction-reseals-records.md) a record's key comes
+from its blob, its nonce is its position in that blob, and its AAD binds that
 position again — so a record cannot be moved without being opened, and
-compaction is decrypt-and-reseal. ADR-0052 scopes the record key to the object
-identifier, makes the nonce constant and drops the ordinal from the AAD, for
-format v3 only.
+compaction is decrypt-and-reseal. Format 3 reverses all three: the key is
+`HKDF-Expand(class_key, "fbp/record/v3" ‖ u8(object_type) ‖ object_id)`, the
+nonce is drawn per record and carried in the record's prefix, and the AAD is
+51 bytes without the ordinal. `Repository.Tests/Packing/RelocatableBlobTests`
+copies a sealed record into another blob under a different salt, writer and
+derived blob key, at a different ordinal, and reads it back;
+`Repository.ConformanceTests/FixtureRepositoryV3Tests` does the same against
+bytes frozen in the repository, which is the only version of that claim a
+future reader can check.
 
-**Nothing implements it and nothing should yet.** `Domain/FormatLimits`
-carries version 2 (and the symmetric containers' stamp of 1, which is a fact
-about bytes on disk rather than a second format — [ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)),
-`Repository.Crypto/BlobKeyDeriver` still mixes the blob's salt, writer and
-counter, and `Repository.Format/Records/RecordNonce` still writes the ordinal.
-Format-2 repositories are read in place forever, so there is no migration
-waiting to be run and no half-state to be in.
+**What is built.** `Domain/FormatVersions` holds the questions the code asks
+of a version — including `ContainerVersion`, since a repository's version and
+a blob's stamp are different numbers — and `Domain/FormatLimits` carries
+`LatestFormatVersion` beside the creation default.
+`Repository.Format/Descriptor/RepositoryDescriptorCodec` implements feature
+`0x0003` and the rule that a format-3 descriptor must list it and a format-2
+one must not. `Repository.Crypto/RecordKeyDeriver`,
+`Repository.Packing/SealedRecordKey` and `Repository.Packing/RecordFraming`
+are the record primitives; `Repository.Packing/BlobWriter` and `BlobReader`
+are the blob plane, `AppendSealedRecordAsync` included. `Repository/ArchiveSession`
+and `Repository/ManifestBuilder` stamp what the descriptor says, and
+`Cli/CliApplication`'s `init --format-version` is the only way to ask for a
+format-3 repository — **the service still creates format 2**, and the one live
+installation is format 2.
 
-What makes the timing the argument: [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet)
-is *Specified only*, so nothing compacts, so reversing its decision costs a
-format revision. After a compactor ships the same change costs a data
-migration. The window closes on its own, which is why the record exists before
-the code rather than alongside it.
+**What is not.** No compactor exists in any format;
+`AppendSealedRecordAsync` is the primitive one would be written over, and
+[ADR-0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet)'s twelve exit
+criteria are untouched. The index plane is not built either: open question 4's
+Merkle-root digest — which is what would let a peer be challenged for
+possession without the bytes crossing the wire — is decided in shape and
+written nowhere. Format-2 repositories are read in place forever, so there is
+no migration waiting to be run.
 
 ### 0053 — the claim is built, the shape is not
 

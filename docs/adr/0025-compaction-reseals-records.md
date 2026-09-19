@@ -35,14 +35,16 @@ identifier (ADR-0007), not from any byte-preservation trick.
 
 ## Decision
 
-> **Superseded for format v3 (2026-09).** Decisions 1–3 below remain in force
-> for format v1 and v2, which are what every shipped repository is. They no
-> longer describe format v3, where the record key is scoped to the object
-> identifier, the nonce is constant and the AAD drops the ordinal, so that a
+> **Superseded for format v3 (2026-09; built 2026-09).** Decisions 1–3 below
+> remain in force for format v1 and v2, which are what every shipped
+> repository is. They no longer describe format v3, where the record key is
+> scoped to the object identifier, the nonce is **drawn per record and
+> carried in the record's prefix**, and the AAD drops the ordinal, so that a
 > record can be relocated without being opened —
-> [ADR-0052](0052-relocatable-records-format-v3.md). See Amendment 3 for why
-> the rejection recorded below was right on its own evidence and wrong in
-> aggregate.
+> [ADR-0052](0052-relocatable-records-format-v3.md), whose Amendment 1
+> withdrew the constant nonce this blockquote first described and which is now
+> built. See Amendment 3 for why the rejection recorded below was right on its
+> own evidence and wrong in aggregate.
 
 ### 1 The AAD is unchanged
 
@@ -242,4 +244,5 @@ compactor ships it is a data migration. The window closes by itself.
 | 2026-08 | Accepted | Resolves Q15 with no format change; 04 §4 rewritten to match; compaction defined as a re-sealing operation for Phase 4 |
 | 2026-08 | Accepted (amended) | Amendment 1: compaction is a staging-archive operation whose output replicates; destinations never re-seal ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-08 | Accepted (amended) | Amendment 2: twelve named exit criteria drawn from the 29 compaction fixes in the surveyed changelog ([ledger](../review/2026-08-prior-art-changelog-ledger.md)). |
-| 2026-09 | Accepted (superseded for v3) | Amendment 3: the decrypt-and-reseal decision stands for format v1 and v2 and is superseded for format v3 by [ADR-0052](0052-relocatable-records-format-v3.md), which scopes the record key to the object identifier, makes the nonce constant and drops the ordinal from the AAD — the three changes this record rejected one at a time, each on the grounds that the other two existed. Amendment 1's staging confinement is separately orphaned for direct-ship sets, which have no staging archive |
+| 2026-09 | Accepted (superseded for v3) | Amendment 3: the decrypt-and-reseal decision stands for format v1 and v2 and is superseded for format v3 by [ADR-0052](0052-relocatable-records-format-v3.md), which scopes the record key to the object identifier, carries a fresh nonce in each record and drops the ordinal from the AAD — the three changes this record rejected one at a time, each on the grounds that the other two existed. Amendment 1's staging confinement is separately orphaned for direct-ship sets, which have no staging archive |
+| 2026-09 | Accepted (superseded for v3, now built) | ADR-0052 is built for the record and blob planes, so the supersession is no longer prospective: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob without opening it, and `Repository.Tests/Packing/RelocatableBlobTests` reads it back there. Two corrections this record must carry rather than leave for a reader to notice: ADR-0052 Amendment 1 **withdrew the constant nonce** for a carried random one, so "makes the nonce constant" above described a design that was never written; and Amendment 1 item 6 **retires Amendment 1's staging confinement by rule** — a compactor runs where the structure key and a writer identity are, which is the source service, and a destination never compacts — rather than leaving it orphaned. Decrypt-and-reseal remains the only answer for format 2, and nothing compacts in any format yet |

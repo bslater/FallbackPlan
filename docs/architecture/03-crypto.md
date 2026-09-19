@@ -118,6 +118,8 @@ Restart is the safe failure. The engine always prefers it when there is any doub
 
 Binding `repository_id ‖ format_version ‖ object_type ‖ object_id ‖ ordinal` as AAD means a record cannot be relocated to a different blob position, a different object type, a different repository, or replayed under a different format version without authentication failing. This is what defends against the substitution and splicing attacks in [`../threat-model.md`](../threat-model.md#t-3-object-substitution-and-splicing).
 
+**Format 3 drops the ordinal**, leaving 51 bytes: `repository_id ‖ u16(3) ‖ u8(object_type) ‖ object_id` ([ADR-0052](../adr/0052-relocatable-records-format-v3.md)). Every other binding is unchanged, so the object, the type and the repository are defended exactly as above; what is given up is the in-blob position, deliberately, because a record that cannot be moved cannot be compacted without being opened. Reordering inside one blob is then caught by the footer instead: its record table names each record's ordinal, identifier and lengths, and the header at the offset must agree — a cross-check the reader performs on every read, and `Repository.Tests/RelocatableBlobTests` swaps two records without their table to prove it bites.
+
 ### 3.5 Test obligations
 
 The construction is only as good as its enforcement, so these are requirements on the test suite, not aspirations:
@@ -128,7 +130,8 @@ The construction is only as good as its enforcement, so these are requirements o
 - interruption test: restart-after-kill produces a *different* blob salt in every case;
 - concurrency test: *N* writers against one repository produce pairwise-distinct blob salts;
 - concurrency test: two writers seeded with an *identical* CSPRNG stream still derive distinct blob keys, via `writer_id` and `blob_counter`;
-- negative test: a record moved between blobs, ordinals, or repositories fails authentication — all three discharged by `Repository.Tests/Crypto/RecordCipherTests`, the blob case last and for a different reason from the other two: the AAD does not name the blob, so nothing breaks a tag, and the record is unopenable because its key derives from the blob's own salt, writer and counter ([ADR-0025](../adr/0025-compaction-reseals-records.md) §3). [ADR-0052](../adr/0052-relocatable-records-format-v3.md) changes exactly that property for format v3.
+- negative test: a **format-2** record moved between blobs, ordinals, or repositories fails authentication — all three discharged by `Repository.Tests/Crypto/RecordCipherTests`, the blob case last and for a different reason from the other two: the AAD does not name the blob, so nothing breaks a tag, and the record is unopenable because its key derives from the blob's own salt, writer and counter ([ADR-0025](../adr/0025-compaction-reseals-records.md) §3).
+- positive test: a **format-3** record moved between blobs *opens* — the property [ADR-0052](../adr/0052-relocatable-records-format-v3.md) exists to create, and the same test file's positive twin. `Repository.Tests/RelocatableBlobTests` copies a sealed record into a blob with another salt, writer, derived blob key and ordinal and reads it back; `Repository.ConformanceTests/FixtureRepositoryV3Tests` does it against bytes frozen in the repository. Moving a format-3 record to another *repository* still fails, because the repository identifier is still in the AAD.
 
 ## 4. Object identifiers
 

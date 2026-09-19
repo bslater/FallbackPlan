@@ -217,7 +217,7 @@ index_delta {
 }
 ```
 
-The index is the **sole authority on physical location**. Entries carry the generation at which they were published and declare whether they are an insertion or a supersession, so when compaction later relocates this record the newer entry wins deterministically — regardless of the order in which any reader discovers the two.
+The index is the **sole authority on physical location**. Entries carry the generation at which they were published and declare whether they are an insertion or a supersession, so when compaction later relocates this record the newer entry wins deterministically — regardless of the order in which any reader discovers the two. (In a format-3 repository that relocation can now be done without opening the record at all — its key is the object's and its nonce rides its prefix, [ADR-0052](../adr/0052-relocatable-records-format-v3.md). Nothing compacts yet in any format; what changes is the price when something does.)
 
 Deltas form gapless per-writer chains, which is what lets a reader *detect* a delta it has not seen rather than silently assuming it has everything.
 
@@ -245,7 +245,7 @@ file_version {
 
 > **Note what is absent: no blob identifier, no physical offset, no stored length.** A segment reference carries logical facts and an object identifier, and nothing else.
 >
-> That absence is what lets compaction relocate records later without rewriting a single immutable object. Physical location in the manifest was the original design's most serious internal contradiction — compaction would have had to either rewrite immutable objects or strand every manifest referencing a moved record. → [ADR-0007](../adr/0007-logical-object-identifiers-in-manifests.md)
+> That absence is what lets compaction relocate records later without rewriting a single immutable object — and, at format 3, without decrypting one either ([ADR-0052](../adr/0052-relocatable-records-format-v3.md)). Physical location in the manifest was the original design's most serious internal contradiction — compaction would have had to either rewrite immutable objects or strand every manifest referencing a moved record. → [ADR-0007](../adr/0007-logical-object-identifiers-in-manifests.md)
 
 The manifest is packed into a metadata blob, referenced by its enclosing tree, up through parent trees to the root tree — and then the signed snapshot manifest is published, referencing a root tree that already exists.
 
