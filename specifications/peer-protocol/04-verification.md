@@ -251,11 +251,19 @@ link the blob — is deliberately **not** defined: the source holds only the
 flat digest, so it could check nothing keyed to a nonce, and a bare digest
 is an answer the destination may have computed once at receipt and kept
 after discarding the bytes. Such an answer is a claim, and a source MUST NOT
-count it as a proof of possession. A challenge of that shape becomes sound
-only when the index commits to the blob in a form the source can open
-without the bytes — a Merkle root over fixed chunks — which is a repository
-format question ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)
-open question 4), not one for this protocol revision.
+count it as a proof of possession.
+
+The condition that would make a cheaper challenge sound has since been met,
+and the challenge defined: the index of a format-3 repository commits to each
+covered blob with a **Merkle root** over fixed chunks
+([repository format 07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)),
+and [07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)
+defines a challenge over it. The distinction that keeps it a proof is that the
+answer carries the leaf's **bytes**, not a hash of them: an authentication
+path is public arithmetic over hashes the destination may freely cache, so it
+establishes nothing on its own, while the chunk it commits to cannot be
+produced without being held. A destination's own hash of its own copy remains
+a claim, in any message, at any width.
 
 ---
 

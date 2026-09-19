@@ -76,7 +76,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: the journal reconciled at start with a notice, cancel settling a run the queue no longer knows, deletion deferring only to queue-active runs, the Owner-only in-process `restart_service` (contract 1.21) on the console and CLI, and the startup configuration record with provenance | Built | `Application/JobStateStore` · `Agent/ServiceRuntime` · `Agent/AgentHost` (the recycle loop and events 3760–3763) · `Agent/AuthenticatingService` · `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AgentServiceLifetimeTests`, `Hosts.Tests/AgentHostTests`, `Web.Tests/ConsoleAdminScriptTests` |
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
-| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives | **Partly built** | `Domain/FormatVersions` · `Repository.Crypto/RecordKeyDeriver` · `Repository.Packing/SealedRecordKey`, `Repository.Packing/RecordFraming`, `Repository.Packing/SealedContentKeyOpener` · `Repository.Packing/BlobWriter`, `Repository.Packing/BlobReader` · `Repository.Tests/Packing/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` · [notes](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not) |
+| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives — and, with [ADR-0065](adr/0065-merkle-commitment-and-chunk-possession.md), the index commits to a blob in a form a party with neither the blob nor a key can check | **Partly built** | `Domain/FormatVersions` · `Repository.Crypto/RecordKeyDeriver` · `Repository.Packing/SealedRecordKey`, `Repository.Packing/RecordFraming`, `Repository.Packing/SealedContentKeyOpener` · `Repository.Packing/BlobWriter`, `Repository.Packing/BlobReader` · `Repository.Tests/Packing/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` · [notes](#0052--the-record-blob-and-index-planes-are-built-nothing-compacts) |
 | [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, (Amendment 1) an interrupted drill recording nothing at all, and (Amendment 3) a peer drilled on a cadence its source's operator states, never by default, under a byte cap | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Application/DestinationConfiguration` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Hosts.Tests/PeerRecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/RepositoryWriteCredential` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
@@ -88,6 +88,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer — a local path's by listing, a peer's from the inventory every push already declares (Amendment 1) — moves the sequence past it, deletes nothing there on the sync pass or the granted collection run, and heals the set in place from the destination — a direct-ship set's metadata store and catalogue, a staging set's content as well, bounded by the closure of the history it lacks (Amendment 2) — over the retrieval session for a peer, one chunk at a time | Built | `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceRuntime` · `Agent/PeerRetrievalObjectStore` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
 | [0063](adr/0063-deletion-receipts.md) | Deletion receipts: a destination that deletes on a retention instruction answers with a statement signed under its own device key — the session, the commander, each page as accepted, the keys removed and the count never held — carried in the acknowledgement, verified by the commander against what it sent, filed by both parties and read back by a file-direct verb | Built | `Protocol/DeletionReceipt` · `Protocol/DeletionReceiptStore` · `Protocol/DeletionReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/AgentHost` · `Cli/CliApplication` · `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests`, `Cli.Tests/ReceiptsVerbValidationTests`; [notes](#0063--the-peer-planes-audit-record) |
 | [0064](adr/0064-replication-receipts.md) | Replication receipts: a destination that takes a push answers with a statement signed under its own device key — the session, the commander, the keys it committed and the count, and what it holds for the repository afterwards — carried in the acknowledgement, verified by the commander against what it sent and what the inventory declared, filed by both parties, and the one thing the ledger ever counts a peer complete on; both kinds of receipt read by `receipts --kind`, `list_receipts` (contract 1.33) and the console's Receipts card | Built | `Protocol/ReplicationReceipt` · `Protocol/PeerReceiptFiles` · `Protocol/ReplicationReceiptStore` · `Protocol/ReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/ServiceCommandHandler.Receipts.cs` · `Agent/AgentHost` · `Cli/CliApplication` · the console's Receipts card · `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Web.Tests/ConsoleReceiptsScriptTests`; [notes](#0064--the-peer-counted-on-its-own-word) |
+| [0065](adr/0065-merkle-commitment-and-chunk-possession.md) | The Merkle commitment and the chunk possession challenge: a sealed blob gains an RFC 6962 root over one-mebibyte leaves beside its flat digest, bound to the preimage's length and published as index-delta key 11 by a format-3 writer only; a peer is then asked for one leaf and its authentication path instead of the blob, and the leaf's **bytes** are what the source checks against the root the writer signed | Built | `Repository.Packing/BlobMerkle` · `Repository.Packing/BlobWriter` · `Repository.Index/IndexDeltaCodec` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Protocol/PeerRetrievalMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/RetrievalResponder` · `Agent/PeerRetrievalClient` · `Replication/ReplicaVerifier` · `Agent/FanOut` · `Application/DestinationSyncStore` (schema 4) · `Api/ContractVersion` (1.34) · `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0065--one-leaf-instead-of-the-blob) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -140,7 +141,7 @@ It is still one provider. A contract with a single implementation has not yet be
 Format 1 was withdrawn before any freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), with no installed base
 to migrate: the one live installation went through setup and only ever wrote
 format 2. `Domain/FormatLimits` named one format version when this was written and now
-names two — 2 at creation, 3 accepted and opt-in ([0052](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not)) —
+names two — 2 at creation, 3 accepted and opt-in ([0052](#0052--the-record-blob-and-index-planes-are-built-nothing-compacts)) —
 and `Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a
 descriptor stamped `1` as its own finding — *refuse, never misread* — naming
 re-seeding as the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
@@ -170,7 +171,7 @@ No legacy reader exists and none should yet: it is phase 5 and gated on a legal 
 
 The decision is sound and unexercised because the collector, though built, deliberately stops before compaction (architecture 07 steps 6–9): deletion-only GC never moves a record, so nothing re-seals. What *is* built is the constraint the decision protects — for format 2 the record ordinal stays in the AAD, and `Repository.Tests/Index/IndexPrecedenceTests` holds the supersession rules a compaction would rely on.
 
-Since [0052](#0052--the-record-and-blob-planes-are-built-the-index-plane-is-not) shipped, this record is superseded *in the built code* for format 3 and not merely on paper: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` moves a sealed record between blobs without opening it. Decrypt-and-reseal remains the only answer for format 2, and still nothing compacts in either.
+Since [0052](#0052--the-record-blob-and-index-planes-are-built-nothing-compacts) shipped, this record is superseded *in the built code* for format 3 and not merely on paper: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` moves a sealed record between blobs without opening it. Decrypt-and-reseal remains the only answer for format 2, and still nothing compacts in either.
 
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 
@@ -254,7 +255,7 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 
 Everything the row names is held by tests, including the 04 §5.1 kill matrix through a two-destination sink (`Hosts.Tests/DirectShipFaultSweepTests`). The gate has since been discharged for local-path sets (ADR-0046 Decision 7's amendment): `direct_ship` rides the contract (1.23) and the console's set editor, a shape flip migrates in-process with its seed queued at once, the retention-with-trimming drill ran (`Hosts.Tests/DirectShipRetentionTests` — and caught the sink stopping sweep deletes at the metadata store, now fanned to the destinations under the replication gate's licence), and a **new set referencing a local-path destination is born direct-ship**. Verification was corrected in 2026-09 on two counts, both of which bit the default shape of a new local-path set. It never ran: challenges live in the sync path and `Agent/Scheduler` queues a pair only when there is something to copy, and a direct-ship set has nothing to copy the moment it converges — so a destination was challenged once and then never again. And what would have run proved nothing: the verifier compared the replica against `Agent/DestinationShipSink`, whose blob reads the destinations themselves answer, so with one destination it was a replica against itself. Challenges are now due on the age of the last proof, and a sampled blob is proved by being *opened* at the replica — its footer and a record's AEAD tag, evidence the destination never held the key to forge (`Hosts.Tests/DirectShipVerificationTests`). Retirement's gate was regated in 2026-09 (Amendment 2) after a live install could not use it: it demanded every non-lifecycle object staging held be present at a destination, and nothing carries an object no live snapshot reaches, so the archive was refused for ever and its disk space held. It now refuses only over a blob the live history reaches that no destination has, or a non-blob object the flip's migration never carried across, and names example keys instead of a bare count. What keeps the row at **Partly built** is one tail: the peer write adapter (a declared peer is a stated `NotSupported` ledger row for direct-ship; peer-only sets default to staging until it lands).
 
-### 0052 — the record and blob planes are built, the index plane is not
+### 0052 — the record, blob and index planes are built; nothing compacts
 
 Under [ADR-0025](adr/0025-compaction-reseals-records.md) a record's key comes
 from its blob, its nonce is its position in that blob, and its AAD binds that
@@ -284,14 +285,16 @@ and `Repository/ManifestBuilder` stamp what the descriptor says, and
 format-3 repository — **the service still creates format 2**, and the one live
 installation is format 2.
 
+The index plane followed as
+[ADR-0065](#0065--one-leaf-instead-of-the-blob): a format-3 delta publishes a
+Merkle root per covered blob, which is what lets a peer be challenged for one
+leaf rather than read back whole.
+
 **What is not.** No compactor exists in any format;
 `AppendSealedRecordAsync` is the primitive one would be written over, and
 [ADR-0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet)'s twelve exit
-criteria are untouched. The index plane is not built either: open question 4's
-Merkle-root digest — which is what would let a peer be challenged for
-possession without the bytes crossing the wire — is decided in shape and
-written nowhere. Format-2 repositories are read in place forever, so there is
-no migration waiting to be run.
+criteria are untouched. Format-2 repositories are read in place forever, so
+there is no migration waiting to be run.
 
 ### 0053 — the claim is built, the shape is not
 
@@ -562,8 +565,12 @@ on the same cursor the local path walks, under a peer byte budget of its own.
 A digest challenge on the wire, in which the peer hashes its own copy, was
 considered and refused as a self-report the source cannot verify — the
 answer is one the peer could have cached at receipt — so the bytes crossing
-the wire stay the proof, and the Merkle-root digest that would make such a
-challenge sound is ADR-0052's open question 4.
+the wire stay the proof. The commitment that makes a cheaper challenge sound
+was then built as [ADR-0065](#0065--one-leaf-instead-of-the-blob): at format 3
+the index carries a Merkle root, the peer is asked for one **leaf** and its
+authentication path, and the leaf's bytes — which a cached path cannot
+supply — are what the source checks. A format-2 blob at a peer is still read
+back whole.
 
 **It does not read a peer outside a run.** A peer shipment is a live session,
 not a directory, so `ReadOrder` still resolves local paths only. A catch-up
@@ -1159,3 +1166,47 @@ What the checker cannot do is judge whether "built" is generous. That is a readi
 ---
 
 **See also:** [Abandoned choices](decisions-abandoned.md) — what was considered and rejected, and why · [Traceability](requirements/traceability.md) — requirements to tests · [Roadmap](roadmap.md)
+
+### 0065 — one leaf instead of the blob
+
+A source with no second copy proved a peer held a sealed blob by pulling the
+whole blob back and hashing it. The cheaper message —  the peer hashes its own
+copy and answers — was refused by
+[ADR-0058](#0058--what-the-adapter-does-not-carry) as a self-report, because a
+bare digest is an answer the peer may have cached at receipt and kept after
+discarding the bytes.
+
+**What is built.** `Repository.Packing/BlobMerkle` is the commitment: an RFC
+6962 tree over one-mebibyte leaves of the flat digest's own preimage, with the
+preimage's length hashed into the published root under a prefix of its own.
+`BlobMerkleAccumulator` rides the calls that already feed the blob's digest, so
+the tree costs no second pass, and the spool resume hands it over as it hands
+over the hash. `Repository.Index/IndexDeltaCodec` carries it as delta key 11,
+parallel to `covered_blob_ids` and never alone; `Repository/SnapshotPublication`
+publishes it only at repository format 3 or above, because an unknown key in a
+delta is refused rather than skipped and a format-2 repository must stay
+readable to builds that predate the key. `Repository.Catalogue/Catalogue` keeps
+it at schema 7 beside the digest, upserted by its own statement so a later
+digest-only delta cannot erase it.
+
+On the wire, `Protocol/PeerRetrievalMessages.cs` types 278–279 under the
+`chunk-possession` feature: `Agent/RetrievalResponder` streams its own copy,
+hashes every leaf and answers with the challenged leaf's bytes and its path;
+`Replication/ReplicaVerifier` checks the bytes against the signed root and
+counts the proof as its own tier, ahead of the whole-blob digest tier and
+falling through to it. `Application/DestinationSyncStore` schema 4 and contract
+1.34 carry the count apart from the digest tier's, because a chunk proof
+samples the blob where a digest proof reads all of it.
+
+**The binding is the part worth remembering.** Plain RFC 6962 takes the tree
+size from its caller, and a four-leaf tree's first path verifies under a
+claimed size of three. At a peer the size comes from the length the destination
+declares for its own copy, so without the length in the root a destination
+could understate its copy by a leaf and exempt that leaf from ever being drawn.
+
+**What is not.** The service still creates format 2, so no live installation
+publishes a root; `Cli/CliApplication`'s `init --format-version 3` is the only
+creation surface, and the peer suite reaches format 3 through a test-only seam
+on `Agent/ServiceRuntime`. A local-path destination is not challenged this way
+— there is no link to spare — and a chunk proof establishes one leaf, never the
+blob.
