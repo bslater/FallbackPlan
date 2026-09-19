@@ -5,7 +5,7 @@
 **Requirements:** FR-DEST-004, FR-REP-005, FR-VER-001, FR-GC-008
 **Related:** [ADR-0063](0063-deletion-receipts.md), [ADR-0057](0057-resumable-object-transfer.md), [ADR-0047](0047-backup-pool-and-priorities.md), [peer-protocol 03](../../specifications/peer-protocol/03-replication.md), [architecture 09 §1](../architecture/09-replication-and-peers.md#1-what-replication-moves), [threat model T-8](../threat-model.md#t-8-destination-withholding-data)
 
-**Built:** `Protocol/ReplicationReceipt` (the statement, its signing encoding and the parse that is its exact inverse), `Protocol/PeerReplicationMessages.cs` (`ReplicationAck` keys 2–3), `Protocol/PeerReceiptFiles` (the one filing shared with the deletion receipts, each envelope naming its kind), `Protocol/ReplicationReceiptStore` (both parties' filing, the signature re-checked on every read), `Protocol/ReceiptReport` (the reader's rendering over both kinds), `Agent/ReplicationResponder` (the destination counts as it walks and receives, signs, files, then acks), `Agent/RemoteServiceListener` (the second store beside the first), `Agent/ReplicationInitiator` (`VerifyReplicationReceipt`, and the sent keys and owed bytes it holds a receipt against), `Agent/FanOut` (the commander files, raises the notice, and records the peer's completeness), `Agent/ServiceCommandHandler.Receipts.cs` (`list_receipts`, contract 1.33), `Agent/AgentHost` and `Cli/CliApplication` (`receipts --kind`), the console's Receipts card in the Web project's script; `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Cli.Tests/ReceiptsVerbValidationTests`, `Web.Tests/ConsoleReceiptsScriptTests`, `Web.Tests/CommandRelayTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
+**Built:** `Protocol/ReplicationReceipt` (the statement, its signing encoding and the parse that is its exact inverse), `Protocol/PeerReplicationMessages.cs` (`ReplicationAck` keys 2–3), `Protocol/PeerReceiptFiles` (the one filing shared with the deletion receipts, each envelope naming its kind), `Protocol/ReplicationReceiptStore` (both parties' filing, the signature re-checked on every read), `Protocol/ReceiptReport` (the reader's rendering over both kinds), `Agent/ReplicationResponder` (the destination counts as it walks and receives, signs, files, then acks), `Agent/RemoteServiceListener` (the second store beside the first), `Agent/ReplicationInitiator` (`VerifyReplicationReceipt`, and the sent keys and owed bytes it holds a receipt against), `Agent/FanOut` (the commander files, raises the notice, and records the peer's completeness), `Agent/ServiceCommandHandler.Receipts.cs` (`list_receipts`, contract 1.33), `Agent/AgentHost` and `Cli/CliApplication` (`receipts --kind`), the console's Receipts card; `Agent/PeerShipStore` (`CompletedShipment`, and the run's verification through the initiator's own seam) and `Agent/DestinationShipSink` (the run files and counts), since the amendment in the Web project's script; `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Cli.Tests/ReceiptsVerbValidationTests`, `Web.Tests/ConsoleReceiptsScriptTests`, `Web.Tests/CommandRelayTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
 
 ---
 
@@ -183,14 +183,66 @@ there is nothing to negotiate and nothing an attacker gains by omitting it.
 - It does not give a local-path destination a receipt. A local path is
   listed and counted directly by the pass; there is no second party to
   attest anything.
-- A direct-ship set shipping to a peer through the write adapter
+- ~~A direct-ship set shipping to a peer through the write adapter
   ([ADR-0058](0058-peer-write-adapter.md)) receives the receipt with the
   run's acknowledgement and reads only its count; the sync pass over the
   same pair is what verifies, files and counts it. Filing from the run is
-  a later change to the adapter, not to the receipt.
+  a later change to the adapter, not to the receipt.~~
+
+  > **Amended 2026-09 — the adapter now files it.** That later change is
+  > the one this record named, and it is made:
+  > [the amendment below](#amendment-2026-09--the-run-files-the-receipt-it-was-already-handed).
+  > The run verifies through the very seam the sync pass uses, files its
+  > copy and counts the pair. What made the gap worth closing rather than
+  > tidy was *when* the statement is made: a source cannot cheaply list a
+  > peer's replica, so the acknowledgement closing the run is the only
+  > measurement that shipment will ever get.
+
+## Amendment (2026-09) — the run files the receipt it was already handed
+
+`PeerShipStore.CompleteAsync` compared the acknowledgement's count against what
+it had sent and returned the number; `ack.Receipt` and `ack.Signature` were
+never touched. The peer's signed statement of exactly which objects it
+committed and how much it now holds was made at the moment the capture reached
+it, and dropped.
+
+The run now verifies that statement through
+`ReplicationInitiator.VerifyReplicationReceipt` — the same pure seam the sync
+pass uses, with the same checks and no second construction — files its copy
+under the commander role, and records the pair's completeness. A rejected
+receipt raises `replication-receipt-invalid`, files nothing, counts nothing and
+leaves the run's own success alone: the objects are at the peer, acknowledged
+and reconciled against what was sent, and what is missing is a statement of it
+that holds up. A peer sending none behaves exactly as before.
+
+**One thing feeding that seam required, and it is not a detail.** The adapter's
+inventory set starts as what the peer declared and grows with the session's
+creates, so it is *not* what the run sent. The receipt has to be checked
+against what actually went on the wire, which is a separate set kept beside it.
+Conflating the two would have made *"it lists a key this commander never sent"*
+unsayable — a different lie from one that miscounts, and one the seam exists to
+name.
+
+**Held and owed are both the peer's own attested figure here**, because a
+direct-ship run has no other: it ships as it captures and never computes what a
+destination is owed the way a sync pass does. The pair reads complete, which it
+is — everything the run sent was acknowledged and signed for. A later sync pass
+over the same pair overwrites both with its own arithmetic; the two agree on
+completeness and may differ in magnitude, which is what measuring one thing two
+ways costs and is better said than discovered.
+
+**Retention.** A replication receipt is kept under the rule
+[ADR-0063's amendment](0063-deletion-receipts.md#amendment-2026-09--a-receipt-is-kept-for-a-stated-time-and-the-rule-is-three-numbers)
+states (NFR-OPS-008), with its own numbers: the newest 8 whatever their age, at
+most 1024 per repository, 90 days between the two. Shorter than a deletion
+receipt's, and for a reason that is this record's own subject matter — one is
+issued on **every** push, including one that committed nothing, and each is
+superseded by the next push's statement of what the peer holds. A deletion
+receipt attests a distinct irreversible act; this attests a standing fact.
 
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | The follow-up [ADR-0057](0057-resumable-object-transfer.md) named and [ADR-0063](0063-deletion-receipts.md)'s shape carried to the replication side. Built over four commits: the statement, the ack's keys, the shared filing and the store (`Protocol/ReplicationReceipt`, `Protocol/PeerReplicationMessages.cs`, `Protocol/PeerReceiptFiles`, `Protocol/ReplicationReceiptStore`, `Protocol/ReceiptReport`); the destination counting, signing, filing and acking (`Agent/ReplicationResponder`, `Agent/RemoteServiceListener`); the commander verifying, filing and counting the peer (`Agent/ReplicationInitiator`, `Agent/FanOut`); the readers — `receipts --kind` on both hosts, `list_receipts` at contract 1.33 (`Agent/ServiceCommandHandler.Receipts.cs`), the console's Receipts card. Held by `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Cli.Tests/ReceiptsVerbValidationTests`, `Web.Tests/ConsoleReceiptsScriptTests` and `Web.Tests/CommandRelayTests` |
+| 2026-09 | Accepted | Amended, closing the follow-up this record named against itself: the direct-ship run verifies the receipt its acknowledgement already carries through `Agent/ReplicationInitiator`'s own seam, files it and counts the pair, instead of reading the count and waiting for a sync pass that may not fall due (`Agent/PeerShipStore`, `Agent/DestinationShipSink`; `Hosts.Tests/DirectShipPeerTests`). A replication receipt is also kept under a stated retention rule (NFR-OPS-008) — 8 / 1024 / 90 days, shorter than a deletion receipt's, because one is issued on every push and each is superseded by the next |

@@ -5,7 +5,7 @@
 **Requirements:** FR-GC-007, FR-GC-008
 **Related:** [ADR-0055](0055-reclaim-authority.md), [ADR-0059](0059-session-bound-deletion-authority.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [peer-protocol 06](../../specifications/peer-protocol/06-retention.md), [architecture 07 §5](../architecture/07-retention-and-gc.md#5-destructive-change-safeguards), [threat model T-6](../threat-model.md#t-6-deletion-by-compromised-store-credentials)
 
-**Built:** `Protocol/DeletionReceipt` (the statement, its signing encoding and the parse that is its exact inverse), `Protocol/PeerReplicationMessages.cs` (`RetentionAck` keys 2–3), `Protocol/DeletionReceiptStore` (both parties' filing, and the signature re-checked on every read), `Protocol/DeletionReceiptReport` (the reader's rendering, shared by both hosts), `Agent/ReplicationResponder` (the destination signs, files, then acks), `Agent/RemoteServiceListener` (the issuer: the real session identifier, the device key, the store), `Agent/ReplicationInitiator` (`VerifyReceipt` and the page digests it holds a receipt against), `Agent/FanOut` (the commander files, raises the notice, reports), `Agent/AgentHost` and `Cli/CliApplication` (the `receipts` verb); `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Cli.Tests/ReceiptsVerbValidationTests`.
+**Built:** `Protocol/DeletionReceipt` (the statement, its signing encoding and the parse that is its exact inverse), `Protocol/PeerReplicationMessages.cs` (`RetentionAck` keys 2–3), `Protocol/DeletionReceiptStore` (both parties' filing, and the signature re-checked on every read), `Protocol/DeletionReceiptReport` (the reader's rendering, shared by both hosts), `Agent/ReplicationResponder` (the destination signs, files, then acks), `Agent/RemoteServiceListener` (the issuer: the real session identifier, the device key, the store), `Agent/ReplicationInitiator` (`VerifyReceipt` and the page digests it holds a receipt against), `Agent/FanOut` (the commander files, raises the notice, reports), `Agent/AgentHost` and `Cli/CliApplication` (the `receipts` verb, `--limit` since the amendment); `Protocol/ReceiptRetentionPolicy` (the three numbers) and `Protocol/PeerReceiptFiles` (the sweep over names, and the read bounded before anything is opened), `Agent/ServiceRuntime` (the start-up sweep of every repository of both kinds); `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Cli.Tests/ReceiptsVerbValidationTests`, `Protocol.Tests/ReceiptSweepTests`.
 
 ---
 
@@ -211,9 +211,77 @@ the destination cannot follow.
   > its kind; a kind-less envelope filed under this record still reads as
   > a deletion.
 
+## Amendment (2026-09) — a receipt is kept for a stated time, and the rule is three numbers
+
+This record gave the receipt a filing and gave the pile no end. One is written
+per instruction at **both** ends and nothing removed one, which is a
+disk-filling bug wearing an audit trail's clothes — the phrase
+[ADR-0057](0057-resumable-object-transfer.md) used about the replication spool
+before giving it a sweep. A deletion receipt is kept under a rule of three
+numbers, and no fewer:
+
+| | |
+|---|---|
+| `MinimumRetained` | 8 — the newest, kept whatever their age |
+| `MaximumRetained` | 4096 per repository — nothing survives past it, however new |
+| `RetainedDays` | 365 — between the two, older than this and it goes |
+
+**No single number is honest.** A count alone discards a year of history from a
+pair that exchanges often. An age alone leaves a pair that has gone quiet — a
+set deleted, a peering ended, a machine that was away — with nothing recent at
+all, which is precisely when its last receipts matter most. The minimum is
+therefore what keeps a bound from ever emptying an audit trail, and it is the
+clause to read before concluding that a bounded trail is a hole in one.
+
+**A deletion receipt is kept longer than a replication receipt**
+([ADR-0064](0064-replication-receipts.md): 8 / 1024 / 90 days). Each one attests
+a distinct irreversible act and is FR-GC-008's audit record; a replication
+receipt attests what a peer holds *now* and is superseded by the next push's
+statement of the same thing. That difference is the difference between an audit
+trail and a log, and it is why the two rules are not one.
+
+**The sweep reads names and nothing else.** A receipt's file name has always
+begun with its issue time zero-padded to twenty digits, so ordering and ageing
+are an ordinal sort over a directory listing with no file opened, no JSON
+parsed and no signature checked. Three consequences, each worth having:
+
+- A pile that has grown unreadable is still bounded — a receipt whose bytes are
+  corrupt ages out by the same rule as a sound one, rather than being immortal
+  for being unparseable.
+- A state directory that was copied or restored still ages correctly. A copy
+  stamps every file with its own time; age taken from the filesystem would make
+  the whole pile look new and quietly stop the bound applying.
+- A file whose name is not a receipt's is left alone, because it is not this
+  sweep's to delete.
+
+The name earns that without being promoted. It orders and it bounds; it never
+describes. Every fact a reader is shown still comes from the signed bytes after
+the signature is checked, which is this record's own rule and is untouched.
+
+**It runs in two places, for two different failures.** Filing applies the rule
+to the repository directory it has just written into, so a live pair stays
+bounded between restarts — the weakness a start-up-only sweep has, which a
+service running for months never reaches. `ServiceRuntime.StartAsync` sweeps
+every repository of both kinds, which is what reaches a pair that has *stopped*
+filing and a pile inherited from a build that had no bound at all. A failure at
+either site is logged and swallowed: housekeeping must never fail a push or
+refuse to let a service start.
+
+**And the reader is priced by the question.** `list_receipts` took a limit and
+applied it after reading and verifying everything, so the console's card
+verified every receipt ever filed to show fifty. The limit now reaches the file
+names, and only the chosen few are opened; `total` (contract 1.35) says how
+many are on file so a client can show what share it is rendering. One
+consequence is worth stating, because it is a property and not an accident: a
+bounded window over *names* cannot be escaped by a receipt becoming unreadable,
+which a window over what still parses could — an unreadable file has no issue
+time to sort by and fell to the bottom, so tampering with a receipt used to
+remove its row from every bounded view of the audit trail.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Closes FR-GC-008's audit half on the peer plane, recorded as not met since [ADR-0055](0055-reclaim-authority.md) and restated by [ADR-0059](0059-session-bound-deletion-authority.md). Built over four commits: the statement, the ack's keys and the store (`Protocol/DeletionReceipt`, `Protocol/PeerReplicationMessages.cs`, `Protocol/DeletionReceiptStore`); the destination signing, filing and acking (`Agent/ReplicationResponder`, `Agent/RemoteServiceListener`); the commander verifying, filing and reporting (`Agent/ReplicationInitiator`, `Agent/FanOut`); the `receipts` verb on both hosts (`Agent/AgentHost`, `Cli/CliApplication`, `Protocol/DeletionReceiptReport`). Held by `Protocol.Tests/ReplicationMessageTests`, `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/AgentPairingVerbsTests` and `Cli.Tests/ReceiptsVerbValidationTests` |
 | 2026-09 | Accepted | Amended by [ADR-0064](0064-replication-receipts.md): the filing is shared with the replication receipts (`Protocol/PeerReceiptFiles`, each envelope naming its kind), the `receipts` verb lists both kinds and narrows with `--kind`, and the console's Receipts card over `list_receipts` closes the "not yet" this record stated |
+| 2026-09 | Accepted | Amended: a receipt is kept under a stated retention rule (NFR-OPS-008) — the newest 8 whatever their age, at most 4096 per repository, 365 days between the two — swept from file names alone at filing and at service start, and longer than a replication receipt's because it attests a distinct irreversible act rather than a fact the next push supersedes. The reader is bounded by the same names, so a listing costs what was asked for and a receipt tampered with cannot drop out of a bounded window by becoming unreadable (`Protocol/ReceiptRetentionPolicy`, `Protocol/PeerReceiptFiles`, `Agent/ServiceRuntime`; `Protocol.Tests/ReceiptSweepTests`, `Protocol.Tests/DeletionReceiptStoreTests`) |

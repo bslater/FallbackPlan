@@ -229,10 +229,15 @@ destination's inventory are exchanged when the run resolves its targets, each
 put writes a `ReplicationObject` and its chunks, and the run's books close
 with the completion and its acknowledgement — whose count must equal what the
 run sent, or the destination is recorded failed however the run itself ended.
-The acknowledgement now also carries the peer's replication receipt
-([ADR-0064](../adr/0064-replication-receipts.md)); the run reads only its
-count, and the sync pass over the same pair (§1) is what verifies, files and
-counts the receipt.
+The acknowledgement also carries the peer's replication receipt
+([ADR-0064](../adr/0064-replication-receipts.md)), and the run verifies it
+through the same seam the sync pass uses, files its copy and counts the pair
+on its strength. That the run does it rather than waiting for a later pass is
+the point: a source cannot cheaply list a peer's replica, so the
+acknowledgement closing the run is the only measurement that shipment gets,
+and it is worth most now — the capture has just arrived. A rejected receipt is
+a notice and never a refusal; a peer that sends none leaves the pair uncounted,
+as every peer was before receipts.
 The inventory answers "already there" without touching the wire; every wire
 failure reaches the sink as an `IOException`, so a peer is dropped, named and
 healed by exactly the rule a full disk is.
