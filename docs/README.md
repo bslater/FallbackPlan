@@ -48,6 +48,7 @@ Encrypted, versioned backup from one computer to another — with no vendor clou
 - [Traceability](requirements/traceability.md) — every requirement mapped to architecture, ADR, test, and phase
 - [Proof obligations](proof-obligations.md) — each major invariant, what would falsify it, and what catches that; the gaps are rows too
 - [Shared Bodu recurrence package](bodu-recurrence-requirements.md) — consumer-side requirements on the upstream `Bodu.Globalization.Recurrence` package serving FallbackPlan scheduling and similar hosts; **satisfied upstream**, verified by semantic probe in three timezones
+- [Shared Bodu Merkle tree](bodu-merkle-requirements.md) — consumer-side requirements on `Bodu.Security.Cryptography` for an RFC 6962 Merkle tree with inclusion proofs, so the tree, path and verification code [ADR-0065](adr/0065-merkle-commitment-and-chunk-possession.md) needed lives in a crypto library rather than in a backup product; **raised, not yet satisfied** — the shipped `MerkleTreeHash` shares the RFC's domain separation and not its tree shape, and exposes no proof API
 
 ## Decisions
 
