@@ -33,7 +33,8 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new FallbackPlan.Repository.Index.WriterSequence(
                 new FallbackPlan.Repository.Index.FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane);
 
         using var source = new MemoryStream(data);
         var published = await orchestrator.PublishAsync(
@@ -339,7 +340,8 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new Repository.Index.WriterSequence(
                 new Repository.Index.FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence-tree.txt"))),
-            SpoolDirectory);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane);
 
         await orchestrator.PublishAsync(
             new SnapshotJob

@@ -80,6 +80,7 @@ public abstract class InterruptionHarness : IDisposable
             sequence
                 ?? new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
             spoolDirectory ?? SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer,
             catalogue);
 

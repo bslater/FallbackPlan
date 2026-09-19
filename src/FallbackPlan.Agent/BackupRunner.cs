@@ -145,6 +145,7 @@ public static class BackupRunner
                 archive.Store,
                 archive.Sequence,
                 archive.SpoolDirectory,
+                archive.Repository.Descriptor.FormatVersion,
                 observer: null,
                 archive.Catalogue,
                 progress,

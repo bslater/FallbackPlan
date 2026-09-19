@@ -56,4 +56,30 @@ public static class FormatVersions
     /// object, nonce carried in the prefix, 51-byte associated data (04 §2–§4).
     /// </summary>
     public static bool HasRelocatableRecords(ushort formatVersion) => formatVersion >= RelocatableRecords;
+
+    /// <summary>
+    /// The version a blob of this class is stamped with inside a repository
+    /// of <paramref name="repositoryFormatVersion"/> — which is not the same
+    /// number, and the one place that says so.
+    /// </summary>
+    /// <remarks>
+    /// A format-2 repository writes <see cref="Symmetric"/> metadata blobs
+    /// and <see cref="SealedDataPlane"/> data blobs, because the symmetric
+    /// construction is the one format 1 defined and format 2 kept byte for
+    /// byte (ADR-0014 Amendment 1); a format-3 repository writes
+    /// <see cref="RelocatableRecords"/> for both. The stamp is AAD input, so
+    /// answering this wrongly does not produce a warning — it produces a blob
+    /// whose own repository cannot open it.
+    /// </remarks>
+    /// <param name="repositoryFormatVersion">The descriptor's format version.</param>
+    /// <param name="dataClass">Whether the blob is a data blob.</param>
+    public static ushort ContainerVersion(ushort repositoryFormatVersion, bool dataClass)
+    {
+        if (HasRelocatableRecords(repositoryFormatVersion))
+        {
+            return RelocatableRecords;
+        }
+
+        return dataClass ? SealedDataPlane : Symmetric;
+    }
 }

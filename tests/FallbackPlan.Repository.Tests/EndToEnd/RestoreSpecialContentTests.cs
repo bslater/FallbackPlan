@@ -127,7 +127,8 @@ public sealed class RestoreSpecialContentTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
         var published = await orchestrator.PublishAsync(
             new SnapshotJob

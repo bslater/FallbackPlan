@@ -209,14 +209,56 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
         }
     }
 
+    [TestMethod]
+    public async Task WriteOnlySpool_AtFormatThree_ResumesUnderTheCheckpointedRecordKeySeed()
+    {
+        // Format 3 keeps the same rule with a different secret: the
+        // checkpoint's one 32-byte slot holds the record-key SEED, not a
+        // blob-wide content key, and the walk re-derives each record's key
+        // from it (05 §6.2). The nonces are random and not recomputable, so
+        // a resume that could not re-derive would have to restart — which is
+        // exactly what this asserts it did not do.
+        var store = CreateStore();
+        var (opened, authority) = await CreateFromPassphraseAsync(store, FormatVersions.RelocatableRecords);
+        using (opened)
+        using (authority)
+        {
+            var content = await KillMidBlobAsync(store, opened);
+            var spooled = await ReadSpoolAsync();
+            Assert.IsTrue(SpoolCheckpoint.TryParse(await File.ReadAllBytesAsync(SidecarPath()), out var checkpoint));
+            Assert.AreEqual(FormatVersions.RelocatableRecords, checkpoint!.FormatVersion);
+            Assert.AreEqual(32, checkpoint.ContentKey!.Value.Length, "the seed rides the slot a content key used to");
+
+            using (var source = new MemoryStream(content))
+            {
+                await CreateWriteOnlyOrchestrator(store, opened)
+                    .PublishAsync(Job(source, snapshotSeed: 0x83), CancellationToken.None);
+            }
+
+            SequenceAssert.AreEqual(content, await RestoreUnderGrantAsync(store, opened, authority, snapshotSeed: 0x83));
+
+            // Resumed, not restarted: the finished blob opens with the
+            // interrupted run's sealed bytes verbatim — and its envelope
+            // carries no share at all, because every record carries its own.
+            var resumed = (await SealedBlobsAsync(store)).Single(blob => StartsWith(blob, spooled));
+            var envelope = BlobEnvelope.Parse(resumed);
+            Assert.AreEqual(FormatVersions.RelocatableRecords, envelope.FormatVersion);
+            Assert.IsTrue(envelope.SealedContentKey.IsEmpty, "a format-3 data envelope carries no sealed share");
+        }
+    }
+
     private static async Task<(OpenedRepository Opened, RepositoryReadAuthority Authority)> CreateFromPassphraseAsync(
-        LocalFileSystemObjectStore store)
+        LocalFileSystemObjectStore store, ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
         return await RepositoryLifecycle.CreateFromPassphraseAsync(
             store,
             passphrase,
-            RepositoryCreationSettings.Default with { CreatedBy = "interruption-tests/1.0" },
+            RepositoryCreationSettings.Default with
+            {
+                CreatedBy = "interruption-tests/1.0",
+                FormatVersion = formatVersion,
+            },
             createdAtUnixMilliseconds: 1_722_600_000_000,
             CancellationToken.None);
     }
@@ -233,6 +275,7 @@ public sealed class WriteOnlySpoolResumeTests : InterruptionHarness
             opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            opened.Descriptor.FormatVersion,
             observer: null,
             catalogue: null);
 

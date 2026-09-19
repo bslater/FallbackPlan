@@ -431,6 +431,13 @@ public static class CliApplication
                 Description = "Informational creator string recorded in the descriptor.",
                 DefaultValueFactory = _ => "fallbackplan-cli/0.1",
             };
+            var formatVersionOption = new Option<int>("--format-version")
+            {
+                Description = "The on-disk format to create, fixed for the repository's life. "
+                    + $"{FormatLimits.FormatVersion} is the default; {FormatVersions.RelocatableRecords} writes "
+                    + "relocatable records (ADR-0052).",
+                DefaultValueFactory = _ => FormatLimits.FormatVersion,
+            };
             var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
             {
                 Description = "Acknowledge that a repository's passphrase can never change and that losing it "
@@ -444,13 +451,31 @@ public static class CliApplication
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(createdByOption);
             command.Options.Add(acknowledgeLossOption);
+            command.Options.Add(formatVersionOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
                 var store = new LocalFileSystemObjectStore(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
-                var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
+                    var requested = parse.GetValue(formatVersionOption);
+                var settings = RepositoryCreationSettings.Default with
+                {
+                    CreatedBy = parse.GetValue(createdByOption)!,
+                    FormatVersion = requested is >= 0 and <= ushort.MaxValue ? (ushort)requested : (ushort)0,
+                };
+
+                // Validated here rather than left to the lifecycle, which
+                // refuses an unwritable version with an ArgumentException
+                // GuardAsync does not catch — the difference between
+                // "error: …" and a stack trace. Nothing is written either way.
+                var validation = settings.Validate();
+                if (!validation.IsValid)
+                {
+                    throw new CliFailureException(
+                        "The creation settings are invalid: "
+                        + string.Join(", ", validation.Defects.Select(defect => defect.Message)));
+                }
 
                 // The loss acknowledgement is the ceremony, not a speed bump
                 // (ADR-0042 §11, architecture 03 §1 rule 6): there is no
@@ -516,7 +541,8 @@ public static class CliApplication
                     session.Repository.Credential,
                     session.Store,
                     session.CreateSequence(),
-                    session.SpoolDirectory);
+                    session.SpoolDirectory,
+                    session.Repository.Descriptor.FormatVersion);
 
                 var snapshotId = RandomNumberGenerator.GetBytes(16);
                 var fileName = Path.GetFileName(filePath);

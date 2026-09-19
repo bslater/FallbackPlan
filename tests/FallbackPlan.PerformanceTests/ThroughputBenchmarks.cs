@@ -169,7 +169,8 @@ public static class ThroughputBenchmarks
 
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, keys, store,
-            new MonotonicBlobCounterAllocator(counter), spool);
+            new MonotonicBlobCounterAllocator(counter), spool,
+            FormatVersions.SealedDataPlane);
 
         using var source = new MemoryStream(data);
         await archiver.ArchiveAsync(source, CancellationToken.None).ConfigureAwait(false);

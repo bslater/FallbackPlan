@@ -269,7 +269,8 @@ public sealed class RepositoryLifecycleTests : IDisposable
             repository.Keys,
             store,
             new MonotonicBlobCounterAllocator(1),
-            Path.Combine(_root, "spool"));
+            Path.Combine(_root, "spool"),
+            FormatVersions.SealedDataPlane);
 
         using var source = new MemoryStream(data);
         var archived = await archiver.ArchiveAsync(source, CancellationToken.None);

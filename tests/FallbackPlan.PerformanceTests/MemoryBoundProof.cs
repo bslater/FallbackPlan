@@ -44,7 +44,8 @@ public static class MemoryBoundProof
             keys,
             store,
             new MonotonicBlobCounterAllocator(1),
-            spool);
+            spool,
+            FormatVersions.SealedDataPlane);
 
         // Two cadences: the fast sampler watches the raw heap (which includes
         // garbage not yet collected — an allocation-rate number, not a

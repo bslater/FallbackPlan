@@ -47,7 +47,8 @@ public sealed class RestorePlanTests : ArchiveTestHarness
         new(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
     {

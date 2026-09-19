@@ -139,7 +139,8 @@ public sealed class SecondBackupReuseTests : ArchiveTestHarness
             keys,
             store,
             new MonotonicBlobCounterAllocator(1_000),
-            SpoolDirectory);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane);
 
         using var secondSource = new MemoryStream(original);
         var second = await rescaled.ArchiveAsync(secondSource, first, CancellationToken.None);

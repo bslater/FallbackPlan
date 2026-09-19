@@ -51,7 +51,8 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue, progress: null, logger: log);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue, progress: null, logger: log);
 
         var snapshotId = Enumerable.Repeat((byte)0xB2, 16).ToArray();
         await orchestrator.PublishAsync(
@@ -144,7 +145,8 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue: null, progress: null, logger: log);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue: null, progress: null, logger: log);
 
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await orchestrator.PublishAsync(

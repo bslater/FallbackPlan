@@ -65,7 +65,8 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
         var snapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray();
         await orchestrator.PublishAsync(

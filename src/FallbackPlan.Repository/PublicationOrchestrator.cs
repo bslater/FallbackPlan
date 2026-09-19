@@ -129,6 +129,11 @@ public sealed partial class PublicationOrchestrator
     private readonly IObjectStore _store;
     private readonly WriterSequence _sequence;
     private readonly string _spoolDirectory;
+
+    // The descriptor's version, carried whole rather than resolved here:
+    // what each blob is stamped with depends on its class as well, and
+    // FormatVersions.ContainerVersion is the one place that decides.
+    private readonly ushort _repositoryFormatVersion;
     private readonly IPublicationObserver? _observer;
     private readonly Catalogue.Catalogue? _catalogue;
     private readonly IJobProgressReporter? _progress;
@@ -152,12 +157,14 @@ public sealed partial class PublicationOrchestrator
         IObjectStore store,
         WriterSequence sequence,
         string spoolDirectory,
+        ushort repositoryFormatVersion,
         IPublicationObserver? observer = null,
         Catalogue.Catalogue? catalogue = null,
         IJobProgressReporter? progress = null,
         ILogger? logger = null)
     {
         _catalogue = catalogue;
+        _repositoryFormatVersion = repositoryFormatVersion;
         ThrowHelper.ThrowIfNull(policy);
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(credential);
@@ -284,8 +291,8 @@ public sealed partial class PublicationOrchestrator
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
         // upload — each blob's covering extension durable before its put.
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
-            _logger);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryFormatVersion, scope, _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
         RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
@@ -294,7 +301,7 @@ public sealed partial class PublicationOrchestrator
         // step-4 window; the snapshot's discoverable copy waits for step 7.
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, logger: _logger);
+            _policy.BlobWriteProfile, _repositoryFormatVersion, scope, logger: _logger);
 
         ObjectId fileVersionId, rootTreeId, policyId, snapshotObjectId;
         SnapshotManifest snapshot;

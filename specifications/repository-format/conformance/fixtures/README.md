@@ -32,16 +32,39 @@ its footer — the structure plane — opens under the metadata class key.
 | `journal/…` | The write intent (sequence 1) and its retirement (sequence 6) |
 
 **Provenance and the read contract.** The generator is
-`tests/FallbackPlan.Repository.ConformanceTests/FixtureRepositoryV2.cs`.
-There is **no byte-identical regeneration**: sealing takes a fresh random
-content key and a fresh ephemeral X25519 share per blob, by design, so no
-two generations share bytes. What this committed copy freezes is the **read
-contract**, enforced by `FixtureRepositoryV2Tests` on every run: the
-descriptor verifies by derive-and-compare (and refuses the wrong
-passphrase), the derived write bundle alone opens the structure plane —
-record tables, manifests, catalogue rebuild, journal — and answers
-`ContentSealed` for content, and the passphrase-derived authority restores
-`fixture.bin` byte-identically.
+`tests/FallbackPlan.Repository.ConformanceTests/FixtureRepositoryBuilder.cs`,
+which both fixtures drive with their own identity. There is **no
+byte-identical regeneration**: sealing takes a fresh random content key and a
+fresh ephemeral X25519 share per blob, by design, so no two generations share
+bytes. What this committed copy freezes is the **read contract**, enforced by
+`FixtureRepositoryV2Tests` on every run: the descriptor verifies by
+derive-and-compare (and refuses the wrong passphrase), the derived write
+bundle alone opens the structure plane — record tables, manifests, catalogue
+rebuild, journal — and answers `ContentSealed` for content, and the
+passphrase-derived authority restores `fixture.bin` byte-identically.
+
+## fixture-repository-v3
+
+The same six objects and the same deterministic `fixture.bin`, written at
+**format 3** ([ADR-0052](../../../../docs/adr/0052-relocatable-records-format-v3.md)
+Amendment 1) under the passphrase `fallbackplan-fixture-v3-passphrase`. What
+differs on disk is the whole point of the revision: the descriptor declares
+format 3 and `relocatable-records` as a **required** feature, so a reader
+that does not implement it refuses the repository by name instead of
+misreading it; the data blob's envelope carries **no** sealed share, because
+each of its records carries one in its own prefix; and every record — in both
+the data and metadata blobs — carries a random 12-byte nonce and is keyed to
+its object rather than to its container. Metadata blobs are stamped 3 here,
+where a format-2 repository stamps its metadata blobs 1. The standalone
+snapshot and the journal records stay format-1 containers, as they do in
+every repository: they are never inside a blob and never relocated.
+
+Byte-identical regeneration is further out of reach than for format 2, not
+closer — a format-3 record draws a fresh nonce and a fresh share each.
+`FixtureRepositoryV3Tests` holds the same read contract on these bytes, and
+one more that only frozen bytes can establish: a data record lifted verbatim
+out of this blob, and appended into a blob written later by a different
+writer under a different salt at a different ordinal, still opens.
 
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while

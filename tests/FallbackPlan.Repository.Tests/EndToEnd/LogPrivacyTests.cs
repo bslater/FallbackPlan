@@ -61,7 +61,8 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue, progress: null, logger: log);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue, progress: null, logger: log);
 
         var snapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray();
         await orchestrator.PublishAsync(

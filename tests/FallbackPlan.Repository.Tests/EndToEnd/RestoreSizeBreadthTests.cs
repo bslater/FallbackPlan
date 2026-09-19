@@ -145,7 +145,8 @@ public sealed class RestoreSizeBreadthTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
         await orchestrator.PublishAsync(Job(source, seed), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();

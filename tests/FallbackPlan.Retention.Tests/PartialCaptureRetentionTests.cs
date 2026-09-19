@@ -265,7 +265,8 @@ public sealed class PartialCaptureRetentionTests : IDisposable
         var builder = new ManifestBuilder(
             repository.RepositoryId, WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             generation, repository.Keys, store, new MonotonicBlobCounterAllocator(9000), SpoolDirectory,
-            BlobWriteProfile.LocalDefault);
+            BlobWriteProfile.LocalDefault,
+            FormatVersions.SealedDataPlane);
 
         await using (builder.ConfigureAwait(false))
         {

@@ -46,7 +46,8 @@ public sealed class LegacyImportTests : ArchiveTestHarness
         Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential) => new(
         SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
         new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-        SpoolDirectory);
+        SpoolDirectory,
+        FormatVersions.SealedDataPlane);
 
     private static byte[] Content(int seed, int length = 700_000)
     {

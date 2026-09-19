@@ -41,6 +41,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer: null,
             progress: progress,
             logger: logger);
@@ -702,7 +703,8 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         // code path publication uses, forced to shard.
         var sequence = new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence2.txt")));
         var builder = new ManifestBuilder(
-            Repo, Writer, KeyGeneration.Zero, keys, store, sequence, SpoolDirectory, SmallBlobPolicy.BlobWriteProfile);
+            Repo, Writer, KeyGeneration.Zero, keys, store, sequence, SpoolDirectory, SmallBlobPolicy.BlobWriteProfile,
+            FormatVersions.SealedDataPlane);
 
         var fileVersionId = published.Files[0].ObjectId;
         var entries = Enumerable.Range(0, 100)

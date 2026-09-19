@@ -101,7 +101,8 @@ public abstract class ArchiveTestHarness : IDisposable
         keys,
         store,
         new MonotonicBlobCounterAllocator(firstCounter),
-        SpoolDirectory);
+        SpoolDirectory,
+        FormatVersions.SealedDataPlane);
 
     /// <summary>
     /// A deterministic ~3 MiB file: alternating 128 KiB regions of repeated

@@ -266,6 +266,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool,
+            FormatVersions.SealedDataPlane,
             observer: null,
             catalogue);
     }

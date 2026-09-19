@@ -29,6 +29,41 @@ public sealed class WriteOnlyCommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Init_AtFormatThree_CreatesARepositoryDeclaringRelocatableRecords()
+    {
+        // The opt-in, and the only way to ask for format 3 today: the service
+        // still creates format 2 (ADR-0052 Amendment 1).
+        var created = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss", "--format-version", "3");
+
+        Assert.AreEqual(0, created.ExitCode, created.All);
+
+        var descriptor = await File.ReadAllBytesAsync(
+            Path.Combine(_cli.RepositoryPath, "repository-format"), CancellationToken.None);
+        var parsed = FallbackPlan.Repository.Format.Descriptor.RepositoryDescriptorCodec.Parse(descriptor);
+        Assert.IsInstanceOfType<FallbackPlan.Repository.Format.Descriptor.DescriptorParseResult.Ok>(parsed, out var ok);
+
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.RelocatableRecords, ok.Descriptor.FormatVersion);
+        Assert.Contains(
+            FallbackPlan.Repository.Format.Descriptor.RepositoryDescriptorCodec.FeatureRelocatableRecords,
+            ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public async Task Init_AtAFormatThisBuildCannotWrite_IsRefusedNamingTheRange()
+    {
+        // A version outside the writable range is refused by name before the
+        // store is touched, not surfaced as an unhandled exception from the
+        // lifecycle's own validation.
+        var refused = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss", "--format-version", "1");
+
+        Assert.AreEqual(1, refused.ExitCode);
+        Assert.Contains("cannot be created", refused.All, StringComparison.Ordinal);
+        Assert.IsFalse(
+            File.Exists(Path.Combine(_cli.RepositoryPath, "repository-format")),
+            "a refused version must create nothing");
+    }
+
+    [TestMethod]
     public async Task WriteOnlyRepository_ArchiveAndRestoreFile_RoundTripsThroughDirectMode()
     {
         const string content = "sealed by the public key, back by the passphrase";

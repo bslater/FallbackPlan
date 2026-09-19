@@ -55,7 +55,8 @@ public sealed class LocalTreeBackupTests : ArchiveTestHarness
         var orchestrator = new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane);
 
         var job = new SnapshotJob
         {

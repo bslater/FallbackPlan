@@ -315,8 +315,8 @@ public sealed partial class PublicationOrchestrator
         RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
-            _logger);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryFormatVersion, scope, _logger);
 
         // One targeted reader serves both things this publication reads back:
         // a renamed file's prior manifest (architecture 06 §4.2) and the
@@ -341,7 +341,7 @@ public sealed partial class PublicationOrchestrator
 
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, dedup, _logger);
+            _policy.BlobWriteProfile, _repositoryFormatVersion, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))

@@ -88,7 +88,8 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
             SmallBlobPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
             Repo, Writer, KeyGeneration.Zero, keys, credential, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool,
+            FormatVersions.SealedDataPlane));
         Assert.Contains("device", refusal.Message, StringComparison.Ordinal);
         Assert.AreEqual(DedupTrustDomain.Device, CapturePolicy.Default.DedupTrustDomain);
     }
@@ -124,7 +125,8 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
         var refusal = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
             unacknowledged, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool));
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))), spool,
+            FormatVersions.SealedDataPlane));
         Assert.Contains("acknowledge", refusal.Message, StringComparison.OrdinalIgnoreCase);
 
         var validation = unacknowledged.Validate();
@@ -321,6 +323,7 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool,
+            FormatVersions.SealedDataPlane,
             observer: null,
             catalogue);
     }

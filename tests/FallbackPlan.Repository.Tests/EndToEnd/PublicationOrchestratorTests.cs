@@ -63,6 +63,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer);
 
     private static BackupJob Job(Stream source) => new(

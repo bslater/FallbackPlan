@@ -61,7 +61,8 @@ public sealed class RecoveryContainmentTests : IDisposable
             repository.Credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool);
+            spool,
+            FormatVersions.SealedDataPlane);
 
         await orchestrator.PublishAsync(
             new SnapshotJob

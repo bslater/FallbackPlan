@@ -34,6 +34,7 @@ public sealed class SourceComparerTests : ArchiveTestHarness
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer: null,
             catalogue);
 

@@ -94,7 +94,8 @@ public class PipelineBenchmarks
         var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, _keys, store,
-            new MonotonicBlobCounterAllocator(_counter), _spool);
+            new MonotonicBlobCounterAllocator(_counter), _spool,
+            FormatVersions.SealedDataPlane);
         _counter += 1_000;
 
         using var source = new MemoryStream(_data);

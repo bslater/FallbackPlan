@@ -36,10 +36,12 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
 
     private LocalFileSystemObjectStore CreateStore() => new(Path.Combine(_root, "repo"));
 
-    private static RepositoryCreationSettings Settings => RepositoryCreationSettings.Default with
-    {
-        CreatedBy = "write-only-tests/1.0",
-    };
+    private static RepositoryCreationSettings SettingsFor(ushort formatVersion) =>
+        RepositoryCreationSettings.Default with
+        {
+            CreatedBy = "write-only-tests/1.0",
+            FormatVersion = formatVersion,
+        };
 
     private static Passphrase Right() => Passphrase.Create(PassphraseText);
 
@@ -61,11 +63,13 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     };
 
     private async Task<(OpenedRepository Opened, RepositoryReadAuthority Authority, CatalogueDb Catalogue, Dictionary<string, byte[]> Files)>
-        CreateAndBackUpAsync(LocalFileSystemObjectStore store)
+        CreateAndBackUpAsync(
+            LocalFileSystemObjectStore store, ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         using var passphrase = Right();
         var (opened, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
-            store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+            store, passphrase, SettingsFor(formatVersion), createdAtUnixMilliseconds: 1_722_600_000_000,
+            CancellationToken.None);
 
         var random = new Random(51);
         var files = new Dictionary<string, byte[]>
@@ -88,7 +92,8 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         var orchestrator = new PublicationOrchestrator(
             SmallPolicy, opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            opened.Descriptor.FormatVersion, observer: null, catalogue);
 
         var published = await orchestrator.PublishAsync(
             new SnapshotJob
@@ -244,7 +249,8 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             SmallPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
             opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(_root, "refused-sequence.txt"))),
-            Path.Combine(_root, "refused-spool")));
+            Path.Combine(_root, "refused-spool"),
+            FormatVersions.SealedDataPlane));
         Assert.Contains("device", refused.Message, StringComparison.Ordinal);
 
         // The exact sealed population, from the structure plane: every
@@ -351,7 +357,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         {
             var salt = Enumerable.Repeat((byte)0x11, KekDerivation.SaltLength).ToArray();
             using var foreign = WriteOnlyDerivation.Derive(
-                other, Settings.KdfParameters, salt, KdfValidationMode.OpenRepository);
+                other, SettingsFor(FormatVersions.SealedDataPlane).KdfParameters, salt, KdfValidationMode.OpenRepository);
             await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
                 await RepositoryLifecycle.OpenAsync(store, foreign.Credential, CancellationToken.None));
         }
@@ -394,6 +400,60 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         {
             SequenceAssert.AreEqual(
                 content, File.ReadAllBytes(Path.Combine(output, path.Replace('/', Path.DirectorySeparatorChar))));
+        }
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_AtFormatThree_BacksUpAndRestoresThroughTheRealPipeline()
+    {
+        // The whole pipeline over format 3, with nothing about the test
+        // reaching below the engine: the descriptor decides, the sessions
+        // stamp what it decides, and the bytes come back.
+        var store = CreateStore();
+        var (opened, authority, catalogue, files) =
+            await CreateAndBackUpAsync(store, FormatVersions.RelocatableRecords);
+        using var _ = opened;
+        using var __ = authority;
+        using var db = catalogue;
+
+        Assert.AreEqual(FormatVersions.RelocatableRecords, opened.Descriptor.FormatVersion);
+
+        // Metadata blobs are stamped 3 here, where a format-2 repository
+        // stamps them 1 — the mapping FormatVersions.ContainerVersion owns,
+        // read back off the disk rather than asserted on the constant.
+        using (var structural = new RepositoryReader(opened.RepositoryId, opened.Keys, store))
+        {
+            await structural.LoadBlobsAsync(CancellationToken.None);
+            Assert.IsEmpty(structural.SkippedBlobs);
+            Assert.IsNotEmpty(structural.AllRecords);
+        }
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var snapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray();
+        var plan = RestorePlanner.Plan(db, snapshotId, string.Empty, target);
+        Assert.IsEmpty(plan.Conflicts);
+
+        using var reader = new RepositoryReader(opened.RepositoryId, opened.Keys, store, authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var outputRoot = Path.Combine(_root, "v3-out");
+        var restored = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, outputRoot,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "v3",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
+        foreach (var (path, content) in files)
+        {
+            SequenceAssert.AreEqual(
+                content,
+                await File.ReadAllBytesAsync(
+                    Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)), CancellationToken.None));
         }
     }
 

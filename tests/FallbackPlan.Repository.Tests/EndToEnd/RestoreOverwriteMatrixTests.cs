@@ -447,7 +447,8 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         return new PublicationOrchestrator(
             SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
     }
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
