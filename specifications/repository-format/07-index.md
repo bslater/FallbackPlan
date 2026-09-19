@@ -31,8 +31,9 @@ Stored at `/index/delta/<generation>/<delta-id>`, encrypted as a metadata record
 | 8 | bool | `is_void` — present and true only for a void delta (§4) |
 | 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of **every other key present**; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
 | 10 | array | `covered_blob_digests` — array of bytes[32], parallel to `covered_blob_ids` (§2.2) |
+| 11 | array | `covered_blob_merkle_roots` — array of bytes[32], parallel to `covered_blob_ids` (§2.3) |
 
-The signature covers every key except itself, stated that way rather than as a numeric range so that a key added later is signed by construction. Key 10 is the first such key; nothing sorts a signed key after the signature by accident.
+The signature covers every key except itself, stated that way rather than as a numeric range so that a key added later is signed by construction. Key 10 was the first such key and key 11 the second; nothing sorts a signed key after the signature by accident.
 
 > **Erratum (phase 0).** Three resolutions pending normative edits, all per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) "encrypted as a metadata record" is under-specified for an object outside a blob — the `FBPKSREC` standalone framing (Decision 1) supplies the encryption context, with object type `0x08`; (2) `<delta-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); (3) key 5 `shard` is **optional** — present only when every entry falls in that one shard, absent otherwise (Decision 4), since §8 permits multi-shard deltas that a scalar cannot describe.
 
@@ -64,6 +65,20 @@ It is optional because a writer that publishes no digest is not wrong — the fo
 A length mismatch between the two arrays is a malformed object, and a reader MUST refuse the delta rather than pair the elements it can.
 
 > **Erratum resolved (phase 1).** [05 §5](05-blob.md#5-sealing) said the digest was "recorded in the index" when no index field carried it, and [Q16](../../docs/open-questions.md#closed) tracked the gap. This section is the field. The device-local catalogue keeps its copy as a cache; this is the durable one.
+
+### 2.3 Covered blob merkle roots
+
+`covered_blob_merkle_roots` is OPTIONAL, and it is **not** an alternative to §2.2 — a delta may carry both, and a writer that carries this one MUST also carry that one. When present it MUST have exactly the length of `covered_blob_ids`, and element *i* MUST be the Merkle commitment of the blob named by `covered_blob_ids[i]`, computed as [05 §5.2](05-blob.md#52-the-merkle-commitment) defines it: an RFC 6962 tree over one-mebibyte leaves of the same preimage the flat digest names, with the preimage's length bound into the published root.
+
+**A writer at repository format 3 or above MUST publish it for every blob a delta covers. A writer below format 3 MUST NOT publish it.** The reason is compatibility and it is worth stating plainly: unlike a map key inside a message on the peer wire, an unknown key in this object is refused rather than skipped (§2.4), so a delta carrying key 11 is unreadable to a build that predates it. Tying publication to the repository's declared format version means a repository an older reader is entitled to read never contains one, and [ADR-0014](../../docs/adr/0014-format-versioning-and-stability.md)'s rule — refuse by name, never misread — holds without anything having to be refused.
+
+A length mismatch with `covered_blob_ids`, or an element that is not 32 bytes, is a malformed object, and a reader MUST refuse the delta rather than pair the elements it can. A reader MUST NOT treat absence as damage, and MUST treat a **present** root that does not admit a leaf it checked as a damage finding.
+
+What the root buys that the digest does not is a check by a party that holds *neither the blob nor any key*: the flat digest can only be compared by someone who has all the bytes, whereas the root can be checked against one leaf and its authentication path. That is what makes a possession challenge against a replica a proof rather than a restatement of what the examined party once computed ([peer-protocol 04 §5.1](../peer-protocol/04-verification.md)).
+
+### 2.4 Unknown keys
+
+A reader MUST refuse a delta carrying a key this section does not assign, as a malformed object. The asymmetry with the peer protocol — where an unknown map key inside a known message is skipped — is deliberate: a delta is a signed statement about what exists and where, so a key a reader cannot interpret may be changing the meaning of the keys it can.
 
 ## 3 Precedence
 

@@ -94,6 +94,42 @@ public sealed class SpoolCheckpointTests : IDisposable
     }
 
     [TestMethod]
+    public async Task SpoolResume_TheMerkleCommitment_IsRebuiltByTheWalkAndNotByARereadOfTheSpool()
+    {
+        // The tree rides the resume hand-over exactly as the digest does
+        // (05 §5): a writer that resumed must seal to the same root as one
+        // that never stopped, or the commitment a delta publishes would
+        // depend on whether the machine happened to crash.
+        var directory = SpoolDirectory("merkle-resume");
+        var writer = CreateWriter(directory, Pinned);
+        await AppendAsync(writer, 11);
+        await AppendAsync(writer, 12);
+        await writer.AbandonAsync();
+
+        var result = Resume(directory, Pinned);
+        Assert.IsInstanceOfType<ResumeResult.Resumed>(result, out var resumed);
+        await AppendAsync(resumed.Writer, 13);
+
+        byte[] resumedRoot;
+        long resumedLength;
+        string spoolPath;
+        await using (var sealedBlob = await resumed.Writer.SealAsync(CancellationToken.None))
+        {
+            resumedRoot = [.. sealedBlob.MerkleRoot];
+            resumedLength = sealedBlob.Length;
+            spoolPath = Path.Combine(directory, $"blob-{sealedBlob.BlobId}.spool");
+            Assert.HasCount(BlobMerkle.RootLength, resumedRoot);
+
+            // The published root is the tree over exactly the digest's
+            // preimage — everything before the sixteen-byte locator.
+            var bytes = await File.ReadAllBytesAsync(spoolPath, CancellationToken.None);
+            Assert.AreEqual(resumedLength, bytes.LongLength);
+            CollectionAssert.AreEqual(
+                BlobMerkle.Root(bytes.AsSpan(0, bytes.Length - FooterLocator.Length)), resumedRoot);
+        }
+    }
+
+    [TestMethod]
     public async Task SpoolResume_AfterAnInterruption_ProducesAByteIdenticalSealedBlob()
     {
         // Uninterrupted reference run: five records, sealed.

@@ -73,6 +73,7 @@ public sealed class BlobWriter : IAsyncDisposable
     private readonly string _spoolPath;
     private readonly FileStream _spool;
     private readonly IncrementalHash _digest;
+    private readonly BlobMerkleAccumulator _merkle;
     private readonly List<RecordTableEntry> _entries = [];
     private readonly SpoolPinnedConfiguration? _pinned;
     private readonly ILogger _log;
@@ -96,6 +97,7 @@ public sealed class BlobWriter : IAsyncDisposable
         byte[]? contentKey = null,
         ILogger? logger = null,
         IncrementalHash? digest = null,
+        BlobMerkleAccumulator? merkle = null,
         byte[]? recordClassKey = null,
         byte[]? recordSealingPublicKey = null)
     {
@@ -127,6 +129,12 @@ public sealed class BlobWriter : IAsyncDisposable
         // the writer owns it from here — re-reading the spool to rebuild one
         // would spend exactly the I/O the streaming walk saves.
         _digest = digest ?? IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        // The Merkle commitment rides the same hand-over for the same reason
+        // (05 §5): it is fed by exactly the calls that feed the digest, so
+        // the tree costs no second pass over the sealed bytes, and a resume
+        // adopts the one its walk rebuilt rather than re-reading the spool.
+        _merkle = merkle ?? new BlobMerkleAccumulator();
     }
 
     /// <summary>The writer-allocated blob identifier, known before any byte exists.</summary>
@@ -354,6 +362,7 @@ public sealed class BlobWriter : IAsyncDisposable
         envelope.WriteTo(written);
         writer._spool.Write(written);
         writer._digest.AppendData(written);
+        writer._merkle.Append(written);
         writer.CurrentLength = envelope.EnvelopeLength;
 
         if (pinned is not null)
@@ -649,7 +658,9 @@ public sealed class BlobWriter : IAsyncDisposable
         // streaming walk cannot hand the bytes back afterwards, and re-reading
         // the spool to hash it would spend the I/O this change saves.
         var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var merkle = new BlobMerkleAccumulator();
         digest.AppendData(prefix.AsSpan(0, envelope.EnvelopeLength));
+        merkle.Append(prefix.AsSpan(0, envelope.EnvelopeLength));
         spoolRead.Position = envelope.EnvelopeLength;
 
         var entries = new List<RecordTableEntry>();
@@ -680,6 +691,7 @@ public sealed class BlobWriter : IAsyncDisposable
             CryptographicOperations.ZeroMemory(scratch);
             CryptographicOperations.ZeroMemory(sealedBytes);
             digest.Dispose();
+            merkle.Dispose();
             return Discard("spool_tail_unauthenticated");
         }
 
@@ -795,6 +807,8 @@ public sealed class BlobWriter : IAsyncDisposable
             // exactly the bytes the walk accepted.
             digest.AppendData(headerBytes);
             digest.AppendData(sealedBytes.AsSpan(0, bodyLength));
+            merkle.Append(headerBytes);
+            merkle.Append(sealedBytes.AsSpan(0, bodyLength));
 
             entries.Add(new RecordTableEntry(
                 header.ObjectId,
@@ -828,6 +842,7 @@ public sealed class BlobWriter : IAsyncDisposable
         var writer = new BlobWriter(
             envelope, profile, encryptionProfile, repositoryId, blobKey, spoolPath, spool, current, contentKey, logger,
             digest,
+            merkle,
             recordClassKey,
             relocatable && sealedContent ? sealingPublicKey.ToArray() : null);
         writer._entries.AddRange(entries);
@@ -947,6 +962,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(record);
+        _merkle.Append(record);
 
         _entries.Add(new RecordTableEntry(
             objectId,
@@ -1043,6 +1059,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         await _spool.WriteAsync(record, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(record);
+        _merkle.Append(record);
 
         _entries.Add(new RecordTableEntry(
             source.ObjectId,
@@ -1103,6 +1120,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         DisposeCiphers();
         _digest.Dispose();
+        _merkle.Dispose();
 
         if (!_spoolClosed)
         {
@@ -1193,6 +1211,7 @@ public sealed class BlobWriter : IAsyncDisposable
 
         await _spool.WriteAsync(footer, cancellationToken).ConfigureAwait(false);
         _digest.AppendData(footer);
+        _merkle.Append(footer);
         var footerOffset = (ulong)CurrentLength;
         CurrentLength += footer.Length;
 
@@ -1201,6 +1220,7 @@ public sealed class BlobWriter : IAsyncDisposable
         // FooterLocator's erratum note).
         var digest = new byte[32];
         _digest.GetHashAndReset(digest);
+        var merkleRoot = _merkle.GetRootAndReset();
 
         var locatorBytes = new byte[FooterLocator.Length];
         new FooterLocator(footerOffset, System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(digest))
@@ -1224,7 +1244,8 @@ public sealed class BlobWriter : IAsyncDisposable
             _envelope.FormatVersion);
 
         return new SealedBlob(
-            _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest, _entries);
+            _spoolPath, _envelope.BlobId, _envelope.BlobClass, _envelope.BlobCounter, CurrentLength, digest,
+            merkleRoot, _entries);
     }
 
     /// <summary>
@@ -1242,6 +1263,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
 
         _digest.Dispose();
+        _merkle.Dispose();
 
         // A writer whose seal was interrupted mid-write is marked sealed
         // with the spool handle still open — closed here, its file left on

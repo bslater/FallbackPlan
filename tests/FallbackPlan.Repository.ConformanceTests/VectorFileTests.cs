@@ -35,6 +35,7 @@ public sealed class VectorFileTests
         ["identifiers.json"] = true,
         ["records.json"] = true,
         ["records-v3.json"] = true,
+        ["merkle.json"] = true,
         ["segmentation.json"] = true,
         ["compression.json"] = true,
         ["aes-gcm.json"] = false,

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -283,6 +284,40 @@ public sealed class BlobWriterAndReaderTests : IDisposable
 
         // Same key inputs except the CSPRNG salt: the sealed bytes must differ.
         Assert.AreNotEqual(sealedFirst.Digest, sealedSecond.Digest);
+    }
+
+    [TestMethod]
+    public async Task SealedBlob_ItsMerkleCommitment_IsTheTreeOverTheDigestsOwnPreimage()
+    {
+        // Two commitments, one preimage (05 §5). The flat digest is what a
+        // whole-blob read-back compares against; the root is what lets a
+        // party holding neither the blob nor a key check one leaf of it. If
+        // they named different bytes, a blob could satisfy one and not the
+        // other and nobody could say which was right.
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        await using var writer = CreateWriter();
+        for (var i = 0; i < 4; i++)
+        {
+            var payload = new byte[600_000];
+            new Random(i).NextBytes(payload);
+            await writer.AppendRecordAsync(
+                ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
+                (ulong)payload.Length, payload, CancellationToken.None);
+        }
+
+        await using var sealedBlob = await writer.SealAsync(CancellationToken.None);
+        var bytes = new byte[sealedBlob.Length];
+        await using (var content = await sealedBlob.OpenContentAsync(CancellationToken.None))
+        {
+            await content.ReadExactlyAsync(bytes, CancellationToken.None);
+        }
+
+        var preimage = bytes.AsSpan(0, bytes.Length - FooterLocator.Length);
+        CollectionAssert.AreEqual(SHA256.HashData(preimage), sealedBlob.Digest.ToArray());
+        CollectionAssert.AreEqual(BlobMerkle.Root(preimage), sealedBlob.MerkleRoot.ToArray());
+
+        // More than one leaf, or the tree case is untested by construction.
+        Assert.IsGreaterThan(1, BlobMerkle.LeafCount(preimage.Length));
     }
 
     [TestMethod]

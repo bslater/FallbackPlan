@@ -777,6 +777,155 @@ def records_v3_vectors() -> dict:
     }
 
 
+def merkle_vectors() -> dict:
+    """The Merkle commitment over a sealed blob's bytes (specification 05
+    section 5; ADR-0052 open question 4). RFC 6962's tree over one-mebibyte
+    leaves of the digest's own preimage, with the preimage's length hashed
+    into the published root under a prefix of its own -- without that binding
+    a four-leaf tree's first path verifies under a claimed size of three, and
+    a destination could understate its length to exempt its last leaf from
+    ever being drawn. Everything here is SHA-256 and concatenation, so it is
+    derived, not pinned."""
+    leaf_size = 1024 * 1024
+
+    def leaf(chunk: bytes) -> bytes:
+        return hashlib.sha256(b"\x00" + chunk).digest()
+
+    def node(left: bytes, right: bytes) -> bytes:
+        return hashlib.sha256(b"\x01" + left + right).digest()
+
+    def split(count: int) -> int:
+        k = 1
+        while k * 2 < count:
+            k *= 2
+        return k
+
+    def mth(leaves: list) -> bytes:
+        if not leaves:
+            return hashlib.sha256(b"").digest()
+        if len(leaves) == 1:
+            return leaves[0]
+        k = split(len(leaves))
+        return node(mth(leaves[:k]), mth(leaves[k:]))
+
+    def bind(length: int, head: bytes) -> bytes:
+        return hashlib.sha256(b"\x02" + u64(length) + head).digest()
+
+    def path(leaves: list, index: int) -> list:
+        if len(leaves) <= 1:
+            return []
+        k = split(len(leaves))
+        if index < k:
+            return path(leaves[:k], index) + [mth(leaves[k:])]
+        return path(leaves[k:], index - k) + [mth(leaves[:k])]
+
+    def stream(length: int) -> bytes:
+        out = bytearray()
+        counter = 0
+        while len(out) < length:
+            out += hashlib.sha256(u64(counter)).digest()
+            counter += 1
+        return bytes(out[:length])
+
+    # Synthetic leaf hashes, so the tree arithmetic can be pinned for shapes
+    # whose real preimages would be megabytes. They stand in for chunk
+    # hashes; what these cases fix is the split and the folding.
+    synthetic = [hashlib.sha256(b"\x00" + bytes([i])).digest() for i in range(8)]
+    shapes = []
+    for count in range(1, 9):
+        length = ((count - 1) * leaf_size) + 1
+        leaves = synthetic[:count]
+        shapes.append(
+            {
+                "leaf_count": count,
+                "preimage_length": length,
+                "split_point": split(count) if count > 1 else 0,
+                "mth": mth(leaves).hex(),
+                "root": bind(length, mth(leaves)).hex(),
+            }
+        )
+
+    # Paths are pinned over a real preimage, not over the synthetic hashes:
+    # a verifier hashes the chunk it is handed and checks its length against
+    # the tree the root names, so a path case has to carry chunks that could
+    # actually sit at those offsets.
+    five_length = (4 * leaf_size) + 4096
+    five_preimage = stream(five_length)
+    five = [
+        leaf(five_preimage[offset:offset + leaf_size])
+        for offset in range(0, five_length, leaf_size)
+    ]
+    paths = [
+        {
+            "leaf_index": index,
+            "chunk_offset": index * leaf_size,
+            "chunk_length": min(leaf_size, five_length - (index * leaf_size)),
+            "path": [step.hex() for step in path(five, index)],
+        }
+        for index in range(len(five))
+    ]
+
+    # Two whole preimages the reader can rebuild byte for byte: the stream is
+    # concatenated SHA-256(BE64(counter)), the same shape the committed
+    # fixtures' file content uses.
+    wholes = []
+    for name, length in [
+        ("under_one_leaf", 3), ("exactly_one_leaf", leaf_size),
+        ("one_byte_over_one_leaf", leaf_size + 1), ("two_leaves_and_a_tail", (2 * leaf_size) + 12_345),
+    ]:
+        preimage = stream(length)
+        leaves = [
+            leaf(preimage[offset:offset + leaf_size]) for offset in range(0, max(length, 1), leaf_size)
+        ]
+        wholes.append(
+            {
+                "name": name,
+                "preimage_length": length,
+                "leaf_count": len(leaves),
+                "root": bind(length, mth(leaves)).hex(),
+            }
+        )
+
+    return {
+        "description": (
+            "Merkle commitment over a sealed blob's bytes: RFC 6962 leaves and nodes, "
+            "one-mebibyte chunks, and a root bound to the preimage's length "
+            "(specification 05 section 5)."
+        ),
+        "independently_derived": True,
+        "parameters": {
+            "leaf_size": leaf_size,
+            "leaf_prefix": "00",
+            "node_prefix": "01",
+            "root_prefix": "02",
+            "root_construction": "SHA-256(0x02 || u64_be(preimage_length) || MTH(leaf_hashes))",
+            "preimage": "bytes [0, blob_length - 16) -- the flat digest's preimage, 05 section 5",
+        },
+        "primitives": {
+            "leaf_of_empty_chunk": leaf(b"").hex(),
+            "leaf_of_abc": leaf(b"abc").hex(),
+            "node_of_two_leaves": node(leaf(b"abc"), leaf(b"def")).hex(),
+            "leaf_and_node_differ_comment": (
+                "SHA-256('abc') is not leaf('abc'): without the prefix a one-leaf tree's head "
+                "would be the chunk's bare digest."
+            ),
+            "sha256_of_abc": hashlib.sha256(b"abc").hexdigest(),
+        },
+        "synthetic_leaf_hashes": [value.hex() for value in synthetic],
+        "shapes": shapes,
+        "authentication_paths": {
+            "leaf_count": len(five),
+            "preimage_length": five_length,
+            "root": bind(five_length, mth(five)).hex(),
+            "paths": paths,
+        },
+        "whole_preimages": {
+            "stream": "concatenated SHA-256(BE64(counter)) from counter 0, truncated to preimage_length",
+            "cases": wholes,
+        },
+    }
+
+
 def segmentation_vectors() -> dict:
     """Specification 09 -- fixed-v1 boundaries."""
     mib = 1024 * 1024
@@ -1625,6 +1774,7 @@ GROUPS = {
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
     "records-v3.json": records_v3_vectors,
+    "merkle.json": merkle_vectors,
     "segmentation.json": segmentation_vectors,
     "compression.json": compression_vectors,
     "aes-gcm.json": aes_gcm_vectors,

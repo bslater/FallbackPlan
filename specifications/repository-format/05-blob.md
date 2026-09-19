@@ -178,6 +178,29 @@ This is a **format invariant**: an identified rule that other documents cite and
 
 > **Erratum (phase 0), resolved in phase 1.** Two defects in the digest sentence above. First, "the complete sealed representation" was circular: the locator carries `digest_prefix`, so the locator cannot be inside its own digest's preimage. The digest is computed over bytes `[0, blob_length − 16)` — everything up to but excluding the 16-byte locator. Second, "recorded in the index" named a field that did not exist. It exists now: `covered_blob_digests`, optional and parallel to `covered_blob_ids` on the index delta ([07 §2.2](07-index.md#22-covered-blob-digests)), inside the signature. The device-local catalogue keeps its copy as a cache. → [Q16](../../docs/open-questions.md#closed)
 
+### 5.2 The Merkle commitment
+
+Beside the flat digest, and never instead of it, a blob's sealed bytes carry a **Merkle commitment** over the same preimage — bytes `[0, blob_length − 16)`.
+
+```text
+leaf_hash(chunk)       = SHA-256(0x00 ‖ chunk)
+node_hash(left, right) = SHA-256(0x01 ‖ left ‖ right)
+MTH(D[n])              = leaf_hash when n = 1
+                       = node_hash(MTH(D[0:k]), MTH(D[k:n])) when n > 1,
+                         k the largest power of two strictly below n
+merkle_root            = SHA-256(0x02 ‖ u64_be(preimage_length) ‖ MTH(leaves))
+```
+
+The tree is [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962)'s, and the leaf and node prefixes are its: without them a one-leaf tree's head would be the chunk's bare digest and an interior node's preimage could be presented as a leaf's.
+
+**The leaf is one mebibyte, fixed by the format.** The chunk at index *i* is `[i × 1 MiB, min((i + 1) × 1 MiB, preimage_length))`, and the last is short whenever the preimage is not a whole number of leaves. The size is stated here rather than recorded per blob so that both parties to a challenge agree on it by construction; a size a reader could be *told* is a size the party being checked could choose.
+
+**The published root binds the preimage's length**, under a third prefix of its own, and that is not ornament. RFC 6962's inclusion check takes the tree size from its caller, and for a four-leaf tree's first leaf the path a three-leaf tree wants has the same length and walks to the same head — so a party that understates its copy's length could exempt its last leaf from ever being asked for and still answer every question correctly. Hashing the length into the root makes the commitment name one tree and no other.
+
+**What it is for.** The flat digest can be checked only by a party that holds the whole blob. The root can be checked against **one leaf**: given the root a writer signed, a leaf's bytes and its authentication path, a party that holds neither the blob nor any key can establish that those bytes sit at that offset of that blob. That is what makes a possession challenge over a peer's replica sound rather than a self-report ([peer-protocol 04 §5.1](../peer-protocol/04-verification.md)), and the bytes of the leaf are the proof: an authentication path is not secret, and a party that kept the paths and discarded the chunks can still produce a path and still cannot answer.
+
+The root's durable home is the index delta, published only by a writer at repository format 3 or above ([07 §2.3](07-index.md#23-covered-blob-merkle-roots)).
+
 ## 6 The spool
 
 Blobs are assembled in a durable local spool before upload. A blob becomes visible in the repository only after it is sealed, validated, uploaded under its final identifier, and acknowledged.

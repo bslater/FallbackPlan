@@ -20,6 +20,7 @@ public sealed class SealedBlob : IAsyncDisposable
         ulong blobCounter,
         long length,
         byte[] digest,
+        byte[] merkleRoot,
         IReadOnlyList<RecordTableEntry> recordTable)
     {
         _spoolPath = spoolPath;
@@ -28,6 +29,7 @@ public sealed class SealedBlob : IAsyncDisposable
         BlobCounter = blobCounter;
         Length = length;
         Digest = digest;
+        MerkleRoot = merkleRoot;
         RecordTable = recordTable;
     }
 
@@ -53,6 +55,16 @@ public sealed class SealedBlob : IAsyncDisposable
     /// preimage note).
     /// </summary>
     public IReadOnlyList<byte> Digest { get; }
+
+    /// <summary>
+    /// The Merkle commitment over the same preimage the digest names
+    /// (specification 05 §5): an RFC 6962 tree over one-mebibyte leaves,
+    /// bound to the preimage's length. It is what lets a party holding only
+    /// the published root check one leaf of this blob without the rest of
+    /// it, and it is published — beside the digest, never instead of it —
+    /// only by a writer at repository format 3 or above (07 §2.3).
+    /// </summary>
+    public IReadOnlyList<byte> MerkleRoot { get; }
 
     /// <summary>The record table the footer carries.</summary>
     public IReadOnlyList<RecordTableEntry> RecordTable { get; }
