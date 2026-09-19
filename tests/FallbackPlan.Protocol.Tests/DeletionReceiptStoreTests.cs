@@ -143,6 +143,59 @@ public sealed class DeletionReceiptStoreTests : IDisposable
         Assert.AreEqual(Receipt(1_000), filed.Receipt);
     }
 
+    [TestMethod]
+    public void List_WithALimit_IsAWindowOverTheNewestFilesAndNotOverWhatStillParses()
+    {
+        // The limit has to bound the work and not only the answer: reading
+        // every receipt ever filed to show the newest fifty prices a listing
+        // by the pile rather than by the question. Bounding by name has a
+        // consequence worth pinning — a receipt that has been tampered with
+        // cannot drop out of the window by becoming unreadable, which is
+        // exactly what a read-everything-then-take would let it do, since an
+        // unreadable file has no issue time to sort by and falls to the end.
+        using var signer = PeerKeypair.Generate();
+        var store = Open();
+        foreach (var issued in new ulong[] { 1_000, 2_000, 3_000 })
+        {
+            var signed = Receipt(issued, session: (byte)issued).EncodeForSigning();
+            store.File(DeletionReceiptRole.Destination, signed, signer.Sign(signed), signer.Identity, null, null);
+        }
+
+        var newest = Directory.GetFiles(
+            Path.Combine(_stateDirectory, "receipts", "deletions"), "*.json", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal)
+            .Last();
+        File.WriteAllText(newest, "tampered with");
+
+        var listed = Open().List(limit: 2);
+
+        Assert.HasCount(2, listed);
+        var broken = Assert.ContainsSingle(listed.Where(filed => filed.Receipt is null));
+        Assert.IsFalse(broken.Verified);
+        var sound = Assert.ContainsSingle(listed.Where(filed => filed.Receipt is not null));
+        Assert.AreEqual(2_000UL, sound.Receipt!.IssuedAtUnixMilliseconds);
+    }
+
+    [TestMethod]
+    public void Count_IsByNameSoAnUnreadableReceiptIsStillOnFile()
+    {
+        using var signer = PeerKeypair.Generate();
+        var store = Open();
+        foreach (var issued in new ulong[] { 1_000, 2_000, 3_000, 4_000 })
+        {
+            var signed = Receipt(issued, session: (byte)issued).EncodeForSigning();
+            store.File(DeletionReceiptRole.Destination, signed, signer.Sign(signed), signer.Identity, null, null);
+        }
+
+        File.WriteAllText(
+            Directory.GetFiles(
+                Path.Combine(_stateDirectory, "receipts", "deletions"), "*.json", SearchOption.AllDirectories)[0],
+            "tampered with");
+
+        Assert.AreEqual(4, Open().Count());
+        Assert.AreEqual(2, Open().List(limit: 2).Count, "the count is what is on file; the limit is what was asked for");
+    }
+
     public void Dispose()
     {
         try

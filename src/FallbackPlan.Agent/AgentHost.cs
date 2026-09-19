@@ -69,7 +69,7 @@ public static class AgentHost
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
                   fallbackplan-agent receipts --state <dir> [--kind deletion|replication] [--set <name>]
-                                            [--repository <hex>] [--json]
+                                            [--repository <hex>] [--limit <n>] [--json]
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
@@ -295,9 +295,21 @@ public static class AgentHost
         // service up at breakfast.
         if (args[0] == "receipts")
         {
+            int? receiptLimit = null;
+            if (Get("--limit") is { } limitText)
+            {
+                if (!int.TryParse(limitText, System.Globalization.CultureInfo.InvariantCulture, out var parsedLimit))
+                {
+                    error.WriteLine($"error: --limit takes a whole number, not '{limitText}'.");
+                    return 1;
+                }
+
+                receiptLimit = parsedLimit;
+            }
+
             return Receipts(
                 stateDirectory, Get("--kind"), Get("--set"), Get("--repository"), args.Contains("--json"),
-                output, error);
+                receiptLimit, output, error);
         }
 
         // `reattribute` re-points a replica stored here (ADR-0053 §3), routed
@@ -1377,7 +1389,7 @@ public static class AgentHost
     }
 
     private static int Receipts(
-        string stateDirectory, string? kind, string? set, string? repository, bool json,
+        string stateDirectory, string? kind, string? set, string? repository, bool json, int? limit,
         TextWriter output, TextWriter error)
     {
         // A mistyped path holds nothing, and "no receipts" for it would be
@@ -1407,12 +1419,21 @@ public static class AgentHost
             repositoryIdHex = parsed;
         }
 
+        if (limit is <= 0)
+        {
+            error.WriteLine("error: --limit must be at least 1.");
+            return 1;
+        }
+
+        // No limit reads everything, which is what an operator reading their
+        // own audit trail asked for; a limit bounds the reading and not only
+        // the printing.
         IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
             ? []
-            : DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex);
+            : DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex, limit);
         IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
             ? []
-            : ReplicationReceiptStore.Open(stateDirectory).List(repositoryIdHex);
+            : ReplicationReceiptStore.Open(stateDirectory).List(repositoryIdHex, limit);
         if (set is not null)
         {
             deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];

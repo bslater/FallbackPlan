@@ -51,10 +51,19 @@ public sealed partial class ServiceCommandHandler
         }
 
         var state = runtime.Options.StateDirectory;
+        var deletionStore = DeletionReceiptStore.Open(state);
+        var replicationStore = ReplicationReceiptStore.Open(state);
+
+        // The limit reaches each store, which applies it to file names before
+        // it reads anything (contract 1.35). Asking each for the limit and
+        // then taking the limit from the merge is right: the newest `limit`
+        // of a union is a subset of the union of each side's newest `limit`.
+        var total = 0;
         var rows = new List<(ulong IssuedAt, string Path, ReceiptDescriptor Row)>();
         if (deletions)
         {
-            foreach (var filed in DeletionReceiptStore.Open(state).List(repositoryIdHex))
+            total += deletionStore.Count(repositoryIdHex);
+            foreach (var filed in deletionStore.List(repositoryIdHex, command.Limit))
             {
                 rows.Add((filed.Receipt?.IssuedAtUnixMilliseconds ?? 0, filed.Path, Describe(filed)));
             }
@@ -62,7 +71,8 @@ public sealed partial class ServiceCommandHandler
 
         if (replications)
         {
-            foreach (var filed in ReplicationReceiptStore.Open(state).List(repositoryIdHex))
+            total += replicationStore.Count(repositoryIdHex);
+            foreach (var filed in replicationStore.List(repositoryIdHex, command.Limit))
             {
                 rows.Add((filed.Receipt?.IssuedAtUnixMilliseconds ?? 0, filed.Path, Describe(filed)));
             }
@@ -71,6 +81,12 @@ public sealed partial class ServiceCommandHandler
         IEnumerable<(ulong IssuedAt, string Path, ReceiptDescriptor Row)> ordered = rows
             .OrderByDescending(entry => entry.IssuedAt)
             .ThenBy(entry => entry.Path, StringComparer.Ordinal);
+
+        // The set is inside the signed bytes, so this narrows what was read
+        // and never what was counted: a listing by set can come back shorter
+        // than its limit while the total stands above both, which the
+        // contract states rather than leaving a client to draw a ratio that
+        // does not close.
         if (command.Set is { } set)
         {
             ordered = ordered.Where(entry => string.Equals(entry.Row.Set, set, StringComparison.Ordinal));
@@ -81,7 +97,7 @@ public sealed partial class ServiceCommandHandler
             ordered = ordered.Take(limit);
         }
 
-        return new ReceiptsResult([.. ordered.Select(entry => entry.Row)]);
+        return new ReceiptsResult([.. ordered.Select(entry => entry.Row)], total);
     }
 
     private static ReceiptDescriptor Describe(FiledDeletionReceipt filed) => new(

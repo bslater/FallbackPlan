@@ -318,7 +318,16 @@ public sealed record ReceiptDescriptor(
 
 /// <summary>The receipts filed here, newest first by issue time (contract 1.33).</summary>
 /// <param name="Receipts">One row per filed receipt, both kinds interleaved.</param>
-public sealed record ReceiptsResult(IReadOnlyList<ReceiptDescriptor> Receipts) : ServiceResult;
+/// <param name="Total">
+/// How many receipts are on file for the kind and repository asked for,
+/// counted from file names (contract 1.35) — so a client can say how much of
+/// the pile it is showing, and a retention rule that is working is visible
+/// rather than inferred. It is counted before the set filter, which can only
+/// be answered by reading a receipt, so a listing narrowed by set may return
+/// fewer rows than the limit while the total is larger than both. A pre-1.35
+/// service answers zero.
+/// </param>
+public sealed record ReceiptsResult(IReadOnlyList<ReceiptDescriptor> Receipts, int Total = 0) : ServiceResult;
 
 /// <summary>One directory on the service's machine, for a folder picker.</summary>
 /// <param name="Name">The directory's name.</param>

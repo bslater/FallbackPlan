@@ -131,6 +131,45 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Receipts_WithALimitOfNone_IsRefusedByName()
+    {
+        // A receipt first, so the state directory exists: a mistyped path is
+        // refused ahead of anything else, deliberately, and this case is
+        // about the limit rather than about that rule.
+        using var spoke = PeerKeypair.Generate();
+        var signed = Receipt().EncodeForSigning();
+        DeletionReceiptStore.Open(_state).File(
+            DeletionReceiptRole.Commander, signed, spoke.Sign(signed), spoke.Identity, "docs", "friend");
+
+        var result = await CliHarness.RunRawAsync("receipts", "--state", _state, "--limit", "0");
+
+        Assert.AreNotEqual(0, result.ExitCode);
+        Assert.Contains("--limit must be at least 1", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Receipts_WithALimit_ReadsOnlyTheNewest()
+    {
+        using var spoke = PeerKeypair.Generate();
+        foreach (var issuedAt in new ulong[] { 1_000, 2_000, 3_000 })
+        {
+            var signed = Receipt(issuedAt).EncodeForSigning();
+            DeletionReceiptStore.Open(_state).File(
+                DeletionReceiptRole.Commander, signed, spoke.Sign(signed), spoke.Identity, "docs", "friend");
+        }
+
+        var result = await CliHarness.RunRawAsync("receipts", "--state", _state, "--limit", "2", "--json");
+
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        using var document = JsonDocument.Parse(result.Output);
+        var entries = document.RootElement.EnumerateArray().ToList();
+        Assert.HasCount(2, entries);
+        Assert.AreEqual(
+            3_000L, entries[0].GetProperty("receipt").GetProperty("issued_at").GetInt64(), "the newest first");
+        Assert.AreEqual(2_000L, entries[1].GetProperty("receipt").GetProperty("issued_at").GetInt64());
+    }
+
+    [TestMethod]
     public async Task Receipts_WithAKindThatDoesNotExist_NamesTheTwoThatDo()
     {
         Directory.CreateDirectory(_state);
@@ -160,11 +199,11 @@ public sealed class ReceiptsVerbValidationTests : IDisposable
         HeldObjects: 7,
         HeldBytes: 1_234);
 
-    private static DeletionReceipt Receipt() => new(
-        SessionId: Enumerable.Repeat((byte)0xAB, DeletionReceipt.SessionIdLength).ToArray(),
+    private static DeletionReceipt Receipt(ulong issuedAt = 1_000) => new(
+        SessionId: Enumerable.Repeat((byte)(issuedAt % 251), DeletionReceipt.SessionIdLength).ToArray(),
         RepositoryId: Enumerable.Repeat((byte)0x01, ReplicationOffer.RepositoryIdLength).ToArray(),
         CommanderPublicKey: Enumerable.Repeat((byte)0xC0, PeerIdentity.KeyLength).ToArray(),
-        IssuedAtUnixMilliseconds: 1_000,
+        IssuedAtUnixMilliseconds: issuedAt,
         FloorGenerations: 3,
         ReclaimPublicKey: ReadOnlyMemory<byte>.Empty,
         PageDigests: [new byte[DeletionReceipt.DigestLength]],

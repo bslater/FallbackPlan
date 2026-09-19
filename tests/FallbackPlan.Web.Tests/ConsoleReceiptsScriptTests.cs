@@ -43,7 +43,13 @@ public sealed class ConsoleReceiptsScriptTests
         Assert.Contains("receipts_listed", refresh, StringComparison.Ordinal);
         Assert.DoesNotContain("run({ command: \"list_receipts\"", refresh, StringComparison.Ordinal,
             "a service that predates 1.33 refuses the verb; that must not toast on every visit");
-        Assert.Contains("limit: 50", refresh, StringComparison.Ordinal, "the card shows the newest fifty");
+        Assert.Contains(
+            "limit: RECEIPTS_SHOWN", refresh, StringComparison.Ordinal,
+            "the limit reaches the service, which bounds the reading and not only the answer (contract 1.35)");
+        Assert.Contains("RECEIPTS_SHOWN = 50", AppJs(), StringComparison.Ordinal);
+        Assert.Contains(
+            "listed.total", refresh, StringComparison.Ordinal,
+            "the count of the whole pile arrives beside the rows");
     }
 
     [TestMethod]
@@ -77,6 +83,14 @@ public sealed class ConsoleReceiptsScriptTests
         Assert.DoesNotContain("row.verified ?", card, StringComparison.Ordinal,
             "two states from a boolean would fold 'unreadable' into 'signature invalid'");
         Assert.Contains("S.receipts === null", card, StringComparison.Ordinal, "not yet fetched is not empty");
+
+        // The rows are a window over the newest few and the total is the
+        // whole pile, so the card says which is which — and a service older
+        // than contract 1.35 sends no total, where there is nothing honest
+        // to say about the rest.
+        Assert.Contains("S.receiptsTotal", card, StringComparison.Ordinal);
+        Assert.Contains("on file", card, StringComparison.Ordinal);
+        Assert.Contains("S.receiptsTotal <= S.receipts.length", card, StringComparison.Ordinal);
         Assert.DoesNotContain("style=", card, StringComparison.Ordinal, "inline style is refused by the CSP");
     }
 }

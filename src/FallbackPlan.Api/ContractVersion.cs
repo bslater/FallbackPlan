@@ -269,8 +269,22 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// Additive with a zero default; a pre-1.34 client reads the row as it
     /// did and a pre-1.34 service answers zero, which is true of it.
     /// </para>
+    /// <para>
+    /// 1.35 adds `total` to `receipts_listed`: how many receipts are on file
+    /// for the kind and repository asked for, counted from names rather than
+    /// from what was read, so `limit` can bound the reading and a client can
+    /// still say what share of the pile it is showing. Peer receipts are now
+    /// swept under a stated retention rule (NFR-OPS-008), and a count beside
+    /// the rows is what makes a bound that is working visible. The count
+    /// precedes the set filter, which can only be answered by reading a
+    /// receipt, so a listing narrowed by set may return fewer rows than its
+    /// limit while the total is larger than both. Additive with a zero
+    /// default; a pre-1.35 client ignores it and a pre-1.35 service answers
+    /// zero, which reads as "this service does not count", not as "nothing
+    /// is on file".
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 34);
+    public static ContractVersion Current { get; } = new(1, 35);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

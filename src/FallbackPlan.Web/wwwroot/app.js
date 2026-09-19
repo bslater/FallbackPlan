@@ -73,6 +73,7 @@ const S = {
   pairings: [],             // PairingDescriptor[]
   attributions: [],         // ReplicaAttributionDescriptor[] — replicas stored here (contract 1.31); [] where the service predates it
   receipts: null,           // ReceiptDescriptor[] newest first (contract 1.33); null until first list_receipts, [] where the service predates it
+  receiptsTotal: 0,         // how many are on file for the whole pile (contract 1.35); 0 where the service predates it
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
@@ -1175,6 +1176,9 @@ function renderMaintenance() {
 // and the status is the service's own verdict on the signature over the
 // bytes on disk now — three states, rendered distinctly, never derived on
 // the page from the absence of a problem. Not yet fetched is not empty.
+/** How many receipts the card asks the service to read (contract 1.35's limit). */
+const RECEIPTS_SHOWN = 50;
+
 function renderReceiptsCard() {
   const el = document.getElementById("receipts-card");
   if (!el) return;
@@ -1222,10 +1226,19 @@ function renderReceiptsCard() {
       </table></div>`;
   }
 
+  // The total is counted from file names across the whole pile and the rows
+  // are the newest few that were actually read, so saying which is which is
+  // also what makes the retention sweep (NFR-OPS-008) visible. A service
+  // older than contract 1.35 sends no total, and then there is nothing
+  // honest to say about the rest.
+  const shown = S.receipts === null || S.receipts.length === 0 || S.receiptsTotal <= S.receipts.length
+    ? ""
+    : ` Showing the newest ${fmtCount(S.receipts.length)} of ${fmtCount(S.receiptsTotal)} on file.`;
+
   el.innerHTML = `
     <h3>🧾 Receipts</h3>
     <p class="sub">What peers attested under their own signatures — deletions on this installation's instruction,
-       and what they hold after each push (ADR-0063, ADR-0064). Newest fifty; every signature re-checked as it is read.</p>
+       and what they hold after each push (ADR-0063, ADR-0064). Every signature re-checked as it is read.${shown}</p>
     ${body}`;
 }
 
@@ -2486,8 +2499,9 @@ async function refreshConfigData() {
 // run(): a service that predates the verb refuses it by name, and that is
 // an empty card, not a toast on every visit.
 async function refreshReceipts() {
-  const listed = await api({ command: "list_receipts", limit: 50 }).catch(() => null);
+  const listed = await api({ command: "list_receipts", limit: RECEIPTS_SHOWN }).catch(() => null);
   S.receipts = listed?.result === "receipts_listed" ? listed.receipts : [];
+  S.receiptsTotal = listed?.result === "receipts_listed" ? (listed.total ?? 0) : 0;
   if (S.view === "maintenance") renderReceiptsCard();
 }
 

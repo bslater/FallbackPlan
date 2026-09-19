@@ -113,13 +113,27 @@ public sealed class DeletionReceiptStore
     /// is reported with its problem rather than skipped.
     /// </summary>
     /// <param name="repositoryIdHex">The repository, lower-hex, or null for all.</param>
-    public IReadOnlyList<FiledDeletionReceipt> List(string? repositoryIdHex = null) =>
+    /// <param name="limit">
+    /// At most this many of the newest by the issue time their names carry,
+    /// or null for every one. The limit bounds the reading and not only the
+    /// answer, so a listing costs what was asked for rather than what has
+    /// accumulated.
+    /// </param>
+    public IReadOnlyList<FiledDeletionReceipt> List(string? repositoryIdHex = null, int? limit = null) =>
     [
-        .. PeerReceiptFiles.Read(_root, repositoryIdHex)
+        .. PeerReceiptFiles.Read(_root, repositoryIdHex, limit)
             .Select(Interpret)
             .OrderByDescending(entry => entry.Receipt?.IssuedAtUnixMilliseconds ?? 0)
             .ThenBy(entry => entry.Path, StringComparer.Ordinal),
     ];
+
+    /// <summary>
+    /// How many receipts are on file, counted from names alone — so it costs
+    /// a listing and no reads, and a receipt that no longer parses is still
+    /// counted as being on file.
+    /// </summary>
+    /// <param name="repositoryIdHex">The repository, lower-hex, or null for all.</param>
+    public int Count(string? repositoryIdHex = null) => PeerReceiptFiles.Count(_root, repositoryIdHex);
 
     /// <summary>
     /// Applies a retention policy across every repository filed here, or one,

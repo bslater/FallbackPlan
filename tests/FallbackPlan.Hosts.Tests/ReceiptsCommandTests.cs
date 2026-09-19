@@ -114,6 +114,40 @@ public sealed class ReceiptsCommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ListReceipts_CountsTheWholePileBesideTheRowsItRead()
+    {
+        // The limit bounds the reading (contract 1.35), so the answer alone
+        // can no longer say how much is on file — and a client that cannot
+        // say "the newest fifty of twelve hundred" cannot show a retention
+        // sweep working either.
+        FileDeletion(issuedAt: 1_000, role: DeletionReceiptRole.Commander, set: "docs", destination: "friend");
+        FileDeletion(issuedAt: 3_000, role: DeletionReceiptRole.Commander, set: "photos", destination: "friend",
+            repositoryId: OtherRepositoryId);
+        FileReplication(issuedAt: 2_000, set: "docs", destination: "friend");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<ReceiptsResult>(
+            await handler.ExecuteAsync(new ListReceiptsCommand(Limit: 1), Timeout), out var bounded);
+        Assert.HasCount(1, bounded.Receipts);
+        Assert.AreEqual(3, bounded.Total, "the count is of what is on file, not of what was read");
+
+        // The set lives inside the signed bytes, so it narrows the rows and
+        // never the count: the two disagree by construction and the contract
+        // says so rather than leaving a client to draw a ratio that does not
+        // close.
+        Assert.IsInstanceOfType<ReceiptsResult>(
+            await handler.ExecuteAsync(new ListReceiptsCommand(Set: "photos"), Timeout), out var bySet);
+        Assert.HasCount(1, bySet.Receipts);
+        Assert.AreEqual(3, bySet.Total);
+
+        Assert.IsInstanceOfType<ReceiptsResult>(
+            await handler.ExecuteAsync(new ListReceiptsCommand(Kind: "replication"), Timeout), out var byKind);
+        Assert.AreEqual(1, byKind.Total, "a kind narrows the count, because a kind is a directory");
+    }
+
+    [TestMethod]
     public async Task ListReceipts_AFileEditedAfterFiling_ReadsSignatureInvalidFromTheSignedBytes()
     {
         var path = FileDeletion(issuedAt: 1_000, role: DeletionReceiptRole.Destination, set: null, destination: null);

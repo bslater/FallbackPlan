@@ -2032,6 +2032,10 @@ public static class CliApplication
             {
                 Description = "Only receipts for one repository, by its id (32 hex digits).",
             };
+            var receiptsLimitOption = new Option<int?>("--limit")
+            {
+                Description = "At most this many of the newest; without it, every receipt on file is read.",
+            };
             var receiptsJsonOption = new Option<bool>("--json")
             {
                 Description = "Print the receipts as a JSON array instead of text.",
@@ -2046,6 +2050,7 @@ public static class CliApplication
             command.Options.Add(receiptsKindOption);
             command.Options.Add(receiptsSetOption);
             command.Options.Add(receiptsRepositoryOption);
+            command.Options.Add(receiptsLimitOption);
             command.Options.Add(receiptsJsonOption);
             root.Subcommands.Add(command);
 
@@ -2075,12 +2080,21 @@ public static class CliApplication
                     repositoryIdHex = parsed;
                 }
 
+                var limit = parse.GetValue(receiptsLimitOption);
+                if (limit is <= 0)
+                {
+                    throw new CliFailureException("--limit must be at least 1.");
+                }
+
+                // No limit reads everything, which is what an operator
+                // reading their own audit trail asked for; a limit bounds the
+                // reading and not only the printing.
                 IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
                     ? []
-                    : DeletionReceiptStore.Open(state).List(repositoryIdHex);
+                    : DeletionReceiptStore.Open(state).List(repositoryIdHex, limit);
                 IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
                     ? []
-                    : ReplicationReceiptStore.Open(state).List(repositoryIdHex);
+                    : ReplicationReceiptStore.Open(state).List(repositoryIdHex, limit);
                 if (parse.GetValue(receiptsSetOption) is { } set)
                 {
                     deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];

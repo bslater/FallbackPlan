@@ -197,8 +197,52 @@ internal static class PeerReceiptFiles
         }
     }
 
-    /// <summary>Every envelope under the root, or one repository's, in no particular order.</summary>
-    internal static IEnumerable<Reading> Read(string root, string? repositoryIdHex)
+    /// <summary>
+    /// The newest <paramref name="limit"/> envelopes under the root, or one
+    /// repository's; every one when the limit is null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The limit bounds the <b>work</b> and not only the answer: reading and
+    /// verifying every receipt ever filed in order to show the newest fifty
+    /// would price a listing by the pile rather than by the question, and the
+    /// pile grows by one per exchange for ever.
+    /// </para>
+    /// <para>
+    /// The window is chosen by file name, whose leading digits are the issue
+    /// time — so it costs a listing and no reads. That has a consequence
+    /// worth stating: a receipt that has been tampered with cannot drop out
+    /// of a bounded window by becoming unreadable, which taking the newest
+    /// rows after reading would have let it do, an unreadable file having no
+    /// issue time to sort by. The name orders and bounds; every fact a caller
+    /// is shown still comes from the signed bytes.
+    /// </para>
+    /// </remarks>
+    /// <param name="root">The kind's root.</param>
+    /// <param name="repositoryIdHex">One repository, lower-hex, or null for all.</param>
+    /// <param name="limit">At most this many of the newest, or null for every one.</param>
+    internal static IEnumerable<Reading> Read(string root, string? repositoryIdHex, int? limit = null)
+    {
+        IEnumerable<string> paths = Names(root, repositoryIdHex);
+        if (limit is { } newest)
+        {
+            paths = paths.OrderByDescending(path => System.IO.Path.GetFileName(path), StringComparer.Ordinal)
+                .Take(newest);
+        }
+
+        foreach (var path in paths)
+        {
+            yield return ReadOne(path);
+        }
+    }
+
+    /// <summary>How many envelopes are on file, counted from names alone.</summary>
+    /// <param name="root">The kind's root.</param>
+    /// <param name="repositoryIdHex">One repository, lower-hex, or null for all.</param>
+    internal static int Count(string root, string? repositoryIdHex) => Names(root, repositoryIdHex).Count();
+
+    /// <summary>Every envelope's path under the root, or one repository's, in no particular order.</summary>
+    private static IEnumerable<string> Names(string root, string? repositoryIdHex)
     {
         if (!Directory.Exists(root))
         {
@@ -212,7 +256,7 @@ internal static class PeerReceiptFiles
         {
             foreach (var path in Directory.GetFiles(directory, "*.json"))
             {
-                yield return ReadOne(path);
+                yield return path;
             }
         }
     }
