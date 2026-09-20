@@ -47,7 +47,7 @@ The fourth boundary is the addition. The original model treated everything holdi
 
 ### T-3 Object substitution and splicing
 An attacker moves a valid record into a different blob, position, object type, or repository.
-**Mitigation:** AAD binds `repository_id ‖ format_version ‖ object_type ‖ object_id ‖ record_ordinal`. Any relocation fails authentication. [`03-crypto.md` §3.4`](architecture/03-crypto.md#34-associated-data).
+**Mitigation:** at format 2 the AAD binds `repository_id ‖ format_version ‖ object_type ‖ object_id ‖ record_ordinal`, so any relocation fails authentication. At format 3 — what the product now creates ([ADR-0066](adr/0066-the-format-upgrade-record.md)) — relocation between blobs is **deliberately** possible, which is what the format exists for ([ADR-0052](adr/0052-relocatable-records-format-v3.md)); the AAD is 51 bytes and names no position. What T-3 needs is unchanged and comes from the other three bindings: the AAD still names the repository, the object type and the object identifier, and the record's key is derived from the object, so a record cannot be passed off as a different object, a different type or a record of another repository. Position is authenticated by the blob's own **recovery footer**, whose record table names each record's identifier, ordinal and offset and is sealed under the blob key — so a record moved or reordered inside a blob without rewriting that table fails the cross-check at read. [`03-crypto.md` §3.4`](architecture/03-crypto.md#34-associated-data).
 
 ### T-4 Rollback to an older repository view
 A store or peer presents a stale snapshot set to hide recent backups or restore deleted content.

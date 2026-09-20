@@ -461,7 +461,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     [TestMethod]
     public async Task WriteOnlyRepository_UpgradedBetweenPublications_SealsTheNewerFormatAndLeavesTheOlderAlone()
     {
-        // The upgrade record earning its keep (11 §4.1). The descriptor still
+        // The upgrade record earning its keep (11 §5.1). The descriptor still
         // says 2 and always will — no destination would accept a replacement
         // — so what the writer must consult is the EFFECTIVE version, and the
         // proof is that blobs of both stamps end up in one repository and

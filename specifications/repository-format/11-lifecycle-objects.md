@@ -136,6 +136,8 @@ It carries no signature. It authorises nothing, and it describes what one writer
 
 ## 5 Format-upgrade record
 
+The decision behind this object, and why the descriptor is not rewritten instead, is [ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md).
+
 `/format-upgrade/<to-version>` records that this repository writes a newer format version from the next sealed object onward. `<to-version>` is the target version as four lowercase hexadecimal digits, so a repository that goes 2 → 3 now and 3 → 4 later carries one object per step and a listing of the prefix answers what it has been through.
 
 ```text

@@ -5,14 +5,14 @@ using FallbackPlan.Repository.Format.Manifests;
 namespace FallbackPlan.Repository.Tests.Format;
 
 /// <summary>
-/// The format-upgrade record (specification 11 §4): the append-only,
+/// The format-upgrade record (specification 11 §5): the append-only,
 /// signed statement that a repository now writes a newer format. It is the
 /// one lifecycle object whose absence is meaningful — a repository with none
 /// is at the version its descriptor was created with — so its encoding, the
 /// bytes its signature covers and every refusal are pinned before anything
 /// writes one.
 /// </summary>
-/// <remarks>Establishes FR-REP-002 and NFR-COMP-004.</remarks>
+/// <remarks>Establishes FR-MAN-019 and NFR-COMP-004.</remarks>
 [TestClass]
 public sealed class FormatUpgradeRecordTests
 {

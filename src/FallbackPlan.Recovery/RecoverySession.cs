@@ -133,7 +133,7 @@ public sealed class RecoverySession : IDisposable
 
     /// <summary>
     /// The format version the archive's owner writes now (specification
-    /// 11 §4.1): the descriptor's, or higher when a signed upgrade record
+    /// 11 §5.1): the descriptor's, or higher when a signed upgrade record
     /// says so. It changes nothing about how this tool reads — every blob
     /// declares its own container in its envelope — but it is what a person
     /// staring at a damaged archive needs told, and a line that said 2 over

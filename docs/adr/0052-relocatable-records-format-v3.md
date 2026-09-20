@@ -396,7 +396,15 @@ names; the blockquotes above mark the sections affected.
 7. **The version knobs.** The creation default stays format 2; format 3
    is created on request (`RepositoryCreationSettings.FormatVersion`, the
    CLI's `init --format-version 3`) and read by every build from this one
-   on. Readers accept 2 and 3 (`FormatLimits.LatestFormatVersion`); the
+   on.
+
+   > **Amended 2026-09 ([ADR-0066](0066-the-format-upgrade-record.md)):**
+   > the creation surface that would "ask for otherwise" turned out to be
+   > the service itself. `FormatLimits.FormatVersion` is **3**, so every set
+   > the product creates is format 3, and `init --format-version 2` is the
+   > remaining way to ask for the older one. An existing format-2 repository
+   > moves by an appended signed record rather than by a rewritten
+   > descriptor, which no copy would accept. Readers accept 2 and 3 (`FormatLimits.LatestFormatVersion`); the
    predicates that used to compare against one version number now ask
    named questions (`FormatVersions`).
 
@@ -417,6 +425,7 @@ about that property alone.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (the creation default) | Format 3 is what the product creates: `Domain/FormatLimits`'s creation default moved to it and `Agent/ServiceRuntime.ArchiveFormatVersion` stopped being a test-only seam, so every new set publishes a Merkle root and can be challenged for one leaf. Amendment 1 item 7's "the creation default stays format 2" is withdrawn. An existing format-2 set moves by an append-only signed record rather than a rewritten descriptor ([ADR-0066](0066-the-format-upgrade-record.md)); both formats stay supported and nothing pushes |
 | 2026-09 | Amended (open question 4 closed) | The index plane is built, and [ADR-0065](0065-merkle-commitment-and-chunk-possession.md) is its record: the covered-blob digest gains a Merkle root beside it as delta key 11, published only at format 3 or above because an unknown key in a delta is refused rather than skipped, and a peer is challenged for one leaf of it over the retrieval session. The Built line above moves with it. No compactor exists in any format |
 | 2026-09 | Accepted | Built over five commits, and the Built line above says which plane is which: the specification and Amendment 1 (`specifications/repository-format` 00, 01, 03 §5.4, 04, 05); the descriptor gate and the creation knob (`Domain/FormatVersions`, `Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/Configuration/RepositoryCreationSettings`); the record primitives and their vectors (`Repository.Crypto/RecordKeyDeriver`, `Repository.Packing/SealedRecordKey`, `RecordFraming`, `records-v3.json`); the blob plane that writes and reads them, `AppendSealedRecordAsync` included (`Repository.Packing/BlobWriter`, `BlobReader`); and the descriptor's version reaching the containers it stamps, with `init --format-version` and a frozen `fixture-repository-v3` (`Repository/ArchiveSession`, `Repository/ManifestBuilder`, `Cli/CliApplication`). The index plane followed in the next slice as [ADR-0065](0065-merkle-commitment-and-chunk-possession.md), and no compactor exists — `AppendSealedRecordAsync` is the primitive one would be written over |
 | 2026-09 | Amended (Amendment 1) | Implementing the record plane found two things and decided four: the feature identifier is `0x0003`, the zero nonce is withdrawn for a carried random one (the uniqueness condition §3 stated was false — same object, different stored bytes), the sealed per-record key rides the record's prefix and the spool resumes under a checkpointed seed; and the four open questions are decided as item 6 says. The Merkle-root digest is decided in shape and left to the index plane |

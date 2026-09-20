@@ -109,7 +109,7 @@ public sealed class PeerRetentionReplayTests : IDisposable
     [TestMethod]
     public async Task RetentionOffer_NamingTheFormatUpgradeRecord_IsRefusedWholeAndTheRecordSurvives()
     {
-        // The upgrade record (11 §4) states what format the repository now
+        // The upgrade record (11 §5) states what format the repository now
         // writes, and every copy of the repository has to carry it or read
         // format-3 blobs believing itself format 2. So it joins the descriptor
         // and the lifecycle prefixes on the never-deletable list (06 §3): a

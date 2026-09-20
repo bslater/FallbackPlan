@@ -4,7 +4,7 @@
 
 ---
 
-Sixty-four decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Sixty-six decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -89,6 +89,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0063](adr/0063-deletion-receipts.md) | Deletion receipts: a destination that deletes on a retention instruction answers with a statement signed under its own device key — the session, the commander, each page as accepted, the keys removed and the count never held — carried in the acknowledgement, verified by the commander against what it sent, filed by both parties and read back by a file-direct verb | Built | `Protocol/DeletionReceipt` · `Protocol/DeletionReceiptStore` · `Protocol/DeletionReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/AgentHost` · `Cli/CliApplication` · `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests`, `Cli.Tests/ReceiptsVerbValidationTests`; [notes](#0063--the-peer-planes-audit-record) Since the amendment the pile is bounded by a stated rule swept from file names alone, at filing and at service start (`Protocol/ReceiptRetentionPolicy`, `Protocol/PeerReceiptFiles`, `Agent/ServiceRuntime`, `Protocol.Tests/ReceiptSweepTests`), and a listing is priced by what was asked for rather than by what has accumulated |
 | [0064](adr/0064-replication-receipts.md) | Replication receipts: a destination that takes a push answers with a statement signed under its own device key — the session, the commander, the keys it committed and the count, and what it holds for the repository afterwards — carried in the acknowledgement, verified by the commander against what it sent and what the inventory declared, filed by both parties, and the one thing the ledger ever counts a peer complete on; both kinds of receipt read by `receipts --kind`, `list_receipts` (contract 1.33) and the console's Receipts card | Built | `Protocol/ReplicationReceipt` · `Protocol/PeerReceiptFiles` · `Protocol/ReplicationReceiptStore` · `Protocol/ReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/ServiceCommandHandler.Receipts.cs` · `Agent/AgentHost` · `Cli/CliApplication` · the console's Receipts card · `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Web.Tests/ConsoleReceiptsScriptTests`; [notes](#0064--the-peer-counted-on-its-own-word) Since the amendment the direct-ship run verifies, files and counts the receipt its own acknowledgement carries rather than waiting for a sync pass (`Agent/PeerShipStore`, `Agent/DestinationShipSink`, `Hosts.Tests/DirectShipPeerTests`) |
 | [0065](adr/0065-merkle-commitment-and-chunk-possession.md) | The Merkle commitment and the chunk possession challenge: a sealed blob gains an RFC 6962 root over one-mebibyte leaves beside its flat digest, bound to the preimage's length and published as index-delta key 11 by a format-3 writer only; a peer is then asked for one leaf and its authentication path instead of the blob, and the leaf's **bytes** are what the source checks against the root the writer signed | Built | `Repository.Packing/BlobMerkle` · `Repository.Packing/BlobWriter` · `Repository.Index/IndexDeltaCodec` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Protocol/PeerRetrievalMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/RetrievalResponder` · `Agent/PeerRetrievalClient` · `Replication/ReplicaVerifier` · `Agent/FanOut` · `Application/DestinationSyncStore` (schema 4) · `Api/ContractVersion` (1.34) · `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0065--one-leaf-instead-of-the-blob) |
+| [0066](adr/0066-the-format-upgrade-record.md) | The format-upgrade record: a repository moves to a newer format by an appended signed object rather than by a rewritten descriptor — which no copy would accept — so the move rides every ordinary replication path, takes effect at the next sealed object, and leaves everything already sealed exactly as it is; format 3 is what the product creates, and an existing format-2 set is upgraded on request and never pushed | Built | `Repository.Format/Lifecycle/FormatUpgradeRecord` · `Repository/RepositoryLifecycle` · `Domain/FormatLimits` · `Agent/ServiceRuntime` · `Agent/ServiceCommandHandler.Configuration.cs` · `Agent/ReplicationResponder` · `Agent/AgentHost` · `Recovery/RecoverySession`, `Recovery/RecoveryHost` · `Api/ContractVersion` (1.36) · the console's notice control · `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Hosts.Tests/FormatUpgradeTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`; [notes](#0066--two-objects-carry-one-version) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -141,12 +142,18 @@ It is still one provider. A contract with a single implementation has not yet be
 Format 1 was withdrawn before any freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), with no installed base
 to migrate: the one live installation went through setup and only ever wrote
 format 2. `Domain/FormatLimits` named one format version when this was written and now
-names two — 2 at creation, 3 accepted and opt-in ([0052](#0052--the-record-blob-and-index-planes-are-built-nothing-compacts)) —
+names two — **3 at creation** and 2 still accepted, both readable
+([0052](#0052--the-record-blob-and-index-planes-are-built-nothing-compacts)) —
 and `Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a
 descriptor stamped `1` as its own finding — *refuse, never misread* — naming
 re-seeding as the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
 `Repository.Tests/Format/RepositoryDescriptorCodecTests` hold both halves.
-The freeze gate's items are unchanged and read against format 2.
+Since [Amendment 2](adr/0014-format-versioning-and-stability.md#amendment-2-2026-09--a-repositorys-version-is-carried-by-two-objects)
+a repository's version is carried by **two** objects rather than one — the
+descriptor says what it was created at and a signed format-upgrade record says
+what it writes ([0066](#0066--two-objects-carry-one-version)) — and the freeze
+gate reads against every version a repository may hold, which after an upgrade
+is both of them in one repository.
 
 One fact is recorded because it looks like an error until it is explained:
 format 2's symmetric containers — metadata blobs and standalone records —
@@ -280,10 +287,14 @@ one must not. `Repository.Crypto/RecordKeyDeriver`,
 `Repository.Packing/SealedRecordKey` and `Repository.Packing/RecordFraming`
 are the record primitives; `Repository.Packing/BlobWriter` and `BlobReader`
 are the blob plane, `AppendSealedRecordAsync` included. `Repository/ArchiveSession`
-and `Repository/ManifestBuilder` stamp what the descriptor says, and
-`Cli/CliApplication`'s `init --format-version` is the only way to ask for a
-format-3 repository — **the service still creates format 2**, and the one live
-installation is format 2.
+and `Repository/ManifestBuilder` stamp what the repository's effective version
+says. **Format 3 is what the product creates**: `Domain/FormatLimits`'s
+creation default moved to it and `Agent/ServiceRuntime.ArchiveFormatVersion`
+stopped being a test-only seam ([0066](#0066--two-objects-carry-one-version)),
+so `Cli/CliApplication`'s `init --format-version 2` is now the way to ask for
+the older one rather than the newer. The one live installation is still format
+2 and stays there until someone upgrades it — both formats are supported and
+nothing pushes.
 
 The index plane followed as
 [ADR-0065](#0065--one-leaf-instead-of-the-blob): a format-3 delta publishes a
@@ -1232,8 +1243,61 @@ declares for its own copy, so without the length in the root a destination
 could understate its copy by a leaf and exempt that leaf from ever being drawn.
 
 **What is not.** The service still creates format 2, so no live installation
-publishes a root; `Cli/CliApplication`'s `init --format-version 3` is the only
-creation surface, and the peer suite reaches format 3 through a test-only seam
-on `Agent/ServiceRuntime`. A local-path destination is not challenged this way
+publishes a root. Since [0066](#0066--two-objects-carry-one-version) that is
+every set the product creates, so this tier is reachable by an ordinary
+installation rather than only through a test-only seam on
+`Agent/ServiceRuntime`; a set still at format 2 publishes no root and is
+proved by reading the whole blob back. A local-path destination is not challenged this way
 — there is no link to spare — and a chunk proof establishes one leaf, never the
 blob.
+
+### 0066 — two objects carry one version
+
+Two slices built format 3 and nothing live wrote it: the only creation surface
+was `init --format-version 3`, which the service never calls, so no repository
+published a Merkle root and no peer could be challenged for one leaf. The
+creation default moved — `Domain/FormatLimits` and
+`Agent/ServiceRuntime.ArchiveFormatVersion`, which stopped being a test-only
+seam — and the other half of the question is what happens to a repository that
+already exists.
+
+**Not a rewritten descriptor, and this was established by reading rather than
+argued.** `Agent/DestinationShipSink` seeds a destination with the descriptor
+if absent and never again, a peer commits an object it lacks and keeps the one
+it has, and `repository-format` may not be named by a retention instruction —
+so a rewrite moves the source alone and leaves every copy claiming the older
+format over newer blobs. An append-only signed record under `format-upgrade/`
+needs none of that, and propagation turned out to cost nothing: there are no
+accept lists to widen. `Replication/StoreToStoreCopier` keeps a deny list with
+a catch-all phase, `Agent/ReplicationResponder` validates that a committed key
+parses and nothing else, and `Agent/DestinationShipSink` branches on `blobs/`
+and forwards the rest.
+
+**What is built.** `Repository.Format/Lifecycle/FormatUpgradeRecord` is the
+record, its encoding and `EffectiveVersion` — the pure decision the engine and
+the recovery tool share, each doing its own listing, so
+`FallbackPlan.Recovery`'s dependency closure does not widen.
+`Repository/RepositoryLifecycle` reads it on every open and writes it under
+the repository's **signing** key, not the reclaim key: an upgrade changes what
+the writer emits and destroys nothing, so a set-up installation upgrades
+without the passphrase. `Agent/ServiceRuntime.UpgradeSetFormatAsync` writes
+the record to the set's own store and evicts the cached archive handle in one
+method, because the effective version is fixed at open and a write without the
+eviction would leave the service sealing the older format until it restarted.
+`Agent/ReplicationResponder` refuses an instruction that names the record —
+the one real work item, and the one that stops a commander reverting a
+replica's format claim. The way in is contract 1.36 `upgrade_set_format`, the
+`upgrade-format` agent verb and a console control on the notice the service
+raises at archive open.
+
+**What is not, and what it costs.** There is no downgrade and no compactor.
+An older build meets an upgraded repository at its **first newer blob** rather
+than at the door, because the descriptor's feature list is unchanged — it
+refuses, so *refuse, never misread* holds, but it reports damage rather than a
+format it does not know
+([0014](#0014--one-format-and-a-refusal-by-name)). And a destination holds
+newer blobs before it holds the record that explains them, until the next
+reconciling pass: a capture ships what it wrote, and the record is an ordinary
+immutable object no capture produces. That costs nothing, because every blob
+declares its own container, and `Hosts.Tests/FormatUpgradeTests` pins both
+sides of the window rather than hiding it behind a sync.

@@ -1,6 +1,6 @@
 # FallbackPlan repository format — specification
 
-**Format version:** 2 (draft) · **Status:** unfrozen — see [stability](#stability)
+**Format versions:** 3 (created) and 2 (still written by repositories created before it, and still creatable on request) · **Status:** unfrozen — see [stability](#stability)
 
 ---
 

@@ -122,7 +122,7 @@ public static class RecoveryHost
                 {
                     output.WriteLine($"repository     {repositoryHex}");
                     // What it writes now, and what it was created at when an
-                    // upgrade record has moved the two apart (11 §4.1).
+                    // upgrade record has moved the two apart (11 §5.1).
                     var version = session.EffectiveFormatVersion == session.FormatVersion
                         ? string.Create(CultureInfo.InvariantCulture, $"{session.FormatVersion}")
                         : string.Create(

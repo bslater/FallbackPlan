@@ -197,6 +197,13 @@ counted apart from the whole-blob tier rather than with it.
   still `init --format-version 3`
   ([ADR-0052](0052-relocatable-records-format-v3.md) Amendment 1 item 7); the
   peer suite reaches format 3 through a test-only seam and says so.
+
+  > **Amended 2026-09 ([ADR-0066](0066-the-format-upgrade-record.md)):** it
+  > does now — not by this record, but by the creation default moving to
+  > format 3, so every set the product creates publishes a root and this
+  > challenge is reachable by an ordinary installation rather than only
+  > through that seam. A set still at format 2 publishes no root and is
+  > proved by reading the whole blob back, which is the bullet above.
 - It does not carry the challenge to a local-path destination. There is no
   wire there and no bandwidth to save: a local path is proved by tag, and by
   the digest tier where the records are sealed.
@@ -206,4 +213,5 @@ counted apart from the whole-blob tier rather than with it.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (reachable in production) | The creation default moved to format 3 ([ADR-0066](0066-the-format-upgrade-record.md)), so every set the product creates publishes a Merkle root and the chunk challenge is reachable without the test-only seam. Nothing in the commitment, the messages or the tier changed; what changed is who has one |
 | 2026-09 | Accepted | [ADR-0052](0052-relocatable-records-format-v3.md)'s open question 4, built over four commits: the commitment and its conformance vectors (`Repository.Packing/BlobMerkle`, `merkle.json`); the index plane (`Repository.Index/IndexDeltaCodec` key 11, `Repository.Catalogue/Catalogue` schema 7, both committed fixtures regenerated); the wire (`Protocol/PeerRetrievalMessages.cs` types 278–279, the `chunk-possession` token); and both ends with the tier (`Agent/RetrievalResponder`, `Agent/PeerRetrievalClient`, `Replication/ReplicaVerifier`, `Agent/FanOut`, ledger schema 4, contract 1.34). Building it found the length binding: plain RFC 6962 admits a four-leaf tree's path under a claimed size of three, so a destination could understate its copy to exempt its last leaf. Held by `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests` and `Hosts.Tests/PeerReadBackVerificationTests` |

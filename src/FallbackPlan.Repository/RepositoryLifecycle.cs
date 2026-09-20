@@ -45,7 +45,7 @@ public sealed class OpenedRepository : IDisposable
     /// <summary>
     /// The format version this repository <em>writes</em> — the descriptor's
     /// own, or higher when a signed upgrade record says so (specification
-    /// 11 §4.1). Everything that seals or publishes reads this; the
+    /// 11 §5.1). Everything that seals or publishes reads this; the
     /// descriptor's <c>FormatVersion</c> keeps meaning what the repository
     /// was <em>created</em> at and never moves.
     /// </summary>
@@ -500,7 +500,7 @@ public static class RepositoryLifecycle
 
     /// <summary>
     /// The version this repository <em>writes</em>, which is not always the
-    /// version it was created at (specification 11 §4). The descriptor is
+    /// version it was created at (specification 11 §5). The descriptor is
     /// written once and never rewritten — a destination commits an object it
     /// lacks and keeps the one it has, so a replacement descriptor would move
     /// the source alone — so an upgrade is an append-only signed record, and
@@ -553,7 +553,7 @@ public static class RepositoryLifecycle
 
     /// <summary>
     /// Records that this repository writes <paramref name="toVersion"/> from
-    /// its next seal (specification 11 §4). Signed under the repository's
+    /// its next seal (specification 11 §5). Signed under the repository's
     /// <em>signing</em> key: an upgrade changes what the writer emits and
     /// destroys nothing, so it belongs to the authority that signs
     /// publications, not to the reclaim authority ADR-0055 split out for

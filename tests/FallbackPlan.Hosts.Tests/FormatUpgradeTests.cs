@@ -16,7 +16,7 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The format-upgrade record reaches the copies
-/// (specification 11 §4; FR-REP-002, NFR-COMP-004). The descriptor cannot
+/// (specification 11 §5; FR-MAN-019, NFR-COMP-004). The descriptor cannot
 /// carry an upgrade: <c>DestinationShipSink</c> seeds it only if absent, a
 /// peer commits an object it lacks and keeps the one it has, and
 /// <c>repository-format</c> may not be deleted by instruction — so a

@@ -7,7 +7,7 @@ using FallbackPlan.Repository.Format.Resources;
 namespace FallbackPlan.Repository.Format.Lifecycle;
 
 /// <summary>
-/// A format-upgrade record (specification 11 §4): the signed statement that
+/// A format-upgrade record (specification 11 §5): the signed statement that
 /// this repository writes a newer format from now on. The descriptor says
 /// what a repository was <em>created</em> at and is never rewritten — a
 /// destination commits an object it lacks and keeps the one it has, so a
@@ -37,7 +37,7 @@ public sealed record DecodedFormatUpgradeRecord(
     FormatUpgradeRecord Value, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature);
 
 /// <summary>
-/// The wire codec for specification 11 §4: canonical CBOR, keys 1–5 signed,
+/// The wire codec for specification 11 §5: canonical CBOR, keys 1–5 signed,
 /// the signature at key 6 under the repository's <em>signing</em> key. An
 /// upgrade changes what the writer will emit and destroys nothing, so it
 /// belongs to the authority that signs publications rather than to the
@@ -68,7 +68,7 @@ public static class FormatUpgradeRecordCodec
     /// <summary>Encodes keys 1–5 — the bytes a signature covers.</summary>
     /// <param name="record">The record to encode.</param>
     /// <returns>The canonical signed prefix.</returns>
-    /// <exception cref="ManifestValidationException">The record violates 11 §4.</exception>
+    /// <exception cref="ManifestValidationException">The record violates 11 §5.</exception>
     public static byte[] EncodeForSigning(FormatUpgradeRecord record)
     {
         ThrowHelper.ThrowIfNull(record);
@@ -83,7 +83,7 @@ public static class FormatUpgradeRecordCodec
     /// <param name="record">The record to encode.</param>
     /// <param name="signature">The Ed25519 signature over <see cref="EncodeForSigning"/>'s bytes.</param>
     /// <returns>The stored encoding.</returns>
-    /// <exception cref="ManifestValidationException">The record or the signature violates 11 §4.</exception>
+    /// <exception cref="ManifestValidationException">The record or the signature violates 11 §5.</exception>
     public static byte[] Encode(FormatUpgradeRecord record, ReadOnlySpan<byte> signature)
     {
         ThrowHelper.ThrowIfNull(record);
@@ -100,7 +100,7 @@ public static class FormatUpgradeRecordCodec
     }
 
     /// <summary>
-    /// The effective format version (specification 11 §4.1): the highest
+    /// The effective format version (specification 11 §5.1): the highest
     /// <c>to_version</c> among <paramref name="records"/> that decodes, that
     /// <paramref name="verify"/> accepts, and that names a version above
     /// <paramref name="descriptorVersion"/> — else the descriptor's own.
@@ -158,7 +158,7 @@ public static class FormatUpgradeRecordCodec
     /// <summary>Decodes a stored record, rebuilding the signed prefix for the caller to verify.</summary>
     /// <param name="data">The stored bytes.</param>
     /// <returns>The decoded record.</returns>
-    /// <exception cref="ManifestValidationException">The bytes violate 11 §4.</exception>
+    /// <exception cref="ManifestValidationException">The bytes violate 11 §5.</exception>
     public static DecodedFormatUpgradeRecord Decode(ReadOnlyMemory<byte> data)
     {
         try

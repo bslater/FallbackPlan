@@ -9,14 +9,14 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The effective format version (specification 11 §4): the descriptor says
+/// The effective format version (specification 11 §5): the descriptor says
 /// what a repository was created at, and an append-only signed upgrade record
 /// says what it writes now. The descriptor is never rewritten — no
 /// destination would accept a replacement — so the two are read together, and
 /// a record nobody with the signing key authored is ignored rather than
 /// obeyed.
 /// </summary>
-/// <remarks>Establishes FR-REP-002 and NFR-COMP-004.</remarks>
+/// <remarks>Establishes FR-MAN-019 and NFR-COMP-004.</remarks>
 [TestClass]
 public sealed class EffectiveFormatTests : IDisposable
 {

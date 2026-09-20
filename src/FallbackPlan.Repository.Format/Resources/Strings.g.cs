@@ -964,34 +964,34 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_SchemaVersionUnsupported, arg0);
 
     /// <summary>
-    /// A format-upgrade record omits required key {0} (11 §4).
+    /// A format-upgrade record omits required key {0} (11 §5).
     /// </summary>
     private static string FormatUpgradeRecordCodec_RequiredKeyMissing => Get(nameof(FormatUpgradeRecordCodec_RequiredKeyMissing));
 
     /// <summary>
-    /// A format-upgrade record omits required key {0} (11 §4).
+    /// A format-upgrade record omits required key {0} (11 §5).
     /// </summary>
     internal static string FormatFormatUpgradeRecordCodec_RequiredKeyMissing(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_RequiredKeyMissing, arg0);
 
     /// <summary>
-    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §4).
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §5).
     /// </summary>
     private static string FormatUpgradeRecordCodec_NotAnUpgrade => Get(nameof(FormatUpgradeRecordCodec_NotAnUpgrade));
 
     /// <summary>
-    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §4).
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §5).
     /// </summary>
     internal static string FormatFormatUpgradeRecordCodec_NotAnUpgrade(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_NotAnUpgrade, arg0, arg1);
 
     /// <summary>
-    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §4).
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §5).
     /// </summary>
     private static string FormatUpgradeRecordCodec_WriterIdentityExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_WriterIdentityExactlyBytes));
 
     /// <summary>
-    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §4).
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §5).
     /// </summary>
     internal static string FormatFormatUpgradeRecordCodec_WriterIdentityExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_WriterIdentityExactlyBytes, arg0);
