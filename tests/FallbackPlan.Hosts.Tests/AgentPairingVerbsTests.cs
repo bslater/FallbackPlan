@@ -152,6 +152,29 @@ public sealed class AgentPairingVerbsTests : IDisposable
     }
 
     [TestMethod]
+    public async Task UpgradeFormat_WithoutItsArguments_IsUsage()
+    {
+        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "upgrade-format", "--state", _state);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("--set", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task UpgradeFormat_WithNoServiceListening_IsRefusedRatherThanWrittenBehindItsBack()
+    {
+        // Unlike `reattribute` there is no file-direct arm, and the refusal
+        // says why: the upgrade takes effect by dropping the set's open
+        // archive, which only the running service can do (ADR-0066).
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync, "upgrade-format", "--state", _state, "--set", "docs");
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("no service is listening", result.Error, StringComparison.Ordinal);
+        Assert.Contains("Start the service", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Reattribute_WithoutItsArguments_IsUsage()
     {
         var result = await HostHarness.RunAsync(AgentHost.RunAsync, "reattribute", "--state", _state, "--to", "ABCDEF");

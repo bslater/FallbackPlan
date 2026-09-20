@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text.Json;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.TestSupport;
@@ -33,11 +34,25 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ReceiptsListing_IsRecordedAtOneThirtyThree()
+    public void ContractVersion_TheFormatUpgradeVerb_IsRecordedAtOneThirtySix()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.35", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.36", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void UpgradeSetFormat_RoundTripsUnderItsWireName()
+    {
+        // The discriminator is the contract; a rename here is a protocol
+        // break that compiles.
+        var json = JsonSerializer.Serialize<ServiceCommand>(
+            new UpgradeSetFormatCommand("docs"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"upgrade_set_format\"", json, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<UpgradeSetFormatCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(json, FrameCodec.SerializerOptions), out var parsed);
+        Assert.AreEqual("docs", parsed.SetName);
     }
 
     [TestMethod]

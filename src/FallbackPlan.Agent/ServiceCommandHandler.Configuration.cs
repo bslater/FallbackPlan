@@ -296,6 +296,80 @@ public sealed partial class ServiceCommandHandler
     /// holds (lifecycle objects aside — they never leave staging) must be
     /// present in the union of the set's destination replicas.
     /// </summary>
+    /// <summary>
+    /// Moves one set's repository to the latest format this build writes
+    /// (ADR-0066, contract 1.36) by appending a signed record. The descriptor
+    /// is not touched: a destination seeds one only if absent and a peer
+    /// keeps the copy it has, so a rewritten descriptor would move the source
+    /// alone and leave every copy claiming the older format over newer blobs.
+    /// </summary>
+    private async ValueTask<ServiceResult> UpgradeSetFormatAsync(
+        UpgradeSetFormatCommand command, CancellationToken cancellationToken)
+    {
+        var set = runtime.Configuration.FindSet(command.SetName);
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        // The eviction below swaps the archive handle out beneath whoever
+        // holds it, which is the storage-shape flip's rule applied to the one
+        // other edit with the same blast radius.
+        var lastJob = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
+        if (lastJob is not null && !JobStateStore.HasSettled(lastJob.State) && runtime.Queue.IsActive(lastJob.Id))
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' has a run in progress — the format cannot change under a live run. "
+                + "Cancel it or let it finish, then upgrade again.");
+        }
+
+        if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is not { } archive)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' holds no archive yet, so there is nothing to upgrade — a set this "
+                + $"build creates is born at format version {FormatLimits.FormatVersion}. Back it up once.");
+        }
+
+        var effective = archive.Repository.EffectiveFormatVersion;
+        if (effective >= FormatLimits.FormatVersion)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' already writes repository format version {effective}; this build "
+                + $"writes {FormatLimits.FormatVersion}, so there is nothing to move it to.");
+        }
+
+        ushort from;
+        try
+        {
+            from = await runtime.UpgradeSetFormatAsync(
+                set.Id, FormatLimits.FormatVersion, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
+        }
+
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        runtime.Notices.Resolve($"format-upgradable:{set.Id}", nowMs);
+
+        return new ConfigurationChangeResult(
+        [
+            $"Backup set '{set.Name}': repository format {from} → {FormatLimits.FormatVersion}. The record is "
+            + "signed under the repository's signing key and appended; the descriptor is unchanged.",
+            "Everything already sealed stays exactly as it is and reads as it always did; the newer format "
+            + "begins at the set's next blob.",
+            "The record reaches each destination on the next reconciling pass — until it arrives, a copy holds "
+            + "newer blobs than the record it has, which costs nothing because every blob declares its own "
+            + "container.",
+            "This cannot be undone, and a build older than this one would read the newer blobs as damage "
+            + "rather than as a format it does not know (ADR-0066).",
+        ]);
+    }
+
     private async ValueTask<ServiceResult> RetireStagingAsync(
         RetireStagingCommand command, CancellationToken cancellationToken)
     {

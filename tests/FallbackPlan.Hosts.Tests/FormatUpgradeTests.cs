@@ -200,6 +200,146 @@ public sealed class FormatUpgradeTests : IDisposable
         }
     }
 
+    [TestMethod]
+    public async Task AnUpgrade_CommandedWhileTheServiceRuns_SealsTheNewerFormatOnTheVeryNextBackup()
+    {
+        // The effective version is fixed when the archive opens and the
+        // runtime caches one handle per set, so a verb that wrote the record
+        // and left the handle where it was would do nothing at all until the
+        // next restart — while telling the person it had worked. One runtime,
+        // no restart, both backups.
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.SealedDataPlane;
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/before.txt", "written while this set was at format 2");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+
+        await RunOnAsync(runtime, set);
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        Assert.IsTrue(
+            (await DataBlobVersionsAsync(replica)).All(version => version == FormatVersions.SealedDataPlane),
+            "the set wrote something other than format 2 before it was upgraded");
+
+        // The set below the latest raised the notice at open, which is the
+        // only way a person learns there is anything to do.
+        Assert.IsTrue(
+            runtime.Notices.Unacknowledged.Any(notice =>
+                notice.Key == $"format-upgradable:{set.Id}"),
+            "an upgradable set raised no notice");
+
+        var result = await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var change);
+        Assert.Contains(
+            FormatLimits.FormatVersion.ToString(CultureInfo.InvariantCulture),
+            string.Join('\n', change.Lines),
+            StringComparison.Ordinal);
+        Assert.IsFalse(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key == $"format-upgradable:{set.Id}"),
+            "the notice outlived the act it asked for");
+
+        _harness.WriteSourceFile(
+            "docs/after.txt", "written after the upgrade, and bigger: " + new string('a', 200_000));
+        await RunOnAsync(runtime, set);
+
+        var after = await DataBlobVersionsAsync(replica);
+        Assert.IsNotEmpty(
+            after.Where(version => version == FormatVersions.RelocatableRecords).ToList(),
+            "the next backup still sealed the older format, so the upgrade reached nothing");
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_WithADestinationThatRefusesTheWrite_IsStillRecordedLocally()
+    {
+        // The record goes to the set's own store, never through the ship
+        // sink. Outside a run the sink holds no destinations in scope, so
+        // when one it resolved fresh then fails the write it finds nothing
+        // left and throws — after the local copy has already landed, which
+        // would report a completed upgrade as a failure. An upgrade must not
+        // turn on whether a drive happens to be writable; propagation is the
+        // next reconciling pass's business.
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.SealedDataPlane;
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunOnAsync(runtime, runtime.Configuration.BackupSets.Single());
+
+        // Present and reachable, and the one key this verb writes cannot be
+        // created there: a file stands where its directory would go.
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        await File.WriteAllTextAsync(
+            Path.Combine(replica, FormatUpgradeRecordCodec.KeyPrefix.TrimEnd('/')), "in the way", Timeout);
+
+        var result = await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out _);
+
+        var upgradeKey = FormatUpgradeRecordCodec.KeyFor(FormatLimits.FormatVersion);
+        Assert.IsTrue(
+            File.Exists(Path.Combine(MetadataRoot, upgradeKey.Replace('/', Path.DirectorySeparatorChar))),
+            "the upgrade record did not reach the set's own store");
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_OfASetAlreadyAtTheLatest_IsRefusedByNameAndWritesNothing()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await RunOnAsync(runtime, runtime.Configuration.BackupSets.Single());
+
+        var result = await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout);
+
+        Assert.IsInstanceOfType<ServiceError>(result, out var error);
+        Assert.AreEqual(ServiceErrorReason.Refused, error.Reason);
+        Assert.Contains(
+            FormatLimits.FormatVersion.ToString(CultureInfo.InvariantCulture),
+            error.Message,
+            StringComparison.Ordinal);
+        Assert.IsEmpty(
+            Directory.GetDirectories(MetadataRoot, "format-upgrade", SearchOption.AllDirectories),
+            "a refused upgrade still wrote a record");
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_OfASetWithNoArchiveYet_IsRefusedByName()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout);
+
+        Assert.IsInstanceOfType<ServiceError>(result, out var error);
+        Assert.AreEqual(ServiceErrorReason.Refused, error.Reason);
+        Assert.Contains("no archive", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public async Task AnUpgrade_OfASetThatIsNotConfigured_IsNotFound()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new UpgradeSetFormatCommand("photos"), Timeout);
+
+        Assert.IsInstanceOfType<ServiceError>(result, out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+        Assert.Contains("photos", error.Message, StringComparison.Ordinal);
+    }
+
     private async Task SyncAsync()
     {
         await using var runtime = await StartAsync();
@@ -211,7 +351,11 @@ public sealed class FormatUpgradeTests : IDisposable
     private async Task BackUpAsync()
     {
         await using var runtime = await StartAsync();
-        var set = runtime.Configuration.BackupSets.Single();
+        await RunOnAsync(runtime, runtime.Configuration.BackupSets.Single());
+    }
+
+    private async Task RunOnAsync(ServiceRuntime runtime, BackupSetConfiguration set)
+    {
         var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
             .WaitAsync(Timeout);
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);

@@ -53,6 +53,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
 [JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
+[JsonDerivedType(typeof(UpgradeSetFormatCommand), "upgrade_set_format")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -743,6 +744,19 @@ public sealed record VerifyDestinationCommand(
 /// </summary>
 /// <param name="SetName">The set whose staging archive to retire.</param>
 public sealed record RetireStagingCommand(string SetName) : ServiceCommand;
+
+/// <summary>
+/// Upgrades one set's repository to the latest format this build writes
+/// (ADR-0066, contract 1.36): appends a signed format-upgrade record, so
+/// the set seals the newer format from its next blob while everything
+/// already sealed stays readable exactly as it is. There is no version
+/// parameter — the service upgrades to the one version it can write, so a
+/// client cannot ask for a format this build would not understand. The act
+/// cannot be undone: nothing removes the record and nothing rewrites a
+/// sealed blob.
+/// </summary>
+/// <param name="SetName">The set whose repository to upgrade.</param>
+public sealed record UpgradeSetFormatCommand(string SetName) : ServiceCommand;
 
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;

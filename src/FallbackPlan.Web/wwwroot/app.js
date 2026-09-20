@@ -967,6 +967,8 @@ function renderNotices() {
               ${notice.acknowledgedAt ? `· acknowledged ${esc(rel(notice.acknowledgedAt))}` : ""}</span></span>
             ${!notice.acknowledgedAt && notice.key?.startsWith("staging-retirable:")
               ? `<button type="button" class="btn small" data-action="retire-staging" data-key="${esc(notice.key)}">Retire staging…</button>` : ""}
+            ${!notice.acknowledgedAt && notice.key?.startsWith("format-upgradable:")
+              ? `<button type="button" class="btn small" data-action="upgrade-format" data-key="${esc(notice.key)}">Upgrade format…</button>` : ""}
             ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
           </div>`).join("")}</div>`}`;
 }
@@ -2443,6 +2445,44 @@ const actions = {
         { errToast: "Staging was not retired" });
       if (result?.result === "configuration_change") {
         reportDialog("Staging retired", result.lines);
+        await refreshNotices(); refreshStatus();
+      }
+    });
+  },
+
+  // The format-upgradable notice's act (ADR-0066, contract 1.36): append a
+  // signed record so the set seals the latest format from its next blob. The
+  // typed confirmation is about intent — nothing removes the record and
+  // nothing rewrites a blob that is already sealed.
+  async "upgrade-format"(el) {
+    const setId = (el.dataset.key ?? "").split(":")[1] ?? "";
+    if (!S.sets.length) await refreshSets();
+    const set = S.sets.find(s => s.id === setId);
+    if (!set) { toast("bad", "The set this notice names is no longer configured"); return; }
+    openDialog(`
+      <h3>Upgrade the repository format for '${esc(set.name)}'</h3>
+      <p class="dlg-sub">Appends a signed record to this set's repository. Everything already backed up stays
+      exactly as it is and restores as it always did; the newer format begins at the set's next backup, and
+      the record reaches each destination on the next pass. This cannot be undone: a build older than this
+      one would read the newer backups as damage rather than as a format it does not know.</p>
+      <label class="field" for="confirm-word">Type <b>upgrade</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="upgrade" data-enables="upgrade-format-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="upgrade-format-go" data-action="upgrade-format-go"
+                data-set="${esc(set.name)}" disabled>Upgrade format</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "upgrade-format-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "upgrade_set_format", setName: el.dataset.set },
+        { errToast: "The format was not upgraded" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Format upgraded", result.lines);
         await refreshNotices(); refreshStatus();
       }
     });

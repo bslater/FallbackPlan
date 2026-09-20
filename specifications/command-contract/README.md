@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.35
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.36
 
 ---
 
@@ -46,7 +46,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.35 — 55 commands. One line each; parameters, results
+The register as of 1.36 — 56 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -55,7 +55,10 @@ setup/sign-in state, the installation's public derivation parameters),
 is the whole of it, ADR-0060), `provision_write_only_set` (ADR-0042),
 `discover_archives` / `adopt_archive` (since 1.30 — what a declared
 destination holds, by descriptor alone, and taking one archive back under
-its original ids with the passphrase; ADR-0061),
+its original ids with the passphrase; ADR-0061; discovery holds no
+credential, so the `format_version` it reports is the version each archive
+was **created** at — an upgrade record is signed, and verifying a signature
+needs a key discovery does not have),
 `login` / `resume_session` / `logout`, `list_users` / `create_user` /
 `delete_user` / `change_password` (ADR-0045).
 
@@ -82,7 +85,10 @@ machine cause and the set's `last_completed_at`).
 `close_restore_source` (ADR-0041).
 
 **Destinations at work** — `sync`, `verify_destination`, `verify`, `check`,
-`retention`, `retire_staging` (1.18, ADR-0046).
+`retention`, `retire_staging` (1.18, ADR-0046), `upgrade_set_format`
+(1.36, ADR-0066 — one set moved to the latest repository format this
+build writes, by an appended signed record rather than a rewritten
+descriptor).
 
 **Pairing and peers** — `list_pairings`, `create_pairing_invite` /
 `list_pairing_invites` / `revoke_pairing_invite` / `pair_with_invite`,
@@ -133,3 +139,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.33 | `list_receipts` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): every receipt filed under the state directory — deletion and replication, the ones this device signed as a destination and the ones it verified as a commander — answered as `receipts_listed` rows of facts newest first: `kind`, `role`, `filed_at`, `status` (`verified` / `signature-invalid` / `unreadable`), `verified`, `problem`, `signer_fingerprint`, `set`, `destination`, `repository_id`, `issued_at`, `session_prefix`, and the kind's counts (`deleted_count` / `not_held`, `committed_count` / `held_objects` / `held_bytes`). No path and no signed or key bytes cross. Narrowed by `kind`, `set`, `repository` and `limit`. Any signed-in role, any caller scope: an audit listing of what a peer already said under its own signature. Additive |
 | 1.34 | `verified_chunk` on each destination row ([07 §3.6](../peer-protocol/07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)): of the objects the last passed verification proved, how many were proved by asking the destination for one leaf of the blob's Merkle commitment and its authentication path, checked against the root the writer signed into the index ([07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)). A **sampled** proof of the blob, counted apart from `verified_digest` — which reads every byte — so the cheaper tier cannot be rendered as the stronger one. Additive with a zero default |
 | 1.35 | `total` on `receipts_listed` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): how many receipts are on file for the `kind` and `repository` asked for, counted from file names rather than from what was read — so `limit` now bounds the **reading** as well as the answer, and a client can still say what share of the pile it is showing. Peer receipts are swept under a stated retention rule (NFR-OPS-008), and a count beside the rows is what makes a bound that is working visible. The count precedes the `set` filter, which can only be answered by reading a receipt, so a listing narrowed by set may return fewer rows than its limit while the total stands above both. Additive with a zero default |
+| 1.36 | `upgrade_set_format {set_name}` (ADR-0066): one set's repository moved to the latest format this build writes, answering `configuration_change` so no result shape moves. The move is an **appended signed record**, not a rewritten descriptor: a destination seeds a descriptor only if absent and a peer keeps the copy it has, so a rewrite would carry the source alone and leave every copy claiming the older format over newer blobs. It takes no version — the service upgrades to the one version it writes, so a client cannot ask for a format this build could not read back. Refused by name for a set already at that version, for a set with no archive yet (one created here is born at the latest format), and while a run holds the set. What it changes is what the set **seals next**: everything already sealed stays exactly as it is, and the record reaches each destination on the next reconciling pass. Additive |

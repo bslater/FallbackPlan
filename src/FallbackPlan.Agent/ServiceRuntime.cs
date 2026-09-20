@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
@@ -437,6 +438,17 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// </summary>
     /// <param name="setId">The set's 32-hex identity.</param>
     public string SetMetadataPath(string setId) => Path.Combine(Options.StateDirectory, "sets", setId);
+
+    /// <summary>
+    /// The directory a set's repository is actually read and written at: its
+    /// metadata store when it publishes directly, its staging archive
+    /// otherwise (ADR-0046). One name for the mapping, because a caller that
+    /// spelled it a second time and got it wrong would write into a
+    /// repository nothing opens.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    public string SetStorePath(string setId) =>
+        FindConfiguredSet(setId)?.DirectShip == true ? SetMetadataPath(setId) : ArchivePath(setId);
 
     /// <summary>
     /// Whether a set's archive exists on disk yet — its staging archive, or
@@ -896,6 +908,22 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     + "setup to give this installation its passphrase, or provision the set (ADR-0044, ADR-0042 §10).");
             }
 
+            // A repository below the latest format this build writes can be
+            // upgraded in place (ADR-0066), and a person only learns that
+            // from a notice. Raised at open and resolved by the verb, so an
+            // upgrade that did not take asks again at the next open rather
+            // than going quiet.
+            if (repository.EffectiveFormatVersion < FormatLimits.FormatVersion)
+            {
+                Notices.Raise(
+                    $"format-upgradable:{setId}",
+                    $"Set '{setId}' writes repository format {repository.EffectiveFormatVersion}; this build "
+                    + $"writes {FormatLimits.FormatVersion}. Upgrading appends a signed record and takes effect "
+                    + "at the set's next backup: blobs already sealed are left exactly as they are, and nothing "
+                    + "undoes it — a build older than this one would read the newer blobs as damage (ADR-0066).",
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
+
             ArchiveHandle archive;
             try
             {
@@ -1153,6 +1181,47 @@ public sealed class ServiceRuntime : IAsyncDisposable
             + "it, so backups continue — but the state directory was lost, restored from an older copy, or "
             + "belongs to a rebuilt machine, and anything else kept beside it deserves the same suspicion.",
             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+
+    /// <summary>
+    /// Appends a set's format-upgrade record and drops the cached handle
+    /// (ADR-0066). The two belong to one method because the effective format
+    /// version is fixed when an archive opens: a write without the eviction
+    /// would leave this service sealing the older format until it restarted,
+    /// having told the person otherwise.
+    /// </summary>
+    /// <remarks>
+    /// The record is written to the set's own store — never through the ship
+    /// sink, which outside a run holds no destinations in scope and would
+    /// throw on a single unreachable one. Propagation is the next
+    /// reconciling pass's business: the record is an ordinary immutable
+    /// object, which is what every copy path already carries.
+    /// </remarks>
+    /// <param name="setId">The set to upgrade.</param>
+    /// <param name="toVersion">The format version to move to.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The version the repository was on before the record was written.</returns>
+    public async ValueTask<ushort> UpgradeSetFormatAsync(
+        string setId, ushort toVersion, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+
+        var archive = await ExistingArchiveAsync(setId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RepositoryOpenException($"Set '{setId}' holds no archive to upgrade.");
+        var from = archive.Repository.EffectiveFormatVersion;
+
+        var store = new LocalFileSystemObjectStore(SetStorePath(setId), LoggerFor<LocalFileSystemObjectStore>());
+        await RepositoryLifecycle.WriteFormatUpgradeAsync(
+            store,
+            archive.Repository.Descriptor,
+            archive.Repository.Credential,
+            toVersion,
+            State.WriterId,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            cancellationToken).ConfigureAwait(false);
+
+        await EvictArchiveAsync(setId, cancellationToken).ConfigureAwait(false);
+        return from;
     }
 
     /// <summary>

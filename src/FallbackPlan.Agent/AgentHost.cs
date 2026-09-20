@@ -70,6 +70,7 @@ public static class AgentHost
                   fallbackplan-agent notices --state <dir> [--ack <id>]
                   fallbackplan-agent receipts --state <dir> [--kind deletion|replication] [--set <name>]
                                             [--repository <hex>] [--limit <n>] [--json]
+                  fallbackplan-agent upgrade-format --state <dir> --set <name>
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
@@ -220,10 +221,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "receipts" or "retention" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
             return 1;
         }
 
@@ -319,6 +320,17 @@ public static class AgentHost
         if (args[0] == "reattribute")
         {
             return await ReattributeAsync(stateDirectory, Get("--repository"), Get("--to"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // `upgrade-format` moves one set to the latest repository format
+        // (ADR-0066). Through the running service only, and deliberately so:
+        // the effective format version is fixed when an archive opens, so a
+        // service listening elsewhere would go on sealing the older format
+        // against its cached handle while this verb reported success.
+        if (args[0] == "upgrade-format")
+        {
+            return await UpgradeFormatAsync(stateDirectory, Get("--set"), output, error, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1313,6 +1325,61 @@ public static class AgentHost
             output,
             [.. notices.Unacknowledged.Select(notice => (notice.Id, notice.RaisedAt, notice.Message))]);
         return 0;
+    }
+
+    private static async Task<int> UpgradeFormatAsync(
+        string stateDirectory,
+        string? setName,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(setName))
+        {
+            error.WriteLine("error: usage is `upgrade-format --state <dir> --set <name>`.");
+            return 1;
+        }
+
+        ServiceResult result;
+        try
+        {
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+            result = await client.ExecuteAsync(new UpgradeSetFormatCommand(setName), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException)
+        {
+            // No fallback to the files, unlike `reattribute`. Writing the
+            // record here would be safe only if nothing held the archive
+            // open, and this verb cannot tell "no service" from "a service
+            // this socket did not reach" — the second leaves a set sealing
+            // the old format with a record saying otherwise.
+            error.WriteLine(
+                "error: no service is listening on this state directory, and the format upgrade takes effect "
+                + "through the running service — it drops the set's open archive so the next backup seals the "
+                + "newer format. Start the service and run this verb again.");
+            return 1;
+        }
+
+        switch (result)
+        {
+            case ConfigurationChangeResult changed:
+                foreach (var line in changed.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+
+            case ServiceError refusal:
+                error.WriteLine($"error: {refusal.Message}");
+                return 1;
+
+            default:
+                error.WriteLine($"error: the service answered a format upgrade with {result.GetType().Name}.");
+                return 1;
+        }
     }
 
     private static async Task<int> ReattributeAsync(

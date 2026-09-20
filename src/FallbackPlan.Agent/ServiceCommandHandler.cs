@@ -396,6 +396,8 @@ public sealed partial class ServiceCommandHandler(
         DeleteBackupSetCommand deleteSet => DeleteBackupSet(deleteSet),
         RetireStagingCommand retireStaging =>
             await RetireStagingAsync(retireStaging, cancellationToken).ConfigureAwait(false),
+        UpgradeSetFormatCommand upgradeFormat =>
+            await UpgradeSetFormatAsync(upgradeFormat, cancellationToken).ConfigureAwait(false),
         ListDestinationsCommand => ListDestinations(),
         UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
         DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),

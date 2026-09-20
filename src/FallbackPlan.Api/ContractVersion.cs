@@ -283,8 +283,23 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// zero, which reads as "this service does not count", not as "nothing
     /// is on file".
     /// </para>
+    /// <para>
+    /// 1.36 adds `upgrade_set_format` (ADR-0066): one set's repository is
+    /// moved to the latest format this build writes, by appending a signed
+    /// format-upgrade record rather than by rewriting the descriptor — which
+    /// no destination would ever accept, since each seeds a descriptor only
+    /// if absent and commits an object it lacks while keeping the one it
+    /// has. It answers `configuration_change`, so no result shape moves. It
+    /// takes no version: the service upgrades to the one version it writes,
+    /// so a client cannot ask for a format this build could not read back.
+    /// Refused by name for a set already at that version and for a set with
+    /// no archive yet, which is born at the latest format anyway. Note that
+    /// `discover_archives` reads descriptors without a credential, so it
+    /// cannot verify an upgrade record and goes on reporting the version
+    /// each archive was **created** at.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 35);
+    public static ContractVersion Current { get; } = new(1, 36);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>
