@@ -14,11 +14,15 @@ Three namespaces in [01 §2](01-object-layout.md#2-namespace) belong to the coll
 /audit/<period>/<record-id>
 ```
 
+A fourth namespace, `/format-upgrade/<to-version>`, belongs to nobody in particular and is specified here (§5) because it is a lifecycle object by the same test: it records something that happened to the repository rather than something in it.
+
 Nothing before phase 4 writes any of them — no component takes a lease, tombstones an object, or writes an audit period — so their shapes were deliberately left uninvented rather than guessed at ([Q17](../../docs/open-questions.md#closed)). They are specified here, ahead of the collector, so that the collector is written against a format instead of establishing one by accident.
 
 All three are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`.
 
 Only one of the three is signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
+
+The format-upgrade record of §5 is signed for the same reason a tombstone is — it decides what a reader does — and is the one lifecycle object that is **not** a sealed standalone record. §5.2 says why.
 
 ## 2 Lease
 
@@ -130,7 +134,46 @@ The reason is that this namespace is the most likely thing in the repository to 
 
 It carries no signature. It authorises nothing, and it describes what one writer did rather than what the repository is; the AEAD tag establishes that a member wrote it, which is what an operational record needs.
 
-## 5 What this section does not settle
+## 5 Format-upgrade record
+
+`/format-upgrade/<to-version>` records that this repository writes a newer format version from the next sealed object onward. `<to-version>` is the target version as four lowercase hexadecimal digits, so a repository that goes 2 → 3 now and 3 → 4 later carries one object per step and a listing of the prefix answers what it has been through.
+
+```text
+format_upgrade = {
+    1: u16       schema version, 1
+    2: u16       from_version
+    3: u16       to_version
+    4: u64       upgraded_at    epoch milliseconds, informational
+    5: bytes[16] writer_id
+    6: bytes[64] signature      Ed25519 over the canonical encoding of keys 1-5
+}
+```
+
+`to_version` MUST be strictly above `from_version`; a record that names a version at or below the one it came from is not an upgrade and MUST be refused at encode and at read. `upgraded_at` is informational in exactly the sense a tombstone's `tombstoned_at` is ([§3.1](#31-the-grace-period-is-counted-in-generations-not-in-time)): there is no trusted time source, so nothing decides on it. The signature has [06 §6.1](06-manifests.md#61-signature)'s semantics and is made with the repository's **signing** key — an upgrade changes what the writer emits and destroys nothing, so it belongs to the authority that signs publications rather than to the reclaim authority [ADR-0055](../../docs/adr/0055-reclaim-authority.md) split out for destruction.
+
+The record is written whole, once, with if-not-exists semantics, and is never rewritten. Nothing removes it.
+
+### 5.1 The effective format version
+
+A reader's **effective** format version is the highest `to_version` among the records under `/format-upgrade/` whose signature verifies and which name a version at or above the descriptor's `format_version`; with no such record, it is the descriptor's own. The descriptor states what the repository was **created** at and never changes.
+
+A record that does not decode, or whose signature does not verify, MUST be **ignored** — not treated as damage, and not a reason to refuse the repository. An unverifiable claim about the format is a claim nobody made; refusing to open a repository over a stranger's file would hand anyone who can write into an archive a denial of service, which is a worse outcome than ignoring a file that says nothing.
+
+A reader that cannot read the effective version's container format still refuses the objects written at it, by the ordinary envelope rules of [05 §2](05-blob.md#2-cleartext-envelope) — [ADR-0014](../../docs/adr/0014-format-versioning-and-stability.md)'s *refuse, never misread* holds. What it does not get is the descriptor's required-feature refusal, which would have named the version: it discovers the newer format at the first blob rather than at the door.
+
+### 5.2 Why this one is not sealed, and why the descriptor is not rewritten
+
+Every other object in this section is a sealed standalone record. This one is cleartext CBOR, in the same plane as the descriptor — because it is a statement about the container format, and a reader has to learn what format a repository is in **before** deciding how to open it. Sealing it would make the repository's own version readable only after that decision, and what it reveals — a format version — the descriptor beside it already reveals in the clear.
+
+Rewriting the descriptor instead was considered and cannot work, because the descriptor is the one object every copy path refuses to replace:
+
+- A local-path destination is seeded with the descriptor **if absent** and never again.
+- A peer commits an object it lacks and keeps the one it has ([peer-protocol 03 §5](../peer-protocol/03-replication.md)).
+- `repository-format` may not be named by a retention instruction ([peer-protocol 06 §3](../peer-protocol/06-retention.md)), so it cannot be replaced by delete-then-resend either.
+
+So a rewritten descriptor would move the source alone and leave every destination and every replica claiming the older format over newer blobs — a recovery from one of those copies would read a format-2 descriptor over format-3 records. An append-only record needs none of this: it is an ordinary immutable object, which is the one thing all three paths already move. For the same reason it joins `repository-format` on the never-deletable list: a commander that could have a spoke delete it could revert that replica's format claim while the source went on writing the newer format into it.
+
+## 6 What this section does not settle
 
 Named so a phase-4 implementer does not read silence as completeness:
 

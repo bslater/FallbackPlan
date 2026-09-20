@@ -114,13 +114,13 @@ public sealed record ServiceOptions
 public sealed class ServiceRuntime : IAsyncDisposable
 {
     /// <summary>
-    /// The repository format version a set's archive is created at. A
-    /// property rather than the constant so the peer suite can stand up a
-    /// format-3 archive through the real pipeline — nothing at format 2
-    /// publishes a Merkle commitment, so nothing at format 2 can be
-    /// challenged by chunk. The service never sets it, and creation stays at
-    /// <see cref="Domain.FormatLimits.FormatVersion"/> until a creation surface asks
-    /// for otherwise (ADR-0052 Amendment 1).
+    /// The repository format version a set's archive is created at:
+    /// <see cref="Domain.FormatLimits.FormatVersion"/>, the latest this build
+    /// can read. It is a property rather than the constant so a suite can
+    /// stand an archive up at an older format through the real pipeline —
+    /// which is what the digest tier and the upgrade record both need, since
+    /// neither has anything to say about a repository already at the latest.
+    /// The service never sets it.
     /// </summary>
     internal static ushort ArchiveFormatVersion { get; set; } = Domain.FormatLimits.FormatVersion;
 

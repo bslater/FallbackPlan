@@ -6,7 +6,9 @@ using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
 using FallbackPlan.Recovery;
+using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Lifecycle;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -260,6 +262,64 @@ public sealed class DirectShipPeerTests : IDisposable
         await AssertRestoresFromAsync(replica, "docs/report.txt", "one pass, end to end");
     }
 
+    [TestMethod]
+    public async Task DirectShipSet_AnUpgradeRecordWrittenAtTheSource_ReachesTheReplicaOnTheNextPass()
+    {
+        // The descriptor cannot carry a format upgrade to a peer: 03 §5 has
+        // the destination commit an object it lacks and keep the one it has,
+        // and 06 §3 forbids deleting `repository-format` by instruction, so a
+        // rewritten descriptor would reach no replica ever. An append-only
+        // record needs no protocol change at all — the commit path validates
+        // that the key parses and nothing else, so an unfamiliar immutable
+        // object rides the exchange the blobs ride.
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatVersions.SealedDataPlane;
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, withVault: false);
+        _harness.WriteSourceFile("docs/report.txt", "the first draft");
+        await RunOnceAsync();
+
+        var replica = await ReplicaPathAsync();
+        var upgradeKey = FormatUpgradeRecordCodec.KeyFor(FallbackPlan.Domain.FormatVersions.RelocatableRecords);
+        var replicaStore = new LocalFileSystemObjectStore(replica);
+        Assert.IsNull(await ReadAsync(replicaStore, ObjectKey.Parse(upgradeKey)));
+
+        await WriteUpgradeAsync(FallbackPlan.Domain.FormatVersions.RelocatableRecords);
+
+        _harness.WriteSourceFile("docs/report.txt", "the second draft");
+        var pass = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--once");
+        Assert.AreEqual(0, pass.ExitCode, pass.Error);
+
+        var carried = await ReadAsync(replicaStore, ObjectKey.Parse(upgradeKey));
+        Assert.IsNotNull(carried, "the upgrade record never reached the peer's replica");
+        Assert.AreEqual(
+            FallbackPlan.Domain.FormatVersions.RelocatableRecords,
+            FormatUpgradeRecordCodec.Decode(carried).Value.ToVersion);
+    }
+
+    /// <summary>
+    /// Writes a signed upgrade record into this set's own metadata plane —
+    /// which for a direct-ship set is the state directory — exactly as the
+    /// service's own upgrade path will.
+    /// </summary>
+    private async Task WriteUpgradeAsync(ushort toVersion)
+    {
+        var store = new LocalFileSystemObjectStore(MetadataRoot);
+        using var passphrase = Passphrase.Create(
+            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, Timeout);
+        using (repository)
+        using (authority)
+        {
+            await RepositoryLifecycle.WriteFormatUpgradeAsync(
+                store, repository.Descriptor, repository.Credential, toVersion,
+                new byte[16],
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Timeout);
+        }
+    }
+
     /// <summary>
     /// Every object the planning copy holds is at the peer, byte for byte —
     /// the metadata plane is what makes the replica openable on its own.
@@ -485,6 +545,7 @@ public sealed class DirectShipPeerTests : IDisposable
 
     public void Dispose()
     {
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion;
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
         _timeout.Dispose();

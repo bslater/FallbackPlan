@@ -3,10 +3,12 @@ using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Lifecycle;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -102,6 +104,42 @@ public sealed class PeerRetentionReplayTests : IDisposable
         Assert.IsTrue(
             (await replica.GetMetadataAsync(Condemned, Timeout)).Found,
             "the replayed instruction destroyed an object that was put back after it was authorised");
+    }
+
+    [TestMethod]
+    public async Task RetentionOffer_NamingTheFormatUpgradeRecord_IsRefusedWholeAndTheRecordSurvives()
+    {
+        // The upgrade record (11 §4) states what format the repository now
+        // writes, and every copy of the repository has to carry it or read
+        // format-3 blobs believing itself format 2. So it joins the descriptor
+        // and the lifecycle prefixes on the never-deletable list (06 §3): a
+        // commander that could have a spoke delete it could revert that
+        // replica's format claim while the source went on writing the newer
+        // format into it, and the damage would be diagnosed as rot.
+        await SeedAsync();
+        var replica = new LocalFileSystemObjectStore(await ReplicaPathAsync());
+        var upgrade = ObjectKey.Parse(FormatUpgradeRecordCodec.KeyFor(FormatVersions.RelocatableRecords));
+        var planted = await replica.PutAsync(
+            upgrade,
+            _ => ValueTask.FromResult<Stream>(new MemoryStream("a signed statement of what this repository writes"u8.ToArray())),
+            PutConditions.None,
+            Timeout);
+        Assert.AreEqual(PutOutcome.Created, planted.Outcome);
+
+        // Signed by the real reclaim authority, so nothing but the key's
+        // identity can be what refuses it. The page also names an ordinary
+        // condemned object: the refusal is of the whole page, so that one
+        // must survive too.
+        await PlantAsync(replica);
+        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            () => InstructAsync(async binding => [await SignedDropAsync(binding, upgrade.Value, Condemned.Value)]));
+
+        Assert.AreEqual(PeerRefusalReason.TermsRefused, refusal.Reason);
+        Assert.Contains(upgrade.Value, refusal.Message, StringComparison.Ordinal);
+        Assert.IsTrue((await replica.GetMetadataAsync(upgrade, Timeout)).Found);
+        Assert.IsTrue(
+            (await replica.GetMetadataAsync(Condemned, Timeout)).Found,
+            "a page naming an undeletable key is refused whole, not filtered down to what it may have");
     }
 
     [TestMethod]

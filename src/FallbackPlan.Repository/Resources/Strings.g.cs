@@ -155,4 +155,26 @@ internal static class Strings
     /// A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.
     /// </summary>
     internal static string RepositoryKeySet_NoDataClassKey => Get(nameof(RepositoryKeySet_NoDataClassKey));
+
+    /// <summary>
+    /// This repository already writes format version {0}; there is nothing to upgrade.
+    /// </summary>
+    private static string RepositoryLifecycle_AlreadyAtFormatVersion => Get(nameof(RepositoryLifecycle_AlreadyAtFormatVersion));
+
+    /// <summary>
+    /// This repository already writes format version {0}; there is nothing to upgrade.
+    /// </summary>
+    internal static string FormatRepositoryLifecycle_AlreadyAtFormatVersion(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_AlreadyAtFormatVersion, arg0);
+
+    /// <summary>
+    /// Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.
+    /// </summary>
+    private static string RepositoryLifecycle_UpgradeBelowEffectiveVersion => Get(nameof(RepositoryLifecycle_UpgradeBelowEffectiveVersion));
+
+    /// <summary>
+    /// Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.
+    /// </summary>
+    internal static string FormatRepositoryLifecycle_UpgradeBelowEffectiveVersion(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_UpgradeBelowEffectiveVersion, arg0, arg1);
 }

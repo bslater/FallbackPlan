@@ -5,6 +5,8 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
+using FallbackPlan.Repository.Format.Lifecycle;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Repository.Resources;
 using Microsoft.Extensions.Logging;
@@ -471,6 +473,116 @@ public static class RepositoryLifecycle
             DescriptorParseResult.FormatViolation violation => throw new RepositoryOpenException(violation.Message),
             var other => throw new RepositoryOpenException(Strings.FormatRepositoryLifecycle_UnrecognisedDescriptorParseOutcome(other)),
         };
+
+    /// <summary>
+    /// The version this repository <em>writes</em>, which is not always the
+    /// version it was created at (specification 11 §4). The descriptor is
+    /// written once and never rewritten — a destination commits an object it
+    /// lacks and keeps the one it has, so a replacement descriptor would move
+    /// the source alone — so an upgrade is an append-only signed record, and
+    /// the two are read together. The answer is the highest <c>to_version</c>
+    /// among records whose signature verifies and which name a version at or
+    /// above the descriptor's; with none, the descriptor's own.
+    /// </summary>
+    /// <remarks>
+    /// A record that fails verification is ignored rather than refused: an
+    /// unverifiable claim about the format is a claim nobody made, and
+    /// refusing to open the repository over a stranger's file would hand
+    /// anyone who can write into an archive a denial of service. The same
+    /// goes for one that does not decode.
+    /// </remarks>
+    public static async ValueTask<ushort> ReadEffectiveFormatAsync(
+        IObjectStore store,
+        RepositoryDescriptor descriptor,
+        RepositoryWriteCredential credential,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(descriptor);
+        ThrowHelper.ThrowIfNull(credential);
+
+        var effective = descriptor.FormatVersion;
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+
+        await foreach (var entry in store
+            .ListAsync(ObjectPrefix.Parse(FormatUpgradeRecordCodec.KeyPrefix), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var content = await ReadWholeObjectAsync(store, entry.Key, cancellationToken).ConfigureAwait(false);
+            if (content is null)
+            {
+                continue;
+            }
+
+            DecodedFormatUpgradeRecord decoded;
+            try
+            {
+                decoded = FormatUpgradeRecordCodec.Decode(content);
+            }
+            catch (ManifestValidationException)
+            {
+                continue;
+            }
+
+            if (decoded.Value.ToVersion > effective
+                && signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span))
+            {
+                effective = decoded.Value.ToVersion;
+            }
+        }
+
+        return effective;
+    }
+
+    /// <summary>
+    /// Records that this repository writes <paramref name="toVersion"/> from
+    /// its next seal (specification 11 §4). Signed under the repository's
+    /// <em>signing</em> key: an upgrade changes what the writer emits and
+    /// destroys nothing, so it belongs to the authority that signs
+    /// publications, not to the reclaim authority ADR-0055 split out for
+    /// destruction — which is what lets a set-up installation upgrade without
+    /// the passphrase, exactly as it publishes without one.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The repository is already at or above that version.</exception>
+    /// <exception cref="IOException">The store refused the record.</exception>
+    public static async ValueTask WriteFormatUpgradeAsync(
+        IObjectStore store,
+        RepositoryDescriptor descriptor,
+        RepositoryWriteCredential credential,
+        ushort toVersion,
+        ReadOnlyMemory<byte> writerId,
+        ulong upgradedAtUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(descriptor);
+        ThrowHelper.ThrowIfNull(credential);
+
+        var effective = await ReadEffectiveFormatAsync(store, descriptor, credential, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (toVersion == effective)
+        {
+            throw new InvalidOperationException(
+                Strings.FormatRepositoryLifecycle_AlreadyAtFormatVersion(toVersion));
+        }
+
+        if (toVersion < effective)
+        {
+            throw new InvalidOperationException(
+                Strings.FormatRepositoryLifecycle_UpgradeBelowEffectiveVersion(toVersion, effective));
+        }
+
+        var record = new FormatUpgradeRecord(effective, toVersion, upgradedAtUnixMilliseconds, writerId);
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+        var signature = signer.Sign(FormatUpgradeRecordCodec.EncodeForSigning(record));
+
+        await PutWholeObjectAsync(
+            store,
+            ObjectKey.Parse(FormatUpgradeRecordCodec.KeyFor(toVersion)),
+            FormatUpgradeRecordCodec.Encode(record, signature),
+            cancellationToken).ConfigureAwait(false);
+    }
 
     private static async ValueTask PutWholeObjectAsync(
         IObjectStore store,

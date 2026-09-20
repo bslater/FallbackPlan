@@ -103,4 +103,10 @@
   <data name="RepositoryKeySet_NoDataClassKey" xml:space="preserve">
     <value>A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.</value>
   </data>
+  <data name="RepositoryLifecycle_AlreadyAtFormatVersion" xml:space="preserve">
+    <value>This repository already writes format version {0}; there is nothing to upgrade.</value>
+  </data>
+  <data name="RepositoryLifecycle_UpgradeBelowEffectiveVersion" xml:space="preserve">
+    <value>Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.</value>
+  </data>
 </root>

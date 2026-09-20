@@ -935,4 +935,64 @@ internal static class Strings
     /// </summary>
     internal static string FormatTombstoneCodec_RequiredKeyMissing(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequiredKeyMissing, arg0);
+
+    /// <summary>
+    /// A format-upgrade signature is exactly 64 bytes.
+    /// </summary>
+    internal static string FormatUpgradeRecordCodec_SignatureExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_SignatureExactlyBytes));
+
+    /// <summary>
+    /// A format-upgrade record is not canonical CBOR: {0}
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_NotCanonicalCbor => Get(nameof(FormatUpgradeRecordCodec_NotCanonicalCbor));
+
+    /// <summary>
+    /// A format-upgrade record is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_NotCanonicalCbor(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_NotCanonicalCbor, arg0);
+
+    /// <summary>
+    /// Format-upgrade schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_SchemaVersionUnsupported => Get(nameof(FormatUpgradeRecordCodec_SchemaVersionUnsupported));
+
+    /// <summary>
+    /// Format-upgrade schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_SchemaVersionUnsupported(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_SchemaVersionUnsupported, arg0);
+
+    /// <summary>
+    /// A format-upgrade record omits required key {0} (11 §4).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_RequiredKeyMissing => Get(nameof(FormatUpgradeRecordCodec_RequiredKeyMissing));
+
+    /// <summary>
+    /// A format-upgrade record omits required key {0} (11 §4).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_RequiredKeyMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_RequiredKeyMissing, arg0);
+
+    /// <summary>
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §4).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_NotAnUpgrade => Get(nameof(FormatUpgradeRecordCodec_NotAnUpgrade));
+
+    /// <summary>
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §4).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_NotAnUpgrade(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_NotAnUpgrade, arg0, arg1);
+
+    /// <summary>
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §4).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_WriterIdentityExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_WriterIdentityExactlyBytes));
+
+    /// <summary>
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §4).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_WriterIdentityExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_WriterIdentityExactlyBytes, arg0);
 }

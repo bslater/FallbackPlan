@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Protocol;
+using FallbackPlan.Repository.Format.Lifecycle;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -575,6 +576,7 @@ internal static class ReplicationResponder
             foreach (var key in page.Keys)
             {
                 if (key is "repository-format"
+                    || key.StartsWith(FormatUpgradeRecordCodec.KeyPrefix, StringComparison.Ordinal)
                     || key.StartsWith("tombstones/", StringComparison.Ordinal)
                     || key.StartsWith("leases/", StringComparison.Ordinal))
                 {
