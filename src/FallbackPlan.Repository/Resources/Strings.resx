@@ -109,4 +109,13 @@
   <data name="RepositoryLifecycle_UpgradeBelowEffectiveVersion" xml:space="preserve">
     <value>Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.</value>
   </data>
+  <data name="BlobCompactor_CompactionNeedsFormatThree" xml:space="preserve">
+    <value>Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).</value>
+  </data>
+  <data name="BlobCompactor_SourceBlobMissing" xml:space="preserve">
+    <value>The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.</value>
+  </data>
+  <data name="BlobCompactor_SourceRecordRefused" xml:space="preserve">
+    <value>Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.</value>
+  </data>
 </root>

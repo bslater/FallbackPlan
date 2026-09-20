@@ -177,4 +177,31 @@ internal static class Strings
     /// </summary>
     internal static string FormatRepositoryLifecycle_UpgradeBelowEffectiveVersion(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_UpgradeBelowEffectiveVersion, arg0, arg1);
+
+    /// <summary>
+    /// Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).
+    /// </summary>
+    internal static string BlobCompactor_CompactionNeedsFormatThree => Get(nameof(BlobCompactor_CompactionNeedsFormatThree));
+
+    /// <summary>
+    /// The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.
+    /// </summary>
+    private static string BlobCompactor_SourceBlobMissing => Get(nameof(BlobCompactor_SourceBlobMissing));
+
+    /// <summary>
+    /// The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.
+    /// </summary>
+    internal static string FormatBlobCompactor_SourceBlobMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceBlobMissing, arg0);
+
+    /// <summary>
+    /// Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.
+    /// </summary>
+    private static string BlobCompactor_SourceRecordRefused => Get(nameof(BlobCompactor_SourceRecordRefused));
+
+    /// <summary>
+    /// Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.
+    /// </summary>
+    internal static string FormatBlobCompactor_SourceRecordRefused(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceRecordRefused, arg0, arg1, arg2);
 }

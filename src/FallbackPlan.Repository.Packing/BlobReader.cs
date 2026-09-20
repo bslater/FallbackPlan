@@ -260,27 +260,55 @@ public sealed class BlobReader : IDisposable
     }
 
     /// <summary>
-    /// Reads, authenticates, decompresses, and content-verifies one record —
-    /// the 04 §6 sequence in order, step 7 included.
+    /// Reads one record's sealed bytes — prefix, ciphertext and tag, exactly
+    /// as this blob holds them — without opening it, for
+    /// <c>BlobWriter.AppendSealedRecordAsync</c> to copy verbatim into
+    /// another blob (ADR-0052 §4, ADR-0067).
     /// </summary>
-    public async ValueTask<RecordReadResult> ReadRecordAsync(RecordTableEntry entry, CancellationToken cancellationToken)
+    /// <remarks>
+    /// There is no key path here at all, which is the point: a format-3
+    /// record's key is its object's and its nonce rides its own prefix, so
+    /// relocation needs nothing this reader would have to hold. The
+    /// header-against-table cross-check still runs, because a compactor that
+    /// skipped it would relocate corruption faithfully.
+    /// </remarks>
+    /// <param name="entry">The record's footer-table entry.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    /// <returns>The sealed bytes, or the finding that stopped the read.</returns>
+    public async ValueTask<SealedRecordReadResult> ReadSealedRecordAsync(
+        RecordTableEntry entry, CancellationToken cancellationToken)
     {
-        if (_recordKey is null && _classKey is null && _opener is null)
-        {
-            return RecordReadResult.Failure(RecordReadOutcome.ContentSealed, Strings.BlobReader_ContentKeySealed);
-        }
+        var framed = await ReadFramedAsync(entry, cancellationToken).ConfigureAwait(false);
+        return framed.Bytes is { } bytes
+            ? SealedRecordReadResult.Success(bytes[RecordHeader.Length..])
+            : SealedRecordReadResult.Failure(framed.Outcome, framed.Detail!);
+    }
 
+    /// <summary>
+    /// The read every record read begins with: the profile and length
+    /// guards, one ranged read of the whole framed record, and the
+    /// header-against-table cross-check of 05 §3.1. Shared so that opening a
+    /// record and relocating one cannot disagree about what a well-formed
+    /// record is.
+    /// </summary>
+    private async ValueTask<FramedRecord> ReadFramedAsync(
+        RecordTableEntry entry, CancellationToken cancellationToken)
+    {
         if (!EncryptionProfile.TryFromValue(entry.EncryptionProfileValue, out var encryptionProfile) ||
             encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
-            return RecordReadResult.Failure(
+            return new FramedRecord(
+                null,
+                null,
                 RecordReadOutcome.UnsupportedProfile,
                 $"Encryption profile 0x{entry.EncryptionProfileValue:x4} is not supported by this reader; refused, not guessed (specification 00 §3).");
         }
 
         if (entry.LogicalLength > (ulong)FormatLimits.MaxRecordStoredLength)
         {
-            return RecordReadResult.Failure(
+            return new FramedRecord(
+                null,
+                null,
                 RecordReadOutcome.FormatViolation,
                 $"logical_length {entry.LogicalLength} exceeds the 64 MiB segment bound (specification 00 §8) — refused before allocation.");
         }
@@ -296,7 +324,7 @@ public sealed class BlobReader : IDisposable
         }
         catch (RecordFormatException exception)
         {
-            return RecordReadResult.Failure(RecordReadOutcome.FormatViolation, exception.Message);
+            return new FramedRecord(null, null, RecordReadOutcome.FormatViolation, exception.Message);
         }
 
         if (header.Ordinal != entry.Ordinal ||
@@ -307,10 +335,37 @@ public sealed class BlobReader : IDisposable
             header.EncryptionProfile.Value != entry.EncryptionProfileValue ||
             header.ObjectType != entry.ObjectType)
         {
-            return RecordReadResult.Failure(
+            return new FramedRecord(
+                null,
+                null,
                 RecordReadOutcome.FormatViolation,
                 $"The record header at offset {entry.PhysicalOffset} disagrees with the footer's table entry — a damage finding (specification 05 §3.1).");
         }
+
+        return new FramedRecord(recordBytes, header, RecordReadOutcome.Ok, null);
+    }
+
+    private readonly record struct FramedRecord(
+        byte[]? Bytes, RecordHeader? Header, RecordReadOutcome Outcome, string? Detail);
+
+    /// <summary>
+    /// Reads, authenticates, decompresses, and content-verifies one record —
+    /// the 04 §6 sequence in order, step 7 included.
+    /// </summary>
+    public async ValueTask<RecordReadResult> ReadRecordAsync(RecordTableEntry entry, CancellationToken cancellationToken)
+    {
+        if (_recordKey is null && _classKey is null && _opener is null)
+        {
+            return RecordReadResult.Failure(RecordReadOutcome.ContentSealed, Strings.BlobReader_ContentKeySealed);
+        }
+
+        var framed = await ReadFramedAsync(entry, cancellationToken).ConfigureAwait(false);
+        if (framed.Bytes is not { } recordBytes)
+        {
+            return RecordReadResult.Failure(framed.Outcome, framed.Detail!);
+        }
+
+        var header = framed.Header!.Value;
 
         Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
         Span<byte> aad = stackalloc byte[RecordAad.Length];
