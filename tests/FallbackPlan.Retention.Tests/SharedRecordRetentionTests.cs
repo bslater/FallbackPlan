@@ -196,7 +196,7 @@ public sealed class SharedRecordRetentionTests : IDisposable
             Assert.IsNotEmpty(
                 mixed,
                 "no blob mixes live and dead records, so the retained-partial branch is untested here");
-            Assert.AreEqual(mixed.Count, plan.RetainedPartialBlobs);
+            Assert.HasCount(mixed.Count, plan.PartlyLiveBlobs);
 
             var condemned = plan.DeletableBlobs.Select(blob => blob.BlobId).ToHashSet();
             foreach (var blob in mixed)

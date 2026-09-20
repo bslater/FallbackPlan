@@ -1,3 +1,4 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
@@ -22,7 +23,7 @@ public sealed record DeletableBlob(ObjectKey StoreKey, BlobId BlobId, long Recor
 /// <param name="ProtectedSnapshots">The snapshots treated as protected, with the planner's reasons.</param>
 /// <param name="ExpiredSnapshotKeys">The standalone snapshot objects the pass would remove.</param>
 /// <param name="DeletableBlobs">Blobs holding nothing reachable and nothing intent-covered.</param>
-/// <param name="RetainedPartialBlobs">Blobs kept whole for a live minority — the compaction backlog.</param>
+/// <param name="PartlyLiveBlobs">Blobs kept whole for a live minority — the compaction backlog, named rather than counted so a pass can act on it (ADR-0067).</param>
 /// <param name="Vetoes">
 /// Conditions that force this pass to delete nothing at all: an undecodable
 /// snapshot, an unwalkable manifest, a blob the reader had to skip. Damage
@@ -32,7 +33,7 @@ public sealed record CollectionPlan(
     IReadOnlyList<SnapshotKeep> ProtectedSnapshots,
     IReadOnlyList<ObjectKey> ExpiredSnapshotKeys,
     IReadOnlyList<DeletableBlob> DeletableBlobs,
-    int RetainedPartialBlobs,
+    IReadOnlyList<CompactableBlob> PartlyLiveBlobs,
     IReadOnlyList<string> Vetoes)
 {
     /// <summary>Whether the pass may delete anything at all.</summary>
@@ -101,25 +102,34 @@ public static class CollectionPlanner
             .ToList();
 
         var deletable = new List<DeletableBlob>();
-        var retainedPartial = 0;
+        var partlyLive = new List<CompactableBlob>();
         foreach (var (storeKey, blobId, records) in reader.Blobs)
         {
             // Step 4: an unretired intent's coverage is reachability, no
-            // exceptions, no heuristics (FR-GC-003).
+            // exceptions, no heuristics (FR-GC-003). A blob a live intent
+            // covers is never a compaction candidate either — another writer
+            // may still be appending to it (ADR-0008).
             if (intents.IsCovered(blobId))
             {
                 continue;
             }
 
-            var live = records.Count(record => reachable.Contains(record.ObjectId));
-            if (live == records.Count)
+            var live = records.Where(record => reachable.Contains(record.ObjectId)).ToList();
+            if (live.Count == records.Count)
             {
                 continue;
             }
 
-            if (live > 0)
+            if (live.Count > 0)
             {
-                retainedPartial++;
+                // Stored lengths, summed: what a rewrite would carry and what
+                // it would leave behind. The footer and the per-record framing
+                // go with the old blob either way, so they are not counted on
+                // either side of the trade.
+                var liveBytes = live.Sum(record => (long)record.StoredLength);
+                var allBytes = records.Sum(record => (long)record.StoredLength);
+                partlyLive.Add(new CompactableBlob(
+                    storeKey, blobId, live, liveBytes, allBytes - liveBytes, records.Count - live.Count));
                 continue;
             }
 
@@ -130,7 +140,7 @@ public static class CollectionPlanner
             selection.Keep,
             expiredKeys,
             deletable,
-            retainedPartial,
+            partlyLive,
             vetoes);
     }
 
@@ -161,7 +171,10 @@ public static class CollectionPlanner
         }
 
         lines.Add($"would delete: {plan.ExpiredSnapshotKeys.Count} snapshot object(s), {plan.DeletableBlobs.Count} blob(s)");
-        lines.Add($"kept whole for a live minority: {plan.RetainedPartialBlobs} blob(s) (compaction is a later phase)");
+        lines.Add(string.Create(
+            CultureInfo.InvariantCulture,
+            $"kept whole for a live minority: {plan.PartlyLiveBlobs.Count} blob(s), "
+            + $"{plan.PartlyLiveBlobs.Sum(blob => blob.DeadBytes):N0} dead byte(s) in them"));
 
         foreach (var veto in plan.Vetoes)
         {
