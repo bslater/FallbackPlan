@@ -542,7 +542,7 @@ public static class CliApplication
                     session.Store,
                     session.CreateSequence(),
                     session.SpoolDirectory,
-                    session.Repository.Descriptor.FormatVersion);
+                    session.Repository.EffectiveFormatVersion);
 
                 var snapshotId = RandomNumberGenerator.GetBytes(16);
                 var fileName = Path.GetFileName(filePath);

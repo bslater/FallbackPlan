@@ -858,7 +858,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             session.Store,
             session.CreateSequence(),
             session.SpoolDirectory,
-            session.Repository.Descriptor.FormatVersion,
+            session.Repository.EffectiveFormatVersion,
             observer: null,
             catalogue);
 

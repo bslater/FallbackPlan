@@ -1,10 +1,14 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using System.Globalization;
+using System.Text;
 using FallbackPlan.Domain;
+using FallbackPlan.Recovery;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Lifecycle;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -103,6 +107,142 @@ public sealed class FormatUpgradeTests : IDisposable
                 await RepositoryLifecycle.ReadEffectiveFormatAsync(
                     store, repository.Descriptor, repository.Credential, Timeout));
         }
+    }
+
+    [TestMethod]
+    public async Task ASetUpgradedBetweenBackups_SealsTheNewerFormatAndStillRestoresTheOlder()
+    {
+        // The whole point of the record, through the real service. The
+        // descriptor says 2 for ever — no destination would accept a
+        // replacement — so the run's version has to come from the effective
+        // read, and the proof is a destination holding blobs of both stamps
+        // that the recovery tool restores whole.
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.SealedDataPlane;
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/before.txt", "written while this set was at format 2");
+        await BackUpAsync();
+
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        var before = await DataBlobVersionsAsync(replica);
+        Assert.IsNotEmpty(before);
+        Assert.IsTrue(
+            before.All(version => version == FormatVersions.SealedDataPlane),
+            "the set wrote something other than format 2 before it was upgraded");
+
+        await WriteUpgradeAsync(FormatVersions.RelocatableRecords);
+
+        _harness.WriteSourceFile("docs/after.txt", "written after the upgrade, and bigger: " + new string('a', 200_000));
+        await BackUpAsync();
+
+        // Both stamps at the destination, and the older blobs are untouched:
+        // an upgrade rewrites nothing that is already sealed.
+        var after = await DataBlobVersionsAsync(replica);
+        Assert.HasCount(
+            before.Count,
+            after.Where(version => version == FormatVersions.SealedDataPlane).ToList());
+        Assert.IsNotEmpty(after.Where(version => version == FormatVersions.RelocatableRecords).ToList());
+
+        // The descriptor at the destination still says what it always said.
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+            new LocalFileSystemObjectStore(replica), Timeout);
+        Assert.AreEqual(FormatVersions.SealedDataPlane, descriptor.FormatVersion);
+
+        // The window, pinned rather than hidden. A capture ships the blobs it
+        // wrote; the upgrade record is an ordinary immutable object that no
+        // capture produced, so it rides the next reconciling pass. Until then
+        // the destination holds format-3 blobs and does not yet hold the
+        // record that explains them — which costs nothing, because every
+        // blob declares its own container, and is the honest thing for the
+        // tool to report while it is true.
+        var beforeConverging = await RunRecoveryAsync(
+            "open", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, beforeConverging.ExitCode, beforeConverging.Error);
+        Assert.Contains("format         2", beforeConverging.Output, StringComparison.Ordinal);
+
+        await SyncAsync();
+
+        // And after the ordinary pass the tool a person reaches for reports
+        // what the repository writes, saying what it was created at rather
+        // than replacing it — a line that said 2 over format-3 blobs would be
+        // the worst kind of wrong, because it would be read at the worst
+        // possible moment.
+        var opened = await RunRecoveryAsync(
+            "open", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, opened.ExitCode, opened.Error);
+        Assert.Contains("format         3 (created at 2)", opened.Output, StringComparison.Ordinal);
+
+        var listing = await RunRecoveryAsync(
+            "snapshots", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, listing.ExitCode, listing.Error);
+        var snapshots = listing.Output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])
+            .ToList();
+        Assert.HasCount(2, snapshots);
+
+        // The newest snapshot spans records sealed under two constructions;
+        // the reader dispatches on the envelope it finds, so both come back.
+        var newest = snapshots[0];
+        var into = Path.Combine(_harness.WorkPath, "recovered");
+        var restore = await RunRecoveryAsync(
+            "restore", "--repo", replica, "--passphrase-env", _harness.PassphraseVariable,
+            "--snapshot", newest, "--output", into);
+        Assert.AreEqual(0, restore.ExitCode, restore.Error);
+
+        foreach (var name in new[] { "before.txt", "after.txt" })
+        {
+            var recovered = Path.Combine(into, "docs", name);
+            Assert.IsTrue(File.Exists(recovered), $"{name} did not come back");
+            Assert.AreEqual(
+                await File.ReadAllTextAsync(Path.Combine(_harness.SourceRoot, "docs", name), Timeout),
+                await File.ReadAllTextAsync(recovered, Timeout));
+        }
+    }
+
+    private async Task SyncAsync()
+    {
+        await using var runtime = await StartAsync();
+        var queued = FanOut.EnqueueAll(
+            runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now, userInitiated: true);
+        await Task.WhenAll(queued).WaitAsync(Timeout);
+    }
+
+    private async Task BackUpAsync()
+    {
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets.Single();
+        var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true)
+            .WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+    }
+
+    /// <summary>The stamped container version of every data blob at a replica, read off the disk.</summary>
+    private async Task<List<ushort>> DataBlobVersionsAsync(string replica)
+    {
+        var store = new LocalFileSystemObjectStore(replica);
+        var versions = new List<ushort>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/data/"), ListOptions.Default, Timeout))
+        {
+            using var read = await store.OpenReadAsync(
+                entry.Key, new ObjectRange(0, BlobEnvelope.MaxLength), Timeout);
+            Assert.AreEqual(OpenReadOutcome.Found, read.Outcome);
+
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, Timeout);
+            versions.Add(BlobEnvelope.Parse(memory.ToArray()).FormatVersion);
+        }
+
+        return versions;
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunRecoveryAsync(params string[] args)
+    {
+        var output = new StringWriter(new StringBuilder(), CultureInfo.InvariantCulture);
+        var error = new StringWriter(new StringBuilder(), CultureInfo.InvariantCulture);
+        var exit = await RecoveryHost.RunAsync(args, output, error, CancellationToken.None);
+        return (exit, output.ToString(), error.ToString());
     }
 
     private async Task WriteUpgradeAsync(ushort toVersion)

@@ -6,6 +6,7 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
+using FallbackPlan.Repository.Format.Lifecycle;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
@@ -116,6 +117,8 @@ public sealed class RecoverySession : IDisposable
             return new RecoverySession(store, descriptor.RepositoryId, authority!.Credential.Clone(), authority)
             {
                 FormatVersion = descriptor.FormatVersion,
+                EffectiveFormatVersion = await ReadEffectiveFormatAsync(
+                    store, descriptor, authority.Credential, cancellationToken).ConfigureAwait(false),
             };
         }
         catch
@@ -125,8 +128,61 @@ public sealed class RecoverySession : IDisposable
         }
     }
 
-    /// <summary>The archive's format version, from its descriptor.</summary>
+    /// <summary>The archive's format version, from its descriptor — what it was <em>created</em> at.</summary>
     public int FormatVersion { get; private init; }
+
+    /// <summary>
+    /// The format version the archive's owner writes now (specification
+    /// 11 §4.1): the descriptor's, or higher when a signed upgrade record
+    /// says so. It changes nothing about how this tool reads — every blob
+    /// declares its own container in its envelope — but it is what a person
+    /// staring at a damaged archive needs told, and a line that said 2 over
+    /// format-3 blobs would be read at the worst possible moment.
+    /// </summary>
+    public int EffectiveFormatVersion { get; private init; }
+
+    /// <summary>
+    /// Reads the upgrade records beside the descriptor and answers the
+    /// effective version. The listing is here and the decision is in
+    /// <see cref="FormatUpgradeRecordCodec.EffectiveVersion"/>, because this
+    /// tool's dependency closure deliberately stops short of the engine and
+    /// what must not differ between the two is which records count.
+    /// </summary>
+    private static async ValueTask<ushort> ReadEffectiveFormatAsync(
+        IObjectStore store,
+        RepositoryDescriptor descriptor,
+        RepositoryWriteCredential credential,
+        CancellationToken cancellationToken)
+    {
+        var records = new List<ReadOnlyMemory<byte>>();
+
+        await foreach (var entry in store
+            .ListAsync(ObjectPrefix.Parse(FormatUpgradeRecordCodec.KeyPrefix), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            using var read = await store.OpenReadAsync(entry.Key, range: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (read.Outcome != OpenReadOutcome.Found)
+            {
+                continue;
+            }
+
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+            records.Add(memory.ToArray());
+        }
+
+        if (records.Count == 0)
+        {
+            return descriptor.FormatVersion;
+        }
+
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+        return FormatUpgradeRecordCodec.EffectiveVersion(
+            descriptor.FormatVersion,
+            records,
+            decoded => signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+    }
 
     /// <summary>Reads and parses the archive's descriptor.</summary>
     private static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(

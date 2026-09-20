@@ -27,7 +27,8 @@ public sealed class OpenedRepository : IDisposable
         RepositoryWriteCredential credential,
         KeyGeneration currentDataGeneration,
         KeyGeneration currentMetadataGeneration,
-        bool kdfBelowCreationMinimums)
+        bool kdfBelowCreationMinimums,
+        ushort effectiveFormatVersion)
     {
         Descriptor = descriptor;
         Keys = keys;
@@ -35,10 +36,26 @@ public sealed class OpenedRepository : IDisposable
         CurrentDataGeneration = currentDataGeneration;
         CurrentMetadataGeneration = currentMetadataGeneration;
         KdfBelowCreationMinimums = kdfBelowCreationMinimums;
+        EffectiveFormatVersion = effectiveFormatVersion;
     }
 
     /// <summary>The verified descriptor.</summary>
     public RepositoryDescriptor Descriptor { get; }
+
+    /// <summary>
+    /// The format version this repository <em>writes</em> — the descriptor's
+    /// own, or higher when a signed upgrade record says so (specification
+    /// 11 §4.1). Everything that seals or publishes reads this; the
+    /// descriptor's <c>FormatVersion</c> keeps meaning what the repository
+    /// was <em>created</em> at and never moves.
+    /// </summary>
+    /// <remarks>
+    /// It is fixed at open, so an upgrade written to a repository something
+    /// already holds open takes effect when that handle is next opened. A
+    /// caller that writes an upgrade against a cached handle is responsible
+    /// for dropping it — which is why the service's upgrade path evicts.
+    /// </remarks>
+    public ushort EffectiveFormatVersion { get; }
 
     /// <summary>The repository identity, from the descriptor.</summary>
     public RepositoryId RepositoryId => Descriptor.RepositoryId;
@@ -191,7 +208,9 @@ public static class RepositoryLifecycle
                 authority.Credential.Clone(),
                 KeyGeneration.Zero,
                 KeyGeneration.Zero,
-                kdfBelowCreationMinimums: false);
+                kdfBelowCreationMinimums: false,
+                // A repository being created carries no upgrade record.
+                effectiveFormatVersion: descriptor.FormatVersion);
 
             return (opened, authority);
         }
@@ -311,7 +330,8 @@ public static class RepositoryLifecycle
             credential.Clone(),
             KeyGeneration.Zero,
             KeyGeneration.Zero,
-            kdfBelowCreationMinimums: !kdfParameters.ValidateCreationMinimums().IsValid);
+            kdfBelowCreationMinimums: !kdfParameters.ValidateCreationMinimums().IsValid,
+            effectiveFormatVersion: descriptor.FormatVersion);
     }
 
     /// <summary>
@@ -367,7 +387,9 @@ public static class RepositoryLifecycle
             credential.Clone(),
             KeyGeneration.Zero,
             KeyGeneration.Zero,
-            kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);
+            kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid,
+            await ReadEffectiveFormatAsync(store, descriptor, credential, cancellationToken)
+                .ConfigureAwait(false));
     }
 
     /// <summary>
@@ -431,7 +453,9 @@ public static class RepositoryLifecycle
                 authority.Credential.Clone(),
                 KeyGeneration.Zero,
                 KeyGeneration.Zero,
-                kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid);
+                kdfBelowCreationMinimums: !descriptor.KdfParameters.ValidateCreationMinimums().IsValid,
+                await ReadEffectiveFormatAsync(store, descriptor, authority.Credential, cancellationToken)
+                    .ConfigureAwait(false));
 
             return (opened, authority);
         }
@@ -501,37 +525,30 @@ public static class RepositoryLifecycle
         ThrowHelper.ThrowIfNull(descriptor);
         ThrowHelper.ThrowIfNull(credential);
 
-        var effective = descriptor.FormatVersion;
-        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+        var records = new List<ReadOnlyMemory<byte>>();
 
         await foreach (var entry in store
             .ListAsync(ObjectPrefix.Parse(FormatUpgradeRecordCodec.KeyPrefix), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            var content = await ReadWholeObjectAsync(store, entry.Key, cancellationToken).ConfigureAwait(false);
-            if (content is null)
+            if (await ReadWholeObjectAsync(store, entry.Key, cancellationToken).ConfigureAwait(false) is { } content)
             {
-                continue;
-            }
-
-            DecodedFormatUpgradeRecord decoded;
-            try
-            {
-                decoded = FormatUpgradeRecordCodec.Decode(content);
-            }
-            catch (ManifestValidationException)
-            {
-                continue;
-            }
-
-            if (decoded.Value.ToVersion > effective
-                && signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span))
-            {
-                effective = decoded.Value.ToVersion;
+                records.Add(content);
             }
         }
 
-        return effective;
+        if (records.Count == 0)
+        {
+            // The common case, and worth not paying for: with nothing to
+            // check there is no signer to derive, and every open pays this.
+            return descriptor.FormatVersion;
+        }
+
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+        return FormatUpgradeRecordCodec.EffectiveVersion(
+            descriptor.FormatVersion,
+            records,
+            decoded => signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
     }
 
     /// <summary>

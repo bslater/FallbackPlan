@@ -99,6 +99,62 @@ public static class FormatUpgradeRecordCodec
         return writer.Encode();
     }
 
+    /// <summary>
+    /// The effective format version (specification 11 §4.1): the highest
+    /// <c>to_version</c> among <paramref name="records"/> that decodes, that
+    /// <paramref name="verify"/> accepts, and that names a version above
+    /// <paramref name="descriptorVersion"/> — else the descriptor's own.
+    /// </summary>
+    /// <param name="descriptorVersion">What the repository was created at; the floor, never moved below.</param>
+    /// <param name="records">The stored bytes under <see cref="KeyPrefix"/>, in any order.</param>
+    /// <param name="verify">
+    /// Checks the signature. It is handed the decoded record together with
+    /// the signed bytes and the signature, rather than being left to rebuild
+    /// the signed bytes itself — a caller that rebuilt them differently would
+    /// be applying a different rule while appearing to share this one.
+    /// </param>
+    /// <remarks>
+    /// The decision lives here, and the listing lives with each caller,
+    /// because the two parties that need it cannot share an object store:
+    /// the engine reads through <c>RepositoryLifecycle</c>, and the recovery
+    /// tool's dependency closure deliberately stops short of it. What must
+    /// not differ between them is which records count.
+    /// </remarks>
+    public static ushort EffectiveVersion(
+        ushort descriptorVersion,
+        IEnumerable<ReadOnlyMemory<byte>> records,
+        Func<DecodedFormatUpgradeRecord, bool> verify)
+    {
+        ThrowHelper.ThrowIfNull(records);
+        ThrowHelper.ThrowIfNull(verify);
+
+        var effective = descriptorVersion;
+
+        foreach (var content in records)
+        {
+            DecodedFormatUpgradeRecord decoded;
+            try
+            {
+                decoded = Decode(content);
+            }
+            catch (ManifestValidationException)
+            {
+                // A record that does not decode is a claim nobody made. It is
+                // not damage to report: refusing to open a repository over a
+                // file anyone able to write into it could have left would be
+                // a denial of service (§5.1).
+                continue;
+            }
+
+            if (decoded.Value.ToVersion > effective && verify(decoded))
+            {
+                effective = decoded.Value.ToVersion;
+            }
+        }
+
+        return effective;
+    }
+
     /// <summary>Decodes a stored record, rebuilding the signed prefix for the caller to verify.</summary>
     /// <param name="data">The stored bytes.</param>
     /// <returns>The decoded record.</returns>

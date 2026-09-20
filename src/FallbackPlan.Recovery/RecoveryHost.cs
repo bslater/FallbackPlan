@@ -121,7 +121,14 @@ public static class RecoveryHost
                 case "open":
                 {
                     output.WriteLine($"repository     {repositoryHex}");
-                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"format         {session.FormatVersion}"));
+                    // What it writes now, and what it was created at when an
+                    // upgrade record has moved the two apart (11 §4.1).
+                    var version = session.EffectiveFormatVersion == session.FormatVersion
+                        ? string.Create(CultureInfo.InvariantCulture, $"{session.FormatVersion}")
+                        : string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"{session.EffectiveFormatVersion} (created at {session.FormatVersion})");
+                    output.WriteLine($"format         {version}");
                     output.WriteLine(
                         "derivation     reproduced — this passphrase opens this archive, and every other "
                         + "archive this installation wrote");

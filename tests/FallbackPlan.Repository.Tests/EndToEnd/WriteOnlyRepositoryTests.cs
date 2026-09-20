@@ -459,6 +459,151 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     }
 
     [TestMethod]
+    public async Task WriteOnlyRepository_UpgradedBetweenPublications_SealsTheNewerFormatAndLeavesTheOlderAlone()
+    {
+        // The upgrade record earning its keep (11 §4.1). The descriptor still
+        // says 2 and always will — no destination would accept a replacement
+        // — so what the writer must consult is the EFFECTIVE version, and the
+        // proof is that blobs of both stamps end up in one repository and
+        // every file still comes back.
+        var store = CreateStore();
+        var (opened, authority, catalogue, files) = await CreateAndBackUpAsync(store);
+        using var db = catalogue;
+
+        Assert.AreEqual(FormatVersions.SealedDataPlane, opened.EffectiveFormatVersion);
+        var beforeUpgrade = await DataBlobVersionsAsync(store);
+        Assert.IsNotEmpty(beforeUpgrade);
+        Assert.IsTrue(
+            beforeUpgrade.All(version => version == FormatVersions.SealedDataPlane),
+            "the first publication wrote something other than format 2");
+
+        await RepositoryLifecycle.WriteFormatUpgradeAsync(
+            store, opened.Descriptor, opened.Credential, FormatVersions.RelocatableRecords,
+            Writer.ToArray(), upgradedAtUnixMilliseconds: 1_722_650_000_000, CancellationToken.None);
+        opened.Dispose();
+        authority.Dispose();
+
+        // Re-opened, because that is when the record is read: the descriptor
+        // is untouched and the effective version has moved.
+        using var passphrase = Right();
+        var (reopened, reauthority) = await RepositoryLifecycle.OpenForReadAsync(
+            store, passphrase, CancellationToken.None);
+        using var _1 = reopened;
+        using var _2 = reauthority;
+
+        Assert.AreEqual(FormatVersions.SealedDataPlane, reopened.Descriptor.FormatVersion);
+        Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.EffectiveFormatVersion);
+
+        var second = new byte[70_000];
+        new Random(52).NextBytes(second);
+        files["after-the-upgrade.bin"] = second;
+        var source = new FakeFileSystemSource();
+        foreach (var (path, content) in files)
+        {
+            source.AddFile(path, content);
+        }
+
+        var spool = Path.Combine(_root, "spool");
+        var snapshotId = Enumerable.Repeat((byte)0x78, 16).ToArray();
+        var orchestrator = new PublicationOrchestrator(
+            SmallPolicy, reopened.RepositoryId, Writer, KeyGeneration.Zero, reopened.Keys, reopened.Credential,
+            store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
+            spool,
+            reopened.EffectiveFormatVersion, observer: null, db);
+
+        var published = await orchestrator.PublishAsync(
+            new SnapshotJob
+            {
+                Source = source,
+                Roots = [new ScanRoot("/")],
+                DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+                SnapshotId = snapshotId,
+                NowUnixMilliseconds = 1_722_700_000_001,
+                DeclaredMaxDurationMs = 3_600_000,
+                ExpiryGeneration = 5,
+                ClientVersion = "write-only-tests/1.0",
+            },
+            CancellationToken.None);
+        Assert.IsEmpty(published.Failures);
+
+        // Both stamps, in one repository. The format-2 blobs are exactly the
+        // ones that were there before: an upgrade rewrites nothing.
+        var afterUpgrade = await DataBlobVersionsAsync(store);
+        Assert.HasCount(
+            beforeUpgrade.Count,
+            afterUpgrade.Where(version => version == FormatVersions.SealedDataPlane).ToList());
+        Assert.IsNotEmpty(afterUpgrade.Where(version => version == FormatVersions.RelocatableRecords).ToList());
+
+        // The delta the upgraded publication wrote carries the Merkle
+        // commitment; the one from before it does not. Nothing had to reason
+        // about which blobs are old — a delta covers only what its own
+        // publication wrote, so the parallel-or-absent rule holds for free.
+        using var loader = new FallbackPlan.Repository.Index.IndexLoader(
+            store, reopened.RepositoryId, reopened.Credential);
+        var state = await loader.LoadAsync(
+            currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            blobState: null, CancellationToken.None);
+        Assert.IsEmpty(state.Findings);
+
+        var deltas = state.Deltas.Select(entry => entry.Delta).OrderBy(delta => delta.Sequence).ToList();
+        Assert.HasCount(2, deltas);
+        Assert.IsEmpty(deltas[0].CoveredBlobMerkleRoots);
+        Assert.IsNotEmpty(deltas[1].CoveredBlobIds);
+        Assert.HasCount(deltas[1].CoveredBlobIds.Count, deltas[1].CoveredBlobMerkleRoots);
+
+        // And the whole of it restores: the newest snapshot spans records
+        // sealed under two different constructions, and the reader dispatches
+        // on the envelope it finds rather than on anything it was told.
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(db, snapshotId, string.Empty, target);
+        Assert.IsEmpty(plan.Conflicts);
+
+        using var reader = new RepositoryReader(reopened.RepositoryId, reopened.Keys, store, reauthority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var outputRoot = Path.Combine(_root, "mixed-out");
+        var restored = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, outputRoot,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "mixed",
+                NowUnixMilliseconds = 1_722_700_000_002,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
+        foreach (var (path, content) in files)
+        {
+            SequenceAssert.AreEqual(
+                content,
+                await File.ReadAllBytesAsync(
+                    Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)), CancellationToken.None));
+        }
+    }
+
+    /// <summary>The stamped container version of every data blob in the store, read off the disk.</summary>
+    private static async Task<List<ushort>> DataBlobVersionsAsync(LocalFileSystemObjectStore store)
+    {
+        var versions = new List<ushort>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/data/"), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(
+                entry.Key, new ObjectRange(0, BlobEnvelope.MaxLength), CancellationToken.None);
+            Assert.AreEqual(OpenReadOutcome.Found, read.Outcome);
+
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, CancellationToken.None);
+            versions.Add(BlobEnvelope.Parse(memory.ToArray()).FormatVersion);
+        }
+
+        return versions;
+    }
+
+    [TestMethod]
     public async Task WriteOnlyRepository_TheIndexDelta_CarriesMerkleRootsOnlyAtFormatThree()
     {
         // The publication gate, at the engine rather than at a frozen
