@@ -42,7 +42,8 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         counter,
         EncryptionProfile.Aes256GcmV1,
         profile ?? BlobWriteProfile.LocalDefault,
-        SpoolDirectory);
+        SpoolDirectory,
+        FormatVersions.Symmetric);
 
     private static ObjectId IdFor(byte[] plaintext, ObjectIdDeriver deriver) =>
         deriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext));
@@ -270,7 +271,8 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         await using var first = CreateWriter(counter: 7);
         await using var second = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Data, ClassKey, 7,
-            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory + "-second");
+            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory + "-second",
+            FormatVersions.Symmetric);
 
         using var deriver = new ObjectIdDeriver(ContentIdKey);
         var payload = "identical payload"u8.ToArray();

@@ -89,7 +89,7 @@ public static class RepositoryDescriptorCodec
         if (!FormatVersions.IsReadable(descriptor.FormatVersion))
         {
             throw new ArgumentException(
-                $"Only format {FormatLimits.FormatVersion} to {FormatLimits.LatestFormatVersion} descriptors are "
+                $"Only format {FormatVersions.SealedDataPlane} to {FormatLimits.LatestFormatVersion} descriptors are "
                 + "written; format 1 is withdrawn.",
                 nameof(descriptor));
         }
@@ -314,9 +314,9 @@ public static class RepositoryDescriptorCodec
         if (!FormatVersions.IsReadable(formatVersion))
         {
             return new DescriptorParseResult.FormatViolation(
-                $"The repository is format {formatVersion}; formats {FormatLimits.FormatVersion} to "
+                $"The repository is format {formatVersion}; formats {FormatVersions.SealedDataPlane} to "
                 + $"{FormatLimits.LatestFormatVersion} are read. "
-                + (formatVersion < FormatLimits.FormatVersion
+                + (formatVersion < FormatVersions.SealedDataPlane
                     ? "Format 1 is withdrawn — re-seed this location from a live installation."
                     : "Update this installation to read it."));
         }

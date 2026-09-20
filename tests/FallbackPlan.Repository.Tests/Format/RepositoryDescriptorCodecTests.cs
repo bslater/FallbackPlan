@@ -17,7 +17,7 @@ public sealed class RepositoryDescriptorCodecTests
 {
     private static RepositoryDescriptor Sample(bool unstable = true) => new(
         RepositoryId.FromBytes(Convert.FromHexString("0102030405060708090a0b0c0d0e0f10")),
-        FallbackPlan.Domain.FormatLimits.FormatVersion,
+        FallbackPlan.Domain.FormatVersions.SealedDataPlane,
         RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
         OptionalFeatures: [7],
         new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },
@@ -53,7 +53,7 @@ public sealed class RepositoryDescriptorCodecTests
         // key 9, the sealed-data-plane feature is required, and this reader
         // implements it — so the parse proceeds rather than refusing.
         Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
-        Assert.AreEqual(FallbackPlan.Domain.FormatLimits.FormatVersion, ok.Descriptor.FormatVersion);
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.SealedDataPlane, ok.Descriptor.FormatVersion);
         SequenceAssert.AreEqual(
             SampleV2().SealingPublicKey.ToArray(), ok.Descriptor.SealingPublicKey.ToArray());
         SequenceAssert.AreEqual<ushort>(

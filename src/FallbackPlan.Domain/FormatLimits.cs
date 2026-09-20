@@ -10,22 +10,31 @@ public static class FormatLimits
 {
     /// <summary>
     /// The repository format version a new repository is created with unless
-    /// told otherwise: file contents sealed to the repository's public key,
-    /// structure symmetric (ADR-0042). The descriptor carries it, and so does
-    /// every sealed data blob. Format 1 was withdrawn before any freeze; the
-    /// number is not renumbered, because it is bound into every descriptor
-    /// and every sealed blob's AAD already on disk. Readers accept every
-    /// version from this one to <see cref="LatestFormatVersion"/>
-    /// (<see cref="FormatVersions.IsReadable"/>).
+    /// told otherwise: format 3, whose records carry their own nonce and
+    /// sealed key and can therefore be relocated between blobs without being
+    /// opened ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)).
+    /// The descriptor carries it, and so does every blob.
     /// </summary>
-    public const ushort FormatVersion = FormatVersions.SealedDataPlane;
+    /// <remarks>
+    /// It equals <see cref="LatestFormatVersion"/>, and that is the rule
+    /// rather than a coincidence: a product that can read a format creates at
+    /// it, or the format reaches nobody. The two constants stay separate
+    /// because they answer different questions — what a reader accepts, and
+    /// what a writer makes — and a build that ever needs them to differ is
+    /// taking a decision, not inheriting one. An existing repository is not
+    /// migrated by this: its version is fixed at creation and moves only
+    /// under a signed upgrade record.
+    /// </remarks>
+    public const ushort FormatVersion = FormatVersions.RelocatableRecords;
 
     /// <summary>
-    /// The newest repository format this implementation reads and, on
-    /// request, writes: format 3, whose records are relocatable
-    /// ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)).
-    /// Creation stays at <see cref="FormatVersion"/> unless a caller asks for
-    /// this one; a repository's version is fixed at creation.
+    /// The newest repository format this implementation reads: format 3.
+    /// Readers accept every version from <see cref="FormatVersions.SealedDataPlane"/>
+    /// to this one (<see cref="FormatVersions.IsReadable"/>), so a format-2
+    /// repository written before the default moved is read in place and never
+    /// rewritten. Format 1 was withdrawn before any freeze; the numbers are
+    /// not renumbered, because they are bound into every descriptor and every
+    /// sealed blob's AAD already on disk.
     /// </summary>
     public const ushort LatestFormatVersion = FormatVersions.RelocatableRecords;
 

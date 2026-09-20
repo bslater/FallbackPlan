@@ -273,7 +273,7 @@ public static class RepositoryLifecycle
         if (!FormatVersions.IsReadable(formatVersion))
         {
             throw new ArgumentException(
-                $"Format {formatVersion} cannot be created; formats {FormatLimits.FormatVersion} to "
+                $"Format {formatVersion} cannot be created; formats {FormatVersions.SealedDataPlane} to "
                 + $"{FormatLimits.LatestFormatVersion} can (specification 00 §5).",
                 nameof(formatVersion));
         }

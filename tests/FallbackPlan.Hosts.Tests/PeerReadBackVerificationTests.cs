@@ -162,6 +162,12 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         // which the peer hashes its own copy was considered and refused as a
         // self-report (ADR-0058 §8): the bytes crossing the wire ARE the
         // proof.
+        //
+        // Pinned to format 2 deliberately, now that creation defaults to
+        // format 3: the digest tier is what proves a blob carrying no Merkle
+        // commitment, so a repository that publishes one would be proved by
+        // chunk and this case would silently stop testing its own subject.
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatVersions.SealedDataPlane;
         await SeedAsync();
         await SyncAsync();
 

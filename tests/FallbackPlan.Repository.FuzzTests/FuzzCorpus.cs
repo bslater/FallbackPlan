@@ -181,7 +181,7 @@ internal static class FuzzCorpus
     private static byte[] BuildSealedEnvelope()
     {
         var envelope = new BlobEnvelope(
-            FormatLimits.FormatVersion,
+            FormatVersions.SealedDataPlane,
             BlobClass.Data,
             new KeyGeneration(0),
             Blob16(0x2C),
@@ -211,6 +211,7 @@ internal static class FuzzCorpus
             var writer = BlobWriter.CreateSealed(
                 Repo, Writer, new KeyGeneration(0), new byte[32], sealingPublic, blobCounter: 3,
                 EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+                FormatVersions.SealedDataPlane,
                 pinned: new SpoolPinnedConfiguration(
                     1, 65_536, 0, 0, CompressionProfile.None.Value, "none",
                     EncryptionProfile.Aes256GcmV1.Value));
@@ -261,7 +262,7 @@ internal static class FuzzCorpus
     /// <summary>A valid serialized repository descriptor — the never-throws target: key 9 and the required sealed-data-plane feature (ADR-0042).</summary>
     public static byte[] DescriptorSeed { get; } = RepositoryDescriptorCodec.Serialize(new RepositoryDescriptor(
         Repo,
-        FormatLimits.FormatVersion,
+        FormatVersions.SealedDataPlane,
         RequiredFeatures: [RepositoryDescriptorCodec.FeatureSealedDataPlane],
         OptionalFeatures: [],
         new Argon2Parameters { MemoryKiB = 65536, Iterations = 3, Parallelism = 4 },

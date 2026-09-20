@@ -25,7 +25,7 @@ public sealed class RecordCipherTests
         var nonce = new byte[RecordNonce.AesGcmLength];
         RecordNonce.Write(ordinal, nonce);
         var aad = new byte[RecordAad.Length];
-        RecordAad.Write(repository, FormatLimits.FormatVersion, ObjectType.SegmentRecord, SomeId, ordinal, aad);
+        RecordAad.Write(repository, FormatVersions.SealedDataPlane, ObjectType.SegmentRecord, SomeId, ordinal, aad);
 
         var ciphertext = new byte[plaintext.Length];
         var tag = new byte[RecordCipher.TagLength];
@@ -39,7 +39,7 @@ public sealed class RecordCipherTests
         var nonce = new byte[RecordNonce.AesGcmLength];
         RecordNonce.Write(ordinal, nonce);
         var aad = new byte[RecordAad.Length];
-        RecordAad.Write(repository, FormatLimits.FormatVersion, ObjectType.SegmentRecord, SomeId, ordinal, aad);
+        RecordAad.Write(repository, FormatVersions.SealedDataPlane, ObjectType.SegmentRecord, SomeId, ordinal, aad);
 
         return RecordCipher.TryOpen(BlobKey, nonce, aad, ciphertext, tag, destination);
     }
@@ -106,7 +106,7 @@ public sealed class RecordCipherTests
         var nonce = new byte[RecordNonce.AesGcmLength];
         RecordNonce.Write(3, nonce);
         var aad = new byte[RecordAad.Length];
-        RecordAad.Write(RepoA, FormatLimits.FormatVersion, ObjectType.SegmentRecord, SomeId, 3, aad);
+        RecordAad.Write(RepoA, FormatVersions.SealedDataPlane, ObjectType.SegmentRecord, SomeId, 3, aad);
 
         var ciphertext = new byte[plaintext.Length];
         var tag = new byte[RecordCipher.TagLength];

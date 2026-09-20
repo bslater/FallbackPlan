@@ -149,8 +149,8 @@ internal static class FixtureRepositoryBuilder
             var structureKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
             var dataWriter = BlobWriter.CreateSealed(
                 identity.Repo, identity.Writer, KeyGeneration.Zero, structureKey, keys.SealingPublicKey, blobCounter: 2,
-                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool, Salt(0xE1),
-                formatVersion: FormatVersions.ContainerVersion(identity.FormatVersion, dataClass: true));
+                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+                FormatVersions.ContainerVersion(identity.FormatVersion, dataClass: true), Salt(0xE1));
 
             for (var offset = 0; offset < content.Length; offset += 64 * 1024)
             {
@@ -171,8 +171,8 @@ internal static class FixtureRepositoryBuilder
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
             var metaWriter = BlobWriter.Create(
                 identity.Repo, identity.Writer, KeyGeneration.Zero, BlobClass.Metadata, metadataKey, blobCounter: 3,
-                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool, Salt(0xE2),
-                formatVersion: FormatVersions.ContainerVersion(identity.FormatVersion, dataClass: false));
+                EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+                FormatVersions.ContainerVersion(identity.FormatVersion, dataClass: false), Salt(0xE2));
 
             var fileVersion = new FileVersionManifest
             {

@@ -425,7 +425,8 @@ public sealed class RelocatableBlobTests : IDisposable
         using var deriver = new ObjectIdDeriver(ContentIdKey);
         await using var writer = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Metadata, ClassKey, 50,
-            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory);
+            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory,
+            FormatVersions.Symmetric);
 
         await AppendAsync(writer, Enumerable.Repeat((byte)0xDD, 500).ToArray(), deriver);
 

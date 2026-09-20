@@ -259,7 +259,8 @@ public sealed class ReplicaVerifierTests
         var structureKey = repository.Keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
         await using var writer = BlobWriter.CreateSealed(
             repository.RepositoryId, Writer, KeyGeneration.Zero, structureKey, repository.Keys.SealingPublicKey,
-            blobCounter: 1, EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool);
+            blobCounter: 1, EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+            FormatVersions.ContainerVersion(repository.Descriptor.FormatVersion, dataClass: false));
 
         using var ids = new ObjectIdDeriver(repository.Keys.ContentIdKey);
         for (var i = 0; i < 3; i++)

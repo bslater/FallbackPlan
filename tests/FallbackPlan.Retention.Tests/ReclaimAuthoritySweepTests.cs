@@ -200,16 +200,27 @@ public sealed class ReclaimAuthoritySweepTests : IDisposable
 
         await File.WriteAllBytesAsync(
             descriptorPath,
-            RepositoryDescriptorCodec.Serialize(ok.Descriptor with { RequiredFeatures = [] }));
+            RepositoryDescriptorCodec.Serialize(ok.Descriptor with
+            {
+                RequiredFeatures =
+                [
+                    .. ok.Descriptor.RequiredFeatures.Where(feature =>
+                        feature != RepositoryDescriptorCodec.FeatureReclaimAuthority),
+                ],
+            }));
 
         var store = new LocalFileSystemObjectStore(RepoPath);
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         var repository = opened.Repository;
 
-        Assert.IsEmpty(repository.Descriptor.RequiredFeatures);
+        Assert.DoesNotContain(
+            RepositoryDescriptorCodec.FeatureReclaimAuthority, repository.Descriptor.RequiredFeatures);
 
         // A repository that makes no claim gets the old key, so a tombstone
-        // written by an older build reads exactly as it always did.
+        // written by an older build reads exactly as it always did. The
+        // descriptor's other features are untouched: stripping them all would
+        // leave a format-3 descriptor not declaring relocatable-records,
+        // which is a different violation and not this case's subject.
         var generation = new KeyGeneration(0);
         using var signing = RepositorySigner.Create(repository.Credential, generation);
         using var reclaim = RepositorySigner.FromSeed(

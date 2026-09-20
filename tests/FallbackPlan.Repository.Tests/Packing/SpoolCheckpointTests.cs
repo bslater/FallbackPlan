@@ -63,6 +63,7 @@ public sealed class SpoolCheckpointTests : IDisposable
             EncryptionProfile.Aes256GcmV1,
             BlobWriteProfile.LocalDefault,
             directory,
+            FormatVersions.Symmetric,
             Salt,
             pinned);
 
@@ -437,7 +438,7 @@ public sealed class SpoolCheckpointTests : IDisposable
         var writer = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Data, ClassKey, blobCounter: 7,
             EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory(name),
-            blobSalt: default, pinned: Pinned);
+            FormatVersions.Symmetric, blobSalt: default, pinned: Pinned);
         await writer.AbandonAsync();
 
         var spoolPath = Directory.GetFiles(SpoolDirectory(name), "*.spool").Single();

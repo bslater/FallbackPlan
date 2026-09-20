@@ -41,13 +41,43 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat2AndClaimsNoRelocatableRecords()
+    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat3AndDeclaresRelocatableRecords()
     {
-        // The creation default stays format 2 (ADR-0052 Amendment 1, item
-        // 7): a build that reads format 3 does not start writing it unasked.
+        // The creation default moved to format 3. It stayed at 2 while the
+        // format was new and untried, which was right then and meant that
+        // nothing a person installed ever wrote a relocatable record or a
+        // Merkle commitment — a format reachable only from a test is a
+        // format that reaches nobody.
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
         _ = await CreateAsync(store, passphrase);
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
+                "a format-3 descriptor must list relocatable-records (01 §3.2)");
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedExplicitlyAsFormat2_IsStillWrittenAndReopened()
+    {
+        // Moving the default must not withdraw the format. Every repository
+        // written before the move is format 2 and is read in place; a build
+        // that could no longer produce one could no longer reproduce a
+        // customer's archive either, and the conformance fixture that freezes
+        // the format-2 read contract is built through this very path.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings with { FormatVersion = FormatVersions.SealedDataPlane },
+            createdAtUnixMilliseconds: 1, CancellationToken.None);
+        repository.Dispose();
+        createdAuthority.Dispose();
 
         var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
         using (reopened)
@@ -221,14 +251,17 @@ public sealed class RepositoryLifecycleTests : IDisposable
 
         var descriptorPath = Path.Combine(_root, "store", "repository-format");
         var bytes = await File.ReadAllBytesAsync(descriptorPath);
-        Assert.AreEqual(2, bytes[9], "the framing carries u16(2) at offset 8");
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, bytes[9],
+            "the framing carries the created version as u16 at offset 8");
         bytes[9] = 1;
         // The body repeats the version under CBOR key 2: after the 16-byte
         // header come the map header, key 1, the byte-string header and the
         // 16-byte repository id, so key 2 sits at offset 35 and its value at 36.
         const int bodyVersion = RepositoryDescriptorCodec.HeaderLength + 1 + 1 + 1 + 16 + 1;
         Assert.AreEqual(0x02, bytes[bodyVersion - 1], "key 2");
-        Assert.AreEqual(0x02, bytes[bodyVersion], "the body carries format_version 2");
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, bytes[bodyVersion], "the body repeats the created format_version");
         bytes[bodyVersion] = 0x01;
         // Re-stamp the trailing digest so the refusal is the version's, not the digest's.
         System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32), bytes.AsSpan(bytes.Length - 32));

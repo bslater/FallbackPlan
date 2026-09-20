@@ -45,7 +45,7 @@ public sealed record RepositoryCreationSettings
         {
             (defects ??= []).Add(new ConfigurationDefect(
                 "format_version_unwritable",
-                $"Format {FormatVersion} cannot be created; formats {FormatLimits.FormatVersion} to "
+                $"Format {FormatVersion} cannot be created; formats {FormatVersions.SealedDataPlane} to "
                 + $"{FormatLimits.LatestFormatVersion} can (specification 00 §5)."));
         }
 

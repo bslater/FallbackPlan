@@ -177,10 +177,10 @@ public sealed class BlobWriter : IAsyncDisposable
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
         string spoolDirectory,
+        ushort formatVersion,
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null,
-        ILogger? logger = null,
-        ushort formatVersion = FormatLimits.SymmetricFormatVersion)
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -273,10 +273,10 @@ public sealed class BlobWriter : IAsyncDisposable
         EncryptionProfile encryptionProfile,
         BlobWriteProfile profile,
         string spoolDirectory,
+        ushort formatVersion,
         ReadOnlySpan<byte> blobSalt = default,
         SpoolPinnedConfiguration? pinned = null,
-        ILogger? logger = null,
-        ushort formatVersion = FormatLimits.FormatVersion)
+        ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(encryptionProfile);
         ThrowHelper.ThrowIfNull(profile);
@@ -288,12 +288,20 @@ public sealed class BlobWriter : IAsyncDisposable
                 nameof(encryptionProfile));
         }
 
-        if (formatVersion != FormatLimits.FormatVersion &&
+        // Named as the two containers this overload can emit, never as the
+        // version the product happens to create at. They were the same number
+        // while creation stayed at format 2, and writing the guard against
+        // the creation default made it a time bomb: moving that default to 3
+        // turned this into a refusal of the sealed data container itself, so
+        // every format-2 repository — every repository written before the
+        // move — would have stopped accepting backups on the build that made
+        // it.
+        if (formatVersion != FormatVersions.SealedDataPlane &&
             formatVersion != FormatVersions.RelocatableRecords)
         {
             throw new ArgumentException(
                 Strings.FormatBlobWriter_FormatVersionNotWritable(
-                    FormatLimits.FormatVersion, FormatVersions.RelocatableRecords, formatVersion),
+                    FormatVersions.SealedDataPlane, FormatVersions.RelocatableRecords, formatVersion),
                 nameof(formatVersion));
         }
 
