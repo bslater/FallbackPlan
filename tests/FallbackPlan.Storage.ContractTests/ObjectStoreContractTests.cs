@@ -345,6 +345,56 @@ public abstract class ObjectStoreContractTests
         Assert.IsFalse(metadata.Found);
     }
 
+    [TestMethod]
+    public async Task List_AfterAPut_ShowsItImmediately_WhenTheProviderPromisesStrongListing()
+    {
+        // The first case in the suite to read ListingConsistency, and the
+        // reason the capability exists: a provider that promises Strong is
+        // held to it, and one that promises Eventual is asked nothing it
+        // never offered. Skipping on Unknown is deliberate — a provider that
+        // makes no statement is not thereby making the strong one.
+        var store = CreateStore();
+        if (store.Capabilities.ListingConsistency != ListingConsistency.Strong)
+        {
+            return;
+        }
+
+        var key = ObjectKey.Parse("snapshots/dev-1/set-1/just-published");
+        await store.PutAsync(key, ContentFactory([0x07]), PutConditions.IfNotExists, CancellationToken.None);
+
+        var listed = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        Assert.Contains(key.Value, listed);
+    }
+
+    [TestMethod]
+    public async Task List_AfterADelete_DropsItImmediately_WhenTheProviderPromisesStrongListing()
+    {
+        var store = CreateStore();
+        if (store.Capabilities.ListingConsistency != ListingConsistency.Strong)
+        {
+            return;
+        }
+
+        var key = ObjectKey.Parse("tombstones/already-swept");
+        await store.PutAsync(key, ContentFactory([0x07]), PutConditions.IfNotExists, CancellationToken.None);
+        await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None);
+
+        var listed = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("tombstones/"), ListOptions.Default, CancellationToken.None))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        Assert.DoesNotContain(key.Value, listed);
+    }
+
     /// <summary>A stream that records whether the provider disposed it.</summary>
     private sealed class TrackingStream : MemoryStream
     {

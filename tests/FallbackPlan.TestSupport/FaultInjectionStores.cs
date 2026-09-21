@@ -614,3 +614,264 @@ public sealed class SeveringReadObjectStore(
         }
     }
 }
+
+/// <summary>
+/// A store whose <em>listings</em> lag its reads: a put is readable the
+/// instant it is acknowledged and does not appear in
+/// <see cref="IObjectStore.ListAsync"/> until <see cref="Release"/>; a delete
+/// stops reading immediately and goes on being listed until the same call.
+/// Reports <see cref="ListingConsistency.Eventual"/>, which nothing in this
+/// product has ever said before.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is the store model the format claims to assume and has never met:
+/// "the core must <b>not</b> assume filesystem rename, strong listing
+/// consistency, provider checksums, or mutable objects"
+/// (docs/architecture/05-storage-providers.md §1). Every provider the engine
+/// has ever run against is one POSIX filesystem, where a listing cannot lag
+/// because there is nothing for it to lag behind.
+/// </para>
+/// <para>
+/// Both directions are modelled because they fail differently. A put that is
+/// not yet listable <b>hides live data from a reader that enumerates</b> —
+/// the dangerous one, because absence reads as "there is nothing there"
+/// rather than as damage. A delete that is still listed <b>offers a reader
+/// something that is already gone</b>, which surfaces as a read failure the
+/// caller can see. An instrument that modelled only one would leave the other
+/// believed rather than held.
+/// </para>
+/// <para>
+/// <paramref name="keyFilter"/> scopes the lag, because the planes lag
+/// independently and the interesting states are the mixed ones — a
+/// <c>snapshots/</c> listing behind a current <c>blobs/</c> listing is not the
+/// same repository as one where both are behind. Null lags everything.
+/// </para>
+/// </remarks>
+public sealed class LaggingObjectStore(IObjectStore inner, Func<string, bool>? keyFilter = null) : IObjectStore
+{
+    private readonly Lock _gate = new();
+    private readonly HashSet<ObjectKey> _unlisted = [];
+    private readonly Dictionary<ObjectKey, ObjectEntry> _lingering = [];
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities =>
+        inner.Capabilities with { ListingConsistency = ListingConsistency.Eventual };
+
+    /// <summary>How many acknowledged puts are not yet listable.</summary>
+    public int UnlistedCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _unlisted.Count;
+            }
+        }
+    }
+
+    /// <summary>How many deleted objects are still being listed.</summary>
+    public int LingeringCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lingering.Count;
+            }
+        }
+    }
+
+    /// <summary>Lets every held listing catch up — the moment the lag ends.</summary>
+    public void Release()
+    {
+        lock (_gate)
+        {
+            _unlisted.Clear();
+            _lingering.Clear();
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+        inner.OpenReadAsync(key, range, cancellationToken);
+
+    /// <inheritdoc />
+    public async ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken)
+    {
+        var result = await inner.PutAsync(key, openContent, conditions, cancellationToken).ConfigureAwait(false);
+        if (result.Outcome == PutOutcome.Created && Lags(key))
+        {
+            lock (_gate)
+            {
+                // A key written back over one this store is still listing as
+                // deleted is visible again on the strength of the write, so
+                // the lingering entry goes rather than racing the new one.
+                _lingering.Remove(key);
+                _unlisted.Add(key);
+            }
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<ObjectEntry> ListAsync(
+        ObjectPrefix prefix,
+        ListOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        HashSet<ObjectKey> hidden;
+        List<ObjectEntry> lingering;
+        lock (_gate)
+        {
+            hidden = [.. _unlisted];
+            lingering = [.. _lingering.Values];
+        }
+
+        var merged = new List<ObjectEntry>();
+        await foreach (var entry in inner.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
+        {
+            if (!hidden.Contains(entry.Key))
+            {
+                merged.Add(entry);
+            }
+        }
+
+        // The inner store applied the prefix and the resume point to what it
+        // holds; a lingering entry is not held any more, so both are applied
+        // here, by the same ordinal comparison the local provider uses.
+        foreach (var entry in lingering)
+        {
+            if (!prefix.Matches(entry.Key))
+            {
+                continue;
+            }
+
+            if (options.ResumeAfter is { } resumeAfter &&
+                string.CompareOrdinal(entry.Key.Value, resumeAfter) <= 0)
+            {
+                continue;
+            }
+
+            merged.Add(entry);
+        }
+
+        merged.Sort(static (left, right) => left.Key.CompareTo(right.Key));
+
+        foreach (var entry in merged)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return entry;
+        }
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<DeleteResult> DeleteAsync(
+        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken)
+    {
+        // The length is read before the object goes: a listing that still
+        // shows a deleted object shows the length it had, and asking the
+        // inner store afterwards would answer nothing.
+        var metadata = await inner.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
+        var result = await inner.DeleteAsync(key, conditions, cancellationToken).ConfigureAwait(false);
+
+        if (result.Outcome == DeleteOutcome.Deleted && Lags(key))
+        {
+            lock (_gate)
+            {
+                // An object deleted before its put ever became listable was
+                // never visible; it does not now become so by being removed.
+                if (!_unlisted.Remove(key) && metadata.Metadata is { } found)
+                {
+                    _lingering[key] = new ObjectEntry(key, found.Length, key.Value);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private bool Lags(ObjectKey key) => keyFilter is null || keyFilter(key.ToString());
+}
+
+/// <summary>
+/// A store that declares less than it can do, so the capabilities the
+/// contract calls load-bearing can be withheld one at a time
+/// ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)).
+/// </summary>
+/// <remarks>
+/// It withholds the <em>behaviour</em> as well as the declaration, which is
+/// the point: a decorator that said <c>RangedReads = false</c> and went on
+/// serving ranges would let a caller that never checked pass anyway, and the
+/// whole reason for a capability is that somebody checks. Absent conditional
+/// create, <see cref="PutConditions.IfNotExists"/> is simply not honoured —
+/// which is what a store without it does, and why admitting one unchecked
+/// would let a publication overwrite instead of refusing.
+/// </remarks>
+public sealed class DegradedObjectStore(IObjectStore inner, StoreCapabilities capabilities) : IObjectStore
+{
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities { get; } = capabilities;
+
+    /// <inheritdoc />
+    public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+        inner.GetMetadataAsync(key, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<OpenReadResult> OpenReadAsync(ObjectKey key, ObjectRange? range, CancellationToken cancellationToken)
+    {
+        if (range is not null && !Capabilities.RangedReads)
+        {
+            // Not an expected outcome with a result of its own: asking a
+            // provider for something it never offered is a caller fault.
+            throw new NotSupportedException("this store does not serve ranged reads");
+        }
+
+        return inner.OpenReadAsync(key, range, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<PutResult> PutAsync(
+        ObjectKey key,
+        Func<CancellationToken, ValueTask<Stream>> openContent,
+        PutConditions conditions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conditions);
+
+        if (Capabilities.ConditionalCreate)
+        {
+            return await inner.PutAsync(key, openContent, conditions, cancellationToken).ConfigureAwait(false);
+        }
+
+        // A store without conditional create does not refuse a second write,
+        // it performs it — and answers Created, because from its side one
+        // happened. Downgrading the condition and delegating would model
+        // nothing: the local provider refuses a rewrite whatever it is asked,
+        // so the decorator has to reach past that refusal to be the store it
+        // is declaring itself to be.
+        await inner.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+        return await inner.PutAsync(key, openContent, PutConditions.None, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public IAsyncEnumerable<ObjectEntry> ListAsync(
+        ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+        inner.ListAsync(prefix, options, cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<DeleteResult> DeleteAsync(
+        ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+        inner.DeleteAsync(key, conditions, cancellationToken);
+}
