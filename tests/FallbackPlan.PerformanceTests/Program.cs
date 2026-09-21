@@ -36,6 +36,15 @@ if (args.Length > 0 && string.Equals(args[0], "catalogue-size", StringComparison
     return CatalogueSizeBenchmark.Run(versions);
 }
 
+if (args.Length > 0 && string.Equals(args[0], "rebuild-rate", StringComparison.OrdinalIgnoreCase))
+{
+    // NFR-PERF-012: one end-to-end forensic rebuild, timed, with the reads it
+    // cost beside the rate. Publishing and deleting an index plane is setup
+    // far too heavy for a BenchmarkDotNet case.
+    var files = args.Length > 1 ? int.Parse(args[1], CultureInfo.InvariantCulture) : 2_000;
+    return await RebuildRateBenchmark.RunAsync(files);
+}
+
 if (args.Length > 0 && string.Equals(args[0], "metadata-size", StringComparison.OrdinalIgnoreCase))
 {
     // Q4's encoding-size half: what canonical CBOR costs against the two

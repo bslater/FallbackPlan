@@ -52,6 +52,23 @@ public sealed class ForensicRebuilder : IDisposable
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
 
+    // The target walk reads one metadata record at a time, and every read
+    // needs the containing blob's record table to find the record's offset.
+    // Opening a reader per record re-issues three range reads and re-decrypts
+    // and re-decodes a table that can hold 65 536 entries — so a walk over a
+    // blob's R records cost 4R range reads and O(R^2) table scanning, against
+    // NFR-PERF-012's rate and NFR-PERF-015's time to first restored file.
+    //
+    // One blob is cached rather than many, because a footer's table can reach
+    // 16 MiB and NFR-PERF-001 bounds memory by configured limits and not by
+    // repository size. One is enough: manifests written together land in the
+    // same blob and the walk descends the tree in the order it was written,
+    // so consecutive reads hit the same blob nearly always. The index beside
+    // it turns the table lookup from a scan into a probe.
+    private BlobId? _cachedBlobId;
+    private BlobReader? _cachedReader;
+    private Dictionary<ObjectId, RecordTableEntry>? _cachedTable;
+
     /// <summary>Creates a rebuilder over the write credential — footers and keys are all a scan needs (FR-MAN-007).</summary>
     public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential)
     {
@@ -403,31 +420,77 @@ public sealed class ForensicRebuilder : IDisposable
             return null;
         }
 
+        if (!await EnsureCachedAsync(blobId, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        if (!_cachedTable!.TryGetValue(objectId, out var entry))
+        {
+            return null;
+        }
+
+        var read = await _cachedReader!.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
+        return read.Outcome == RecordReadOutcome.Ok ? read.Plaintext : null;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="blobId"/> the cached blob, answering false when
+    /// it cannot be opened. A blob that fails to open is not a finding here:
+    /// the scan has already opened every blob it listed and recorded whatever
+    /// damage it found, so a failure at this point means the object went away
+    /// under us and the record is simply unreachable.
+    /// </summary>
+    private async ValueTask<bool> EnsureCachedAsync(BlobId blobId, CancellationToken cancellationToken)
+    {
+        if (_cachedBlobId is { } cached && cached.Equals(blobId))
+        {
+            return true;
+        }
+
+        ReleaseCached();
+
         var storeKey = BlobStoreKeys.ForBlob(BlobClass.Metadata, _storeKeyDeriver.Derive(blobId));
 
         var metadata = await _store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
         if (!metadata.Found)
         {
-            return null;
+            return false;
         }
 
-        using var reader = await BlobReader.OpenAsync(
-            _store, storeKey, metadata.Metadata!.Length, _repositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken)
+        // A blob reached here was opened by the scan already, so a format
+        // failure now is not the local corruption ScanBlobAsync records as a
+        // finding — it is the object changing underneath a read-only pass.
+        // It propagates, as it did before this blob was held across records.
+        var reader = await BlobReader.OpenAsync(
+            _store, storeKey, metadata.Metadata!.Length, _repositoryId, DeriveClassKey, _objectIdDeriver,
+            cancellationToken)
             .ConfigureAwait(false);
 
-        var entry = reader.RecordTable.FirstOrDefault(record => record.ObjectId == objectId);
-        if (entry == default)
+        var table = new Dictionary<ObjectId, RecordTableEntry>(reader.RecordTable.Count);
+        foreach (var record in reader.RecordTable)
         {
-            return null;
+            table.TryAdd(record.ObjectId, record);
         }
 
-        var read = await reader.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
-        return read.Outcome == RecordReadOutcome.Ok ? read.Plaintext : null;
+        _cachedBlobId = blobId;
+        _cachedReader = reader;
+        _cachedTable = table;
+        return true;
+    }
+
+    private void ReleaseCached()
+    {
+        _cachedReader?.Dispose();
+        _cachedBlobId = null;
+        _cachedReader = null;
+        _cachedTable = null;
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
+        ReleaseCached();
         _objectIdDeriver.Dispose();
         _storeKeyDeriver.Dispose();
     }
