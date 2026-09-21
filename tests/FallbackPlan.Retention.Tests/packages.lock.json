@@ -403,7 +403,9 @@
       "fallbackplan.testsupport": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "FsCheck": "[3.3.4, )",
           "MSTest": "[3.11.0, )",

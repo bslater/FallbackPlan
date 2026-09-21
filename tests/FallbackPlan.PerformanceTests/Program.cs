@@ -28,6 +28,14 @@ if (args.Length > 0 && string.Equals(args[0], "pathlookup", StringComparison.Ord
     return PathLookupBenchmark.Run();
 }
 
+if (args.Length > 0 && string.Equals(args[0], "catalogue-size", StringComparison.OrdinalIgnoreCase))
+{
+    // NFR-PERF-011: what the schema costs per file version, by plane. Not a
+    // BenchmarkDotNet case — it measures a file on disk, not a call.
+    var versions = args.Length > 1 ? int.Parse(args[1], CultureInfo.InvariantCulture) : 100_000;
+    return CatalogueSizeBenchmark.Run(versions);
+}
+
 if (args.Length > 0 && string.Equals(args[0], "metadata-size", StringComparison.OrdinalIgnoreCase))
 {
     // Q4's encoding-size half: what canonical CBOR costs against the two
