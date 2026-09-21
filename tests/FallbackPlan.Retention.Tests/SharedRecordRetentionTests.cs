@@ -372,7 +372,8 @@ public sealed class SharedRecordRetentionTests : IDisposable
         var intents = IntentSurveyor.Survey(
             records, unparseable, sealingGeneration, (ulong)now.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
 
-        return (CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents),
+        return (CollectionPlanner.Plan(
+                survey, selection, gate, reader, reachable, unwalkable, intents, ListingConsistency.Strong),
             reachable, reader);
     }
 

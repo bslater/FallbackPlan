@@ -142,7 +142,8 @@ public static class RetentionRunner
             records, unparseable, sealingGeneration, nowUnixMilliseconds, skewMarginMs: 300_000);
 
         var plan = CollectionPlanner.Plan(
-            survey, selection, gate, reader, reachable, unwalkable, intents, resolveLocation);
+            survey, selection, gate, reader, reachable, unwalkable, intents,
+            store.Capabilities.ListingConsistency, resolveLocation);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
         Log.RetentionPlanned(log, set, selection.Keep.Count, selection.Expire.Count);

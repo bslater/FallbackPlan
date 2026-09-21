@@ -31,6 +31,13 @@ public enum ConvergenceRefusal
 
     /// <summary>The keep-set's closure would not walk — a reference led somewhere unreadable.</summary>
     UnwalkableClosure = 1,
+
+    /// <summary>
+    /// The source store does not promise that a listing reflects what it
+    /// holds, so the keep-set cannot be trusted to name every snapshot there
+    /// is ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)).
+    /// </summary>
+    LaggingListing = 2,
 }
 
 /// <summary>
@@ -111,6 +118,17 @@ public static class DestinationConvergence
         if (unwalkable.Count > 0)
         {
             return ConvergencePlan.Refused(ConvergenceRefusal.UnwalkableClosure);
+        }
+
+        // The keep-set is built from what a listing of this store could
+        // enumerate, and it is executed as deletions at a destination that
+        // may hold the only other copy. A snapshot the source's listing has
+        // not caught up to would be trimmed away there on the strength of a
+        // view that was incomplete — the same absence the collector refuses
+        // to act on, with a worse blast radius (architecture 05 §1).
+        if (store.Capabilities.ListingConsistency != ListingConsistency.Strong)
+        {
+            return ConvergencePlan.Refused(ConvergenceRefusal.LaggingListing);
         }
 
         var keptSnapshotKeys = keptSnapshots.Select(snapshot => snapshot.StoreKey.Value)

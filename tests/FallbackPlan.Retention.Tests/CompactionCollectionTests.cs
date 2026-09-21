@@ -290,7 +290,7 @@ public sealed class CompactionCollectionTests : IDisposable
             (ulong)Day1.AddDays(4).ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
 
         return CollectionPlanner.Plan(
-            survey, selection, gate, reader, reachable, unwalkable, intents,
+            survey, selection, gate, reader, reachable, unwalkable, intents, ListingConsistency.Strong,
             objectId => catalogue.ResolveLocation(objectId)?.BlobId);
     }
 

@@ -61,6 +61,12 @@ public static class CollectionPlanner
     /// <param name="reachable">The mark set from <see cref="StagingMark.MarkAsync"/>.</param>
     /// <param name="unwalkable">Objects the mark could not read — each one a veto.</param>
     /// <param name="intents">The journal's live-intent survey — step 4's input.</param>
+    /// <param name="listingConsistency">
+    /// What the store promises about listing freshness
+    /// ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)).
+    /// Anything but <see cref="ListingConsistency.Strong"/> vetoes the pass,
+    /// because every condemnation here rests on absence.
+    /// </param>
     /// <param name="resolveLocation">
     /// Where the index says an object now lives, or null when it has no
     /// opinion. Supplying it is what lets a pass condemn a blob compaction
@@ -79,6 +85,7 @@ public static class CollectionPlanner
         HashSet<ObjectId> reachable,
         IReadOnlyList<string> unwalkable,
         IntentSurvey intents,
+        ListingConsistency listingConsistency,
         Func<ObjectId, BlobId?>? resolveLocation = null)
     {
         ThrowHelper.ThrowIfNull(survey);
@@ -90,6 +97,24 @@ public static class CollectionPlanner
         ThrowHelper.ThrowIfNull(intents);
 
         var vetoes = new List<string>();
+
+        // Every condemnation below rests on absence: a blob is garbage
+        // because nothing reachable names it, and what is reachable is what
+        // the survey could enumerate. A store whose listings may lag cannot
+        // distinguish "there is no such snapshot" from "I cannot see it yet",
+        // so absence is not a fact there and this pass has no authority to
+        // act on it (architecture 05 §1; ADR-0012). The plan is still built
+        // and still reported — the dry run is worth having, because it says
+        // what a strongly-consistent store would have collected — and nothing
+        // may be deleted from it.
+        if (listingConsistency != ListingConsistency.Strong)
+        {
+            var promise = listingConsistency == ListingConsistency.Eventual ? "eventual" : "unstated";
+            vetoes.Add(
+                $"the store does not promise that a listing reflects what it holds (listing consistency: {promise}), "
+                + "and every condemnation in this pass rests on an object's absence from one");
+        }
+
         foreach (var undecodable in survey.Undecodable)
         {
             vetoes.Add($"snapshot object would not decode: {undecodable}");

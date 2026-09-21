@@ -653,6 +653,7 @@ public sealed class LaggingObjectStore(IObjectStore inner, Func<string, bool>? k
     private readonly Lock _gate = new();
     private readonly HashSet<ObjectKey> _unlisted = [];
     private readonly Dictionary<ObjectKey, ObjectEntry> _lingering = [];
+    private Func<string, bool>? _concealed;
 
     /// <inheritdoc />
     public StoreCapabilities Capabilities =>
@@ -682,6 +683,20 @@ public sealed class LaggingObjectStore(IObjectStore inner, Func<string, bool>? k
         }
     }
 
+    /// <summary>
+    /// Holds a listing back from keys this store did not write — the ordinary
+    /// case, since the process that published is rarely the process that
+    /// enumerates. A writer's put and a collector's listing are different
+    /// clients of the same bucket, and it is the second one's view that lags.
+    /// </summary>
+    public void Conceal(Func<string, bool> predicate)
+    {
+        lock (_gate)
+        {
+            _concealed = predicate;
+        }
+    }
+
     /// <summary>Lets every held listing catch up — the moment the lag ends.</summary>
     public void Release()
     {
@@ -689,6 +704,7 @@ public sealed class LaggingObjectStore(IObjectStore inner, Func<string, bool>? k
         {
             _unlisted.Clear();
             _lingering.Clear();
+            _concealed = null;
         }
     }
 
@@ -733,16 +749,18 @@ public sealed class LaggingObjectStore(IObjectStore inner, Func<string, bool>? k
 
         HashSet<ObjectKey> hidden;
         List<ObjectEntry> lingering;
+        Func<string, bool>? concealed;
         lock (_gate)
         {
             hidden = [.. _unlisted];
             lingering = [.. _lingering.Values];
+            concealed = _concealed;
         }
 
         var merged = new List<ObjectEntry>();
         await foreach (var entry in inner.ListAsync(prefix, options, cancellationToken).ConfigureAwait(false))
         {
-            if (!hidden.Contains(entry.Key))
+            if (!hidden.Contains(entry.Key) && concealed?.Invoke(entry.Key.ToString()) != true)
             {
                 merged.Add(entry);
             }

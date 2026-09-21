@@ -1628,9 +1628,15 @@ public static class FanOut
             return;
         }
 
-        var cause = reason == Retention.ConvergenceRefusal.UndecodableSnapshots
-            ? "the staging archive holds snapshots it cannot decode"
-            : "the keep-set's closure would not walk cleanly in the staging archive";
+        var cause = reason switch
+        {
+            Retention.ConvergenceRefusal.UndecodableSnapshots =>
+                "the staging archive holds snapshots it cannot decode",
+            Retention.ConvergenceRefusal.LaggingListing =>
+                "the archive's store cannot promise that a listing shows everything it holds, so a keep-set "
+                + "built from one could trim away a snapshot this machine simply has not seen yet",
+            _ => "the keep-set's closure would not walk cleanly in the staging archive",
+        };
         runtime.Notices.Raise(
             key,
             $"destination '{destinationName}' of set '{set.Name}' received a whole copy instead of its "
