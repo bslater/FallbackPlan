@@ -425,6 +425,103 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         return (plan, target, store, keys);
     }
 
+    [TestMethod]
+    public async Task RestoringOneFile_CostsWhatThatFileNeeds_NotWhatTheRepositoryHolds()
+    {
+        // NFR-PERF-009's first term, and the one that matters most: the load
+        // was proportional to the REPOSITORY, not to the restore, so a person
+        // recovering one document from a decade of backups paid for the
+        // decade. Asserted as the scaling property rather than as a count,
+        // because that is the part a bigger repository would otherwise break:
+        // the same restore is measured against a store that has since grown,
+        // and must not have got dearer.
+        var inner = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = OpenCatalogue("one-file");
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        async Task<(int Reads, int Needed, int InStore)> RestoreOneAsync(string label)
+        {
+            var plan = RestorePlanner.Plan(
+                catalogue, Enumerable.Repeat((byte)0xE7, 16).ToArray(), "data/file-1.bin", target);
+            Assert.ContainsSingle(plan.Items.Where(item => item.Kind != EntryKind.DirectoryPlaceholder));
+
+            // A fresh counter per restore, so each is measured on its own.
+            var counting = new CountingObjectStore(inner);
+            using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+            var needed = await RestoreBlobSet.ResolveAsync(
+                catalogue, plan, counting, Repo, keys, CancellationToken.None);
+            await reader.LoadBlobsAsync(needed.Blobs, CancellationToken.None);
+
+            var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+                plan, Path.Combine(SpoolDirectory, label),
+                new RestoreExecutionOptions { RunId = label, NowUnixMilliseconds = 1_722_700_000_000 },
+                CancellationToken.None);
+
+            Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+            Assert.IsEmpty(needed.Missing);
+
+            return (
+                (int)counting.Reads,
+                needed.Blobs.Count,
+                Directory.EnumerateFiles(Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories).Count());
+        }
+
+        // Incompressible, so the fixture actually spans blobs: the pattern
+        // Deterministic writes packs a whole snapshot into two.
+        static byte[] Incompressible(int seed)
+        {
+            var content = new byte[200_000];
+            new Random(seed).NextBytes(content);
+            return content;
+        }
+
+        var small = new FakeFileSystemSource();
+        for (var index = 0; index < 3; index++)
+        {
+            small.AddFile($"data/file-{index}.bin", Incompressible(40 + index), fileId: (ulong)(9_100 + index));
+        }
+
+        await CreateOrchestrator(inner, keys, credential, catalogue, "one-file-a")
+            .PublishAsync(Job(small, 0xE7), CancellationToken.None);
+
+        var before = await RestoreOneAsync("one-file-before");
+
+        // The repository grows by a multiple; the restore does not change.
+        var large = new FakeFileSystemSource();
+        for (var index = 0; index < 3; index++)
+        {
+            large.AddFile($"data/file-{index}.bin", Incompressible(40 + index), fileId: (ulong)(9_100 + index));
+        }
+
+        for (var index = 3; index < 18; index++)
+        {
+            large.AddFile($"data/file-{index}.bin", Incompressible(40 + index), fileId: (ulong)(9_100 + index));
+        }
+
+        await CreateOrchestrator(inner, keys, credential, catalogue, "one-file-a")
+            .PublishAsync(Job(large, 0xE8), CancellationToken.None);
+
+        var after = await RestoreOneAsync("one-file-after");
+
+        Assert.IsGreaterThan(
+            before.InStore * 2,
+            after.InStore,
+            $"the store must grow for this to measure anything: {before.InStore} -> {after.InStore} blob(s)");
+
+        // The point: the same restore, against a store several times larger,
+        // costs the same. Under the whole-store load it cost three reads per
+        // blob in the repository and would have grown with it.
+        Assert.AreEqual(
+            before.Reads,
+            after.Reads,
+            $"{before.Reads} reads over {before.InStore} blob(s), {after.Reads} over {after.InStore}");
+        Assert.AreEqual(before.Needed, after.Needed);
+        Assert.IsLessThan(after.InStore, after.Needed, $"{after.Needed} blob(s) named of {after.InStore}");
+    }
+
     private CatalogueDb OpenCatalogue(string name) =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 

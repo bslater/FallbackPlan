@@ -691,253 +691,26 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// What a plan is for: the objects it needs and cannot find, reported
-    /// before any byte moves rather than discovered part-way through. The
-    /// catalogue alone cannot answer this — it is a cache, and a cache
-    /// ahead of the store says "nothing missing" about the very objects
-    /// the store has lost — so each located blob is probed against the
-    /// store, one memoized metadata call per distinct blob. The manifest
-    /// blob alone is not enough: an item's SEGMENTS live in other blobs —
-    /// after a staging trim, precisely the ones no longer here (ADR-0034
-    /// §6) — so each manifest is read (metadata never trims) and its
-    /// referenced blobs are probed too (FR-RST-003). The keys that answered
-    /// are returned too: they are exactly the blob set a run needs, which is
-    /// what the targeted load opens instead of every footer in the store.
+    /// before any byte moves rather than discovered part-way through — and
+    /// the blob set a run opens instead of every footer in the store.
     /// </summary>
+    /// <remarks>
+    /// The work lives in <see cref="Restore.RestoreBlobSet"/>, beside the
+    /// planner, because every restore path needs it and only this one had
+    /// it: the CLI's direct restore opened every footer in the store, and so
+    /// did this handler whenever the source was local.
+    /// </remarks>
     private static async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
         RestoreContext context,
         Repository.Catalogue.Catalogue catalogue,
         RestorePlan plan,
         CancellationToken cancellationToken)
     {
-        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(context.Keys.KeyIdKey);
-        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(context.Keys.ContentIdKey);
-        using var metaReaders = new MetaReaderCache();
-        var blobKeys = new Dictionary<Domain.Identifiers.BlobId, ObjectKey?>();
-        var missing = new List<string>();
-        var needed = new HashSet<ObjectKey>();
+        var resolved = await Restore.RestoreBlobSet.ResolveAsync(
+            catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
+            .ConfigureAwait(false);
 
-        async ValueTask<bool> PresentAsync(Repository.Catalogue.ResolvedLocation location)
-        {
-            if (!blobKeys.TryGetValue(location.BlobId, out var key))
-            {
-                key = await FindBlobKeyAsync(
-                    context.Store, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId), cancellationToken)
-                    .ConfigureAwait(false);
-                blobKeys[location.BlobId] = key;
-            }
-
-            if (key is { } found)
-            {
-                needed.Add(found);
-                return true;
-            }
-
-            return false;
-        }
-
-        foreach (var item in plan.Items)
-        {
-            if (item.Kind == EntryKind.DirectoryPlaceholder)
-            {
-                continue;
-            }
-
-            if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
-            {
-                missing.Add(item.Path);
-                continue;
-            }
-
-            if (!await PresentAsync(location).ConfigureAwait(false))
-            {
-                missing.Add(item.Path);
-                continue;
-            }
-
-            // A manifest that is present but will not read is damage, not
-            // absence — verify's business, and nothing this plan can name
-            // segments from.
-            var manifest = await ReadManifestAsync(
-                context, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
-                .ConfigureAwait(false);
-            if (manifest is null)
-            {
-                continue;
-            }
-
-            var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
-                .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
-            foreach (var referenced in references)
-            {
-                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
-                    || !await PresentAsync(segmentLocation).ConfigureAwait(false))
-                {
-                    missing.Add(item.Path);
-                    break;
-                }
-            }
-        }
-
-        return (missing, needed);
-    }
-
-    /// <summary>
-    /// Reads one file-version manifest through its meta blob's authenticated
-    /// footer — the plan-side targeted read, cached per blob because a
-    /// snapshot's manifests cluster in a few metadata blobs.
-    /// </summary>
-    private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
-        RestoreContext context,
-        Domain.Identifiers.ObjectId objectId,
-        Repository.Catalogue.ResolvedLocation location,
-        Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
-        Repository.Crypto.ObjectIdDeriver objectIdDeriver,
-        MetaReaderCache metaReaders,
-        CancellationToken cancellationToken)
-    {
-        var storeKey = Repository.Packing.BlobStoreKeys.ForBlob(
-            BlobClass.Metadata, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId));
-
-        if (!metaReaders.TryGet(storeKey, out var cached))
-        {
-            Repository.Packing.BlobReader? reader;
-            try
-            {
-                var metadata = await context.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
-                reader = metadata.Metadata is not { Length: > 0 }
-                    ? null
-                    : await Repository.Packing.BlobReader.OpenAsync(
-                        context.Store, storeKey, metadata.Metadata.Length, context.RepositoryId,
-                        context.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
-                        .ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is Repository.Packing.BlobFormatException or IOException)
-            {
-                reader = null;
-            }
-
-            cached = metaReaders.Add(storeKey, reader);
-        }
-
-        if (cached is null || !cached.Manifests.TryGetValue(objectId, out var located))
-        {
-            return null;
-        }
-
-        var read = await cached.Reader.ReadRecordAsync(located, cancellationToken).ConfigureAwait(false);
-        if (read.Outcome != Repository.Packing.RecordReadOutcome.Ok || read.Plaintext is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext);
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// The plan probe's open meta-blob readers: memoized, because a
-    /// snapshot's manifests cluster in a few metadata blobs — and BOUNDED,
-    /// because a whole-snapshot plan can touch as many metadata blobs as the
-    /// repository holds, and plan memory must not scale with repository size
-    /// (NFR-PERF-001). Each reader carries an object-id index over its
-    /// manifest records, so the per-item lookup is a dictionary hit rather
-    /// than a scan of the blob's whole record table.
-    /// </summary>
-    private sealed class MetaReaderCache : IDisposable
-    {
-        private const int Capacity = 32;
-
-        private readonly Dictionary<ObjectKey, Cached?> _entries = [];
-        private readonly Queue<ObjectKey> _openOrder = new();
-
-        /// <summary>One open reader and its manifest index.</summary>
-        public sealed record Cached(
-            Repository.Packing.BlobReader Reader,
-            IReadOnlyDictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry> Manifests);
-
-        /// <summary>Looks a blob up; a null <paramref name="cached"/> with a true return is a remembered unreadable blob.</summary>
-        public bool TryGet(ObjectKey key, out Cached? cached) => _entries.TryGetValue(key, out cached);
-
-        /// <summary>Caches a freshly opened reader (or the fact that the blob would not open).</summary>
-        public Cached? Add(ObjectKey key, Repository.Packing.BlobReader? reader)
-        {
-            if (reader is null)
-            {
-                // Negative entries are a key and a null — never worth evicting.
-                _entries[key] = null;
-                return null;
-            }
-
-            if (_openOrder.Count >= Capacity)
-            {
-                var evicted = _openOrder.Dequeue();
-                if (_entries.Remove(evicted, out var old))
-                {
-                    old?.Reader.Dispose();
-                }
-            }
-
-            var manifests = new Dictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry>();
-            foreach (var entry in reader.RecordTable)
-            {
-                if (entry.ObjectType == Domain.ObjectType.FileVersionManifest)
-                {
-                    manifests.TryAdd(entry.ObjectId, entry);
-                }
-            }
-
-            var cached = new Cached(reader, manifests);
-            _entries[key] = cached;
-            _openOrder.Enqueue(key);
-            return cached;
-        }
-
-        /// <inheritdoc/>
-        public void Dispose()
-        {
-            foreach (var cached in _entries.Values)
-            {
-                cached?.Reader.Dispose();
-            }
-
-            _entries.Clear();
-        }
-    }
-
-    /// <summary>
-    /// The store key a blob actually exists under, trying both classes — or
-    /// null. A store that cannot answer reads as missing: the plan's job is
-    /// to warn before bytes move, and "unreachable" warrants the warning as
-    /// much as "absent". The found key is what the run's targeted load opens.
-    /// </summary>
-    private static async ValueTask<ObjectKey?> FindBlobKeyAsync(
-        Storage.Abstractions.IObjectStore store,
-        Domain.Identifiers.StoreBlobKey blobKey,
-        CancellationToken cancellationToken)
-    {
-        foreach (var blobClass in new[] { BlobClass.Metadata, BlobClass.Data })
-        {
-            var key = Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey);
-            try
-            {
-                var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
-                if (metadata.Found && metadata.Metadata!.Length > 0)
-                {
-                    return key;
-                }
-            }
-            catch (IOException)
-            {
-            }
-        }
-
-        return null;
+        return ([.. resolved.Missing], [.. resolved.Blobs]);
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
@@ -1023,18 +796,14 @@ public sealed partial class ServiceCommandHandler(
 
             using var reader = new RepositoryReader(
                 context.RepositoryId, context.Keys, context.Store, context.Source?.ReadAuthority);
-            if (context.Source is null)
-            {
-                await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                // A source may be remote: open only the blobs the plan needs,
-                // known exactly from the same probe the plan verb runs
-                // (ADR-0041).
-                var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
-                await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
-            }
+
+            // Open only the blobs the plan needs, known exactly from the same
+            // probe the plan verb runs (ADR-0041). This used to be the remote
+            // source's path alone, and a local source opened every footer in
+            // the store — a cost proportional to the repository rather than
+            // to the restore, which is NFR-PERF-009's first term.
+            var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+            await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
 
             var options = new RestoreExecutionOptions
             {
