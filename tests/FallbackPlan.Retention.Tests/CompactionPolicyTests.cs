@@ -95,6 +95,59 @@ public sealed class CompactionPolicyTests
         Assert.Contains("below the threshold", lines, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The format gate, and the whole of what it says: below format 3 a
+    /// rewrite means decrypt-and-reseal, which needs a content key this
+    /// service does not hold, so nothing is selected and the remedy is
+    /// named.
+    /// </summary>
+    [TestMethod]
+    public void AFormatTwoSet_SelectsNothing_AndNamesTheRemedy()
+    {
+        var blob = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024);
+
+        var selection = Default.Select(FormatVersions.SealedDataPlane, [blob]);
+
+        Assert.IsEmpty(selection.Candidates);
+        Assert.Contains(
+            "upgrade_set_format",
+            string.Join("\n", selection.Lines),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// And it is quiet when there is nothing to be quiet about. ADR-0066
+    /// decision 6 supports both formats and pushes neither, and the
+    /// <c>format-upgradable</c> notice is silenced for good by acknowledging
+    /// it; a retention line repeating the offer every pass would re-open what
+    /// that acknowledgement closed. So the refusal is printed only when a
+    /// backlog would otherwise have produced work.
+    /// </summary>
+    [TestMethod]
+    public void AFormatTwoSet_WithNothingWorthRewriting_SaysNothingAtAll()
+    {
+        // A backlog, but every blob below the threshold: at format 3 this
+        // pass would also have done nothing, so there is no offer to make.
+        var trivial = Blob(liveBytes: 64 * 1024, deadBytes: 576 * 1024);
+
+        Assert.IsEmpty(Default.Select(FormatVersions.SealedDataPlane, [trivial]).Lines
+            .Where(line => line.Contains("upgrade_set_format", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public void AFormatThreeSet_SelectsAndDescribesAsThePolicyAlwaysDid()
+    {
+        var blob = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024);
+
+        var selection = Default.Select(FormatVersions.RelocatableRecords, [blob]);
+
+        Assert.AreEqual(blob.BlobId, Assert.ContainsSingle(selection.Candidates).BlobId);
+        Assert.Contains(
+            "compaction would rewrite",
+            string.Join("\n", selection.Lines),
+            StringComparison.Ordinal);
+    }
+
     private static int _next;
 
     private static CompactableBlob Blob(long liveBytes, long deadBytes)

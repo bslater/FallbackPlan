@@ -1,5 +1,6 @@
 using System.Globalization;
 using Bodu;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
@@ -27,6 +28,14 @@ public sealed record CompactableBlob(
     long DeadRecords);
 
 /// <summary>
+/// What one pass would rewrite, and what it would say about it.
+/// </summary>
+/// <param name="Candidates">The blobs to hand a compaction pass, in the order to take them.</param>
+/// <param name="Lines">The dry-run lines, empty when there is nothing to say (FR-GC-005).</param>
+public sealed record CompactionSelection(
+    IReadOnlyList<CompactableBlob> Candidates, IReadOnlyList<string> Lines);
+
+/// <summary>
 /// Which of the backlog a pass rewrites (ADR-0067). Two bounds, for two
 /// different reasons: a <b>fraction</b>, because rewriting a blob that is
 /// mostly live moves many bytes to reclaim few; and a <b>floor in bytes</b>,
@@ -43,6 +52,51 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
 {
     /// <summary>Half dead, four mebibytes reclaimed, two hundred and fifty-six read in a pass.</summary>
     public static CompactionPolicy Default { get; } = new(0.5, 4L * 1024 * 1024, 256L * 1024 * 1024);
+
+    /// <summary>
+    /// What this pass would rewrite and what it would say — the whole
+    /// decision in one call, so the dry run and the act cannot be computed
+    /// twice and disagree (FR-GC-005).
+    /// </summary>
+    /// <param name="effectiveFormatVersion">
+    /// The repository's effective format ([ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md)).
+    /// Below format 3 a rewrite is decrypt-and-reseal, which needs a content
+    /// key this service does not hold (FR-WOR-003), so nothing is selected.
+    /// </param>
+    /// <param name="backlog">Every blob the collector kept whole for a live minority.</param>
+    /// <returns>The candidates and the lines.</returns>
+    public CompactionSelection Select(ushort effectiveFormatVersion, IReadOnlyList<CompactableBlob> backlog)
+    {
+        ThrowHelper.ThrowIfNull(backlog);
+
+        var candidates = SelectCandidates(backlog);
+
+        if (FormatVersions.HasRelocatableRecords(effectiveFormatVersion))
+        {
+            return new CompactionSelection(candidates, Describe(backlog, candidates));
+        }
+
+        // Below format 3 the offer is made only when there is something to
+        // offer. ADR-0066 decision 6 supports both formats and pushes
+        // neither, and acknowledging the format-upgradable notice silences it
+        // for good; a line repeating the offer on every pass would re-open
+        // what that acknowledgement closed. So a set whose backlog would not
+        // have been worth rewriting anyway hears nothing.
+        if (candidates.Count == 0)
+        {
+            return new CompactionSelection([], []);
+        }
+
+        var reclaimable = candidates.Sum(blob => blob.DeadBytes).ToString("N0", CultureInfo.InvariantCulture);
+        return new CompactionSelection(
+            [],
+            [
+                $"compaction would reclaim {reclaimable} byte(s) here, and this set is at format "
+                + $"{effectiveFormatVersion.ToString(CultureInfo.InvariantCulture)}: relocating a sealed record "
+                + "is a format-3 property, and below it a rewrite needs a content key this service does not "
+                + "hold. Run upgrade_set_format to make the next pass able to do it.",
+            ]);
+    }
 
     /// <summary>
     /// The blobs this pass would rewrite, largest reclaim first so that a

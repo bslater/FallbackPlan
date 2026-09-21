@@ -166,6 +166,39 @@ public sealed class CompactionCollectionTests : IDisposable
             "the drained blob was condemned on the strength of an entry naming a blob nobody holds");
     }
 
+    /// <summary>
+    /// The dry run says what the pass would rewrite and rewrites nothing
+    /// (FR-GC-005). The selection is the runner's rather than the caller's
+    /// so that what is described and what is done cannot be computed twice
+    /// and disagree.
+    /// </summary>
+    [TestMethod]
+    public async Task ADryRun_NamesWhatItWouldRewrite_AndRewritesNothing()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store);
+
+        var before = await StoredBlobIdsAsync(store);
+
+        // A floor this fixture's few kilobytes of garbage can clear. What
+        // the thresholds themselves are worth is CompactionPolicyTests', and
+        // what is asserted here is that a dry run reports the selection and
+        // touches nothing.
+        var report = await PlanOnlyAsync(
+            store, Day1.AddDays(3).AddHours(1), CompactionPolicy.Default with { MinimumReclaim = 512 });
+
+        Assert.IsNotEmpty(report.CompactionCandidates);
+        Assert.Contains(
+            "compaction would rewrite",
+            string.Join("\n", report.Lines),
+            StringComparison.Ordinal);
+
+        CollectionAssert.AreEquivalent(
+            before.Select(id => id.ToString()).ToList(),
+            (await StoredBlobIdsAsync(store)).Select(id => id.ToString()).ToList(),
+            "a dry run changed the store");
+    }
+
     /// <summary>Four backups with churn, so some records in the early blobs die.</summary>
     private async Task ChurnAsync(LocalFileSystemObjectStore store)
     {
@@ -342,6 +375,23 @@ public sealed class CompactionCollectionTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
             (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim,
             resolveLocation: objectId => catalogue.ResolveLocation(objectId)?.BlobId);
+    }
+
+    private async Task<RetentionReport> PlanOnlyAsync(
+        LocalFileSystemObjectStore store, DateTimeOffset now, CompactionPolicy policy)
+    {
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        using var catalogue = OpenCatalogue(opened.Repository.RepositoryId);
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        return await RetentionRunner.RunAsync(
+            store, opened.Repository, new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+            [new SetDestinationReference { Ref = "vault" }],
+            name => sync.Find(SetId, name), _ => TrimVerification.None,
+            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: false,
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None,
+            resolveLocation: objectId => catalogue.ResolveLocation(objectId)?.BlobId,
+            compactionPolicy: policy);
     }
 
     public void Dispose()

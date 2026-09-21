@@ -15,11 +15,19 @@ namespace FallbackPlan.Retention;
 /// <param name="Held">The gate's holds, for the caller to raise deferral warnings from.</param>
 /// <param name="TombstonesWritten">Tombstones written this pass — 0 on a dry run.</param>
 /// <param name="Swept">The sweep outcome — null on a dry run.</param>
+/// <param name="CompactionCandidates">
+/// The blobs this pass would rewrite (ADR-0067), chosen here rather than by
+/// the caller so that the dry run and the act cannot be computed twice and
+/// disagree. This runner takes a store and a repository and deliberately
+/// cannot write a blob, so performing them is the caller's — but deciding
+/// which they are is planning, and planning is this runner's.
+/// </param>
 public sealed record RetentionReport(
     IReadOnlyList<string> Lines,
     IReadOnlyList<HeldSnapshot> Held,
     int TombstonesWritten,
-    SweepOutcome? Swept);
+    SweepOutcome? Swept,
+    IReadOnlyList<CompactableBlob> CompactionCandidates);
 
 /// <summary>
 /// One set's retention pass, whole (architecture 07): survey the store,
@@ -50,6 +58,7 @@ public static class RetentionRunner
     /// and for a repository written before the feature.
     /// </param>
     /// <param name="resolveLocation">Where the index says an object now lives — what lets this pass condemn a blob compaction drained (ADR-0067). Null plans as it did before compaction existed.</param>
+    /// <param name="compactionPolicy">Which of the compaction backlog a pass would rewrite; <see cref="CompactionPolicy.Default"/> when omitted.</param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -65,7 +74,8 @@ public static class RetentionRunner
         string? setName = null,
         ILogger? logger = null,
         ReclaimAuthority? reclaim = null,
-        Func<ObjectId, BlobId?>? resolveLocation = null)
+        Func<ObjectId, BlobId?>? resolveLocation = null,
+        CompactionPolicy? compactionPolicy = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -148,6 +158,15 @@ public static class RetentionRunner
             Log.RetentionHeld(log, set, vetoes);
         }
 
+        // Compaction is planned either way and never done here: a vetoed
+        // plan selects nothing, because a collector that cannot say what is
+        // garbage cannot say what is worth rewriting either.
+        var compaction = plan.Deletable
+            ? (compactionPolicy ?? CompactionPolicy.Default).Select(
+                repository.EffectiveFormatVersion, plan.PartlyLiveBlobs)
+            : new CompactionSelection([], []);
+        lines.AddRange(compaction.Lines);
+
         // The trim decides either way — the dry run must say what would go
         // (FR-GC-005) — and deletes only under apply, after the sweep.
         var trim = await StagingTrim.PlanAsync(
@@ -158,7 +177,7 @@ public static class RetentionRunner
 
         if (!apply)
         {
-            return new RetentionReport(lines, gate.Held, 0, null);
+            return new RetentionReport(lines, gate.Held, 0, null, compaction.Candidates);
         }
 
         // The grace clock: the single writer's highest published sequence.
@@ -204,6 +223,6 @@ public static class RetentionRunner
         Log.CollectionComplete(
             log, swept.Deleted, swept.NotYetEligible, swept.TombstonesCleared, trimmedBlobs, trimmedBytes);
 
-        return new RetentionReport(lines, gate.Held, written, swept);
+        return new RetentionReport(lines, gate.Held, written, swept, compaction.Candidates);
     }
 }

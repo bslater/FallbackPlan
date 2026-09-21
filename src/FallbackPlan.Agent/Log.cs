@@ -141,6 +141,11 @@ internal static partial class Log
     internal static partial void ReceiptsSwept(ILogger logger, int deletions, int replications);
 
     [LoggerMessage(
+        EventId = 3781, Level = LogLevel.Warning,
+        Message = "Compaction did not run for set {Set}; the retention this pass did stands and the next pass retries")]
+    internal static partial void CompactionFailed(ILogger logger, string set, Exception exception);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);

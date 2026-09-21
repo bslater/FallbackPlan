@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
@@ -300,7 +301,13 @@ public sealed partial class ServiceCommandHandler(
                     cancellationToken,
                     set.Name,
                     runtime.LoggerFor(typeof(Retention.RetentionRunner)),
-                    reclaim).ConfigureAwait(false);
+                    reclaim,
+                    // Where the index now says an object lives. Without it a
+                    // blob an earlier pass compacted is never condemned —
+                    // its records are still reachable and still physically
+                    // present — and compaction would reclaim nothing, ever
+                    // (ADR-0067).
+                    objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
                 // the scheduled sync holds no authority to delete, so it
@@ -311,6 +318,20 @@ public sealed partial class ServiceCommandHandler(
                 {
                     lines.AddRange(
                         (await FanOut.ConvergePeersAsync(runtime, set, archive, reclaim, now, cancellationToken)
+                            .ConfigureAwait(false))
+                        .Select(line => $"{set.Name}: {line}"));
+                }
+
+                // And the third phase, in the same position and for the same
+                // reason: it writes, so it runs while the gate is held. It
+                // needs no reclaim authority, because it deletes nothing —
+                // the blobs it drains are condemned by the NEXT pass's plan,
+                // on the collector's own terms, and swept after their grace
+                // like any other garbage (ADR-0067).
+                if (apply && report.CompactionCandidates.Count > 0)
+                {
+                    lines.AddRange(
+                        (await CompactSetAsync(runtime, set, archive, report, now, cancellationToken)
                             .ConfigureAwait(false))
                         .Select(line => $"{set.Name}: {line}"));
                 }
@@ -342,6 +363,83 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new RetentionResult(lines);
+    }
+
+    /// <summary>
+    /// Rewrites the blobs this pass's plan chose, and moves the index onto
+    /// the result ([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Source and destination are both <c>archive.Store</c>, which is what
+    /// makes the two set shapes one path: for a staging set that is the
+    /// archive's own directory, and for a direct-ship set it is the ship
+    /// sink — candidates read back from the destinations in priority order,
+    /// and the blobs produced written out through the same sink.
+    /// </para>
+    /// <para>
+    /// Peers are excluded, and by the sink rather than by anything here:
+    /// outside a run <c>DestinationShipSink.ReadOrder</c> resolves local
+    /// paths only, because a peer shipment is a live session rather than a
+    /// directory. A set whose destinations are all peers therefore lists no
+    /// blobs through the sink, its plan vetoes, and there is nothing to
+    /// compact — which is the same and correct answer as for a set whose
+    /// local paths are simply away.
+    /// </para>
+    /// <para>
+    /// A failure here fails the phase and not the pass. The retention the
+    /// run already did is durable and correct; compaction is maintenance,
+    /// and an unreadable candidate or a destination that went away mid-write
+    /// is a reason to say so and try again next time, not to lose the
+    /// report.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<IReadOnlyList<string>> CompactSetAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        ArchiveHandle archive,
+        Retention.RetentionReport report,
+        ulong nowUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outcome = await Repository.CompactionPass.RunAsync(
+                [.. report.CompactionCandidates.Select(blob =>
+                    new Repository.CompactionSource(blob.StoreKey, blob.BlobId, blob.Live))],
+                archive.Repository,
+                archive.Store,
+                archive.Store,
+                runtime.Writer,
+                CapturePolicy.Default,
+                archive.Sequence,
+                archive.Catalogue,
+                archive.SpoolDirectory,
+                nowUnixMilliseconds,
+                declaredMaxDurationMs: (ulong)TimeSpan.FromHours(6).TotalMilliseconds,
+                expiryGeneration: archive.Repository.CurrentMetadataGeneration.Value + 1,
+                cancellationToken,
+                logger: runtime.LoggerFor(typeof(Repository.CompactionPass))).ConfigureAwait(false);
+
+            var reclaimable = report.CompactionCandidates
+                .Where(blob => outcome.Drained.Contains(blob.BlobId))
+                .Sum(blob => blob.DeadBytes);
+
+            return
+            [
+                $"compacted: {outcome.RecordsMoved.ToString(CultureInfo.InvariantCulture)} record(s) out of "
+                + $"{outcome.Drained.Count.ToString(CultureInfo.InvariantCulture)} blob(s) into "
+                + $"{outcome.Published.Count.ToString(CultureInfo.InvariantCulture)}; "
+                + $"{reclaimable.ToString("N0", CultureInfo.InvariantCulture)} byte(s) come back once the next "
+                + "pass condemns them and their grace runs",
+            ];
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException
+            or Repository.Packing.BlobFormatException)
+        {
+            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), set.Name, exception);
+            return [$"compaction did not run: {exception.Message}"];
+        }
     }
 
     /// <summary>
