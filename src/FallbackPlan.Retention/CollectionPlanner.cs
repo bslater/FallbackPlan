@@ -2,6 +2,7 @@ using System.Globalization;
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
@@ -12,7 +13,15 @@ namespace FallbackPlan.Retention;
 /// <param name="StoreKey">The blob's store key.</param>
 /// <param name="BlobId">Its writer-allocated identity — what a tombstone names (spec 11 §3).</param>
 /// <param name="Records">How many records it holds — all unreachable, or it would not be here.</param>
-public sealed record DeletableBlob(ObjectKey StoreKey, BlobId BlobId, long Records);
+/// <param name="Reason">
+/// Why, in specification 11 §3's closed vocabulary. The reason is inside the
+/// tombstone's signed bytes, so it is an attested claim about why data was
+/// destroyed rather than a comment — which is why it is derived here, where
+/// the two ways a record can be dead are already distinguished, instead of
+/// being a constant the sweep supplies.
+/// </param>
+public sealed record DeletableBlob(
+    ObjectKey StoreKey, BlobId BlobId, long Records, TombstoneReason Reason);
 
 /// <summary>
 /// What one collection pass would do — produced before anything is done,
@@ -178,7 +187,18 @@ public static class CollectionPlanner
                 continue;
             }
 
-            deletable.Add(new DeletableBlob(storeKey, blobId, records.Count));
+            // Reason 3 rather than reason 1 when the index moved these records
+            // somewhere that still exists: the blob was drained by a rewrite,
+            // which is what "compacted" names (ADR-0067). One relocated record
+            // is enough — a compactor carries the live records and leaves the
+            // rest, so whatever it did not carry was already unreachable.
+            deletable.Add(new DeletableBlob(
+                storeKey,
+                blobId,
+                records.Count,
+                records.Any(record => Relocated(record, blobId))
+                    ? TombstoneReason.Compacted
+                    : TombstoneReason.Unreferenced));
         }
 
         return new CollectionPlan(
@@ -188,17 +208,20 @@ public static class CollectionPlanner
             partlyLive,
             vetoes);
 
-        bool LivesHere(RecordTableEntry record, BlobId blobId)
-        {
-            if (!reachable.Contains(record.ObjectId))
-            {
-                return false;
-            }
+        bool LivesHere(RecordTableEntry record, BlobId blobId) =>
+            reachable.Contains(record.ObjectId) && !Relocated(record, blobId);
 
-            return resolveLocation?.Invoke(record.ObjectId) is not { } winner
-                || winner.Equals(blobId)
-                || !present.Contains(winner);
-        }
+        // The second of the two ways a record here can be dead, and the one
+        // that names a rewrite: it is still reached by a protected snapshot,
+        // but the index resolves it into a DIFFERENT blob that is PRESENT.
+        // The presence check is load-bearing — a supersession into a blob
+        // nobody holds must condemn nothing (ADR-0025 exit criterion 12,
+        // inverted and fatal), and it must not relabel anything either.
+        bool Relocated(RecordTableEntry record, BlobId blobId) =>
+            reachable.Contains(record.ObjectId)
+            && resolveLocation?.Invoke(record.ObjectId) is { } winner
+            && !winner.Equals(blobId)
+            && present.Contains(winner);
     }
 
     /// <summary>The dry-run report, in the order a human reads it (FR-GC-005).</summary>

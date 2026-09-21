@@ -5,6 +5,9 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
+using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
@@ -164,6 +167,82 @@ public sealed class CompactionCollectionTests : IDisposable
             drained,
             (await PlanAsync(store, catalogue)).DeletableBlobs.Select(blob => blob.BlobId).ToList(),
             "the drained blob was condemned on the strength of an entry naming a blob nobody holds");
+    }
+
+    /// <summary>
+    /// The tombstone says <em>why</em>, and the reason is inside the bytes the
+    /// reclaim key signs (specification 11 §3, keys 1–7) — so it is an
+    /// attested claim about why data was destroyed rather than a comment.
+    /// Until this test the field was a constant at both of the sweep's call
+    /// sites: reasons 2, 3 and 4 were declared, encoded, decoded and
+    /// round-tripped, and written by nothing.
+    /// </summary>
+    /// <remarks>
+    /// [ADR-0067](../../docs/adr/0067-the-keyless-compactor.md) named the
+    /// wrong reason as a limit it could not reach — "the collector condemns by
+    /// plan and does not know provenance". It does know: a record here is dead
+    /// either because nothing reaches it, or because it is still reached and
+    /// the index resolves it into another blob that is present. The second is
+    /// a relocation, which is what <em>compacted</em> names, and the planner
+    /// was already computing the distinction to decide condemnation at all.
+    /// </remarks>
+    [TestMethod]
+    public async Task ADrainedBlobIsTombstonedCompacted_AndOneNothingReachesIsTombstonedUnreferenced()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store);
+
+        // Before any compaction: every condemnation is an ordinary expiry, so
+        // every reason is reason 1. This half also pins that the new reason is
+        // not simply always produced.
+        using (var untouched = OpenCatalogue(await RepositoryIdAsync(store)))
+        {
+            var expiredOnly = (await PlanAsync(store, untouched)).DeletableBlobs;
+            Assert.IsNotEmpty(expiredOnly, "nothing was condemned by expiry, so reason 1 is untested here");
+            foreach (var blob in expiredOnly)
+            {
+                Assert.AreEqual(
+                    TombstoneReason.Unreferenced, blob.Reason,
+                    $"blob {blob.BlobId} was condemned by expiry and named something else");
+            }
+        }
+
+        var (drained, _) = await CompactAsync(store);
+
+        using (var catalogue = OpenCatalogue(await RepositoryIdAsync(store)))
+        {
+            var plan = await PlanAsync(store, catalogue);
+            var condemned = plan.DeletableBlobs.Single(blob => blob.BlobId.Equals(drained));
+            Assert.AreEqual(
+                TombstoneReason.Compacted, condemned.Reason,
+                "the drained blob's records live in another blob now, which is reason 3");
+
+            foreach (var other in plan.DeletableBlobs.Where(blob => !blob.BlobId.Equals(drained)))
+            {
+                Assert.AreEqual(
+                    TombstoneReason.Unreferenced, other.Reason,
+                    $"blob {other.BlobId} was not drained by the rewrite and named reason 3 anyway");
+            }
+        }
+
+        // And it survives the two passes that separate a rewrite from its
+        // reclaim: what is asserted here is the signed record on disk, not the
+        // plan that produced it.
+        await RetainAsync(store, Day1.AddDays(3).AddHours(1));
+
+        var tombstones = await TombstonesAsync(store);
+        var forDrained = tombstones.Single(tombstone =>
+            tombstone.ObjectTypeCode == Tombstone.BlobTypeCode
+            && BlobId.FromBytes(tombstone.ObjectId.Span).Equals(drained));
+        Assert.AreEqual(TombstoneReason.Compacted, forDrained.Reason);
+
+        foreach (var snapshot in tombstones.Where(
+            tombstone => tombstone.ObjectTypeCode != Tombstone.BlobTypeCode))
+        {
+            Assert.AreEqual(
+                TombstoneReason.Unreferenced, snapshot.Reason,
+                "a snapshot manifest expires because retention no longer keeps it, which is reason 1");
+        }
     }
 
     /// <summary>
@@ -354,6 +433,39 @@ public sealed class CompactionCollectionTests : IDisposable
         }
 
         return ids;
+    }
+
+    /// <summary>
+    /// Every tombstone on the store, opened and decoded the way the sweep's
+    /// own delete gate opens them: the standalone record's framing, the
+    /// metadata key for the generation it was sealed under, then the codec.
+    /// Reading the signed bytes rather than the plan is the point — a reason
+    /// the planner computed and the sweep dropped would pass an assertion on
+    /// the plan and fail the audit record.
+    /// </summary>
+    private static async Task<List<Tombstone>> TombstonesAsync(LocalFileSystemObjectStore store)
+    {
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
+        var found = new List<Tombstone>();
+
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("tombstones/"), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(entry.Key, range: null, CancellationToken.None);
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, CancellationToken.None);
+
+            var record = StandaloneRecordFraming.Parse(memory.ToArray());
+            var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
+            Assert.IsTrue(
+                StandaloneRecordCipher.TryOpen(record, repository.RepositoryId, metadataKey, out var plaintext),
+                $"tombstone {entry.Key} did not open");
+            found.Add(TombstoneCodec.Decode(plaintext).Value);
+        }
+
+        Assert.IsNotEmpty(found, "no tombstone was written, so nothing was asserted about any reason");
+        return found;
     }
 
     private async Task BackUpAsync(DateTimeOffset now)

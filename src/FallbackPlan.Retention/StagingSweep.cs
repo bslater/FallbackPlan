@@ -99,7 +99,7 @@ public static class StagingSweep
         foreach (var blob in plan.DeletableBlobs)
         {
             var tombstone = new Tombstone(
-                Tombstone.BlobTypeCode, blob.BlobId.ToArray(), TombstoneReason.Unreferenced,
+                Tombstone.BlobTypeCode, blob.BlobId.ToArray(), blob.Reason,
                 writerId.ToArray(), nowUnixMilliseconds, eligible);
             written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
                 .ConfigureAwait(false);
