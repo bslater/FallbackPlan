@@ -60,9 +60,9 @@ public sealed record PublishedCompaction(
 /// compaction pass hands over a whole byte budget's worth of blobs at once.
 /// </para>
 /// <para>
-/// It does not tombstone the drained blobs and does not write a journal
-/// intent. Both are the pass's, with an ordering that makes an interrupted
-/// compaction safe, and burying them here would bury the order.
+/// It does not tombstone the drained blobs and does not decide the order its
+/// steps run in. Both are <see cref="CompactionPass"/>'s, which is where the
+/// ordering that makes an interrupted compaction safe is written down.
 /// </para>
 /// </remarks>
 public static class CompactionPublication
@@ -155,6 +155,9 @@ public static class CompactionPublication
     /// <param name="generation">The publication generation.</param>
     /// <param name="cancellationToken">Cancels the uploads and publications.</param>
     /// <param name="deltaByteBudget">Overrides <see cref="DefaultDeltaByteBudget"/>; for tests that need a split without sixteen mebibytes of entries.</param>
+    /// <param name="intentScope">Covers each blob by a durable intent before its put (08 §3.1). Null uploads uncovered, which only a test has any business doing.</param>
+    /// <param name="counters">Marks each blob's counter accounted once it is durable and covered; null leaves that to the caller.</param>
+    /// <param name="afterUploads">Called once every blob is durable and before any entry names one — the seam a cut has to be able to land in.</param>
     /// <returns>What was published.</returns>
     /// <exception cref="IOException">A blob's store key already held different bytes.</exception>
     public static async ValueTask<PublishedCompaction> PublishAsync(
@@ -165,7 +168,10 @@ public static class CompactionPublication
         Catalogue.Catalogue catalogue,
         ulong generation,
         CancellationToken cancellationToken,
-        int? deltaByteBudget = null)
+        int? deltaByteBudget = null,
+        IIntentScope? intentScope = null,
+        IBlobCounterAllocator? counters = null,
+        Action? afterUploads = null)
     {
         ThrowHelper.ThrowIfNull(produced);
         ThrowHelper.ThrowIfNull(destination);
@@ -183,8 +189,11 @@ public static class CompactionPublication
         // as damage, and the only way to avoid producing it is the order.
         foreach (var blob in produced)
         {
-            await UploadAsync(destination, storeKeys, blob.Sealed, cancellationToken).ConfigureAwait(false);
+            await UploadAsync(
+                destination, storeKeys, blob.Sealed, intentScope, counters, cancellationToken).ConfigureAwait(false);
         }
+
+        afterUploads?.Invoke();
 
         var deltaIds = new List<DeltaId>();
         foreach (var chunk in Split(produced, deltaByteBudget ?? DefaultDeltaByteBudget))
@@ -211,9 +220,20 @@ public static class CompactionPublication
         IObjectStore destination,
         StoreBlobKeyDeriver storeKeys,
         SealedBlob blob,
+        IIntentScope? intentScope,
+        IBlobCounterAllocator? counters,
         CancellationToken cancellationToken)
     {
         var key = BlobStoreKeys.ForBlob(blob.BlobClass, storeKeys.Derive(blob.BlobId));
+
+        // 08 §3.1: no blob is uploaded before an unretired intent naming it
+        // is durable — the same rule and the same order a capture's upload
+        // keeps, because a compactor is a writer with no exception for
+        // maintenance (08 §3.2).
+        if (intentScope is not null)
+        {
+            await intentScope.EnsureCoveredAsync(blob.BlobId, cancellationToken).ConfigureAwait(false);
+        }
         var put = await destination.PutAsync(
             key, blob.OpenContentAsync, PutConditions.IfNotExists, cancellationToken).ConfigureAwait(false);
 
@@ -230,6 +250,16 @@ public static class CompactionPublication
             !await SealedBlobReadback.MatchesAsync(destination, key, blob, cancellationToken).ConfigureAwait(false))
         {
             throw new IOException(Strings.FormatCompactionPublication_StoreHeldDifferentBytes(key));
+        }
+
+        // ADR-0022 §Decision 7 case 4: the blob is durable and a durable
+        // intent names it, so its counter has its accounting object and owes
+        // no void delta to any later run. Without a scope the case never
+        // becomes true, and the counter's fate stays with the caller who
+        // chose to upload uncovered.
+        if (intentScope is not null)
+        {
+            counters?.MarkAccounted(blob.BlobCounter);
         }
     }
 }

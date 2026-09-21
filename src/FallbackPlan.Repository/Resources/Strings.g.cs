@@ -237,4 +237,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatCompactionPublication_StoreRefusedBlob(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, CompactionPublication_StoreRefusedBlob, arg0);
+
+    /// <summary>
+    /// This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.
+    /// </summary>
+    private static string CompactionPass_NeedsFormatThree => Get(nameof(CompactionPass_NeedsFormatThree));
+
+    /// <summary>
+    /// This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.
+    /// </summary>
+    internal static string FormatCompactionPass_NeedsFormatThree(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPass_NeedsFormatThree, arg0);
 }

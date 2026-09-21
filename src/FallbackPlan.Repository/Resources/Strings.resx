@@ -127,4 +127,7 @@
   <data name="CompactionPublication_StoreRefusedBlob" xml:space="preserve">
     <value>The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.</value>
   </data>
+  <data name="CompactionPass_NeedsFormatThree" xml:space="preserve">
+    <value>This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.</value>
+  </data>
 </root>

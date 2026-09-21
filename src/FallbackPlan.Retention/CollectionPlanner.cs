@@ -16,13 +16,15 @@ public sealed record DeletableBlob(ObjectKey StoreKey, BlobId BlobId, long Recor
 
 /// <summary>
 /// What one collection pass would do — produced before anything is done,
-/// because the dry-run report is mandatory (FR-GC-005). Deletion-only:
-/// no compaction, so a blob with a single live record stays whole, and the
-/// report says how much that conservatism is costing.
+/// because the dry-run report is mandatory (FR-GC-005). The pass itself
+/// deletes: a blob with a live minority stays whole and is reported as the
+/// compaction backlog, and a blob compaction has already drained is garbage
+/// here like any other, because every record it holds now resolves
+/// elsewhere (ADR-0067).
 /// </summary>
 /// <param name="ProtectedSnapshots">The snapshots treated as protected, with the planner's reasons.</param>
 /// <param name="ExpiredSnapshotKeys">The standalone snapshot objects the pass would remove.</param>
-/// <param name="DeletableBlobs">Blobs holding nothing reachable and nothing intent-covered.</param>
+/// <param name="DeletableBlobs">Blobs holding nothing reachable <em>here</em> and nothing intent-covered — including one compaction drained, whose records the index now resolves into another blob.</param>
 /// <param name="PartlyLiveBlobs">Blobs kept whole for a live minority — the compaction backlog, named rather than counted so a pass can act on it (ADR-0067).</param>
 /// <param name="Vetoes">
 /// Conditions that force this pass to delete nothing at all: an undecodable
@@ -41,10 +43,11 @@ public sealed record CollectionPlan(
 }
 
 /// <summary>
-/// Steps 1–5 of the collection algorithm (architecture 07 §3), deletion-only:
-/// mark from the protected snapshots, add every blob an unretired write
-/// intent covers (step 4 — ADR-0009's reason to exist), and plan the
-/// difference. Anything doubtful vetoes the whole pass rather than narrowing
+/// Steps 1–5 of the collection algorithm (architecture 07 §3): mark from the
+/// protected snapshots, add every blob an unretired write intent covers
+/// (step 4 — ADR-0009's reason to exist), and plan the difference, counting
+/// a record as living in a blob only while the index still sends readers
+/// there. Anything doubtful vetoes the whole pass rather than narrowing
 /// it: a collector that guesses is the failure mode this design was built
 /// against.
 /// </summary>
@@ -58,6 +61,15 @@ public static class CollectionPlanner
     /// <param name="reachable">The mark set from <see cref="StagingMark.MarkAsync"/>.</param>
     /// <param name="unwalkable">Objects the mark could not read — each one a veto.</param>
     /// <param name="intents">The journal's live-intent survey — step 4's input.</param>
+    /// <param name="resolveLocation">
+    /// Where the index says an object now lives, or null when it has no
+    /// opinion. Supplying it is what lets a pass condemn a blob compaction
+    /// drained: a record whose bytes are still here but whose <b>location</b>
+    /// is another blob is dead here, and a blob every one of whose records is
+    /// dead here is garbage like any other (07 §3, ADR-0067). Omit it and the
+    /// planner behaves as it did before compaction existed — conservatively,
+    /// since a drained blob then simply stays.
+    /// </param>
     /// <returns>The plan, never yet an action.</returns>
     public static CollectionPlan Plan(
         SnapshotSurvey survey,
@@ -66,7 +78,8 @@ public static class CollectionPlanner
         RepositoryReader reader,
         HashSet<ObjectId> reachable,
         IReadOnlyList<string> unwalkable,
-        IntentSurvey intents)
+        IntentSurvey intents,
+        Func<ObjectId, BlobId?>? resolveLocation = null)
     {
         ThrowHelper.ThrowIfNull(survey);
         ThrowHelper.ThrowIfNull(selection);
@@ -101,6 +114,13 @@ public static class CollectionPlanner
             .Select(snapshot => snapshot.StoreKey)
             .ToList();
 
+        // A supersession may only condemn a record here if the blob the index
+        // sends readers to is one this reader actually opened. Trusting an
+        // entry that names a blob nobody holds would delete the last copy of
+        // a record on the strength of a pointer into nothing — ADR-0025 exit
+        // criterion 12, inverted and fatal.
+        var present = reader.Blobs.Select(blob => blob.BlobId).ToHashSet();
+
         var deletable = new List<DeletableBlob>();
         var partlyLive = new List<CompactableBlob>();
         foreach (var (storeKey, blobId, records) in reader.Blobs)
@@ -114,7 +134,7 @@ public static class CollectionPlanner
                 continue;
             }
 
-            var live = records.Where(record => reachable.Contains(record.ObjectId)).ToList();
+            var live = records.Where(record => LivesHere(record, blobId)).ToList();
             if (live.Count == records.Count)
             {
                 continue;
@@ -142,6 +162,18 @@ public static class CollectionPlanner
             deletable,
             partlyLive,
             vetoes);
+
+        bool LivesHere(RecordTableEntry record, BlobId blobId)
+        {
+            if (!reachable.Contains(record.ObjectId))
+            {
+                return false;
+            }
+
+            return resolveLocation?.Invoke(record.ObjectId) is not { } winner
+                || winner.Equals(blobId)
+                || !present.Contains(winner);
+        }
     }
 
     /// <summary>The dry-run report, in the order a human reads it (FR-GC-005).</summary>

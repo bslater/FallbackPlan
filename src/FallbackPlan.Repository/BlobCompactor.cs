@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Bodu;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -69,7 +70,8 @@ public sealed class BlobCompactor : IDisposable
     private readonly RepositoryId _repositoryId;
     private readonly WriterId _writerId;
     private readonly KeyGeneration _generation;
-    private readonly byte[] _structureKey;
+    private readonly RepositoryKeySet _keys;
+    private readonly Dictionary<uint, byte[]> _structureKeys = [];
     private readonly byte[] _sealingPublicKey;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly CapturePolicy _policy;
@@ -126,7 +128,14 @@ public sealed class BlobCompactor : IDisposable
         // records are sealed to the repository's public key (ADR-0042 §2).
         // Nothing here asks for a content key, because nothing here opens a
         // record.
-        _structureKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
+        //
+        // Per generation, not one for the pass: a source blob's footer is
+        // sealed under the key of the generation its OWN envelope names, and
+        // a repository that has rotated holds blobs from several. Deriving
+        // the pass's generation and using it for every read would fail
+        // authentication on every blob older than this key epoch — which is
+        // to say, on exactly the blobs worth compacting.
+        _keys = keys;
         _sealingPublicKey = keys.SealingPublicKey.ToArray();
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
 
@@ -229,7 +238,7 @@ public sealed class BlobCompactor : IDisposable
             candidate.StoreKey,
             found.Length,
             _repositoryId,
-            (_, _) => _structureKey,
+            (blobClass, generation) => ClassKey(blobClass, generation),
             _objectIdDeriver,
             cancellationToken,
             sealedContentKeyOpener: null,
@@ -240,7 +249,7 @@ public sealed class BlobCompactor : IDisposable
         _repositoryId,
         _writerId,
         _generation,
-        _structureKey,
+        ClassKey(BlobClass.Metadata, _generation),
         _sealingPublicKey,
         _counters.AllocateNext(),
         _policy.EncryptionProfile,
@@ -250,7 +259,35 @@ public sealed class BlobCompactor : IDisposable
         formatVersion: _containerVersion);
 
     /// <summary>Releases the content-identifier deriver this compactor owns.</summary>
-    public void Dispose() => _objectIdDeriver.Dispose();
+    /// <summary>
+    /// The class key for one generation, derived once and held for the
+    /// compactor's life so a pass over many blobs does not re-derive it per
+    /// blob. Zeroed on disposal, since <see cref="RepositoryKeySet"/> hands
+    /// back a fresh array each time and does not own it.
+    /// </summary>
+    private byte[] ClassKey(BlobClass blobClass, KeyGeneration generation)
+    {
+        if (_structureKeys.TryGetValue(generation.Value, out var held))
+        {
+            return held;
+        }
+
+        var derived = _keys.DeriveClassKey(blobClass, generation);
+        _structureKeys[generation.Value] = derived;
+        return derived;
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        foreach (var key in _structureKeys.Values)
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+
+        _structureKeys.Clear();
+        _objectIdDeriver.Dispose();
+    }
 
     private static async ValueTask<CompactedBlob> SealAsync(
         BlobWriter writer, IReadOnlyList<BlobId> drained, CancellationToken cancellationToken)

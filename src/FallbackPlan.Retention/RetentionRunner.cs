@@ -49,6 +49,7 @@ public static class RetentionRunner
     /// declaring <c>reclaim-authority</c> needs one; null is for a dry run,
     /// and for a repository written before the feature.
     /// </param>
+    /// <param name="resolveLocation">Where the index says an object now lives — what lets this pass condemn a blob compaction drained (ADR-0067). Null plans as it did before compaction existed.</param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -63,7 +64,8 @@ public static class RetentionRunner
         CancellationToken cancellationToken,
         string? setName = null,
         ILogger? logger = null,
-        ReclaimAuthority? reclaim = null)
+        ReclaimAuthority? reclaim = null,
+        Func<ObjectId, BlobId?>? resolveLocation = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -129,7 +131,8 @@ public static class RetentionRunner
         var intents = IntentSurveyor.Survey(
             records, unparseable, sealingGeneration, nowUnixMilliseconds, skewMarginMs: 300_000);
 
-        var plan = CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents);
+        var plan = CollectionPlanner.Plan(
+            survey, selection, gate, reader, reachable, unwalkable, intents, resolveLocation);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
         Log.RetentionPlanned(log, set, selection.Keep.Count, selection.Expire.Count);

@@ -104,8 +104,10 @@ public abstract class InterruptionHarness : IDisposable
         ClientVersion: "interruption-tests/1.0");
 
     /// <summary>Restores a published snapshot cold — the "previously committed snapshots stay readable" oracle.</summary>
-    protected static async Task<byte[]> RestoreSnapshotAsync(IObjectStore store, RepositoryKeySet keys, byte snapshotSeed)
+    protected static async Task<byte[]> RestoreSnapshotAsync(
+        IObjectStore store, RepositoryKeySet keys, byte snapshotSeed, RepositoryId? repositoryId = null)
     {
+        var repository = repositoryId ?? Repo;
         var wantedId = Enumerable.Repeat(snapshotSeed, 16).ToArray();
 
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
@@ -116,7 +118,7 @@ public abstract class InterruptionHarness : IDisposable
 
             var record = StandaloneRecordFraming.Parse(memory.ToArray());
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, repository, metadataKey, out var plaintext));
 
             var decoded = SnapshotManifestCodec.Decode(plaintext);
             if (!decoded.Manifest.SnapshotId.Span.SequenceEqual(wantedId))
@@ -124,7 +126,7 @@ public abstract class InterruptionHarness : IDisposable
                 continue;
             }
 
-            using var reader = new RepositoryReader(Repo, keys, store, Authority);
+            using var reader = new RepositoryReader(repository, keys, store, Authority);
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
@@ -183,9 +185,11 @@ public abstract class InterruptionHarness : IDisposable
         LocalFileSystemObjectStore store,
         RepositoryWriteCredential credential,
         ulong currentGeneration,
-        ulong nowMs)
+        ulong nowMs,
+        RepositoryId? repositoryId = null)
     {
-        using var journalReader = new Repository.Index.Journal.JournalReader(store, Repo, credential);
+        using var journalReader = new Repository.Index.Journal.JournalReader(
+            store, repositoryId ?? Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync((uint)currentGeneration, CancellationToken.None);
         var survey = Repository.Index.Journal.IntentSurveyor.Survey(
             records, unparseable, currentGeneration, nowMs, skewMarginMs: 60_000);

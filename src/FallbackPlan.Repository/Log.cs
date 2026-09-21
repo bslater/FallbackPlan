@@ -57,6 +57,11 @@ internal static partial class Log
         ILogger logger, LogId snapshotId, long logicalBytes, int records, int blobs);
 
     [LoggerMessage(
+        EventId = 2033, Level = LogLevel.Information,
+        Message = "Compaction complete: {Produced} blob(s) produced, {Drained} drained, {Records} record(s) relocated")]
+    internal static partial void CompactionComplete(ILogger logger, int produced, int drained, long records);
+
+    [LoggerMessage(
         EventId = 2004, Level = LogLevel.Information,
         Message = "Snapshot {SnapshotId} published: {Files} files, {Failures} failed, "
             + "{LogicalBytes} logical bytes")]
