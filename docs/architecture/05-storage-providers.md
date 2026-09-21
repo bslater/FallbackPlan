@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built; cloud providers are phase 3 — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). Cloud providers are phase 3 — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -11,6 +11,10 @@
 The repository engine depends on a deliberately small interface. The core must **not** assume filesystem rename, strong listing consistency, provider checksums, or mutable objects — every one of those is absent from at least one provider we intend to support.
 
 Provider capabilities are probed once and reported separately from the data path, so a capability check never sits inside a hot loop, and no provider-specific behaviour leaks into snapshot or file-version semantics (NFR-COMP-005).
+
+**Not assuming a capability is not the same as tolerating its absence**, and the difference is where the engine says which it means. Two capabilities are required, and a store declaring either absent is refused by name before it is used rather than failing somewhere deep: **conditional create**, because every durable step of a publication is an if-absent put and without it "created" stops meaning "nothing was there"; and **ranged reads**, because opening a blob costs three of them before a record is read. A reader is held only to the second — a peer's replica over the retrieval session has no put at all ([peer-protocol 07 §1](../../specifications/peer-protocol/07-retrieval.md)) — so the caller states which it is doing, defaulting to writing.
+
+**Strong listing consistency is the one the core genuinely does not assume, and what that costs is deletion.** Anything that reasons from an object's *presence* works against a lagging listing and is pinned doing so: a replication pass re-offers what it already sent and is refused, a stale writer head collides on its conditional put, an unseen index delta is reported as an unresolved gap rather than assumed away. Anything that reasons from an object's **absence** cannot: collection calls a blob garbage because nothing reachable names it, and a snapshot a listing has not caught up to is indistinguishable from one that was never written. So against anything but a `Strong` promise a collection pass reports the plan it would have acted on and condemns nothing, and a destination's keep-set is refused rather than built ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). Lifting that needs an attested witness of completeness for the snapshot plane, which does not exist; the catalogue cannot be it, being a cache and never the authority a deletion hangs off.
 
 > **Terminology.** A **repository blob** is our immutable container ([`01-domain-model.md`](01-domain-model.md#1-glossary)). A **store object** is the provider's unit of storage. Azure calls the latter a blob; this document does not.
 

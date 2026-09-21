@@ -7,7 +7,7 @@ namespace FallbackPlan.Storage.ContractTests;
 /// <summary>
 /// Holds the eventual-listing instrument honest
 /// ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md);
-/// architecture 05 §1). Establishes NFR-COMP-005 for the instrument only —
+/// architecture 05 §1). Establishes NFR-PORT-005 for the instrument only —
 /// what the engine does when a listing lags is
 /// <c>Retention.Tests</c>' and <c>Repository.Tests</c>' to establish, not
 /// this suite's.

@@ -11,7 +11,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// <summary>
 /// What the index and journal planes do when a listing has not caught up
 /// ([ADR-0012](../../../docs/adr/0012-storage-provider-contract.md); 07 §3,
-/// §4). Establishes NFR-COMP-005 and NFR-SEC-005.
+/// §4). Establishes NFR-PORT-005 and NFR-SEC-005.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -12,7 +12,7 @@ namespace FallbackPlan.Retention.Tests;
 /// <summary>
 /// A collection pass against a store whose listings lag
 /// ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md);
-/// architecture 05 §1). Establishes FR-GC-002 and NFR-COMP-005.
+/// architecture 05 §1). Establishes FR-GC-002 and NFR-PORT-005.
 /// </summary>
 /// <remarks>
 /// <para>

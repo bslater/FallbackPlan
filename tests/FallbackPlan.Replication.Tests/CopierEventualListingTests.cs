@@ -8,7 +8,7 @@ namespace FallbackPlan.Replication.Tests;
 /// <summary>
 /// What a replication pass does when a destination's listing has not caught
 /// up ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md);
-/// architecture 05 §1). Establishes NFR-COMP-005 and FR-REP-005.
+/// architecture 05 §1). Establishes NFR-PORT-005 and FR-REP-005.
 /// </summary>
 /// <remarks>
 /// The copier survives a lag in both directions, and the reason is that it
