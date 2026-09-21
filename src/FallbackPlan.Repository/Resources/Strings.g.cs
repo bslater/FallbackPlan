@@ -204,4 +204,37 @@ internal static class Strings
     /// </summary>
     internal static string FormatBlobCompactor_SourceRecordRefused(object? arg0, object? arg1, object? arg2) =>
         string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceRecordRefused, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.
+    /// </summary>
+    private static string CompactionPublication_BlobExceedsDeltaBudget => Get(nameof(CompactionPublication_BlobExceedsDeltaBudget));
+
+    /// <summary>
+    /// Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.
+    /// </summary>
+    internal static string FormatCompactionPublication_BlobExceedsDeltaBudget(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_BlobExceedsDeltaBudget, arg0, arg1, arg2);
+
+    /// <summary>
+    /// The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.
+    /// </summary>
+    private static string CompactionPublication_StoreHeldDifferentBytes => Get(nameof(CompactionPublication_StoreHeldDifferentBytes));
+
+    /// <summary>
+    /// The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.
+    /// </summary>
+    internal static string FormatCompactionPublication_StoreHeldDifferentBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_StoreHeldDifferentBytes, arg0);
+
+    /// <summary>
+    /// The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.
+    /// </summary>
+    private static string CompactionPublication_StoreRefusedBlob => Get(nameof(CompactionPublication_StoreRefusedBlob));
+
+    /// <summary>
+    /// The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.
+    /// </summary>
+    internal static string FormatCompactionPublication_StoreRefusedBlob(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_StoreRefusedBlob, arg0);
 }

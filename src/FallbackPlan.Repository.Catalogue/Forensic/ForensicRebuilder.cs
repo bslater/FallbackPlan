@@ -169,33 +169,40 @@ public sealed class ForensicRebuilder : IDisposable
                 entry.Length,
                 digest: default);
 
+            // Forensic provenance: the envelope's generation, writer and
+            // counter — deterministic, footer-derived, and below any real
+            // published entry at a later generation (07 §10 reports;
+            // precedence still decides).
+            //
+            // One delta for the whole blob, not one per record. The
+            // catalogue's delta ledger is UNIQUE (writer_id, sequence) and
+            // every record of a blob shares the blob's counter, so a delta
+            // per record would be taken for a re-application of the first
+            // and every record after it would be dropped — a rebuild that
+            // reported a complete index holding one record per blob.
+            target.ApplyDelta(
+                DeltaId.FromBytes(System.Security.Cryptography.SHA256.HashData(
+                    reader.Envelope.BlobId.ToArray()).AsSpan(0, 16)),
+                new IndexDelta
+                {
+                    WriterId = reader.Envelope.WriterId,
+                    Sequence = reader.Envelope.BlobCounter,
+                    Generation = reader.Envelope.KeyGeneration.Value,
+                    Entries =
+                    [
+                        .. reader.RecordTable.Select(record => new IndexEntry(
+                            record.ObjectId,
+                            reader.Envelope.BlobId,
+                            record.PhysicalOffset,
+                            record.StoredLength,
+                            record.CompressionProfileValue,
+                            record.EncryptionProfileValue,
+                            IndexEntryType.Insertion)),
+                    ],
+                });
+
             foreach (var record in reader.RecordTable)
             {
-                // Forensic provenance: the envelope's generation, writer, and
-                // counter — deterministic, footer-derived, and below any real
-                // published entry at a later generation (07 §10 reports;
-                // precedence still decides).
-                target.ApplyDelta(
-                    DeltaId.FromBytes(System.Security.Cryptography.SHA256.HashData(
-                        [.. reader.Envelope.BlobId.ToArray(), .. record.ObjectId.ToArray()]).AsSpan(0, 16)),
-                    new IndexDelta
-                    {
-                        WriterId = reader.Envelope.WriterId,
-                        Sequence = reader.Envelope.BlobCounter,
-                        Generation = reader.Envelope.KeyGeneration.Value,
-                        Entries =
-                        [
-                            new IndexEntry(
-                                record.ObjectId,
-                                reader.Envelope.BlobId,
-                                record.PhysicalOffset,
-                                record.StoredLength,
-                                record.CompressionProfileValue,
-                                record.EncryptionProfileValue,
-                                IndexEntryType.Insertion),
-                        ],
-                    });
-
                 indexed.TryAdd(record.ObjectId, reader.Envelope.BlobId);
             }
 

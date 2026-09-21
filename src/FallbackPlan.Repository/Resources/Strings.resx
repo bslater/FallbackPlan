@@ -118,4 +118,13 @@
   <data name="BlobCompactor_SourceRecordRefused" xml:space="preserve">
     <value>Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.</value>
   </data>
+  <data name="CompactionPublication_BlobExceedsDeltaBudget" xml:space="preserve">
+    <value>Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.</value>
+  </data>
+  <data name="CompactionPublication_StoreHeldDifferentBytes" xml:space="preserve">
+    <value>The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.</value>
+  </data>
+  <data name="CompactionPublication_StoreRefusedBlob" xml:space="preserve">
+    <value>The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.</value>
+  </data>
 </root>

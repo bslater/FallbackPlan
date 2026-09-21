@@ -113,6 +113,46 @@ public sealed class ForensicRebuildTests : ArchiveTestHarness
         SequenceAssert.AreEqual(data, restored.ToArray());
     }
 
+    /// <summary>
+    /// A rebuild is complete per <b>record</b>, not per blob. The catalogue's
+    /// delta ledger is unique on (writer, sequence) and every record of a blob
+    /// shares the blob's counter, so a rebuild that filed one synthetic delta
+    /// per record had each after the first taken for a re-application of the
+    /// first and dropped — reporting a satisfied target over an index holding
+    /// one record per blob. Found by [ADR-0025](../../../docs/adr/0025-compaction-reseals-records.md)
+    /// exit criterion 9.
+    /// </summary>
+    [TestMethod]
+    public async Task ForensicRebuild_ABlobHoldingSeveralRecords_IndexesEveryOneOfThem()
+    {
+        var (_, _, keys, credential, store) = await PublishAsync(regions: 16);
+        using var _keys = keys;
+        using var _credential = credential;
+
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
+        using var catalogue = Catalogue.Open(Path.Combine(SpoolDirectory, "per-record.db"), Repo);
+        await rebuilder.RebuildAsync(catalogue, new ForensicTarget.Everything(), CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var blobs = reader.Blobs.ToList();
+        Assert.IsGreaterThan(
+            1,
+            blobs.Max(blob => blob.Records.Count),
+            "every blob held one record, so this case cannot see the defect it exists for");
+
+        foreach (var (_, blobId, records) in blobs)
+        {
+            foreach (var record in records)
+            {
+                Assert.IsNotNull(
+                    catalogue.ResolveLocation(record.ObjectId),
+                    $"record {record.ObjectId} of blob {blobId} was lost by the rebuild");
+            }
+        }
+    }
+
     [TestMethod]
     public async Task ForensicRebuild_TargetedAtOneSnapshot_StopsBeforeScanningEveryDataBlob()
     {
