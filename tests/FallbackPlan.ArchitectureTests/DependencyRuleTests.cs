@@ -52,34 +52,56 @@ public sealed class DependencyRuleTests
     /// library — so it is loaded by name from the test output directory, where
     /// its ProjectReference guarantees it has been copied.
     /// </summary>
-    private static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
+    internal static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
 
     /// <summary>The standalone recovery tool — also an executable, loaded by name.</summary>
     private static Assembly Recovery => Assembly.Load("FallbackPlan.Recovery");
 
     /// <summary>The Agent host — an executable, loaded by name.</summary>
-    private static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
+    internal static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
 
     /// <summary>The client contract (ADR-0028 §7).</summary>
-    private static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
+    internal static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
 
     /// <summary>The peer protocol (ADR-0030).</summary>
-    private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
+    internal static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
     /// <summary>The local web console (ADR-0036) — an executable, loaded by name.</summary>
-    private static Assembly Web => Assembly.Load("FallbackPlan.Web");
+    internal static Assembly Web => Assembly.Load("FallbackPlan.Web");
+
+    /// <summary>
+    /// The logging sinks (ADR-0043 §1). A library, but markerless, so it is
+    /// loaded by name like the executables above.
+    /// </summary>
+    internal static Assembly Diagnostics => Assembly.Load("FallbackPlan.Diagnostics");
+
+    /// <summary>The replication engine — markerless, loaded by name.</summary>
+    internal static Assembly Replication => Assembly.Load("FallbackPlan.Replication");
+
+    /// <summary>The retention engine — markerless, loaded by name.</summary>
+    internal static Assembly Retention => Assembly.Load("FallbackPlan.Retention");
 
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
     /// a Bodu reference with no rule covering it.
+    ///
+    /// It was a hand-picked subset anyway until the telemetry rules were
+    /// written: it named twenty-one of the twenty-four projects under src/,
+    /// omitting Diagnostics, Replication and Retention — the three with no
+    /// AssemblyMarker to reach them by. Diagnostics is where a logging sink
+    /// that learned to post somewhere would live, so the omission mattered
+    /// most exactly where the list claimed to be exhaustive. Recorded here
+    /// rather than silently corrected, because the comment above had been
+    /// making a promise the code below did not keep.
     /// </summary>
-    private static IEnumerable<Assembly> AllSourceAssemblies =>
+    internal static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web];
+         Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web,
+         Diagnostics, Replication, Retention];
 
-    private static void AssertPasses(TestResult result, string rule)
+    internal static void AssertPasses(TestResult result, string rule)
     {
         Assert.IsTrue(
             result.IsSuccessful,
@@ -610,7 +632,7 @@ public sealed class DependencyRuleTests
     /// exist on a CI runner — with the source path as the fallback for
     /// runners that relocate binaries.
     /// </summary>
-    private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
+    internal static string RepositoryRoot([CallerFilePath] string sourceFile = "")
     {
         var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
         Assert.IsNotNull(root);
