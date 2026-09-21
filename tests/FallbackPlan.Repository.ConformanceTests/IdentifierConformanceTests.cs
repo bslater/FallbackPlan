@@ -11,7 +11,7 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// types — <see cref="ContentHasher"/>, <see cref="ObjectIdDeriver"/>,
 /// <see cref="StoreBlobKeyDeriver"/>, and <see cref="BlobId"/> formation —
 /// which is Wave A3's acceptance criterion: matches the vectors exactly
-/// (specification 02; FR-ARCH-003, NFR-SEC-004).
+/// (specification 02; FR-ARCH-003, NFR-SEC-001, NFR-SEC-004).
 /// </summary>
 /// <remarks>
 /// The derivation keys come from the pinned <c>derived</c> values in

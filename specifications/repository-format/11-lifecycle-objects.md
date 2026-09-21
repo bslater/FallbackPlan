@@ -72,6 +72,24 @@ tombstone = {
 }
 ```
 
+Key 4 is a **closed** vocabulary and a writer produces what it can honestly
+tell apart. Two of its values are produced today: *unreferenced*, when no
+protected snapshot reaches the object, and *compacted*, when the object is
+still reached and the index resolves it into a different blob that is
+present — a relocation, which is what a rewrite leaves behind
+([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)). *Retired delta* is
+defined and unreachable in this implementation: nothing tombstones an index
+delta, a checkpoint retiring one deletes nothing. *Superseded* describes a
+newer object replacing an older, which is not what an expiring snapshot
+manifest is; a manifest retention no longer keeps is *unreferenced*. A reader
+MUST accept all four — the vocabulary is the format's, not one writer's — and
+MUST refuse a value outside it.
+
+The reason is inside the signed bytes, so it is an attested claim about why
+data was destroyed rather than an annotation. A writer that cannot tell two
+cases apart MUST say *unreferenced* rather than guess: an audit record that
+names the wrong cause is worse than one that names the weakest true one.
+
 The signature has the semantics of [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for the generation in force. A reader MUST verify it before treating the tombstone as authorisation, and MUST treat a tombstone that fails verification as a **security finding** rather than a damage finding — an unsigned or forged tombstone is an attempt to have someone else delete data.
 
 ### 3.1 The grace period is counted in generations, not in time

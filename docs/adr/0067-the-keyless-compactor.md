@@ -5,7 +5,7 @@
 **Requirements:** FR-GC-011, FR-GC-003, FR-GC-004, FR-GC-005, FR-MAN-015, FR-MAN-019, FR-WOR-003, NFR-SEC-003
 **Related:** [ADR-0025](0025-compaction-reseals-records.md), [ADR-0052](0052-relocatable-records-format-v3.md), [ADR-0066](0066-the-format-upgrade-record.md), [ADR-0009](0009-garbage-collection-safety.md), [ADR-0017](0017-index-entry-supersession.md), [ADR-0007](0007-logical-object-identifiers-in-manifests.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0046](0046-direct-to-destination-publication.md), [repository-format 05 §5](../../specifications/repository-format/05-blob.md), [repository-format 07 §3](../../specifications/repository-format/07-index.md)
 
-**Built:** `Retention/CompactionPolicy` (`CompactableBlob`, the dead-fraction and reclaim floor, the byte budget, and `Select` — one decision the dry run and the act share), `Retention/CollectionPlanner` (the backlog named rather than counted, and the record whose location the index has moved counted dead where its bytes still are), `Retention/RetentionRunner` (the selection on the report, before the apply early return, under the effective-format gate), `Repository.Packing/BlobReader` (`ReadSealedRecordAsync` — the one read with no key path at all, sharing the header/table cross-check), `Repository.Packing/BlobWriter` (`AppendSealedRecordAsync`, which re-frames the header and copies the sealed bytes verbatim), `Repository/BlobCompactor` (the rewrite, holding a structure key per source generation and no content key), `Repository/CompactionPublication` (the supersessions, the covered commitments, and the split that keeps a delta readable), `Repository/CompactionPass` (intent, seal, upload under extensions, publish, retire last), `Repository.Catalogue/Forensic/ForensicRebuilder` (one delta per blob, so a rebuilt index holds every record a blob carries), `Agent/ServiceCommandHandler` (the compaction phase of `retention --apply`, and the catalogue resolver the collector plans with); `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`.
+**Built:** `Retention/CompactionPolicy` (`CompactableBlob`, the dead-fraction and reclaim floor, the byte budget, and `Select` — one decision the dry run and the act share), `Retention/CollectionPlanner` (the backlog named rather than counted, and the record whose location the index has moved counted dead where its bytes still are), `Retention/RetentionRunner` (the selection on the report, before the apply early return, under the effective-format gate), `Repository.Packing/BlobReader` (`ReadSealedRecordAsync` — the one read with no key path at all, sharing the header/table cross-check), `Repository.Packing/BlobWriter` (`AppendSealedRecordAsync`, which re-frames the header and copies the sealed bytes verbatim), `Repository/BlobCompactor` (the rewrite, holding a structure key per source generation and no content key), `Repository/CompactionPublication` (the supersessions, the covered commitments, and the split that keeps a delta readable), `Repository/CompactionPass` (intent, seal, upload under extensions, publish, retire last), `Repository.Catalogue/Forensic/ForensicRebuilder` (one delta per blob, so a rebuilt index holds every record a blob carries), `Agent/ServiceCommandHandler` (the compaction phase of `retention --apply`, and the catalogue resolver the collector plans with); `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`. The tombstone's reason is derived at condemnation by `Retention/CollectionPlanner` and written by `Retention/StagingSweep` (2026-09 amendment).
 
 ---
 
@@ -137,12 +137,18 @@ cannot say what is garbage cannot say what is worth rewriting either.
   grace at all), and a sweep revalidating against a world the same pass just
   wrote. On a maintenance operation that runs on a schedule, a day is worth
   less than that property.
-- **A drained blob is tombstoned with reason *unreferenced*** although
+- ~~**A drained blob is tombstoned with reason *unreferenced*** although
   specification [11 §3](../../specifications/repository-format/11-lifecycle-objects.md#3-tombstone)
   defines a *compacted* reason for exactly this. The collector condemns by
   plan and does not know provenance; carrying it would mean the compactor
   telling the collector what it did, which is the coupling decision 3 exists
-  to avoid. A code change, and not this record's.
+  to avoid. A code change, and not this record's.~~
+
+  > **Withdrawn (2026-09).** The premise was wrong, not merely overtaken. The
+  > collector does know: `Retention/CollectionPlanner` was already
+  > distinguishing the two ways a record can be dead, because that
+  > distinction is what decides condemnation at all. No coupling was needed
+  > and nothing is carried from the compactor — see the amendment below.
 - **A peer's replica is never compacted**, so a peer-only set's backlog is a
   backlog for ever. Compacting one means pulling a whole blob over a domestic
   uplink and pushing a new one back to reclaim space on someone else's disk.
@@ -187,8 +193,44 @@ refuses. Rejected, as ADR-0025 Amendment 1 rejected it.
   [ADR-0007](0007-logical-object-identifiers-in-manifests.md) bought by
   keeping physical location out of manifests in the first place.
 
+### Amendment (2026-09): the reason is derived, and the limit above rested on a premise the planner contradicts
+
+This record named a limit it did not have. It said the collector "condemns by
+plan and does not know provenance", and that carrying the provenance would
+require the compactor to tell the collector what it had done — the coupling
+decision 3 exists to avoid. Both halves were wrong.
+
+`Retention/CollectionPlanner` already computed the distinction. A record here
+is dead in one of exactly two ways, and the planner separates them to decide
+condemnation at all: either nothing reaches the object, or it is still reached
+and the index resolves it into a **different blob that is present**. The
+second is a relocation, and a relocation is what *compacted* names. So the
+reason is derived where the planner already stands — no durable state, nothing
+threaded across the two passes that separate a rewrite from its reclaim, and
+no message from the compactor. Decision 3 is untouched: the collector still
+reaches its own conclusion on its own terms, and now says which one.
+
+Finding it turned up something larger. The reason field had never carried
+information at all: both of `Retention/StagingSweep`'s call sites hard-coded
+*unreferenced*, so reasons 2, 3 and 4 were declared, encoded, decoded,
+validated on read and round-tripped by tests, and written by nothing. That
+matters because the reason is inside the tombstone's signed bytes
+(11 §3, keys 1–7) — the repository plane's half of FR-GC-008's promise of
+signed audit records. A constant is not a claim.
+
+What is produced and what is not, stated so the closed vocabulary does not
+read as a gap: *unreferenced* and *compacted* are written; *retired delta* is
+unreachable, because nothing tombstones an index delta; *superseded* describes
+a newer object replacing an older, which an expiring snapshot manifest is not.
+
+A mixed blob is *compacted*, and that is what happened rather than a rounding:
+a compactor carries the live records and leaves the rest, so whatever it did
+not carry was already unreachable. A blob is drained by the rewrite or it is
+not.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | The keyless compactor over `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync`, built in five commits; [ADR-0025](0025-compaction-reseals-records.md)'s twelve exit criteria answered one by one, and its *Specified only* row retired |
+| 2026-09 | Amended | The first named follow-up withdrawn rather than deferred: the reason a drained blob is tombstoned with is derived by `Retention/CollectionPlanner` from the distinction it already computes, so the limit rested on a premise its own planner contradicts. Found in passing that the reason field had never carried information at all — both of `Retention/StagingSweep`'s call sites hard-coded *unreferenced* |

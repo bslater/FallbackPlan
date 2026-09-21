@@ -36,7 +36,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Built** | `Repository.Index/Journal/IntentLifecycle`, `Retention/StagingSweep`, `Retention/CollectionPlanner` · `Retention.Tests/RetentionCycleTests`, `InterruptionTests/CompactionInterruptionTests` · [notes](#0009--the-collector-is-built-and-now-so-is-compaction) |
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
-| [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local`, `Repository/StoreAdmission`, `Repository/RepositoryLifecycle` · `Storage.ContractTests`, `Repository.Tests/StoreAdmissionTests`, `Retention.Tests/EventualListingTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
+| [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local`, `Repository/StoreAdmission`, `Repository/RepositoryLifecycle`, `Agent/DestinationShipSink` · `Storage.ContractTests`, `Repository.Tests/StoreAdmissionTests`, `Retention.Tests/EventualListingTests`, `Storage.ContractTests/CapabilityIntersectionTests`, `Hosts.Tests/ShipSinkCapabilityTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
 | [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Applied** | Superseded by [ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md): no kit exists to be built. What the record set in motion and still stands is the standalone tool, `Recovery/RecoverySession`, which now opens from the passphrase and the descriptor; [notes](#0060--the-passphrase-is-the-recovery-credential) |
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture; format 1 withdrawn before freeze (Amendment 1) | **Built** | `Domain/FormatLimits` · `Repository.Format/Descriptor/RepositoryDescriptorCodec` · `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests` · [notes](#0014--one-format-and-a-refusal-by-name) |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
@@ -138,6 +138,8 @@ The decision that a snapshot commits per destination rather than globally is in 
 It is still one provider. A contract with a single implementation has not yet been tested by the thing it exists for — the second implementation that disagrees with it. Azure and S3 are phase 3, and `NFR-PORT-002` is traced against the architecture tests and the contract suite rather than against a provider that proves portability by being different.
 
 **The capabilities are read now**, which they were not. Every reader of `StoreCapabilities` in the product asked for the maximum object size, and `ListingConsistency` was read by nothing at all — so two behaviours this record promised for a degraded provider (`Repository/StoreAdmission` Amendment 3 withdraws them) had never been built, and a store declaring no conditional create would have been admitted and would have answered `Created` to a put that overwrote. `Repository/StoreAdmission` now refuses by name at `Repository/RepositoryLifecycle`, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to reason from absence against a listing that may lag.
+
+**And a store standing in front of others now answers for them.** `Agent/DestinationShipSink` forwarded the local metadata store's capabilities for a store whose blob reads and writes the destinations answer; `Storage.Abstractions/StoreCapabilities.Intersect` is the rule it uses instead — the weakest answer its targets give, with the archival-tier hazard the one member **or**ed rather than **and**ed. That change immediately found `Agent/PeerShipStore` and `Agent/PeerRetrievalObjectStore` declaring a zero maximum object size, by leaving the member at its struct default, which had every direct-ship run to a peer validating its capture policy against a ceiling of nought the moment anything read it. It is the second declaration of that shape this contract has caught in two slices, and both say the same thing: a capability nobody reads is a capability nobody has to get right.
 
 **What that is worth, stated precisely, because a gate no provider can trip is easy to overrate.** The only provider promises everything the engine asks, so both refusals are reachable today only through `TestSupport/LaggingObjectStore` and `TestSupport/DegradedObjectStore`. What has changed is not that a bad provider is stopped — there is none — but that the contract's claims are now falsifiable, and one of them turned out to be false: a collection pass against a lagging snapshot listing condemned the newest backup's blobs and wrote the tombstones. Two obligations are recorded rather than closed: `Agent/DestinationShipSink` forwards the local metadata store's capabilities instead of intersecting them with its destinations', and collection on an eventually-consistent store needs a completeness witness the repository does not have.
 
@@ -1355,6 +1357,19 @@ quietly when there was nothing worth rewriting anyway. A peer's replica is
 never compacted: outside a run `Agent/DestinationShipSink`'s read order takes
 local paths only, so the limit is stated rather than coded, and a set whose
 destinations are all peers — or all away — plans nothing rather than failing.
+
+**And the tombstone now says which of the two it was.** This record's first
+named follow-up was withdrawn rather than deferred: it claimed the collector
+"does not know provenance", and `Retention/CollectionPlanner` was already
+computing the distinction, because separating an object nothing reaches from
+one the index has moved is what decides condemnation at all. Deriving the
+reason needed no coupling, no durable state and no message from the compactor.
+Looking for it found that the reason had never carried information at all —
+both of `Retention/StagingSweep`'s call sites hard-coded *unreferenced*, so
+three of specification 11 §3's four values were declared, encoded, decoded and
+round-tripped by tests while nothing wrote them. The reason is inside the
+signed bytes, which makes it the repository plane's half of FR-GC-008's audit
+record rather than an annotation.
 A drained blob is tombstoned with reason *unreferenced* although specification
 [11 §3](../specifications/repository-format/11-lifecycle-objects.md#3-tombstone)
 defines a *compacted* reason for exactly this: the collector condemns by plan
