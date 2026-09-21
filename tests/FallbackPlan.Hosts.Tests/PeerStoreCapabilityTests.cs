@@ -1,4 +1,5 @@
 using FallbackPlan.Agent;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -24,6 +25,24 @@ public sealed class PeerStoreCapabilityTests
     {
         Assert.IsTrue(PeerShipStore.DeclaredCapabilities.ConditionalCreate);
         Assert.IsNull(StoreAdmission.RefuseForWriting(PeerShipStore.DeclaredCapabilities));
+    }
+
+    [TestMethod]
+    public void BothAdapters_DeclareASizeThatAdmitsWhatTheFormatWrites()
+    {
+        // Both said zero, by leaving the member at its struct default, and
+        // both said it invisibly: nothing read the figure while the ship sink
+        // forwarded the local metadata store's capabilities rather than its
+        // destinations'. The moment it stopped, every direct-ship run to a
+        // peer refused itself with "blob_maximum_exceeds_provider_object_size"
+        // — the capture validating its policy against a ceiling of nought.
+        //
+        // The peer wire sets no ceiling of its own, so the honest figure is
+        // the same one a local path gives.
+        Assert.IsGreaterThanOrEqualTo(
+            FormatLimits.MaxBlobSize, PeerShipStore.DeclaredCapabilities.MaximumObjectSize);
+        Assert.IsGreaterThanOrEqualTo(
+            FormatLimits.MaxBlobSize, PeerRetrievalObjectStore.DeclaredCapabilities.MaximumObjectSize);
     }
 
     [TestMethod]

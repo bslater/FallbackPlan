@@ -55,6 +55,9 @@ public sealed class DestinationShipSink : IObjectStore
     private readonly LocalFileSystemObjectStore? _stagingFallback;
     private readonly Lock _gate = new();
     private List<Shipment> _inScope = [];
+
+    /// <summary>This run's intersected capabilities; null outside a run.</summary>
+    private StoreCapabilities? _capabilities;
     private bool _runActive;
     private readonly Dictionary<string, string> _droppedThisRun = new(StringComparer.Ordinal);
     private readonly List<(string Name, DestinationSyncState State, string Error)> _skippedThisRun = [];
@@ -98,7 +101,41 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <inheritdoc />
-    public StoreCapabilities Capabilities => _metadata.Capabilities;
+    /// <remarks>
+    /// <para>
+    /// The weakest answer this run's targets give, not the local metadata
+    /// store's ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)
+    /// Amendment 4). A caller acting on a promise made here acts against every
+    /// destination at once, so forwarding one member's capabilities would let
+    /// it write an object larger than a destination accepts, or rely on a
+    /// conditional create a destination does not honour, on the strength of a
+    /// promise something else made.
+    /// </para>
+    /// <para>
+    /// Computed once, where the run's targets are resolved, rather than per
+    /// read: capability answers are kept off the data path on purpose (ADR-0012),
+    /// and a property that listed destinations would put provider probing
+    /// inside <c>Repository/FileArchiver</c>'s sizing decision. Outside a run
+    /// there are no targets and the answer is the metadata store's, which is
+    /// what a caller can rely on when nothing is being shipped.
+    /// </para>
+    /// <para>
+    /// A destination dropped mid-run is deliberately not recomputed. Dropping
+    /// one can only remove a constraint, so the cached answer stays at least
+    /// as conservative as the survivors' — erring towards promising less,
+    /// which is the direction that cannot mislead.
+    /// </para>
+    /// </remarks>
+    public StoreCapabilities Capabilities
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _capabilities ?? _metadata.Capabilities;
+            }
+        }
+    }
 
     /// <summary>
     /// Resolves this run's write targets and seeds each with the repository's
@@ -283,6 +320,8 @@ public sealed class DestinationShipSink : IObjectStore
         lock (_gate)
         {
             _inScope = seeded;
+            _capabilities = StoreCapabilities.Intersect(
+                [_metadata.Capabilities, .. seeded.Select(shipment => shipment.Store.Capabilities)]);
             _runActive = true;
             _droppedThisRun.Clear();
             foreach (var (name, error) in dropped)
@@ -405,6 +444,7 @@ public sealed class DestinationShipSink : IObjectStore
             shipped = _shippedThisRun;
             published = _publishedThisRun;
             _inScope = [];
+            _capabilities = null;
             _runActive = false;
             _droppedThisRun.Clear();
             _skippedThisRun.Clear();

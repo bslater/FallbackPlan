@@ -113,6 +113,18 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     {
         ConditionalCreate = true,
         RangedReads = true,
+
+        // The peer wire sets no ceiling of its own: `ReplicationObject`
+        // carries a u64 length and chunking is the transport's business
+        // (peer-protocol 03 §3.3), so the largest object that can cross is
+        // the largest the format writes — which is the engine's limit, not
+        // this adapter's, and declaring it here would turn somebody else's
+        // constant into a promise this layer cannot keep updated.
+        //
+        // Left at the struct default this said ZERO, and said it invisibly:
+        // nothing read it while `Agent/DestinationShipSink` forwarded the
+        // local metadata store's answer instead of its destinations'.
+        MaximumObjectSize = long.MaxValue,
     };
 
     /// <inheritdoc />

@@ -26,7 +26,8 @@ internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IOb
     /// peer replica is read-only over the retrieval session (07 §1) and it
     /// has no put at all. Named so a test can hold the declaration to that.
     /// </summary>
-    internal static StoreCapabilities DeclaredCapabilities { get; } = new() { RangedReads = true };
+    internal static StoreCapabilities DeclaredCapabilities { get; } =
+        new() { RangedReads = true, MaximumObjectSize = long.MaxValue };
 
     /// <inheritdoc />
     public StoreCapabilities Capabilities => DeclaredCapabilities;
