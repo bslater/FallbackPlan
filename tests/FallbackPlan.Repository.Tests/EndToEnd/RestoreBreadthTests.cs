@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Domain;
@@ -113,27 +114,40 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Restore_GetRequests_AreCharacterisedAgainstTheDistinctBlobBudget()
+    public async Task Restore_GetRequests_MeetTheDistinctBlobBudget()
     {
         // NFR-PERF-009: restore GETs ≤ 1.2 × the distinct blobs holding the
-        // required segments. This is a CHARACTERIZATION, not a compliance
-        // pass: the read path opens EVERY blob in the repository at load
-        // (three range reads each — locator, footer, envelope) and then
-        // reads one range per manifest and per segment with no coalescing,
-        // so the budget is architecturally unmet today. The exact counts are
-        // pinned so the day the read path learns targeted loading or range
-        // coalescing, this test fails and gets rewritten as the compliance
-        // test it should become — and until then, nobody can mistake the
-        // budget for met.
+        // required segments. This was a CHARACTERIZATION of a budget three
+        // terms away from being met, and its own comment said what would
+        // make it a compliance test: targeted loading, then a read that does
+        // not open the blob, then coalescing. All three have landed, so this
+        // is that compliance test, kept in the same shape and with the same
+        // generous denominator — every blob this store holds, counted as
+        // though it held required segments.
+        //
+        // The arithmetic that says why all three were needed, writing B for
+        // the data blobs and M for the metadata blobs a restore needs:
+        //
+        //   whole-store load     3 × blobs in store + 1/manifest + 1/segment
+        //   targeted load        3(B + M) + 1/manifest + 1/segment
+        //   located reads        (B + M) envelopes + 1/record
+        //   coalesced            2(B + M) — envelope paid separately
+        //   envelope folded      (B + M)
+        //
+        // Only the last fits, which is why the first run of a blob reaches
+        // down to offset 0 and takes the envelope with it rather than only
+        // merging neighbours.
         var source = new FakeFileSystemSource();
-        source.AddFile("data/one.bin", Deterministic(120_000, 13), fileId: 9_001);
-        source.AddFile("data/two.bin", Deterministic(120_000, 19), fileId: 9_002);
+        for (var index = 0; index < 12; index++)
+        {
+            source.AddFile($"data/file-{index}.bin", Incompressible(120 + index, 200_000), fileId: (ulong)(9_400 + index));
+        }
 
         var inner = CreateStore();
         using var keys = CreateKeys();
         using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("breadth-budget");
-        var published = await CreateOrchestrator(inner, keys, credential, catalogue, "breadth-budget")
+        await CreateOrchestrator(inner, keys, credential, catalogue, "breadth-budget")
             .PublishAsync(Job(source, 0xE3), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -143,14 +157,14 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
             .EnumerateFiles(Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories)
             .Count();
 
+        // Measured on the shape the product restores through: the catalogue
+        // as the location source and no load at all. The plan probe that
+        // names unreachable paths before anything moves (FR-RST-003) is the
+        // plan verb's and is deliberately not in this measurement, because
+        // it is no longer in the restore.
         var counting = new CountingObjectStore(inner);
         using var reader = new RepositoryReader(Repo, keys, counting, Authority);
-        await reader.LoadBlobsAsync(CancellationToken.None);
-
-        // The load alone: three range reads per blob in the repository —
-        // proportional to repository size, not to this restore.
-        var loadReads = counting.Reads;
-        Assert.AreEqual(3 * blobsInStore, loadReads);
+        reader.UseLocationSource(catalogue.ResolveLocation);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan, Path.Combine(SpoolDirectory, "budget-out"),
@@ -158,22 +172,142 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
             CancellationToken.None);
 
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual(0, reader.LocationFallbacks, "no blob should have needed its footer");
 
-        // One read per file-version manifest, one per segment reference, no
-        // coalescing of neighbours in the same blob.
-        var expectedRestoreReads = published.Files.Sum(
-            file => 1 + file.Archive!.SegmentReferences.Count);
-        Assert.AreEqual(expectedRestoreReads, counting.Reads - loadReads);
-
-        // The budget arithmetic, stated where it can be seen: even counting
-        // generously (every blob in this store holds required segments), the
-        // path exceeds 1.2 × distinct blobs — the finding the pickup list
-        // now carries as read-path engine work.
         var budget = Math.Ceiling(1.2 * blobsInStore);
-        Assert.IsTrue(
-            counting.Reads > budget,
-            $"the read path issued {counting.Reads} GETs against a budget of {budget} — if this now passes, "
-            + "targeted loading or coalescing has landed and this characterization must become a compliance test.");
+        Assert.IsLessThan(
+            budget + 1,
+            counting.Reads,
+            $"the read path issued {counting.Reads} GET(s) against a budget of {budget} "
+            + $"over {blobsInStore} blob(s), in {reader.PrefetchedRuns} coalesced run(s)");
+
+        // And the term the fold buys: one read a blob, not two. Asserted
+        // separately because the budget above would still pass at 2 × B with
+        // a generous enough denominator, and the fold is the part that has
+        // to keep working.
+        Assert.IsLessThan(
+            blobsInStore + 1,
+            counting.Reads,
+            $"{counting.Reads} read(s) over {blobsInStore} blob(s)");
+    }
+
+    [TestMethod]
+    public async Task AFilesSegmentsInOneBlob_AreFetchedTogether_NotOneReadEach()
+    {
+        // The coalescing itself: a file's records sit next to each other in
+        // the blob they were written to, so reading them one at a time is one
+        // request for every 64 KiB segment. Asserted against the records the
+        // restore actually read rather than against a count this test would
+        // have to derive, because the ratio is the claim.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+        using var _ = keys;
+        using var _c = catalogue;
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "coalesced-out"),
+            new RestoreExecutionOptions { RunId = "coalesced", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.AreEqual(0, reader.LocationFallbacks);
+
+        // Every read this restore issued was a coalesced run: no record was
+        // fetched on its own, and no blob was opened through its footer.
+        Assert.AreEqual(reader.PrefetchedRuns, (int)counting.Reads);
+        Assert.IsLessThan(
+            reader.RecordsRead,
+            counting.Reads,
+            $"{counting.Reads} read(s) for {reader.RecordsRead} record(s)");
+    }
+
+    [TestMethod]
+    public async Task AGapWiderThanTheBridge_IsNotBridged()
+    {
+        // The bound that stops a GET budget being bought with a bandwidth
+        // bill. Two records with a record between them that nobody asked for
+        // are one read when the gap is bridgeable and two when it is not —
+        // and when it is not, the bytes in between never cross.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+        using var _ = keys;
+        using var _c = catalogue;
+
+        var segments = await NeighbouringSegmentsAsync(plan, catalogue, inner, keys);
+        var first = catalogue.ResolveLocation(segments[0])!;
+        var third = catalogue.ResolveLocation(segments[2])!;
+        var gap = (long)(third.PhysicalOffset - first.PhysicalOffset);
+        Assert.IsGreaterThan(8 * 1024, gap, "the fixture must leave a real gap between the two");
+
+        long bridgedBytes;
+        var bridged = new CountingObjectStore(inner);
+        using (var wide = new RepositoryReader(Repo, keys, bridged, Authority))
+        {
+            wide.UseLocationSource(catalogue.ResolveLocation);
+            await wide.PrefetchAsync([segments[0], segments[2]], CancellationToken.None);
+            Assert.AreEqual(1, wide.PrefetchedRuns, "a bridgeable gap is one read");
+            bridgedBytes = wide.PrefetchedBytes;
+        }
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        reader.UsePrefetchPolicy(PrefetchPolicy.Default with { MaximumBridgeBytes = 1024 });
+
+        await reader.PrefetchAsync([segments[0], segments[2]], CancellationToken.None);
+
+        Assert.AreEqual(2, reader.PrefetchedRuns, "a gap wider than the bridge must not be bridged");
+
+        // The saving is the record nobody asked for: bridging fetches it,
+        // refusing to bridge does not, and the difference is that record.
+        Assert.IsLessThan(
+            bridgedBytes,
+            reader.PrefetchedBytes,
+            $"{reader.PrefetchedBytes} byte(s) in two runs against {bridgedBytes} in one, over a {gap}-byte span");
+
+        // And both records still read, out of their own runs.
+        foreach (var segment in new[] { segments[0], segments[2] })
+        {
+            Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(segment, CancellationToken.None)).Outcome);
+        }
+
+        Assert.AreEqual(0, reader.LocationFallbacks);
+    }
+
+    [TestMethod]
+    public async Task APrefetchOverTheWindow_BecomesSeveralReads()
+    {
+        // NFR-PERF-001 bounds memory by configuration rather than by what a
+        // file happens to be, so a prefetch that would exceed the window is
+        // several reads rather than one buffer — and every record still reads
+        // out of one of them.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+        using var _ = keys;
+        using var _c = catalogue;
+
+        var segments = await NeighbouringSegmentsAsync(plan, catalogue, inner, keys);
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        reader.UsePrefetchPolicy(PrefetchPolicy.Default with { CoalesceWindowBytes = 96 * 1024 });
+
+        await reader.PrefetchAsync(segments, CancellationToken.None);
+
+        Assert.IsGreaterThan(
+            1, reader.PrefetchedRuns, $"{segments.Count} segment(s) coalesced into {reader.PrefetchedRuns} run(s)");
+        Assert.IsLessThan(
+            segments.Count, reader.PrefetchedRuns, "and still fewer runs than records");
+
+        foreach (var segment in segments)
+        {
+            Assert.AreEqual(RecordReadOutcome.Ok, (await reader.ReadSegmentAsync(segment, CancellationToken.None)).Outcome);
+        }
+
+        Assert.AreEqual(0, reader.LocationFallbacks, "several runs must still serve every record");
     }
 
     [TestMethod]
@@ -525,7 +659,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task ARestoreWithKnownLocations_OpensNoFooter_AndCostsTwoFewerReadsPerBlob()
+    public async Task ARestoreWithKnownLocations_OpensNoFooter_AndCostsFewerReadsThanTheFooterPath()
     {
         // NFR-PERF-009's second term. Opening a blob costs three ranged reads
         // — locator, footer, envelope — before a byte of payload, so a path
@@ -565,13 +699,15 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
         Assert.AreEqual(0, located.LocationFallbacks, "every record should have read from its location");
 
-        // Exactly the locator and the footer saved, per blob the records live
-        // in — the envelope read is the one the fast path still needs.
-        Assert.AreEqual(
-            viaFooters.Reads - (2 * located.FramedBlobs),
+        // At least the locator and the footer saved, per blob the records
+        // live in — and rather more than that, because the records a run
+        // covers no longer cost a read each and the envelope rides the run
+        // that fetched the first of them.
+        Assert.IsGreaterThan(
             viaLocations.Reads,
+            viaFooters.Reads - (2 * located.FramedBlobs),
             $"{viaFooters.Reads} reads through footers, {viaLocations.Reads} through locations, "
-            + $"over {located.FramedBlobs} blob(s)");
+            + $"over {located.FramedBlobs} blob(s) in {located.PrefetchedRuns} run(s)");
     }
 
     [TestMethod]
@@ -625,6 +761,11 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         reader.UseLocationSource(objectId =>
             objectId == items[0].ObjectId ? neighbour : catalogue.ResolveLocation(objectId));
 
+        // Served out of a coalesced run rather than a read of its own, so the
+        // check is held on the path a restore actually takes: a prefetch must
+        // not be a way for a record to arrive unexamined.
+        await reader.PrefetchAsync([.. items.Select(item => item.ObjectId)], CancellationToken.None);
+
         var read = await reader.ReadSegmentAsync(items[0].ObjectId, CancellationToken.None);
 
         // Either refused outright, or answered from the footer fallback with
@@ -651,6 +792,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         using var reader = new RepositoryReader(Repo, keys, inner, Authority);
         reader.UseLocationSource(catalogue.ResolveLocation);
         await reader.LoadBlobsAsync(CancellationToken.None);
+        await reader.PrefetchAsync([item.ObjectId], CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(item.ObjectId, CancellationToken.None);
         Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
@@ -738,6 +880,50 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         ExpiryGeneration = 5,
         ClientVersion = "restore-breadth-tests/1.0",
     };
+
+    /// <summary>
+    /// The segment object identifiers of one file, in order and all in one
+    /// blob — what the coalescing cases need, because segments written
+    /// together sit next to each other and a gap between two of them is a
+    /// record nobody asked for.
+    /// </summary>
+    private static async Task<IReadOnlyList<ObjectId>> NeighbouringSegmentsAsync(
+        RestorePlan plan, CatalogueDb catalogue, IObjectStore store, RepositoryKeySet keys)
+    {
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+
+        foreach (var item in plan.Items.Where(entry => entry.Kind == EntryKind.File))
+        {
+            var read = await reader.ReadSegmentAsync(item.ObjectId, CancellationToken.None);
+            Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
+
+            var manifest = FallbackPlan.Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext!);
+            var ids = manifest.SegmentReferences.Select(reference => reference.ObjectId).ToList();
+            if (ids.Count < 3)
+            {
+                continue;
+            }
+
+            var blob = catalogue.ResolveLocation(ids[0])!.BlobId;
+            var contiguous = ids.TakeWhile(id => catalogue.ResolveLocation(id)!.BlobId.Equals(blob)).ToList();
+            if (contiguous.Count >= 3)
+            {
+                return contiguous;
+            }
+        }
+
+        Assert.Fail("the fixture must produce a file with three segments in one blob");
+        return [];
+    }
+
+    /// <summary>Content zstd cannot pack, so a fixture actually spans blobs.</summary>
+    private static byte[] Incompressible(int seed, int length)
+    {
+        var content = new byte[length];
+        new Random(seed).NextBytes(content);
+        return content;
+    }
 
     private static byte[] Deterministic(int length, byte seed)
     {

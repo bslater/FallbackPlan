@@ -1051,14 +1051,12 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
 
-        // Only the blobs this plan needs, not every footer in the store: the
-        // load was proportional to the repository rather than to the restore
-        // (NFR-PERF-009), so recovering one file from a decade of backups
-        // paid for all of it.
-        var needed = await RestoreBlobSet.ResolveAsync(
-            catalogue, plan, session.Store, session.Repository.RepositoryId, session.Repository.Keys,
-            cancellationToken).ConfigureAwait(false);
-        await reader.LoadBlobsAsync(needed.Blobs, cancellationToken).ConfigureAwait(false);
+        // No load at all: the catalogue says where every record is, so the
+        // read goes straight there and a blob is opened through its footer
+        // only when that fails (NFR-PERF-009). Opening even the blobs a plan
+        // needs cost three ranged reads each — locator, footer, envelope —
+        // before a byte of payload.
+        reader.UseLocationSource(catalogue.ResolveLocation);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan,

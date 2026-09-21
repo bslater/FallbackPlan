@@ -797,13 +797,15 @@ public sealed partial class ServiceCommandHandler(
             using var reader = new RepositoryReader(
                 context.RepositoryId, context.Keys, context.Store, context.Source?.ReadAuthority);
 
-            // Open only the blobs the plan needs, known exactly from the same
-            // probe the plan verb runs (ADR-0041). This used to be the remote
-            // source's path alone, and a local source opened every footer in
-            // the store — a cost proportional to the repository rather than
-            // to the restore, which is NFR-PERF-009's first term.
-            var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
-            await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
+            // No load at all: the catalogue already says where every record
+            // is, so a record is read from there and a blob is opened through
+            // its footer only when that fails (NFR-PERF-009). Opening the
+            // blobs a plan needs cost three ranged reads each before a byte of
+            // payload, which no amount of coalescing afterwards could get
+            // under the budget. The plan verb still runs the probe — naming
+            // unreachable paths before anything moves is its job, not this
+            // one's (FR-RST-003).
+            reader.UseLocationSource(catalogue.ResolveLocation);
 
             var options = new RestoreExecutionOptions
             {

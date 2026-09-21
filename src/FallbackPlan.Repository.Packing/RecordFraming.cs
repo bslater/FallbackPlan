@@ -20,6 +20,24 @@ public static class RecordFraming
     /// <summary>The sealed record key's offset within the prefix: after the nonce.</summary>
     public const int SealedKeyOffset = RecordNonce.AesGcmLength;
 
+    /// <summary>
+    /// The longest prefix any container puts in front of a record's
+    /// ciphertext — a format-3 data record's carried nonce and sealed key.
+    /// A caller that must size a read <em>before</em> it has the blob's
+    /// envelope (a prefetch, which is what folds the envelope into the
+    /// first run) uses this and over-fetches by at most 92 bytes per record
+    /// rather than paying a read to learn the exact figure.
+    /// </summary>
+    public const int MaxPrefixLength = RecordNonce.AesGcmLength + SealedRecordKey.SealedLength;
+
+    /// <summary>
+    /// The largest a record of this stored length can be framed as, in any
+    /// container this reader accepts — the bound that lets a range be sized
+    /// without the envelope.
+    /// </summary>
+    public static long MaxRecordLength(uint storedLength) =>
+        RecordHeader.Length + MaxPrefixLength + storedLength + Crypto.RecordCipher.TagLength;
+
     /// <summary>The prefix length for a container of this version and class.</summary>
     public static int PrefixLength(ushort formatVersion, BlobClass blobClass)
     {

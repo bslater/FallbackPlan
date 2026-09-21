@@ -64,6 +64,44 @@ public readonly record struct RecordSpan(
         entry.EncryptionProfileValue);
 }
 
+/// <summary>
+/// A contiguous stretch of one blob a caller already holds — what a single
+/// coalesced ranged read fetched (NFR-PERF-009). Records whose framing falls
+/// inside it are opened from these bytes instead of from a read of their own.
+/// </summary>
+/// <remarks>
+/// Holding bytes changes only where they came from. Everything a record read
+/// checks — the header cross-check, the AEAD tag, the plaintext re-hash of
+/// 04 §6 step 7 — runs identically on a slice of a run and on a read of one
+/// record, because a bigger read is a transport decision and never a
+/// verification one.
+/// </remarks>
+/// <param name="Offset">Where these bytes start within the blob.</param>
+/// <param name="Bytes">The bytes themselves.</param>
+public readonly record struct BlobRun(long Offset, ReadOnlyMemory<byte> Bytes)
+{
+    /// <summary>Where these bytes end within the blob, exclusive.</summary>
+    public long End => Offset + Bytes.Length;
+
+    /// <summary>
+    /// The stretch at <paramref name="offset"/>, when this run covers all of
+    /// it. A run that covers only part of a record answers false: a short
+    /// slice would read as a truncated record, which is a damage finding
+    /// about the blob rather than about the prefetch.
+    /// </summary>
+    public bool TrySlice(long offset, long length, out ReadOnlyMemory<byte> slice)
+    {
+        if (offset >= Offset && length >= 0 && offset + length <= End)
+        {
+            slice = Bytes.Slice((int)(offset - Offset), (int)length);
+            return true;
+        }
+
+        slice = default;
+        return false;
+    }
+}
+
 public sealed class BlobReader : IDisposable
 {
     private readonly IObjectStore _store;
@@ -230,7 +268,41 @@ public sealed class BlobReader : IDisposable
 
         var envelopeLength = Math.Min(BlobEnvelope.MaxLength, blobLength - FooterLocator.Length);
         var envelopeBytes = await ReadRangeAsync(store, key, 0, envelopeLength, cancellationToken).ConfigureAwait(false);
-        var envelope = BlobEnvelope.Parse(envelopeBytes);
+
+        return OpenFramingFrom(
+            store, key, blobLength, repositoryId, classKeyProvider, objectIdDeriver, envelopeBytes,
+            sealedContentKeyOpener, logger);
+    }
+
+    /// <summary>
+    /// The same framing open from envelope bytes already in hand — a caller
+    /// whose coalesced read began at offset 0 has them, and the envelope is
+    /// then folded into that run rather than paid for separately
+    /// (NFR-PERF-009). Identical in every other respect: the same parse and
+    /// the same <see cref="DeriveKeys"/>, so a blob framed either way is
+    /// keyed the same.
+    /// </summary>
+    public static BlobReader OpenFramingFrom(
+        IObjectStore store,
+        ObjectKey key,
+        long blobLength,
+        RepositoryId repositoryId,
+        Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
+        ObjectIdDeriver objectIdDeriver,
+        ReadOnlyMemory<byte> envelopeBytes,
+        SealedContentKeyOpener? sealedContentKeyOpener = null,
+        ILogger? logger = null)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(classKeyProvider);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
+
+        if (blobLength < BlobEnvelope.Length + BlobFooter.HeaderLength + RecordCipher.TagLength + FooterLocator.Length)
+        {
+            throw new BlobFormatException(Strings.FormatBlobReader_ByteObjectTooShortSealed(blobLength));
+        }
+
+        var envelope = BlobEnvelope.Parse(envelopeBytes.Span);
 
         var (blobKey, recordKey, retainedClassKey, recordOpener) =
             DeriveKeys(envelope, classKeyProvider, sealedContentKeyOpener, logger ?? NullLogger.Instance);
@@ -239,6 +311,10 @@ public sealed class BlobReader : IDisposable
             store, key, blobLength, repositoryId, objectIdDeriver, envelope, blobKey, recordKey, retainedClassKey,
             recordOpener, []);
     }
+
+    /// <summary>The longest leading stretch this blob's envelope can occupy.</summary>
+    public static long EnvelopeReadLength(long blobLength) =>
+        Math.Min(BlobEnvelope.MaxLength, blobLength - FooterLocator.Length);
 
     /// <summary>The store key this blob was opened from.</summary>
     public ObjectKey StoreKey => _key;
@@ -390,7 +466,7 @@ public sealed class BlobReader : IDisposable
     {
         var framed = await ReadFramedAsync(entry, cancellationToken).ConfigureAwait(false);
         return framed.Bytes is { } bytes
-            ? SealedRecordReadResult.Success(bytes[RecordHeader.Length..])
+            ? SealedRecordReadResult.Success(bytes[RecordHeader.Length..].ToArray())
             : SealedRecordReadResult.Failure(framed.Outcome, framed.Detail!);
     }
 
@@ -405,7 +481,7 @@ public sealed class BlobReader : IDisposable
         RecordTableEntry entry, CancellationToken cancellationToken)
     {
         var framed = await ReadFramedAsync(
-            RecordSpan.From(entry), entry.LogicalLength, cancellationToken).ConfigureAwait(false);
+            RecordSpan.From(entry), entry.LogicalLength, held: null, cancellationToken).ConfigureAwait(false);
         if (framed.Header is not { } header)
         {
             return framed;
@@ -434,7 +510,7 @@ public sealed class BlobReader : IDisposable
     /// <see cref="RecordSpan"/>'s own remarks explain.
     /// </summary>
     private async ValueTask<FramedRecord> ReadFramedAsync(
-        RecordSpan entry, ulong logicalLengthGuard, CancellationToken cancellationToken)
+        RecordSpan entry, ulong logicalLengthGuard, BlobRun? held, CancellationToken cancellationToken)
     {
         if (!EncryptionProfile.TryFromValue(entry.EncryptionProfileValue, out var encryptionProfile) ||
             encryptionProfile != EncryptionProfile.Aes256GcmV1)
@@ -455,14 +531,21 @@ public sealed class BlobReader : IDisposable
                 $"logical_length {logicalLengthGuard} exceeds the 64 MiB segment bound (specification 00 §8) — refused before allocation.");
         }
 
-        var recordLength = RecordHeader.Length + _recordPrefixLength + entry.StoredLength + RecordCipher.TagLength;
-        var recordBytes = await ReadRangeAsync(
-            _store, _key, (long)entry.PhysicalOffset, recordLength, cancellationToken).ConfigureAwait(false);
+        long recordLength = RecordHeader.Length + _recordPrefixLength + entry.StoredLength + RecordCipher.TagLength;
+
+        // Bytes already in hand when a prefetch coalesced this record's blob
+        // into a run that covers it; one ranged read of its own otherwise.
+        // Which of the two it was changes nothing below: the same
+        // cross-check, the same cipher, the same step 7.
+        var recordBytes = held is { } run && run.TrySlice((long)entry.PhysicalOffset, recordLength, out var slice)
+            ? slice
+            : await ReadRangeAsync(
+                _store, _key, (long)entry.PhysicalOffset, recordLength, cancellationToken).ConfigureAwait(false);
 
         RecordHeader header;
         try
         {
-            header = RecordHeader.Parse(recordBytes.AsSpan(0, RecordHeader.Length));
+            header = RecordHeader.Parse(recordBytes.Span[..RecordHeader.Length]);
         }
         catch (RecordFormatException exception)
         {
@@ -485,7 +568,7 @@ public sealed class BlobReader : IDisposable
     }
 
     private readonly record struct FramedRecord(
-        byte[]? Bytes, RecordHeader? Header, RecordReadOutcome Outcome, string? Detail);
+        ReadOnlyMemory<byte>? Bytes, RecordHeader? Header, RecordReadOutcome Outcome, string? Detail);
 
     /// <summary>
     /// Reads, authenticates, decompresses, and content-verifies one record —
@@ -508,8 +591,18 @@ public sealed class BlobReader : IDisposable
     /// <see cref="RecordSpan"/> says why the remainder is safe.
     /// </remarks>
     public ValueTask<RecordReadResult> ReadRecordAsync(RecordSpan span, CancellationToken cancellationToken) =>
+        ReadRecordAsync(span, held: null, cancellationToken);
+
+    /// <summary>
+    /// The same read, served from a <see cref="BlobRun"/> the caller already
+    /// fetched when that run covers the record — the coalescing half of
+    /// NFR-PERF-009. A run that does not cover it falls through to a read of
+    /// its own, so a prefetch is an optimisation that cannot fail a read.
+    /// </summary>
+    public ValueTask<RecordReadResult> ReadRecordAsync(
+        RecordSpan span, BlobRun? held, CancellationToken cancellationToken) =>
         ReadRecordCoreAsync(
-            () => ReadFramedAsync(span, logicalLengthGuard: 0, cancellationToken), cancellationToken);
+            () => ReadFramedAsync(span, logicalLengthGuard: 0, held, cancellationToken), cancellationToken);
 
     private async ValueTask<RecordReadResult> ReadRecordCoreAsync(
         Func<ValueTask<FramedRecord>> read, CancellationToken cancellationToken)
@@ -549,7 +642,7 @@ public sealed class BlobReader : IDisposable
             // object's, so neither depends on where the record now sits —
             // which is why these same bytes read identically after being
             // copied into another blob (04 §3, 05 §2.2).
-            recordBytes.AsSpan(RecordHeader.Length + RecordFraming.NonceOffset, RecordNonce.AesGcmLength)
+            recordBytes.Span.Slice(RecordHeader.Length + RecordFraming.NonceOffset, RecordNonce.AesGcmLength)
                 .CopyTo(nonce);
             RecordAad.WriteRelocatable(
                 _repositoryId, Envelope.FormatVersion, header.ObjectType, header.ObjectId,
@@ -566,7 +659,7 @@ public sealed class BlobReader : IDisposable
                 try
                 {
                     shareKey = _opener!.OpenRecordKey(
-                        recordBytes.AsSpan(
+                        recordBytes.Span.Slice(
                             RecordHeader.Length + RecordFraming.SealedKeyOffset, SealedRecordKey.SealedLength),
                         header.ObjectId);
                 }
@@ -593,8 +686,8 @@ public sealed class BlobReader : IDisposable
             keyForRecord,
             nonce,
             aadForRecord,
-            recordBytes.AsSpan(RecordHeader.Length + _recordPrefixLength, (int)header.StoredLength),
-            recordBytes.AsSpan(
+            recordBytes.Span.Slice(RecordHeader.Length + _recordPrefixLength, (int)header.StoredLength),
+            recordBytes.Span.Slice(
                 RecordHeader.Length + _recordPrefixLength + (int)header.StoredLength, RecordCipher.TagLength),
             storedPayload);
 
@@ -665,7 +758,13 @@ public sealed class BlobReader : IDisposable
         _decompressor.Dispose();
     }
 
-    private static async ValueTask<byte[]> ReadRangeAsync(
+    /// <summary>
+    /// One ranged read, filled or refused — the whole of what this reader
+    /// asks of a store. Public so a caller that coalesces several records
+    /// into one read (NFR-PERF-009) fetches its run the same way, with the
+    /// same short-read refusal rather than a second fill loop of its own.
+    /// </summary>
+    public static async ValueTask<byte[]> ReadRangeAsync(
         IObjectStore store,
         ObjectKey key,
         long offset,

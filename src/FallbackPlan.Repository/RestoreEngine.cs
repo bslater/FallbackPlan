@@ -50,6 +50,14 @@ public sealed class RestoreEngine
                 .OrderBy(piece => piece.Item1)
                 .ToList();
 
+            // Every segment this file needs, fetched in as few reads as the
+            // reader's bounds allow before the loop asks for the first of
+            // them (NFR-PERF-009). What the reader then holds is bounded by
+            // its own budget, not by this file.
+            _ = await _reader.PrefetchAsync(
+                [.. manifest.SegmentReferences.Select(reference => reference.ObjectId)],
+                cancellationToken).ConfigureAwait(false);
+
             var spool = new FileStream(
                 spoolPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
             await using (spool.ConfigureAwait(false))
