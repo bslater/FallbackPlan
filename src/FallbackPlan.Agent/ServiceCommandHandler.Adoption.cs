@@ -334,7 +334,12 @@ public sealed partial class ServiceCommandHandler
             try
             {
                 repository = await RepositoryLifecycle.OpenAsync(
-                        replicaStore, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
+                        replicaStore, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)),
+                        // Adoption reads an archive it is deciding whether to
+                        // take on; nothing is published into it here, and for
+                        // a peer the store cannot be published into at all
+                        // (peer-protocol 07 §1).
+                        StoreUse.ReadingOnly)
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)

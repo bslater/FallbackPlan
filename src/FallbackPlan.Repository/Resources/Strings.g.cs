@@ -248,4 +248,14 @@ internal static class Strings
     /// </summary>
     internal static string FormatCompactionPass_NeedsFormatThree(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, CompactionPass_NeedsFormatThree, arg0);
+
+    /// <summary>
+    /// This store declares no conditional create, and every durable step of a publication is an if-absent put — without it a write over a live key answers 'created', which is how a sealed blob would be silently replaced. Refused rather than guessed (ADR-0012).
+    /// </summary>
+    internal static string StoreAdmission_NoConditionalCreate => Get(nameof(StoreAdmission_NoConditionalCreate));
+
+    /// <summary>
+    /// This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).
+    /// </summary>
+    internal static string StoreAdmission_NoRangedReads => Get(nameof(StoreAdmission_NoRangedReads));
 }

@@ -21,7 +21,15 @@ namespace FallbackPlan.Agent;
 internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IObjectStore
 {
     /// <inheritdoc/>
-    public StoreCapabilities Capabilities { get; } = new() { RangedReads = true };
+    /// <summary>
+    /// What this adapter promises: ranged reads and nothing else, because a
+    /// peer replica is read-only over the retrieval session (07 §1) and it
+    /// has no put at all. Named so a test can hold the declaration to that.
+    /// </summary>
+    internal static StoreCapabilities DeclaredCapabilities { get; } = new() { RangedReads = true };
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => DeclaredCapabilities;
 
     /// <inheritdoc/>
     public async ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken)

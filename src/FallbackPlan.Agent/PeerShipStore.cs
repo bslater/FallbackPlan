@@ -100,7 +100,23 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
     public string DestinationName => _destination.Name;
 
     /// <inheritdoc/>
-    public StoreCapabilities Capabilities { get; } = new() { RangedReads = true };
+    /// <summary>
+    /// What this adapter promises, named so a test can hold the declaration
+    /// to what the code does without standing a peer session up.
+    /// </summary>
+    /// <remarks>
+    /// It does implement if-absent puts — <c>Holds</c> is the check — and
+    /// declaring otherwise would have it refused by the engine's admission
+    /// gate for a primitive it has always had (ADR-0012).
+    /// </remarks>
+    internal static StoreCapabilities DeclaredCapabilities { get; } = new()
+    {
+        ConditionalCreate = true,
+        RangedReads = true,
+    };
+
+    /// <inheritdoc />
+    public StoreCapabilities Capabilities => DeclaredCapabilities;
 
     /// <summary>
     /// Dials the destination, offers the repository, and reads the inventory

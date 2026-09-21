@@ -164,6 +164,8 @@ public static class RepositoryLifecycle
         ulong createdAtUnixMilliseconds,
         CancellationToken cancellationToken)
     {
+        Refuse(StoreAdmission.RefuseForWriting(store.Capabilities));
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNull(settings);
@@ -286,6 +288,8 @@ public static class RepositoryLifecycle
         ushort formatVersion,
         CancellationToken cancellationToken)
     {
+        Refuse(StoreAdmission.RefuseForWriting(store.Capabilities));
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(kdfParameters);
@@ -346,12 +350,13 @@ public static class RepositoryLifecycle
         IObjectStore store,
         RepositoryWriteCredential credential,
         CancellationToken cancellationToken,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        StoreUse use = StoreUse.Writing)
     {
         var log = logger ?? NullLogger.Instance;
         try
         {
-            var opened = await OpenCoreAsync(store, credential, cancellationToken).ConfigureAwait(false);
+            var opened = await OpenCoreAsync(store, credential, use, cancellationToken).ConfigureAwait(false);
             Log.RepositoryOpened(log, opened.RepositoryId, opened.Descriptor.FormatVersion);
             return opened;
         }
@@ -369,8 +374,13 @@ public static class RepositoryLifecycle
     private static async ValueTask<OpenedRepository> OpenCoreAsync(
         IObjectStore store,
         RepositoryWriteCredential credential,
+        StoreUse use,
         CancellationToken cancellationToken)
     {
+        Refuse(use == StoreUse.ReadingOnly
+            ? StoreAdmission.RefuseForReading(store.Capabilities)
+            : StoreAdmission.RefuseForWriting(store.Capabilities));
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(credential);
 
@@ -435,6 +445,8 @@ public static class RepositoryLifecycle
         Passphrase passphrase,
         CancellationToken cancellationToken)
     {
+        Refuse(StoreAdmission.RefuseForReading(store.Capabilities));
+
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(passphrase);
 
@@ -482,6 +494,20 @@ public static class RepositoryLifecycle
         return WriteOnlyDerivation.TryDeriveVerified(
             passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, descriptor.SealingPublicKey.Span,
             out authority);
+    }
+
+    /// <summary>
+    /// Turns an admission refusal into the exception a caller already handles
+    /// for "this reader cannot use this repository" — because a store the
+    /// engine cannot use is the same kind of answer: not damage, not a fault,
+    /// a stated incapacity (ADR-0012).
+    /// </summary>
+    private static void Refuse(string? refusal)
+    {
+        if (refusal is not null)
+        {
+            throw new RepositoryOpenException(refusal);
+        }
     }
 
     private static RepositoryDescriptor ParseDescriptorOrThrow(byte[] descriptorBytes) =>

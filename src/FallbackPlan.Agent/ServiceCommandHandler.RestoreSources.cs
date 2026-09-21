@@ -431,7 +431,10 @@ public sealed partial class ServiceCommandHandler
             using (credential)
             {
                 return await RepositoryLifecycle.OpenAsync(
-                        store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
+                        store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)),
+                        // A restore source is read: the store may be a peer's
+                        // replica, which has no put at all.
+                        Repository.StoreUse.ReadingOnly)
                     .ConfigureAwait(false);
             }
         }
