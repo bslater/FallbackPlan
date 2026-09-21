@@ -34,6 +34,36 @@ namespace FallbackPlan.Repository.Packing;
 /// native decoder and is guarded below.
 /// </para>
 /// </remarks>
+/// <summary>
+/// Where a record sits and how long it is — the part of a
+/// <see cref="RecordTableEntry"/> a location cache can answer, without the
+/// ordinal, the logical length or the object type that only the
+/// authenticated footer states.
+/// </summary>
+/// <remarks>
+/// Those three are exactly the fields the record's own protection already
+/// covers: the object type and (before format 3) the ordinal are AAD
+/// inputs, so a header that lies about either fails its tag; the logical
+/// length is what 04 §6 step 7's plaintext re-hash checks. So a read from a
+/// span is not a read with three checks missing — it is a read whose three
+/// remaining checks moved from the footer to the cipher.
+/// </remarks>
+public readonly record struct RecordSpan(
+    ObjectId ObjectId,
+    ulong PhysicalOffset,
+    uint StoredLength,
+    ushort CompressionProfileValue,
+    ushort EncryptionProfileValue)
+{
+    /// <summary>The span a footer's table entry describes.</summary>
+    public static RecordSpan From(RecordTableEntry entry) => new(
+        entry.ObjectId,
+        entry.PhysicalOffset,
+        entry.StoredLength,
+        entry.CompressionProfileValue,
+        entry.EncryptionProfileValue);
+}
+
 public sealed class BlobReader : IDisposable
 {
     private readonly IObjectStore _store;
@@ -82,6 +112,132 @@ public sealed class BlobReader : IDisposable
         _opener = opener;
         _recordPrefixLength = RecordFraming.PrefixLength(envelope.FormatVersion, envelope.BlobClass);
         RecordTable = recordTable;
+    }
+
+    /// <summary>
+    /// The keys an envelope implies — shared by the full open and the
+    /// framing-only one, so a blob opened either way is keyed identically.
+    /// </summary>
+    /// <remarks>
+    /// Three ways a record is keyed, and the envelope picks one. A format-3
+    /// blob keys per record, so nothing is opened here: a structure-plane
+    /// record expands the class key (kept for the reads), and a data
+    /// record's share is opened one at a time, where a refusal costs that
+    /// record and not the blob.
+    /// </remarks>
+    private static (byte[] BlobKey, byte[]? RecordKey, byte[]? ClassKey, SealedContentKeyOpener? Opener) DeriveKeys(
+        BlobEnvelope envelope,
+        Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
+        SealedContentKeyOpener? sealedContentKeyOpener,
+        ILogger log)
+    {
+        // A sealed data blob's STRUCTURE lives on the metadata plane
+        // (ADR-0042 §2) in both formats that have one: its footer key derives
+        // from the metadata class key, and only its records need a content
+        // key. Asked by version and class rather than by "at least version
+        // 2", because format 3 seals per record and would answer the second
+        // question wrongly.
+        var isData = envelope.BlobClass == BlobClass.Data;
+        var sealedPerBlob = FormatVersions.SealsContentPerBlob(envelope.FormatVersion, isData);
+        var sealedPerRecord = FormatVersions.SealsContentPerRecord(envelope.FormatVersion, isData);
+        var structureClass = sealedPerBlob || sealedPerRecord ? BlobClass.Metadata : envelope.BlobClass;
+
+        var classKey = classKeyProvider(structureClass, envelope.KeyGeneration);
+        var blobKey = new byte[BlobKeyDeriver.BlobKeyLength];
+        BlobKeyDeriver.Derive(classKey, envelope.BlobSalt, envelope.WriterId, envelope.BlobCounter, blobKey);
+
+        byte[]? recordKey = null;
+        byte[]? retainedClassKey = null;
+        SealedContentKeyOpener? recordOpener = null;
+
+        if (FormatVersions.HasRelocatableRecords(envelope.FormatVersion))
+        {
+            if (sealedPerRecord)
+            {
+                recordOpener = sealedContentKeyOpener;
+            }
+            else
+            {
+                retainedClassKey = classKey.AsSpan().ToArray();
+            }
+        }
+        else if (!sealedPerBlob)
+        {
+            recordKey = blobKey;
+        }
+        else if (sealedContentKeyOpener is not null)
+        {
+            try
+            {
+                recordKey = sealedContentKeyOpener.OpenBlobKey(envelope);
+            }
+            catch (Exception refusal) when (refusal is SealedContentException or ArgumentException)
+            {
+                // Every call site proves the authority against the descriptor
+                // before constructing an opener, so a share that still does
+                // not open is THIS blob's damage — tampered, transplanted, or
+                // a low-order ephemeral. Contained to the blob exactly as a
+                // failed footer is (ADR-0042 §7): one hostile object must not
+                // abort loading every other blob.
+                CryptographicOperations.ZeroMemory(blobKey);
+                Log.SealedShareRefused(log, envelope.BlobId);
+                throw new BlobFormatException(Strings.BlobReader_SealedShareDoesNotOpen);
+            }
+            catch
+            {
+                CryptographicOperations.ZeroMemory(blobKey);
+                throw;
+            }
+        }
+
+        return (blobKey, recordKey, retainedClassKey, recordOpener);
+    }
+
+    /// <summary>
+    /// Opens a blob's <b>framing</b> alone: one ranged read of the envelope,
+    /// no locator and no footer, so <see cref="RecordTable"/> is empty and
+    /// only <see cref="ReadRecordAsync(RecordSpan, CancellationToken)"/> can
+    /// be used. For a caller that already knows where its records are
+    /// (NFR-PERF-009), this is the whole per-blob cost: one read instead of
+    /// three, and nothing scattered across the object.
+    /// </summary>
+    /// <remarks>
+    /// A format-3 blob needs the envelope only for its format version and
+    /// key generation; a format-2 blob needs its salt, writer and counter
+    /// too, because the per-blob key derives from them
+    /// (<see cref="BlobKeyDeriver"/>). Either way it is the same 88 or 168
+    /// bytes at offset 0, and the same fact for every record in the blob.
+    /// </remarks>
+    public static async ValueTask<BlobReader> OpenFramingAsync(
+        IObjectStore store,
+        ObjectKey key,
+        long blobLength,
+        RepositoryId repositoryId,
+        Func<BlobClass, KeyGeneration, byte[]> classKeyProvider,
+        ObjectIdDeriver objectIdDeriver,
+        CancellationToken cancellationToken,
+        SealedContentKeyOpener? sealedContentKeyOpener = null,
+        ILogger? logger = null)
+    {
+        ThrowHelper.ThrowIfNull(store);
+        ThrowHelper.ThrowIfNull(classKeyProvider);
+        ThrowHelper.ThrowIfNull(objectIdDeriver);
+
+        if (blobLength < BlobEnvelope.Length + BlobFooter.HeaderLength + RecordCipher.TagLength + FooterLocator.Length)
+        {
+            throw new BlobFormatException(Strings.FormatBlobReader_ByteObjectTooShortSealed(blobLength));
+        }
+
+        var envelopeLength = Math.Min(BlobEnvelope.MaxLength, blobLength - FooterLocator.Length);
+        var envelopeBytes = await ReadRangeAsync(store, key, 0, envelopeLength, cancellationToken).ConfigureAwait(false);
+        var envelope = BlobEnvelope.Parse(envelopeBytes);
+
+        var (blobKey, recordKey, retainedClassKey, recordOpener) =
+            DeriveKeys(envelope, classKeyProvider, sealedContentKeyOpener, logger ?? NullLogger.Instance);
+
+        return new BlobReader(
+            store, key, blobLength, repositoryId, objectIdDeriver, envelope, blobKey, recordKey, retainedClassKey,
+            recordOpener, []);
     }
 
     /// <summary>The store key this blob was opened from.</summary>
@@ -203,54 +359,8 @@ public sealed class BlobReader : IDisposable
         var entries = BlobFooter.DecodeRecordTable(
             table, recordCount, blobLength, RecordFraming.PrefixLength(envelope.FormatVersion, envelope.BlobClass));
 
-        // Three ways a record is keyed, and the envelope picks one. A
-        // format-3 blob keys per record, so nothing is opened here: a
-        // structure-plane record expands the class key (kept for the reads),
-        // and a data record's share is opened one at a time, where a refusal
-        // costs that record and not the blob.
-        byte[]? recordKey = null;
-        byte[]? retainedClassKey = null;
-        SealedContentKeyOpener? recordOpener = null;
-
-        if (FormatVersions.HasRelocatableRecords(envelope.FormatVersion))
-        {
-            if (sealedPerRecord)
-            {
-                recordOpener = sealedContentKeyOpener;
-            }
-            else
-            {
-                retainedClassKey = classKey.AsSpan().ToArray();
-            }
-        }
-        else if (!sealedPerBlob)
-        {
-            recordKey = blobKey;
-        }
-        else if (sealedContentKeyOpener is not null)
-        {
-            try
-            {
-                recordKey = sealedContentKeyOpener.OpenBlobKey(envelope);
-            }
-            catch (Exception refusal) when (refusal is SealedContentException or ArgumentException)
-            {
-                // Every call site proves the authority against the descriptor
-                // before constructing an opener, so a share that still does
-                // not open is THIS blob's damage — tampered, transplanted, or
-                // a low-order ephemeral. Contained to the blob exactly as a
-                // failed footer is (ADR-0042 §7): one hostile object must not
-                // abort loading every other blob.
-                CryptographicOperations.ZeroMemory(blobKey);
-                Log.SealedShareRefused(log, envelope.BlobId);
-                throw new BlobFormatException(Strings.BlobReader_SealedShareDoesNotOpen);
-            }
-            catch
-            {
-                CryptographicOperations.ZeroMemory(blobKey);
-                throw;
-            }
-        }
+        var (_, recordKey, retainedClassKey, recordOpener) =
+            DeriveKeys(envelope, classKeyProvider, sealedContentKeyOpener, log);
 
         Log.BlobOpened(log, envelope.BlobId, entries.Count);
 
@@ -294,6 +404,38 @@ public sealed class BlobReader : IDisposable
     private async ValueTask<FramedRecord> ReadFramedAsync(
         RecordTableEntry entry, CancellationToken cancellationToken)
     {
+        var framed = await ReadFramedAsync(
+            RecordSpan.From(entry), entry.LogicalLength, cancellationToken).ConfigureAwait(false);
+        if (framed.Header is not { } header)
+        {
+            return framed;
+        }
+
+        // The three a span cannot state, checked here because a footer did.
+        if (header.Ordinal != entry.Ordinal ||
+            header.LogicalLength != entry.LogicalLength ||
+            header.ObjectType != entry.ObjectType)
+        {
+            return new FramedRecord(
+                null,
+                null,
+                RecordReadOutcome.FormatViolation,
+                $"The record header at offset {entry.PhysicalOffset} disagrees with the footer's table entry — a damage finding (specification 05 §3.1).");
+        }
+
+        return framed;
+    }
+
+    /// <summary>
+    /// The same read from a <see cref="RecordSpan"/>: a caller that knows
+    /// where a record is but holds no footer. The four fields a span states
+    /// are cross-checked against the header exactly as the footer's are; the
+    /// other three are left to the cipher and to step 7, which is what
+    /// <see cref="RecordSpan"/>'s own remarks explain.
+    /// </summary>
+    private async ValueTask<FramedRecord> ReadFramedAsync(
+        RecordSpan entry, ulong logicalLengthGuard, CancellationToken cancellationToken)
+    {
         if (!EncryptionProfile.TryFromValue(entry.EncryptionProfileValue, out var encryptionProfile) ||
             encryptionProfile != EncryptionProfile.Aes256GcmV1)
         {
@@ -304,13 +446,13 @@ public sealed class BlobReader : IDisposable
                 $"Encryption profile 0x{entry.EncryptionProfileValue:x4} is not supported by this reader; refused, not guessed (specification 00 §3).");
         }
 
-        if (entry.LogicalLength > (ulong)FormatLimits.MaxRecordStoredLength)
+        if (logicalLengthGuard > (ulong)FormatLimits.MaxRecordStoredLength)
         {
             return new FramedRecord(
                 null,
                 null,
                 RecordReadOutcome.FormatViolation,
-                $"logical_length {entry.LogicalLength} exceeds the 64 MiB segment bound (specification 00 §8) — refused before allocation.");
+                $"logical_length {logicalLengthGuard} exceeds the 64 MiB segment bound (specification 00 §8) — refused before allocation.");
         }
 
         var recordLength = RecordHeader.Length + _recordPrefixLength + entry.StoredLength + RecordCipher.TagLength;
@@ -327,19 +469,16 @@ public sealed class BlobReader : IDisposable
             return new FramedRecord(null, null, RecordReadOutcome.FormatViolation, exception.Message);
         }
 
-        if (header.Ordinal != entry.Ordinal ||
-            header.ObjectId != entry.ObjectId ||
+        if (header.ObjectId != entry.ObjectId ||
             header.StoredLength != entry.StoredLength ||
-            header.LogicalLength != entry.LogicalLength ||
             header.CompressionProfile.Value != entry.CompressionProfileValue ||
-            header.EncryptionProfile.Value != entry.EncryptionProfileValue ||
-            header.ObjectType != entry.ObjectType)
+            header.EncryptionProfile.Value != entry.EncryptionProfileValue)
         {
             return new FramedRecord(
                 null,
                 null,
                 RecordReadOutcome.FormatViolation,
-                $"The record header at offset {entry.PhysicalOffset} disagrees with the footer's table entry — a damage finding (specification 05 §3.1).");
+                $"The record header at offset {entry.PhysicalOffset} disagrees with the table entry that named it — a damage finding (specification 05 §3.1).");
         }
 
         return new FramedRecord(recordBytes, header, RecordReadOutcome.Ok, null);
@@ -352,14 +491,37 @@ public sealed class BlobReader : IDisposable
     /// Reads, authenticates, decompresses, and content-verifies one record —
     /// the 04 §6 sequence in order, step 7 included.
     /// </summary>
-    public async ValueTask<RecordReadResult> ReadRecordAsync(RecordTableEntry entry, CancellationToken cancellationToken)
+    public ValueTask<RecordReadResult> ReadRecordAsync(RecordTableEntry entry, CancellationToken cancellationToken) =>
+        ReadRecordCoreAsync(
+            () => ReadFramedAsync(entry, cancellationToken), cancellationToken);
+
+    /// <summary>
+    /// Reads one record from a <see cref="RecordSpan"/> — a caller that knows
+    /// where the record is and holds no footer, which is what makes a read
+    /// possible after <see cref="OpenFramingAsync"/> (NFR-PERF-009).
+    /// </summary>
+    /// <remarks>
+    /// Identical to the footer's overload from the cipher onwards: the same
+    /// nonce and AAD construction, the same decompression, and the same
+    /// 04 §6 step 7 content verification. What differs is only which of the
+    /// header's fields were cross-checked before it, and
+    /// <see cref="RecordSpan"/> says why the remainder is safe.
+    /// </remarks>
+    public ValueTask<RecordReadResult> ReadRecordAsync(RecordSpan span, CancellationToken cancellationToken) =>
+        ReadRecordCoreAsync(
+            () => ReadFramedAsync(span, logicalLengthGuard: 0, cancellationToken), cancellationToken);
+
+    private async ValueTask<RecordReadResult> ReadRecordCoreAsync(
+        Func<ValueTask<FramedRecord>> read, CancellationToken cancellationToken)
     {
+        _ = cancellationToken;
+
         if (_recordKey is null && _classKey is null && _opener is null)
         {
             return RecordReadResult.Failure(RecordReadOutcome.ContentSealed, Strings.BlobReader_ContentKeySealed);
         }
 
-        var framed = await ReadFramedAsync(entry, cancellationToken).ConfigureAwait(false);
+        var framed = await read().ConfigureAwait(false);
         if (framed.Bytes is not { } recordBytes)
         {
             return RecordReadResult.Failure(framed.Outcome, framed.Detail!);

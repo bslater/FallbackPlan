@@ -2,6 +2,7 @@ using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
@@ -63,6 +64,15 @@ public sealed class RepositoryReader : IDisposable
     private readonly List<SkippedBlob> _skipped = [];
     private readonly Dictionary<ObjectId, (BlobReader Reader, RecordTableEntry Entry)> _records = [];
     private readonly ILogger _logger;
+
+    // The fast read (NFR-PERF-009). Opening a blob costs three ranged reads
+    // before a byte of payload, so a path that opens every blob it reads from
+    // cannot reach the budget however well it coalesces. A location source —
+    // the catalogue — answers the offset, the stored length and the profiles,
+    // and the blob's framing is one 88-byte envelope read held for the run.
+    private readonly Dictionary<ObjectKey, BlobReader> _framing = [];
+    private Func<ObjectId, ResolvedLocation?>? _locations;
+    private StoreBlobKeyDeriver? _storeKeyDeriver;
 
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
     public RepositoryReader(
@@ -261,17 +271,159 @@ public sealed class RepositoryReader : IDisposable
     /// Reads and verifies one segment by object identifier — the full
     /// specification 04 §6 sequence including step 7.
     /// </summary>
-    public ValueTask<RecordReadResult> ReadSegmentAsync(ObjectId objectId, CancellationToken cancellationToken)
+    public async ValueTask<RecordReadResult> ReadSegmentAsync(ObjectId objectId, CancellationToken cancellationToken)
     {
-        if (!_records.TryGetValue(objectId, out var located))
+        if (_locations is not null && _locations(objectId) is { } location)
         {
-            return ValueTask.FromResult(RecordReadResult.Failure(
-                RecordReadOutcome.FormatViolation,
-                $"No loaded blob carries a record for object {objectId}."));
+            var fast = await ReadFromLocationAsync(location, objectId, cancellationToken).ConfigureAwait(false);
+            if (fast is { } read && read.Outcome == RecordReadOutcome.Ok)
+            {
+                return read;
+            }
+
+            // A location cache is never authoritative, so a fast read that
+            // fails is a question rather than an answer: fall back to the
+            // footer, which is the path built to say what is wrong with a
+            // blob (architecture 04 §7; NFR-REL-004). Damage is still
+            // diagnosed by the reader that knows how to describe it, and a
+            // stale offset costs one wasted read rather than a lost file.
+            LocationFallbacks++;
+            await OpenForFallbackAsync(location, cancellationToken).ConfigureAwait(false);
         }
 
-        return located.Reader.ReadRecordAsync(located.Entry, cancellationToken);
+        if (!_records.TryGetValue(objectId, out var located))
+        {
+            return RecordReadResult.Failure(
+                RecordReadOutcome.FormatViolation,
+                $"No loaded blob carries a record for object {objectId}.");
+        }
+
+        return await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Opens the blob a failed fast read named, through its locator and
+    /// footer, so the footer path can answer — the lazy half of the
+    /// fallback. A reader using a location source loads nothing up front,
+    /// so without this there would be nothing to fall back <em>to</em>.
+    /// </summary>
+    private async ValueTask OpenForFallbackAsync(ResolvedLocation location, CancellationToken cancellationToken)
+    {
+        _storeKeyDeriver ??= new StoreBlobKeyDeriver(_keys.KeyIdKey);
+        var blobKey = location.StoreBlobKey ?? _storeKeyDeriver.Derive(location.BlobId);
+
+        foreach (var blobClass in new[] { BlobClass.Data, BlobClass.Metadata })
+        {
+            var storeKey = BlobStoreKeys.ForBlob(blobClass, blobKey);
+            if (_blobReaders.Any(open => open.StoreKey == storeKey))
+            {
+                continue;
+            }
+
+            var metadata = await _store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+            if (metadata.Metadata is not { Length: > 0 } found)
+            {
+                continue;
+            }
+
+            BlobReader reader;
+            try
+            {
+                reader = await BlobReader.OpenAsync(
+                    _store, storeKey, found.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                    cancellationToken, _sealedContentKeyOpener, _logger).ConfigureAwait(false);
+            }
+            catch (BlobFormatException exception)
+            {
+                // Damage, scoped to the blob it is in — the same posture the
+                // full load takes, so a fallback cannot turn one torn blob
+                // into a failed restore of everything else.
+                Log.BlobSkipped(_logger, storeKey, exception.Message);
+                _skipped.Add(new SkippedBlob(storeKey, exception.Message));
+                continue;
+            }
+
+            _blobReaders.Add(reader);
+            foreach (var record in reader.RecordTable)
+            {
+                _records.TryAdd(record.ObjectId, (reader, record));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads a record straight from where a location source says it is: one
+    /// ranged read, and one envelope read the first time the blob is touched.
+    /// Answers null when the blob's framing cannot be opened at all, which
+    /// the caller treats as a miss rather than as damage — the footer path
+    /// decides that.
+    /// </summary>
+    private async ValueTask<RecordReadResult?> ReadFromLocationAsync(
+        ResolvedLocation location, ObjectId objectId, CancellationToken cancellationToken)
+    {
+        _storeKeyDeriver ??= new StoreBlobKeyDeriver(_keys.KeyIdKey);
+        var blobKey = location.StoreBlobKey ?? _storeKeyDeriver.Derive(location.BlobId);
+
+        foreach (var blobClass in new[] { BlobClass.Data, BlobClass.Metadata })
+        {
+            var storeKey = BlobStoreKeys.ForBlob(blobClass, blobKey);
+            if (!_framing.TryGetValue(storeKey, out var framing))
+            {
+                var metadata = await _store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
+                if (metadata.Metadata is not { Length: > 0 } found)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    framing = await BlobReader.OpenFramingAsync(
+                        _store, storeKey, found.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                        cancellationToken, _sealedContentKeyOpener, _logger).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is BlobFormatException or IOException)
+                {
+                    return null;
+                }
+
+                _framing[storeKey] = framing;
+            }
+
+            return await framing.ReadRecordAsync(
+                new RecordSpan(
+                    objectId,
+                    location.PhysicalOffset,
+                    location.StoredLength,
+                    location.CompressionProfileValue,
+                    location.EncryptionProfileValue),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads records straight from the locations <paramref name="resolver"/>
+    /// answers, instead of from a loaded footer — the catalogue's
+    /// <c>ResolveLocation</c> at every call site (NFR-PERF-009).
+    /// </summary>
+    /// <remarks>
+    /// A reader given one need not load at all: loading is what the fast path
+    /// exists to avoid, and a blob is opened through its footer only when a
+    /// fast read fails. A caller that loads anyway keeps the footer path as
+    /// its fallback, which is what the corruption cases rely on.
+    /// </remarks>
+    public void UseLocationSource(Func<ObjectId, ResolvedLocation?> resolver)
+    {
+        ThrowHelper.ThrowIfNull(resolver);
+        _locations = resolver;
+    }
+
+    /// <summary>How many blobs have had their framing opened, one read each.</summary>
+    public int FramedBlobs => _framing.Count;
+
+    /// <summary>How many reads the location source could not satisfy and the footer path answered.</summary>
+    public int LocationFallbacks { get; private set; }
 
     /// <summary>
     /// Restores a file version from its logical segment references with no
@@ -381,6 +533,12 @@ public sealed class RepositoryReader : IDisposable
             reader.Dispose();
         }
 
+        foreach (var reader in _framing.Values)
+        {
+            reader.Dispose();
+        }
+
+        _storeKeyDeriver?.Dispose();
         _objectIdDeriver.Dispose();
         _sealedContentKeyOpener?.Dispose();
     }

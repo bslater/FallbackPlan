@@ -1,3 +1,5 @@
+using FallbackPlan.Repository.Format.Records;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
@@ -520,6 +522,192 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
             $"{before.Reads} reads over {before.InStore} blob(s), {after.Reads} over {after.InStore}");
         Assert.AreEqual(before.Needed, after.Needed);
         Assert.IsLessThan(after.InStore, after.Needed, $"{after.Needed} blob(s) named of {after.InStore}");
+    }
+
+    [TestMethod]
+    public async Task ARestoreWithKnownLocations_OpensNoFooter_AndCostsTwoFewerReadsPerBlob()
+    {
+        // NFR-PERF-009's second term. Opening a blob costs three ranged reads
+        // — locator, footer, envelope — before a byte of payload, so a path
+        // that opens the blobs it reads from cannot reach 1.2x the blobs it
+        // needs however well it coalesces. The catalogue already answers the
+        // offset, the stored length and both profiles, so a record is fetched
+        // from where it lives and the blob costs one envelope read instead.
+        //
+        // Measured against the same restore through the footer path rather
+        // than against arithmetic, so the assertion cannot be wrong about how
+        // many records a file turns into.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+        using var _ = keys;
+        using var _c = catalogue;
+        var target = RestoreTargetProfile.ForLocalPlatform();
+
+        var viaFooters = new CountingObjectStore(inner);
+        using (var reader = new RepositoryReader(Repo, keys, viaFooters, Authority))
+        {
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
+                plan, Path.Combine(SpoolDirectory, "footers-out"),
+                new RestoreExecutionOptions { RunId = "footers", NowUnixMilliseconds = 1_722_700_000_000 },
+                CancellationToken.None);
+            Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        }
+
+        var viaLocations = new CountingObjectStore(inner);
+        using var located = new RepositoryReader(Repo, keys, viaLocations, Authority);
+        located.UseLocationSource(catalogue.ResolveLocation);
+
+        var restored = await new RestoreExecutor(located, target).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "located-out"),
+            new RestoreExecutionOptions { RunId = "located", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
+        Assert.AreEqual(0, located.LocationFallbacks, "every record should have read from its location");
+
+        // Exactly the locator and the footer saved, per blob the records live
+        // in — the envelope read is the one the fast path still needs.
+        Assert.AreEqual(
+            viaFooters.Reads - (2 * located.FramedBlobs),
+            viaLocations.Reads,
+            $"{viaFooters.Reads} reads through footers, {viaLocations.Reads} through locations, "
+            + $"over {located.FramedBlobs} blob(s)");
+    }
+
+    [TestMethod]
+    public async Task ALocationThatIsWrong_FallsBackToTheFooter_AndStillRestores()
+    {
+        // The catalogue is a cache and is never authoritative, so the fast
+        // path has to be safe when it is wrong rather than merely fast when
+        // it is right. A record read at the wrong offset fails its tag — it
+        // cannot silently return another record's bytes — and the fallback
+        // opens the blob and reads it the way the footer says.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+
+        var counting = new CountingObjectStore(inner);
+        using var reader = new RepositoryReader(Repo, keys, counting, Authority);
+        reader.UseLocationSource(objectId => catalogue.ResolveLocation(objectId) is { } found
+            ? found with { PhysicalOffset = found.PhysicalOffset + 1 }
+            : null);
+
+        var receipt = await new RestoreExecutor(reader, RestoreTargetProfile.ForLocalPlatform()).ExecuteAsync(
+            plan, Path.Combine(SpoolDirectory, "wrong-out"),
+            new RestoreExecutionOptions { RunId = "wrong", NowUnixMilliseconds = 1_722_700_000_000 },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        Assert.IsGreaterThan(0, reader.LocationFallbacks, "every record should have fallen back");
+    }
+
+    [TestMethod]
+    public async Task ALocationPointingAtAnotherRecord_IsRefused_NotSilentlyServed()
+    {
+        // The case that makes the object-id cross-check load-bearing rather
+        // than decorative. A read takes its key and its AAD from the
+        // record's OWN header, so a location pointing at a different but
+        // perfectly valid record in the same blob decrypts and verifies —
+        // it is simply the wrong object. Nothing downstream would notice:
+        // the bytes are authentic, they are just not the ones asked for.
+        // Checking the header's object id against the one the location was
+        // resolved for is what turns that into a refusal.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+        using var _ = keys;
+        using var _c = catalogue;
+
+        var items = plan.Items.Where(item => item.Kind != EntryKind.DirectoryPlaceholder).ToList();
+        var first = catalogue.ResolveLocation(items[0].ObjectId)!;
+        var neighbour = items
+            .Select(item => catalogue.ResolveLocation(item.ObjectId))
+            .OfType<Repository.Catalogue.ResolvedLocation>()
+            .First(other => other.BlobId.Equals(first.BlobId) && other.PhysicalOffset != first.PhysicalOffset);
+
+        using var reader = new RepositoryReader(Repo, keys, inner, Authority);
+        reader.UseLocationSource(objectId =>
+            objectId == items[0].ObjectId ? neighbour : catalogue.ResolveLocation(objectId));
+
+        var read = await reader.ReadSegmentAsync(items[0].ObjectId, CancellationToken.None);
+
+        // Either refused outright, or answered from the footer fallback with
+        // the record actually asked for — never another object's bytes under
+        // this object's name.
+        if (read.Outcome == RecordReadOutcome.Ok)
+        {
+            Assert.IsGreaterThan(0, reader.LocationFallbacks, "a wrong-object read must not be served fast");
+        }
+    }
+
+    [TestMethod]
+    public async Task ACorruptRecord_IsStillADamageFinding_WhenTheLocationWasKnown()
+    {
+        // The fallback exists so damage keeps being diagnosed by the path
+        // built to diagnose it. If the fast path swallowed a finding the old
+        // path produced, the budget would have been bought with silence.
+        var (plan, catalogue, inner, keys) = await PublishForLocationsAsync();
+
+        var item = plan.Items.First(entry => entry.Kind != EntryKind.DirectoryPlaceholder);
+        var location = catalogue.ResolveLocation(item.ObjectId)!;
+        RotOneByte(location);
+
+        using var reader = new RepositoryReader(Repo, keys, inner, Authority);
+        reader.UseLocationSource(catalogue.ResolveLocation);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var read = await reader.ReadSegmentAsync(item.ObjectId, CancellationToken.None);
+        Assert.AreNotEqual(RecordReadOutcome.Ok, read.Outcome);
+    }
+
+    /// <summary>
+    /// A small multi-file snapshot with its catalogue, for the cases that
+    /// read records from the locations the catalogue holds. Incompressible,
+    /// so the records land across more than one blob.
+    /// </summary>
+    private async Task<(RestorePlan Plan, CatalogueDb Catalogue, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys)>
+        PublishForLocationsAsync()
+    {
+        var source = new FakeFileSystemSource();
+        for (var index = 0; index < 4; index++)
+        {
+            var content = new byte[200_000];
+            new Random(70 + index).NextBytes(content);
+            source.AddFile($"data/file-{index}.bin", content, fileId: (ulong)(9_300 + index));
+        }
+
+        var store = CreateStore();
+        var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var catalogue = OpenCatalogue("located");
+        await CreateOrchestrator(store, keys, credential, catalogue, "located")
+            .PublishAsync(Job(source, 0xE9), CancellationToken.None);
+
+        var plan = RestorePlanner.Plan(
+            catalogue,
+            Enumerable.Repeat((byte)0xE9, 16).ToArray(),
+            string.Empty,
+            RestoreTargetProfile.ForLocalPlatform());
+
+        return (plan, catalogue, store, keys);
+    }
+
+    /// <summary>Flips one byte inside a record's ciphertext, where its tag will catch it.</summary>
+    private void RotOneByte(Repository.Catalogue.ResolvedLocation location)
+    {
+        using var deriver = new StoreBlobKeyDeriver(CreateKeys().KeyIdKey);
+        var blobKey = location.StoreBlobKey ?? deriver.Derive(location.BlobId);
+        var candidates = Directory
+            .EnumerateFiles(Path.Combine(StoreRoot, "blobs"), "*", SearchOption.AllDirectories)
+            .Where(path => new FileInfo(path).Length > (long)location.PhysicalOffset + 64)
+            .ToList();
+
+        foreach (var path in candidates)
+        {
+            using var file = File.Open(path, FileMode.Open, FileAccess.ReadWrite);
+            file.Seek((long)location.PhysicalOffset + RecordHeader.Length + 4, SeekOrigin.Begin);
+            var original = file.ReadByte();
+            file.Seek(-1, SeekOrigin.Current);
+            file.WriteByte((byte)(original ^ 0xFF));
+        }
+
+        _ = blobKey;
     }
 
     private CatalogueDb OpenCatalogue(string name) =>

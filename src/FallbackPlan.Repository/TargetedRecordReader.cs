@@ -50,7 +50,7 @@ internal enum ReuseVerification
 /// segments arrive in that writer's blobs.
 /// </para>
 /// <para>
-/// <see cref="BlobReader.ReadRecordAsync"/> already performs 04 §6 step 7 —
+/// <see cref="BlobReader.ReadRecordAsync(RecordTableEntry, CancellationToken)"/> already performs 04 §6 step 7 —
 /// it re-hashes the plaintext and compares the identifier the hash implies —
 /// so a successful read <em>is</em> the confirmation ADR-0006 asks for. There
 /// is no separate verification step to get wrong.
