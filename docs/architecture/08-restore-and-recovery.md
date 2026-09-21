@@ -28,6 +28,8 @@ A plan is constructed **before** any transfer, and it is the mechanism by which 
 
 Plans are exportable and resumable. A plan that reveals unacceptable degradation can be abandoned before a single byte is written, which is the entire point of producing one.
 
+Producing the plan and running it are separately priced, and deliberately so. The plan's reachability pass reads every manifest it names and probes every blob they reference, because "this path cannot be restored" is worth knowing before anything moves (FR-RST-003). The **run** then reads nothing it does not need: it opens no blob, taking each record's position from the catalogue and falling back to the blob's own footer only when that turns out to be wrong, and it fetches neighbouring records together ([ADR-0068](../adr/0068-the-catalogue-directed-restore-read.md)). The budget that holds it is NFR-PERF-009's, and it is about requests rather than bytes — on an object store a request is billed and a round trip is waited on, whoever is waiting.
+
 ## 3. Restore verification
 
 Every restore:

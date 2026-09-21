@@ -14,8 +14,9 @@ namespace FallbackPlan.Restore;
 /// it cannot reach.
 /// </summary>
 /// <param name="Blobs">
-/// Exactly the blob set a run needs — what the targeted load opens instead
-/// of every footer in the store.
+/// Exactly the blob set a run needs. A caller that means to open them hands
+/// this to <c>RepositoryReader.LoadBlobsAsync(blobStoreKeys, …)</c>; a
+/// restore does not, because it opens no blob at all (ADR-0068).
 /// </param>
 /// <param name="Missing">
 /// Paths whose manifest or whose segments the store does not hold, reported
@@ -43,13 +44,15 @@ public sealed record RestoreBlobSetResult(
 /// blobs are probed too.
 /// </para>
 /// <para>
-/// This lives beside the planner rather than in the service because every
-/// restore path needs it and only one had it: the service used it for a
-/// remote source and opened every footer in the store for a local one, and
-/// the CLI's direct restore opened every footer always. A load proportional
-/// to the repository rather than to the restore is what
-/// <c>Repository.Tests/RestoreBreadthTests</c> measures against the
-/// NFR-PERF-009 budget.
+/// This lives beside the planner rather than in the service because it is
+/// the <b>plan's</b> question and not a run's. It was briefly both: when the
+/// restore still opened the blobs it needed, the blob set was what a load
+/// took, and lifting the probe out of the service is what let every restore
+/// path stop opening every footer in the store. Since ADR-0068 a restore
+/// opens no blob on the happy path, so nothing in a run asks this, and the
+/// one production caller is the plan verb — which wants the other half of
+/// the answer, the paths the store cannot serve, reported before any byte
+/// moves (FR-RST-003).
 /// </para>
 /// </remarks>
 public static class RestoreBlobSet

@@ -4,7 +4,7 @@
 
 ---
 
-Sixty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Sixty-eight decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -65,7 +65,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
-| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
+| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval — its targeted blob load is no longer what a restore uses ([0068](adr/0068-the-catalogue-directed-restore-read.md)) | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) — since 2026-09 the only format | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Packing/SealedContentKey` · `Repository/RepositoryLifecycle` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests`, `ArchitectureTests/TelemetrySilenceTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for). The ceremony ends at the passphrase and the first account: the recovery-kit step, its confirmation and the public-parameters record that let a kit be rebuilt are withdrawn with the kit (ADR-0060), and the installation's public derivation parameters ride the describe verb (contract 1.28) from `Agent/ServiceCommandHandler` instead |
@@ -91,6 +91,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0065](adr/0065-merkle-commitment-and-chunk-possession.md) | The Merkle commitment and the chunk possession challenge: a sealed blob gains an RFC 6962 root over one-mebibyte leaves beside its flat digest, bound to the preimage's length and published as index-delta key 11 by a format-3 writer only; a peer is then asked for one leaf and its authentication path instead of the blob, and the leaf's **bytes** are what the source checks against the root the writer signed | Built | `Repository.Packing/BlobMerkle` · `Repository.Packing/BlobWriter` · `Repository.Index/IndexDeltaCodec` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Protocol/PeerRetrievalMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/RetrievalResponder` · `Agent/PeerRetrievalClient` · `Replication/ReplicaVerifier` · `Agent/FanOut` · `Application/DestinationSyncStore` (schema 4) · `Api/ContractVersion` (1.34) · `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0065--one-leaf-instead-of-the-blob) |
 | [0066](adr/0066-the-format-upgrade-record.md) | The format-upgrade record: a repository moves to a newer format by an appended signed object rather than by a rewritten descriptor — which no copy would accept — so the move rides every ordinary replication path, takes effect at the next sealed object, and leaves everything already sealed exactly as it is; format 3 is what the product creates, and an existing format-2 set is upgraded on request and never pushed | Built | `Repository.Format/Lifecycle/FormatUpgradeRecord` · `Repository/RepositoryLifecycle` · `Domain/FormatLimits` · `Agent/ServiceRuntime` · `Agent/ServiceCommandHandler.Configuration.cs` · `Agent/ReplicationResponder` · `Agent/AgentHost` · `Recovery/RecoverySession`, `Recovery/RecoveryHost` · `Api/ContractVersion` (1.36) · the console's notice control · `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Hosts.Tests/FormatUpgradeTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`; [notes](#0066--two-objects-carry-one-version) |
 | [0067](adr/0067-the-keyless-compactor.md) | The keyless compactor: a blob holding a live minority is rewritten by copying its live records' sealed bytes verbatim into a fresh blob — no content key is held, because at format 3 a record's key is its object's and its nonce rides its own prefix — and the pass publishes supersessions and deletes nothing, leaving the collector to condemn the drained blob on its own terms once every record it held resolves elsewhere | Built | `Retention/CompactionPolicy` · `Retention/CollectionPlanner` · `Retention/RetentionRunner` · `Repository.Packing/BlobReader` · `Repository.Packing/BlobWriter` · `Repository/BlobCompactor` · `Repository/CompactionPublication` · `Repository/CompactionPass` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`; [notes](#0067--the-rewrite-that-holds-no-key) |
+| [0068](adr/0068-the-catalogue-directed-restore-read.md) | The catalogue-directed restore read: a restore loads nothing, reads each record straight from the location the catalogue holds, opens a blob through its footer only when a fast read fails, and coalesces neighbouring records into one ranged read whose first run reaches down to the envelope — 11 GETs over 11 blobs where the same restore cost 93 | Built | `Repository/PrefetchPolicy` · `Repository/RepositoryReader` · `Repository/RestoreEngine` · `Repository.Packing/BlobReader` · `Repository.Packing/RecordFraming` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreBreadthTests`; [notes](#0068--a-restore-fetches-what-it-needs) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -1156,11 +1157,18 @@ finally reach the wire: `target: original` maps label slices back onto the
 set's configured roots, `existing: rename` is the new `WriteBeside` policy
 (`name (restored 2026-08-18).ext`, existing file untouched), `overwrite` is
 `Replace`, and absent options reproduce the old behaviour byte for byte. The
-receipt persists to `<state>/receipts/<run>.json` on every run. Runs against
-a source load only the plan's own blobs — a restore-sized transfer, not a
-repository-sized one. Proven live: a Playwright walk of all six steps,
-wrong-passphrase refusal included, ending on restored bytes and the receipt
-path.
+receipt persists to `<state>/receipts/<run>.json` on every run. Proven live: a
+Playwright walk of all six steps, wrong-passphrase refusal included, ending on
+restored bytes and the receipt path.
+
+The targeted blob load this record added — open the plan's own blobs rather
+than every footer in the store — was the right half of the answer and was
+reached by one of the three restore paths. It is no longer what a restore
+uses at all: [ADR-0068](adr/0068-the-catalogue-directed-restore-read.md) opens
+no blob on the happy path, because opening one costs three ranged reads before
+a byte of payload. `LoadBlobsAsync(blobStoreKeys, …)` stays, and its callers
+are now the two that genuinely want a footer in hand —
+`Replication/ReplicaVerifier` and `Agent/CatalogueRebuild`.
 
 ### 0042 — the hub that cannot read what it keeps
 
@@ -1375,3 +1383,42 @@ A drained blob is tombstoned with reason *unreferenced* although specification
 defines a *compacted* reason for exactly this: the collector condemns by plan
 and does not know provenance.
 
+### 0068 — a restore fetches what it needs
+
+NFR-PERF-009 budgets a restore at 1.2× the distinct blobs holding the segments
+it needs, and had never been met. Three terms, and the arithmetic says all
+three were needed: the load was proportional to the **repository** rather than
+to the restore; each blob it read from was opened through its locator and
+footer, which is three GETs before a byte of payload; and every manifest and
+every segment was a ranged read of its own, although a file's records sit next
+to each other in the blob they were written into. Coalescing alone reaches
+`2(B + M)`, which does not fit `1.2B` either, so the first run of a blob
+reaches down to offset 0 and takes the envelope with it — the fold is required
+rather than an optimisation.
+
+`Repository.Catalogue/Catalogue.ResolveLocation` answers every field a ranged
+record read wants, so `Repository/RepositoryReader` reads from there and opens
+a blob's footer only when that fails. It is safe because it fails **closed**:
+a record is sealed with its identity in the AAD, so a wrong offset produces a
+tag failure and never silent corruption, and the catalogue was already a
+disposable cache ([ADR-0010](adr/0010-local-store-separation.md)) rather than
+an authority. What it gives up is the footer as a *second* statement of where
+a record is, and with it the sharper diagnosis — which the lazy fallback hands
+back on the one path that wants it, which is damage.
+
+Two findings the design turned on. A read takes its key and its AAD from the
+record's **own** header, so a location pointing at a different but perfectly
+valid record in the same blob decrypts, authenticates and content-verifies —
+the object-id comparison is the whole of what stops a neighbour's bytes being
+served under the requested object's name, and it is held on the coalesced path
+as well as the dedicated one. And prefetching only the file being restored
+costs one read per *(file, blob)* pair, because consecutive files share the
+blob they were written into — so runs outlive the call that fetched them and
+`Restore/RestoreExecutor` reads ahead in bounded waves.
+
+Measured: **11 GETs over 11 blobs holding 60 records, against a budget of 14**,
+where the same restore cost 93. What is **not** covered is stated rather than
+absorbed: a sparse restore of one small record out of large blobs cannot fold
+the envelope, so it costs two reads a blob; and the plan verb's reachability
+probe (`Restore/RestoreBlobSet`, FR-RST-003) still opens each metadata blob
+through its footer, which is a different question asked before anything moves.

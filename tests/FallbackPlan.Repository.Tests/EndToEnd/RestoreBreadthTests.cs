@@ -14,14 +14,24 @@ using FallbackPlan.Filesystem;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// The restore-breadth debt (phase-2 pickup item 11): the two
+/// The restore-breadth debt (phase-2 pickup items 11 and 13): the two
 /// <see cref="ExistingDestinationPolicy"/> values no test had ever set, and
-/// the NFR-PERF-009 GET budget measured honestly against what the read path
-/// actually issues. ADR-0041 widened it: the write-beside policy that keeps
-/// both files under a dated name (FR-RST-006's explicit-choice posture), the
-/// receipt pinned whole at schema 4 with <c>written_as</c> (FR-RST-004),
-/// several prefixes in one plan, and the targeted blob load.
+/// the NFR-PERF-009 GET budget. ADR-0041 widened it: the write-beside policy
+/// that keeps both files under a dated name (FR-RST-006's explicit-choice
+/// posture), the receipt pinned whole at schema 4 with <c>written_as</c>
+/// (FR-RST-004), several prefixes in one plan, and the targeted blob load.
 /// </summary>
+/// <remarks>
+/// The budget case began as a characterisation of a shortfall and is now the
+/// compliance test its own comment asked it to become (ADR-0068). The three
+/// terms it took are held apart, because each is separately losable: a load
+/// proportional to the restore rather than to the repository, a read that
+/// opens no footer, and the coalescing. So are the bounds coalescing works
+/// under — the window is NFR-PERF-001's promise reaching the read side, and
+/// the bridge is what stops a GET budget being bought with a bandwidth bill.
+/// The two safety cases run with a prefetch in front of them on purpose: a
+/// coalesced buffer must not be a way for a record to arrive unexamined.
+/// </remarks>
 [TestClass]
 public sealed class RestoreBreadthTests : ArchiveTestHarness
 {

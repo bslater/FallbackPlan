@@ -427,16 +427,23 @@ reports rotted citations). What both reviews deliberately left is below.
 12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
     a maintainer decision between implementing sparse write-out and amending
     FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
-13. **The restore GET budget** (NFR-PERF-009) — architecturally unmet: the
-    read path opens every blob in the repository at load (three range reads
-    each, proportional to repository size) and issues one uncoalesced range
-    read per manifest and per segment.
-    `RestoreBreadthTests.Restore_GetRequests_AreCharacterisedAgainstTheDistinctBlobBudget`
-    pins the exact current counts so the shortfall cannot be mistaken for
-    met. Done when the reader learns catalogue-directed blob loading and
-    range coalescing and the characterization becomes the compliance test —
-    real read-path engine work, sensibly co-scheduled with the first remote
-    provider, where a GET has a price.
+13. ✅ **The restore GET budget** (NFR-PERF-009) — done
+    ([ADR-0068](adr/0068-the-catalogue-directed-restore-read.md)), and it took
+    all three terms the item named plus one it did not. The load became
+    proportional to the restore; the read stopped opening the blob, because
+    opening one costs three ranged reads before a byte of payload and no
+    amount of coalescing reaches the budget while it does; and the coalescing
+    folds the envelope into the run that fetches a blob's first record, since
+    paying it separately is two requests a blob and does not fit either. The
+    term the item did not anticipate: prefetching one file at a time costs one
+    read per *(file, blob)* pair, because consecutive files share the blob
+    they were written into, so the runs outlive the call and the executor
+    reads ahead in bounded waves. **11 GETs over 11 blobs holding 60 records,
+    against a budget of 14, where the same restore cost 93**, and the
+    characterisation is now the compliance test its own comment asked it to
+    become. One case stays over budget and is named in the requirement rather
+    than absorbed: a sparse restore of one small record out of large blobs
+    cannot fold the envelope.
 
 ### 3. NFR-PERF-007 on the reference machine
 
