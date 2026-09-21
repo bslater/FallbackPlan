@@ -320,6 +320,36 @@ than it otherwise might.
 produced, never what they are. `Concurrency = 1` reproduces today's behaviour.
 Repository-level multi-writer semantics are unaffected.
 
+### Amendment (2026-09): the CPU cap this record anticipated was never built
+
+§3's default was chosen to satisfy **NFR-OPS-004** and **NFR-PERF-013**, and
+the 2026-08 amendment above ends by saying that "NFR-PERF-013's CPU cap
+should be measured against that rather than assumed from the number".
+Measuring it, in the round that filled the last unmeasured performance rows,
+found there is nothing to measure: **none of the four limits NFR-PERF-013
+names — CPU, disk, network, time window — exists anywhere in `src/`.**
+
+`CapturePolicy.Concurrency` is the only configured bound in the product, and
+it bounds *parallel work* and the memory that follows from it. It is not a
+CPU cap, and this record should not be read as implying one: the sentence
+above asks for a measurement of something a reader could reasonably think
+exists.
+
+What §4 *does* deliver against NFR-PERF-013 is its other clause, and this
+record already states it plainly — **"a user-initiated operation outranks a
+scheduled one. Where they contend, background work yields — the concrete
+meaning of NFR-PERF-013's 'background activity shall observe configured
+limits'"** — built as [ADR-0047](0047-backup-pool-and-priorities.md)'s
+priorities and pause gate. So the requirement is *partly built*, and the half
+that is missing is the half its acceptance criterion is written about.
+
+A configured CPU, disk, bandwidth or time-window plane is a feature with its
+own contract surface and console control, and its acceptance ("with a 25%
+CPU cap, measured agent CPU stays ≤ 30% over any 60 s window") is
+machine-dependent in a way this project cannot settle from a container. It is
+named as a scoped decision somebody takes on purpose, rather than left
+looking like a measurement nobody got round to.
+
 ## Alternatives considered
 
 **Parallelise per file rather than within one.** Archive several files
@@ -421,3 +451,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |
 | 2026-08 | Accepted (amended) | Amendment 4: the writer lane is a pool of 1..5 with priorities in the queue key and a pause gate at the pipeline's file boundary, and the pass no longer awaits its transfer phases ([ADR-0047](0047-backup-pool-and-priorities.md)) |
+| 2026-09 | Accepted (amended) | The 2026-09 amendment: NFR-PERF-013's CPU cap was never built, and neither were its disk, network or time-window limits — `Domain/Configuration/CapturePolicy`'s `Concurrency` is the only configured bound and bounds parallel work rather than CPU. The requirement's yielding half is built; its measurable half does not exist |

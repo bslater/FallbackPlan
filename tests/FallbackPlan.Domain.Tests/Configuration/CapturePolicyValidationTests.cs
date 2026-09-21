@@ -8,6 +8,18 @@ namespace FallbackPlan.Domain.Tests.Configuration;
 /// NFR-OPS-003): the default is clean, every defect carries its stable name,
 /// and defects aggregate rather than stopping at the first.
 /// </summary>
+/// <remarks>
+/// It also holds the only configured bound NFR-PERF-013 actually has.
+/// <c>Concurrency</c> is validated to 1..64 and bounds parallel work and the
+/// memory that follows from it — and it is <b>not</b> a CPU cap. This suite
+/// therefore does not establish NFR-PERF-013 as written: none of the four
+/// limits that requirement names — CPU, disk, network, time window — exists
+/// in the product, so its acceptance criterion ("with a 25% CPU cap")
+/// describes a setting that cannot be set. What the requirement's other
+/// clause promises — background work yielding to a user-initiated operation,
+/// which ADR-0029 calls its concrete meaning — is established elsewhere,
+/// under FR-SVC-013 and FR-SVC-014.
+/// </remarks>
 [TestClass]
 public sealed class CapturePolicyValidationTests
 {
