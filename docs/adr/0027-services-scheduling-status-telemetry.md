@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** NFR-OPS-001, NFR-OPS-002, NFR-PRIV-002, NFR-TIME-001
+**Requirements:** NFR-OPS-001, NFR-OPS-002, NFR-PRIV-001, NFR-PRIV-002, NFR-TIME-001
 **Related:** [architecture 10](../architecture/10-observability.md), [architecture 11 §3](../architecture/11-solution-structure.md#3-local-state-separation), [phase-1 plan](../phase-1-execution-plan.md)
 
 ---
@@ -322,6 +322,61 @@ Application layer they live in is exactly what the service now hosts.
 - Job history is deliberately sacrificial; anything that must survive
   belongs to the engine's journal or the repository itself.
 
+### Amendment (2026-09): "exporters deferred" is now a property of the build, not of nobody having added one
+
+§3 deferred the exporter and §3's privacy bound was enforced by test from the
+start — but only for NFR-PRIV-**002**, the attribute allowlist, which is a
+statement about what an *enabled* exporter would carry. The stronger claim
+beside it, NFR-PRIV-001's "no telemetry shall leave the device without explicit
+opt-in", had no falsifier at all. Its own acceptance criterion said "default
+build transmits nothing; verified by network capture", and no suite performed
+one. [architecture 10 §5](../architecture/10-observability.md#5-telemetry)
+states the posture in as many words — *"a backup product is trusted with the
+shape of a person's entire life; the default is that it tells nobody anything"*
+— and that sentence rested on the absence of a commit.
+
+It is now two tests, and they answer different questions.
+
+**The build contains no means.** `ArchitectureTests/TelemetrySilenceTests`
+holds four rules over every assembly under `src/`: no HTTP client anywhere —
+globally, with no allowlist, because nothing in this product speaks HTTP
+outbound and there is therefore nothing to exempt; outbound capability confined
+to the five assemblies that are the peer protocol and the loopback IPC, each
+named with what it is for; no `MeterListener` and no `ActivityListener`, which
+is this section's own loophole made checkable — an instrument nobody subscribes
+to tells nobody anything, and a listener is the line that changes that without
+a package reference appearing anywhere; and the twelve packages the product
+ships pinned as a **set**. The set is pinned rather than a pattern prohibited
+because the thing being defended against has no pattern: an update check, a
+crash reporter and a usage beacon share no name, only the fact that somebody
+added a dependency.
+
+**And a default run transmits nothing.** `Hosts.Tests/DefaultBuildSilenceTests`
+puts a default installation through setup, a backup to a local path, status,
+snapshots, a restore and a retention pass — driven through the transport an
+operator's terminal and the console actually use — inside a listener over the
+runtime's own `System.Net.*` event sources, and asserts that nothing reached an
+address on an IP network, resolved a host name or made an HTTP request.
+
+Two things found by writing it, recorded so they are not re-derived. The
+workload had to go through the real IPC: almost every suite in `Hosts.Tests`
+drives the service by calling its command handler in process, which opens no
+socket at all, so a capture around one of those would have recorded nothing and
+proved nothing. Going through the loopback transport instead is both the
+realistic shape and what lets the assertion be the sharper *no IP address*
+rather than the weaker *no sockets*, with the run's own Unix-domain connects as
+evidence that the instrument is recording. And the positive control earned its
+place immediately: breaking the instrument by subscribing to a misspelled
+source name left the silence assertion **passing** and only the liveness cases
+red, which is exactly how a test of this shape lies.
+
+**What this does not prove**, stated here rather than left to a reader: an
+in-process listener sees what that process does. It is not a packet capture on
+the host and it cannot see a child process. The structural half is the answer
+to that — a build whose package list cannot grow in silence and whose libraries
+cannot reach the network is what makes one observed run worth generalising from
+— and it is why the proof row is **Partly proved** rather than Proved.
+
 ## Alternatives considered
 
 **Cron expressions for `schedule`.** Familiar to the operators who already know
@@ -377,3 +432,4 @@ for that reason.
 | 2026-08 | Amended (§4 ×2) | The status derivation gained its destination axis — one `DestinationStatus.Describe` both producers call — and a warning class that surfaces without moving the derived state |
 | 2026-08 | Amended (Consequences) | The peer-host model superseded: peers are destinations under ADR-0030's pairing, not a second service shape |
 | 2026-08 | Amended (§4) | The vocabulary standardised: never-emitted `Replicated` and `PolicyCompliant` retired with their wire numbers reserved, and the console gained the five-word glance layer over the derived states — both normative at 10 §1.1, NFR-OPS-002 amended to match, pinned by `Domain.Tests/ProtectionStateTests` and the console vocabulary pins |
+| 2026-09 | Amended (§3) | "Exporters deferred" became a property of the build: no HTTP client in any `src` assembly, the network confined to five named owners, no `MeterListener` or `ActivityListener`, and the shipped package set pinned whole (`ArchitectureTests/TelemetrySilenceTests`); a default run is captured transmitting nothing (`Hosts.Tests/DefaultBuildSilenceTests`), which is NFR-PRIV-001's own acceptance criterion run rather than argued |

@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
-**Built:** Partly — the status model, job states and instrumentation are implemented; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
+**Built:** Partly — the status model, job states and instrumentation are implemented; §5's silence is held by test rather than by nobody having broken it; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -201,6 +201,10 @@ The boundary that decides this is the one the record **crosses**, not the one it
 No telemetry is transmitted off the device without explicit opt-in. When enabled, what is collected is enumerated in the UI, and it never includes paths, filenames, repository identifiers, destination endpoints, or anything derived from file content (NFR-PRIV-001..003).
 
 A backup product is trusted with the shape of a person's entire life. The default is that it tells nobody anything.
+
+That sentence used to rest on the absence of a commit. It now rests on two tests, which answer different questions and are both needed ([ADR-0027](../adr/0027-services-scheduling-status-telemetry.md) §3, amended 2026-09). **The build contains no means**: no assembly under `src/` references an HTTP client, outbound capability is confined to the five that are the peer protocol and the loopback IPC, nothing attaches a listener to §2's in-box instruments — publishing to a `Meter` nobody subscribes to tells nobody anything, and a listener is the line that would change that with no package reference appearing anywhere — and the packages the product ships are pinned as a set, because what an update check, a crash reporter and a usage beacon have in common is not a name but a new dependency. **And a default run is captured**: an installation set up, backing up to a local path, answering for its status and snapshots, restoring a file and planning a retention pass, all through the loopback transport a terminal and this console use, while the runtime's own network instrumentation records everything that crossed a socket — and nothing reached an IP address, resolved a name or made a request.
+
+The limit is stated rather than left to be found: that capture observes one process. It is not a packet capture on the host and it cannot see a child process, which is why the build-level half is what makes one observed run worth generalising from, and why the proof obligation is recorded as partly proved.
 
 ## 6. Logging
 

@@ -451,6 +451,29 @@ A declaration that promises a count nothing computes is the same hazard the
 register exists to expose, and harder to see: it survives a "is it called?"
 check the moment somebody wires it with a plausible-looking zero.
 
+### Amendment: the sinks stay in the hosts, and now so does the proof
+
+This record's §1 division — libraries take the abstraction, the hosts own the
+factory and the sinks — was held by `ArchitectureTests/LoggingShapeTests`,
+which proves that only `FallbackPlan.Diagnostics` references the concrete
+logging package. That covers a sink arriving as a *package*. It never covered a
+sink that writes somewhere rather than to a file: `Diagnostics` holds the
+rolling file and the ring, and nothing stopped one of them growing a client and
+posting records at a URL, because `System.Net.Http` needs no package reference
+at all.
+
+`ArchitectureTests/TelemetrySilenceTests` closes that (2026-09): no `src`
+assembly references an HTTP client, and outbound capability is confined to the
+five that are the peer protocol and the loopback IPC — `Diagnostics` is not
+among them. The same commit found and closed a gap in the guard beside it:
+`DependencyRuleTests.AllSourceAssemblies`, which the cryptography and
+recurrence containment rules iterate, named twenty-one of the twenty-four
+projects under `src/` and omitted `Diagnostics`, `Replication` and `Retention`
+— the three with no `AssemblyMarker` to reach them by. The logging sinks were
+the assembly a telemetry rule most needed to cover and the one the list could
+not see. The reasoning is [ADR-0027](0027-services-scheduling-status-telemetry.md)
+§3's, amended there; this record carries the consequence for its own §1.
+
 ### Amendment: a call site is not a logger
 
 The register proved every declaration is *called*. Nothing in the type system
@@ -466,3 +489,4 @@ and a retention drill over an applied pass.
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |
 | 2026-09 | Amended | Range 3300–3399 retired with the platform keystore (format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); `Protocol` keeps 3200–3299 |
 | 2026-09 | Amended (event 3100) | The recovery tool's event 3100 records the archive descriptor read — repository id and format — rather than the recovery kit read, because there is no kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); 3101 and 3102 are unchanged, and the 1.14 numbering note above stays as history |
+| 2026-09 | Amended | §1's division extended to the network: no sink may reach for an HTTP client, which needs no package reference and so escaped `ArchitectureTests/LoggingShapeTests` (`ArchitectureTests/TelemetrySilenceTests`; reasoning at [ADR-0027](0027-services-scheduling-status-telemetry.md) §3's 2026-09 amendment) |
