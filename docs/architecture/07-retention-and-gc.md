@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §11 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. For direct-ship sets ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) the retention traversal is proven through the ship sink — the report walks closures out of destination-held metadata — with convergence as the deleting half and a full retention-with-trimming drill on aged direct-ship snapshots still outstanding before the flag's default flips. Compaction (steps 6–9) is not built — see [implementation status](../implementation-status.md). Deletion receipts on the peer plane ([ADR-0063](../adr/0063-deletion-receipts.md)) are built: the destination signs and files, the commander verifies and files, and the `receipts` verb reads.
+**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. For direct-ship sets ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) the retention traversal is proven through the ship sink — the report walks closures out of destination-held metadata — with convergence as the deleting half and a full retention-with-trimming drill on aged direct-ship snapshots still outstanding before the flag's default flips. Compaction (steps 6–9) is built for format-3 repositories at local paths, as a keyless rewrite rather than the re-sealing the original design assumed (`Retention/CompactionPolicy`, `Repository/BlobCompactor`, `Repository/CompactionPublication`, `Repository/CompactionPass`, run as the third phase of `retention --apply`; [ADR-0067](../adr/0067-the-keyless-compactor.md)) — with the one ordering difference §3.3 records. A format-2 set is refused by name, and a peer's replica is never compacted. Deletion receipts on the peer plane ([ADR-0063](../adr/0063-deletion-receipts.md)) are built: the destination signs and files, the commander verifies and files, and the `receipts` verb reads.
 
 ---
 
@@ -104,11 +104,16 @@ peer, who deletes exactly what it is told and nothing else, bounded below by
 its own granted floor. A destination's local reachability is never an input,
 because a replica's view is exactly the partial view this algorithm exists to
 distrust. For a direct-ship set, convergence is also the only deletion there
-is — §2.1's note. Compaction, still unbuilt, runs in staging and reaches
-destinations as ordinary replication for staging sets
-([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates));
-where it runs for a direct-ship set is an open question deferred to the
-compaction record (ADR-0009 Amendment 6).
+is — §2.1's note. Compaction runs on the hub like everything else above, and the
+question ADR-0009 Amendment 6 deferred is answered: a staging set compacts
+its own archive and its output reaches destinations as ordinary replication
+([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates)),
+while a **direct-ship** set reads its candidates back through the ship sink —
+which outside a run resolves local paths only — and writes its replacement
+blobs through the same sink. A peer is therefore never compacted, without a
+guard written for the purpose: compacting one would mean pulling a whole blob
+over a domestic uplink and pushing a new one back to reclaim space on someone
+else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
 ### 3.1 Step 4 is the one that matters
 
@@ -121,6 +126,24 @@ Intent coverage is a *durable, self-describing* statement of what is in flight. 
 Compaction moves records between blobs, which changes their physical location. It is safe to do that without rewriting history *only* because manifests reference segments by object identifier and never by blob and offset ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 
 Had physical location stayed in the manifest as originally specified, step 7 would have required rewriting immutable objects — which is to say, it would not have been possible at all.
+
+### 3.3 What the built pass does differently, and why
+
+The thirteen steps above describe one pass that compacts in the middle of its
+own deletion cycle. The built pass runs steps 6–9 **after** step 13, as a
+phase of its own, and lets the *next* pass condemn what it drained
+([ADR-0067](../adr/0067-the-keyless-compactor.md)). Nothing in the safety
+argument moves: the intent of step 6 is still published before a replacement
+blob exists and retired last, so §3.0's window stays closed; and step 10's
+tombstone is still the collector's, reached by steps 3 and 5 on the following
+pass because every record the drained blob holds now resolves elsewhere.
+
+The cost is one pass of latency — the space comes back two passes after the
+rewrite rather than one. What it buys is that step 12 never revalidates
+against a world the same pass has just written into, and that step 11's grace
+clock is not recomputed past the compaction's own journal records. On a
+maintenance operation that runs on a schedule, a day is worth less than
+either.
 
 ## 4. Why leases are not load-bearing
 

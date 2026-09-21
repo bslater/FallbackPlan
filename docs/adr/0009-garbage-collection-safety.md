@@ -171,10 +171,15 @@ holds a blob the live history reaches that no destination has — never over
 one nothing references, which no pass could ever carry (ADR-0046 Amendment
 2). Amendment 5's single-writer
 grace arithmetic carries over verbatim — the metadata store is single-writer
-by the same construction. Compaction, still unbuilt, is the open question:
+by the same construction. Compaction was the open question here —
 "re-seals in staging and propagates as replication" has no staging to re-seal
-in for direct-ship sets, and the answer belongs to the compaction record when
-it lands (ADR-0025).
+in for a direct-ship set — and the compaction record answered it:
+[ADR-0067](0067-the-keyless-compactor.md) reads a direct-ship set's candidates
+back through the ship sink and writes their replacements through it, so the
+hub still does the work and the destinations still receive ordinary objects.
+Steps 6 and 9 of this record's algorithm are what make that safe, and the
+built pass keeps them in the order this record requires while running the
+whole phase after the sweep rather than inside it (architecture 07 §3.3).
 
 ## Status history
 

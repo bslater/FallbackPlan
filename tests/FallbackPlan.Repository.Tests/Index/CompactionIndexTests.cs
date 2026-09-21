@@ -24,7 +24,9 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// commitments that keep them verifiable, and the bound that keeps the delta
 /// readable. Every case names the exit criterion of
 /// [ADR-0025 Amendment 2](../../../docs/adr/0025-compaction-reseals-records.md)
-/// it discharges. Establishes FR-MAN-019 and FR-MAN-015.
+/// it discharges. Establishes FR-GC-004, FR-MAN-019 and FR-MAN-015: what a
+/// pass publishes is index entries and nothing else, so no manifest, tree or
+/// snapshot is touched by a rewrite.
 /// </summary>
 /// <remarks>
 /// Does not establish FR-GC-011: nothing here decides which blobs are worth

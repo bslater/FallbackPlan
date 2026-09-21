@@ -18,7 +18,9 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 /// ([ADR-0067](../../../docs/adr/0067-the-keyless-compactor.md); ADR-0025
 /// exit criterion 3): records lifted into a rewritten blob and records left
 /// where the capture put them, assembled into one file through the ordinary
-/// reader. Establishes FR-MAN-019 and FR-RST-002.
+/// reader. Establishes FR-GC-004, FR-MAN-019 and FR-RST-002: the manifest
+/// the capture wrote is read back unchanged, and every reference in it still
+/// resolves after half its segments have moved.
 /// </summary>
 /// <remarks>
 /// This is the case the whole of format 3 exists for. The source blob is

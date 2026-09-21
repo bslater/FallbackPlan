@@ -240,10 +240,12 @@ and no more palatable for an upgrade.
 It does not downgrade: there is no verb and no record shape for moving a
 repository back, and nothing rewrites sealed blobs in either direction.
 
-It does not compact. `AppendSealedRecordAsync` is the primitive a compactor
-would be written over and no compactor exists in any format
-([ADR-0025](0025-compaction-reseals-records.md) as superseded by
-[ADR-0052](0052-relocatable-records-format-v3.md) for format 3).
+It does not compact, and it is what makes compaction reachable: the compactor
+is written over `AppendSealedRecordAsync`
+([ADR-0067](0067-the-keyless-compactor.md)), which exists only at format 3, so
+an upgraded set gains a rewrite for its partly dead blobs that a format-2 set
+has no way to perform at all. Nothing here rewrites a sealed blob; the upgrade
+only changes what the *next* one is sealed as.
 
 It does not withdraw format 2. `init --format-version 2` remains a supported
 choice, the format-2 fixture stays frozen, and NFR-COMP-004 reads against

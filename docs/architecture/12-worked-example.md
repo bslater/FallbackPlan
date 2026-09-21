@@ -217,7 +217,7 @@ index_delta {
 }
 ```
 
-The index is the **sole authority on physical location**. Entries carry the generation at which they were published and declare whether they are an insertion or a supersession, so when compaction later relocates this record the newer entry wins deterministically — regardless of the order in which any reader discovers the two. (In a format-3 repository that relocation can now be done without opening the record at all — its key is the object's and its nonce rides its prefix, [ADR-0052](../adr/0052-relocatable-records-format-v3.md). Nothing compacts yet in any format; what changes is the price when something does.)
+The index is the **sole authority on physical location**. Entries carry the generation at which they were published and declare whether they are an insertion or a supersession, so when compaction later relocates this record the newer entry wins deterministically — regardless of the order in which any reader discovers the two. (In a format-3 repository that relocation is done without opening the record at all — its key is the object's and its nonce rides its prefix, [ADR-0052](../adr/0052-relocatable-records-format-v3.md) — and the compactor that does it is [ADR-0067](../adr/0067-the-keyless-compactor.md). A format-2 repository has no compactor and will not get one: re-sealing there needs a content key the service does not hold.)
 
 Deltas form gapless per-writer chains, which is what lets a reader *detect* a delta it has not seen rather than silently assuming it has everything.
 
