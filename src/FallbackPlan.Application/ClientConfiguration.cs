@@ -242,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -283,6 +283,38 @@ public sealed record ClientConfiguration
     /// <summary>The pool width this configuration means, defaults applied.</summary>
     [JsonIgnore]
     public int EffectiveMaxConcurrentBackups => MaxConcurrentBackups ?? 2;
+
+    /// <summary>
+    /// The hours background activity may run in (NFR-PERF-013, ADR-0069) —
+    /// <c>HH:mm-HH:mm</c> in local wall-clock time, and a start after an end
+    /// crosses midnight. **Absent means always**, which is what every file
+    /// written before schema 6 says by not mentioning it, and is the
+    /// behaviour of every installation that does not want one.
+    /// </summary>
+    /// <remarks>
+    /// Installation-wide rather than per set, because the requirement is
+    /// about background activity and not about one set's cadence — a set's
+    /// <c>schedule</c> says how often, and this says when the machine is
+    /// willing. Read afresh by each scheduler pass rather than at service
+    /// start, unlike <see cref="MaxConcurrentBackups"/>: a window whose whole
+    /// point is that it changes during the day would be useless pinned at
+    /// start.
+    /// </remarks>
+    [JsonPropertyName("background_window")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackgroundWindow { get; init; }
+
+    /// <summary>
+    /// The parsed window, or null for "any hour". Validation has already
+    /// refused a defective one, so a null here from a non-null
+    /// <see cref="BackgroundWindow"/> cannot arise on a loaded configuration.
+    /// </summary>
+    [JsonIgnore]
+    public BackgroundWindow? EffectiveBackgroundWindow =>
+        BackgroundWindow is { } text
+            && Application.BackgroundWindow.TryParse(text, out var window, out _)
+            ? window
+            : null;
 
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
@@ -362,7 +394,7 @@ public sealed record ClientConfiguration
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -427,6 +459,17 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_ConcurrencyOutOfRange(path, concurrency));
+        }
+
+        // Refused here rather than discovered by the scheduler at two in the
+        // morning — and a defective window is refused rather than ignored,
+        // because a window nobody honours is a machine backing up at the one
+        // time its operator asked it not to.
+        if (BackgroundWindow is { } declared
+            && !Application.BackgroundWindow.TryParse(declared, out _, out var windowDefect))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_BackgroundWindowInvalid(path, windowDefect!));
         }
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);

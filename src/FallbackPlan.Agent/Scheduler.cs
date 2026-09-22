@@ -63,9 +63,19 @@ public static class Scheduler
     /// <param name="runtime">The service.</param>
     /// <param name="now">The clock, passed in so the derivation stays pure.</param>
     /// <param name="cancellationToken">Cancels the wait for queued work.</param>
+    /// <param name="userInitiated">
+    /// Whether a person asked for this pass. A scheduled tick is the service's
+    /// and observes the background window (NFR-PERF-013, ADR-0069); a person
+    /// who typed <c>run --once</c> is not background activity, and gating them
+    /// would be the same mistake as making a restore wait for a backup
+    /// (ADR-0029 §4).
+    /// </param>
     /// <returns>What happened to each set.</returns>
     public static async ValueTask<AgentPassResult> RunPassAsync(
-        ServiceRuntime runtime, DateTimeOffset now, CancellationToken cancellationToken)
+        ServiceRuntime runtime,
+        DateTimeOffset now,
+        CancellationToken cancellationToken,
+        bool userInitiated = false)
     {
         ThrowHelper.ThrowIfNull(runtime);
 
@@ -84,6 +94,21 @@ public static class Scheduler
         // works from one snapshot rather than re-reading per set.
         var configuration = runtime.LoadConfiguration();
 
+        // The window is read from the configuration this pass loaded, not
+        // pinned at service start like the pool width: a limit whose whole
+        // point is that it changes during the day would be useless fixed at
+        // boot. Absent means any hour, which is what every file written
+        // before schema 6 says by not mentioning it.
+        var window = userInitiated ? null : configuration.EffectiveBackgroundWindow;
+        var shut = window is not null && !window.IsOpen(now);
+        if (shut && pass.IsEnabled(LogLevel.Information))
+        {
+            // Formatted into a local inside the guard: CA1873 does not read
+            // IsEnabled, and it is right that an argument expression is
+            // evaluated whether or not anybody is listening.
+            var opens = window!.NextOpen(now).ToString("u", CultureInfo.InvariantCulture);
+            Log.BackgroundWindowShut(pass, window.Text, opens);
+        }
 
         foreach (var set in configuration.BackupSets)
         {
@@ -118,6 +143,19 @@ public static class Scheduler
             {
                 outcomes.Add(new AgentSetOutcome(
                     set.Name, "already-running", $"job {latest.Id} is still queued or running"));
+                continue;
+            }
+
+            // Asked after due-ness would have been evaluated but before the
+            // work is queued, so the row says "due, and held" rather than
+            // silently reading as not due — "why did nothing run" is the
+            // question a window creates, and this is where it is answered.
+            if (shut)
+            {
+                outcomes.Add(new AgentSetOutcome(
+                    set.Name,
+                    "outside-window",
+                    $"the background window {window!.Text} is shut; it opens {window.NextOpen(now):u}"));
                 continue;
             }
 
@@ -164,11 +202,15 @@ public static class Scheduler
         // the service does not, and the stable per-pair job identities keep
         // un-awaited passes from piling work up (the duplicate enqueue is
         // refused, and the NEXT pass re-evaluates the pair).
-        var transfers = RunTransferPhasesAsync(runtime, now, cancellationToken);
+        // Fan-out, the deep sweep and the drills are background activity by
+        // the same definition the captures are — the scheduler starts them
+        // with nobody waiting — so a shut window holds all four rather than
+        // only the one an operator would notice.
+        var transfers = shut ? Task.CompletedTask : RunTransferPhasesAsync(runtime, now, cancellationToken);
         return new AgentPassResult(outcomes)
         {
             Transfers = transfers,
-            Drills = RunDrillPhaseAsync(runtime, transfers, now, cancellationToken),
+            Drills = shut ? Task.CompletedTask : RunDrillPhaseAsync(runtime, transfers, now, cancellationToken),
         };
     }
 

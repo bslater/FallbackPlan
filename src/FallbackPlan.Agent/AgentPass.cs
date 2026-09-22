@@ -37,7 +37,10 @@ public static class AgentPass
         await using var runtime = await ServiceRuntime.StartAsync(options, cancellationToken)
             .ConfigureAwait(false);
 
-        var result = await Scheduler.RunPassAsync(runtime, now, cancellationToken).ConfigureAwait(false);
+        // A person asked for this pass, so the background window does not
+        // hold it (ADR-0069) — this entry point exists for exactly that.
+        var result = await Scheduler
+            .RunPassAsync(runtime, now, cancellationToken, userInitiated: true).ConfigureAwait(false);
 
         // --once means once, whole: the transfer phases the service would
         // leave running (ADR-0029 Amendment 4) are awaited here, because the

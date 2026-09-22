@@ -161,6 +161,14 @@ internal static partial class Log
         Message = "Set {SetName} is not due yet; next run {NextRun}")]
     internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
 
+    // Information rather than Debug: a window is a setting an operator chose,
+    // and "nothing ran last night" is the question it creates. A pass that
+    // held everything back says so at the tier an operator actually reads.
+    [LoggerMessage(
+        EventId = 3782, Level = LogLevel.Information,
+        Message = "Background window {Window} is shut; nothing scheduled runs until {NextOpen}")]
+    internal static partial void BackgroundWindowShut(ILogger logger, string window, string nextOpen);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

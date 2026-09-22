@@ -1000,7 +1000,12 @@ public static class AgentHost
             var failed = 0;
             while (!lifetime.IsCancellationRequested)
             {
-                var result = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token)
+                // `--once` is a person at a terminal, so the background
+                // window does not hold it (ADR-0069): gating an operator who
+                // typed the command would be the same mistake as making a
+                // restore wait for a backup.
+                var result = await Scheduler
+                    .RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token, userInitiated: once)
                     .ConfigureAwait(false);
 
                 foreach (var set in result.Sets)
