@@ -169,6 +169,15 @@ internal static partial class Log
         Message = "Background window {Window} is shut; nothing scheduled runs until {NextOpen}")]
     internal static partial void BackgroundWindowShut(ILogger logger, string window, string nextOpen);
 
+    // The other half of the same question: not "nothing started" but
+    // "something that was already running stopped". A capture parking at ten
+    // in the evening is the most visible thing a window does, and the least
+    // guessable without a line saying so.
+    [LoggerMessage(
+        EventId = 3783, Level = LogLevel.Information,
+        Message = "Background window {Window} shut over {Runs} running capture(s); each parks at its next file boundary")]
+    internal static partial void BackgroundWindowParked(ILogger logger, string window, int runs);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

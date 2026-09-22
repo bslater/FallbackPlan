@@ -38,7 +38,9 @@ public enum JobState
 
     /// <summary>
     /// Suspended at a file boundary by the scheduler, its in-memory state
-    /// held, so a higher-priority run can use its pool slot (ADR-0047 Amendment 1).
+    /// held — because a higher-priority run needs its pool slot (ADR-0047
+    /// Amendment 1) or because the background window has shut over it
+    /// (ADR-0069). The run's own detail says which.
     /// Not terminal: the run resumes unattended when a slot frees, degrades
     /// to <see cref="Cancelled"/> on shutdown, and self-cancels past the
     /// max-pause age.

@@ -99,7 +99,16 @@ public static class Scheduler
         // point is that it changes during the day would be useless fixed at
         // boot. Absent means any hour, which is what every file written
         // before schema 6 says by not mentioning it.
-        var window = userInitiated ? null : configuration.EffectiveBackgroundWindow;
+        var configured = configuration.EffectiveBackgroundWindow;
+
+        // Two questions, deliberately not one. "Is the window shut" is the
+        // machine's state and belongs to the pool's hold; "is THIS pass
+        // gated" is who asked, and a person's pass never is. Folding them
+        // would have `agent run --once` at two in the morning release every
+        // capture the window had parked — the manual pass rightly not being
+        // gated, and wrongly speaking for the machine.
+        var windowShut = configured is not null && !configured.IsOpen(now);
+        var window = userInitiated ? null : configured;
         var shut = window is not null && !window.IsOpen(now);
         if (shut && pass.IsEnabled(LogLevel.Information))
         {
@@ -108,6 +117,29 @@ public static class Scheduler
             // evaluated whether or not anybody is listening.
             var opens = window!.NextOpen(now).ToString("u", CultureInfo.InvariantCulture);
             Log.BackgroundWindowShut(pass, window.Text, opens);
+        }
+
+        if (windowShut)
+        {
+            // A capture already under way when the window shuts parks at its
+            // next file boundary and stays parked (ADR-0069). The suspension,
+            // the escalation, the expiry and the re-run path are all
+            // ADR-0047's, unchanged: what the window adds is the ask and the
+            // standing hold that keeps a freed worker from undoing it. The
+            // reason travels with the ask, because the journal row it writes
+            // is what answers "why did my backup stop at ten".
+            var held = await runtime.Queue
+                .HoldBackgroundAsync(
+                    $"held outside the background window {configured!.Text}", cancellationToken)
+                .ConfigureAwait(false);
+            if (held > 0 && pass.IsEnabled(LogLevel.Information))
+            {
+                Log.BackgroundWindowParked(pass, configured.Text, held);
+            }
+        }
+        else
+        {
+            runtime.Queue.ReleaseBackground();
         }
 
         foreach (var set in configuration.BackupSets)
@@ -186,7 +218,16 @@ public static class Scheduler
                 Log.SetDue(pass, set.Name, lastCompleted, nextRun);
             }
 
-            running.Add(Enqueue(runtime, set, now, userInitiated: false));
+            // The pass's own initiation, carried down rather than hard-coded
+            // false. `agent run --once` is a person at a terminal, and the
+            // work it starts is theirs: ADR-0029 §4's rule that a
+            // user-initiated operation outranks a scheduled one is about the
+            // work, not about the tick that queued it. C1 made the window
+            // honour that at the gate; hard-coding it here left the pool
+            // still treating a person's pass as background, so under a shut
+            // window the hold below would refuse to start the very work the
+            // person's pass had just been let through to queue.
+            running.Add(Enqueue(runtime, set, now, userInitiated));
         }
 
         foreach (var outcome in await Task.WhenAll(running).ConfigureAwait(false))
@@ -206,7 +247,9 @@ public static class Scheduler
         // the same definition the captures are — the scheduler starts them
         // with nobody waiting — so a shut window holds all four rather than
         // only the one an operator would notice.
-        var transfers = shut ? Task.CompletedTask : RunTransferPhasesAsync(runtime, now, cancellationToken);
+        var transfers = shut
+            ? Task.CompletedTask
+            : RunTransferPhasesAsync(runtime, now, userInitiated, cancellationToken);
         return new AgentPassResult(outcomes)
         {
             Transfers = transfers,
@@ -226,7 +269,7 @@ public static class Scheduler
     /// scheduler loop, or an un-awaiting caller, down.
     /// </summary>
     private static async Task RunTransferPhasesAsync(
-        ServiceRuntime runtime, DateTimeOffset now, CancellationToken cancellationToken)
+        ServiceRuntime runtime, DateTimeOffset now, bool userInitiated, CancellationToken cancellationToken)
     {
         var syncs = new List<Task>();
         foreach (var set in runtime.Configuration.BackupSets)
@@ -239,7 +282,7 @@ public static class Scheduler
             foreach (var reference in set.Destinations)
             {
                 if (ShouldSync(runtime, set, reference.Ref, now)
-                    && FanOut.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sync)
+                    && FanOut.Enqueue(runtime, set, reference.Ref, now, userInitiated) is { } sync)
                 {
                     syncs.Add(sync);
                 }
@@ -278,7 +321,7 @@ public static class Scheduler
             foreach (var reference in set.Destinations)
             {
                 if (ShouldSweep(runtime, set, reference.Ref, now)
-                    && ReplicaSweepJob.Enqueue(runtime, set, reference.Ref, now, userInitiated: false) is { } sweep)
+                    && ReplicaSweepJob.Enqueue(runtime, set, reference.Ref, now, userInitiated) is { } sweep)
                 {
                     sweeps.Add(sweep);
                 }
@@ -599,11 +642,14 @@ public static class Scheduler
             // file boundary and the journal says so — Paused on the way down,
             // back to Publishing on the way up. The stamps are wall-clock
             // because they record when the suspension actually happened, not
-            // when the pass that queued the run began.
+            // when the pass that queued the run began. The reason comes from
+            // whoever asked (ADR-0069 gave the pool a second asker), because
+            // this row is what a person reads the next morning to answer why
+            // their backup stopped at ten.
             var gate = new PauseGate(
-                onParked: () => runtime.Jobs.Transition(
+                onParked: reason => runtime.Jobs.Transition(
                     job.Id, JobState.Paused, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    "suspended for a higher-priority run"),
+                    reason),
                 onResumed: () => runtime.Jobs.Transition(
                     job.Id, JobState.Publishing, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     "resumed"));

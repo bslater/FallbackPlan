@@ -64,8 +64,11 @@ public static class BackupRunner
         {
             var resumeTo = JobState.Scanning;
             gate.AddCallbacks(
-                onParked: () =>
+                onParked: _ =>
                 {
+                    // The reason reaches the journal rather than the meter:
+                    // a progress report carries a state and its counts, and
+                    // has nowhere to put a sentence.
                     resumeTo = progress.LastState;
                     progress.Enter(JobState.Paused);
                 },

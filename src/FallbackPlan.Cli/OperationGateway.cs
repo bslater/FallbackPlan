@@ -750,7 +750,11 @@ internal sealed class ServiceGateway(
         JobState.CompletedWithFailures =>
             "PARTIAL — the snapshot is committed, but not everything could be read",
         JobState.Cancelled => "cancelled",
-        JobState.Paused => "PAUSED — suspended for a higher-priority run; it resumes unattended",
+        // The cause belongs on the detail line beside this one, which carries
+        // the run's own park reason: since ADR-0069 the pool has two askers —
+        // a higher-priority arrival and a background window that has shut —
+        // and naming one of them here would be wrong half the time.
+        JobState.Paused => "PAUSED — suspended with its state held; it resumes unattended",
         JobState.FailedRecoverable => "FAILED (recoverable) — the service retries on its next pass",
         JobState.FailedPermanent => "FAILED — needs intervention; it will not be retried",
         _ => state.ToString().ToLowerInvariant(),

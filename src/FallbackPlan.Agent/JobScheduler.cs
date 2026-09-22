@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Bodu;
 using FallbackPlan.Domain.Jobs;
 using Microsoft.Extensions.Logging;
@@ -79,6 +80,15 @@ public sealed record QueuedJob(
 /// contend, background work yields — the concrete meaning of NFR-PERF-013's
 /// "background activity shall observe configured limits".
 /// </description></item>
+/// <item><description>
+/// <b>Background work can be held out of the pool altogether</b>
+/// (<see cref="HoldBackgroundAsync"/>, ADR-0069): the first of NFR-PERF-013's
+/// four named limits, a configured time window, is enforced here because this
+/// is the only thing that knows which runs are attended and which are parked.
+/// The hold borrows the preemption machinery whole and adds one rule — while
+/// it stands, the writer pump neither resumes a parked background run nor
+/// starts a queued one.
+/// </description></item>
 /// </list>
 /// </remarks>
 public sealed class JobScheduler : IAsyncDisposable
@@ -98,6 +108,11 @@ public sealed class JobScheduler : IAsyncDisposable
     private readonly TimeSpan _maxPause;
     private readonly TimeSpan _escalationDelay;
     private long _parkSequence;
+
+    // The background hold (ADR-0069). Guarded by _gate, like the two
+    // dictionaries above, because every reader of it is already holding
+    // the gate to read them.
+    private bool _backgroundHeld;
 
     // One signal per lane, not one shared: with a shared semaphore, a token
     // released for a busy lane could only be consumed by the OTHER lanes'
@@ -181,6 +196,137 @@ public sealed class JobScheduler : IAsyncDisposable
         {
             return _running.ContainsKey(jobId);
         }
+    }
+
+    /// <summary>
+    /// Holds background work out of the writer pool: every attended, gated,
+    /// non-user-initiated run is asked to park, and while the hold stands the
+    /// pump resumes no parked background run and starts no queued one
+    /// (ADR-0069). Idempotent, so a shut window may simply ask on every pass
+    /// rather than remembering a transition.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The standing state is the mechanism and the ask is only its first
+    /// half. ADR-0047's pump resumes the best-ranked parked run the moment a
+    /// worker frees — which is precisely what a park does — so a one-shot
+    /// <see cref="PauseGate.Pause"/> would be undone within milliseconds by
+    /// the worker the park released.
+    /// </para>
+    /// <para>
+    /// The wait is for the <em>report</em>, never for correctness: a run
+    /// inside one huge file may not reach a boundary inside the settle
+    /// window, and it is still asked, still parks later, and is still held
+    /// when it does. A hold whose completion depended on a capture reaching a
+    /// pause point would be a pass one large file could hang.
+    /// </para>
+    /// <para>
+    /// A parked run is <em>not</em> held indefinitely: the max-pause cap
+    /// (see the constructor) is armed at the park and is unchanged by the
+    /// hold, so a closure that outlasts it hands the run to the
+    /// interruption-safe re-run path — which is exactly right for a window
+    /// that stays shut for hours.
+    /// </para>
+    /// </remarks>
+    /// <param name="reason">
+    /// Why, in the words the journal and the progress surface will carry —
+    /// the pass's, because this knows nothing of windows and a run's park
+    /// reason is what a person reads to answer "why did my backup stop".
+    /// </param>
+    /// <param name="cancellationToken">Cuts the settle wait short; the hold itself is already in force.</param>
+    /// <returns>How many background runs are parked under the hold.</returns>
+    public async ValueTask<int> HoldBackgroundAsync(string reason, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(reason);
+
+        List<(Task Parked, Task? Run)> asked = [];
+        lock (_gate)
+        {
+            _backgroundHeld = true;
+            foreach (var entry in _attended.Values)
+            {
+                if (entry.Job.UserInitiated || entry.Job.PauseGate is not { IsPaused: false } gate)
+                {
+                    continue;
+                }
+
+                gate.Pause(reason);
+                asked.Add((gate.Parked, entry.RunTask));
+            }
+        }
+
+        // Either signal ends the wait for one run: a job asked to park may
+        // instead finish, which is the same outcome from the pool's point of
+        // view and is why AttendWriterAsync waits on the pair too. The whole
+        // settle is bounded by one escalation delay across every ask, and
+        // running out of it is an ordinary outcome rather than a failure —
+        // the run stays asked, parks later, and is held when it does.
+        var started = Stopwatch.GetTimestamp();
+        foreach (var (parked, run) in asked)
+        {
+            var remaining = _escalationDelay - Stopwatch.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.WhenAny(parked, run ?? parked).WaitAsync(remaining, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                break;
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        lock (_gate)
+        {
+            // Counted from the gates and not from the paused set: the park
+            // signal fires on the job's own thread, and the attending worker
+            // moves the entry across a moment later, so a count of _paused
+            // taken the instant the wait returned would race that hand-over
+            // and under-report by one.
+            return _attended.Values.Concat(_paused.Values).Count(entry =>
+                !entry.Job.UserInitiated && entry.Job.PauseGate is { Parked.IsCompleted: true });
+        }
+    }
+
+    /// <summary>
+    /// Lifts the hold and wakes the pump so held work is reconsidered
+    /// (ADR-0069). Idempotent; a release with nothing held costs the workers
+    /// one turn each round the loop.
+    /// </summary>
+    /// <remarks>
+    /// The resume itself is the pump's, not this method's: a released run
+    /// re-enters the ordinary ranking at the next pickup and takes a slot
+    /// when its rank says it may, rather than all of them starting at once
+    /// the instant a window opens.
+    /// </remarks>
+    public void ReleaseBackground()
+    {
+        int wake;
+        lock (_gate)
+        {
+            if (!_backgroundHeld)
+            {
+                return;
+            }
+
+            _backgroundHeld = false;
+
+            // One token per held run plus one per worker. Over-releasing is
+            // the already-handled "a token with no job behind it" case;
+            // under-releasing is a pool that sleeps through the opening.
+            wake = _paused.Count + _writerWorkers;
+        }
+
+        _writerPending.Release(wake);
     }
 
     /// <summary>
@@ -348,6 +494,8 @@ public sealed class JobScheduler : IAsyncDisposable
         _stopping.Dispose();
     }
 
+    private const string PreemptedReason = "suspended for a higher-priority run";
+
     private SemaphoreSlim Pending(JobLane lane) => lane switch
     {
         JobLane.Writer => _writerPending,
@@ -416,13 +564,25 @@ public sealed class JobScheduler : IAsyncDisposable
             WriterAttendance? bestPaused = null;
             foreach (var entry in _paused.Values)
             {
+                if (_backgroundHeld && !entry.Job.UserInitiated)
+                {
+                    continue;
+                }
+
                 if (bestPaused is null || entry.Key.CompareTo(bestPaused.Key) < 0)
                 {
                     bestPaused = entry;
                 }
             }
 
-            var hasQueued = _writerLane.TryPeek(out _, out var queuedKey);
+            // The lane's key sorts user-initiated first, so a background head
+            // means every entry behind it is background too: one peek decides
+            // the whole queue, with no dequeue-and-requeue and no second
+            // structure. Without this the hold is half a limit — at the
+            // default pool width of one, parking the running set hands its
+            // worker straight to the next one queued.
+            var hasQueued = _writerLane.TryPeek(out var head, out var queuedKey)
+                && !(_backgroundHeld && !head.UserInitiated);
             if (bestPaused is not null && (!hasQueued || bestPaused.Key.CompareTo(queuedKey) <= 0))
             {
                 _paused.Remove(bestPaused.Job.JobId);
@@ -432,7 +592,7 @@ public sealed class JobScheduler : IAsyncDisposable
                 return true;
             }
 
-            if (_writerLane.TryDequeue(out var job, out var key))
+            if (hasQueued && _writerLane.TryDequeue(out var job, out var key))
             {
                 if (_running.TryGetValue(job.JobId, out var source))
                 {
@@ -575,7 +735,7 @@ public sealed class JobScheduler : IAsyncDisposable
 
         if (victim is not null && incomer.CompareTo(victim.Key) < 0)
         {
-            victim.Job.PauseGate!.Pause();
+            victim.Job.PauseGate!.Pause(PreemptedReason);
             return victim.Job.JobId;
         }
 
