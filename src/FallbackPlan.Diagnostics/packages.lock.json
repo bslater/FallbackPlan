@@ -4,18 +4,18 @@
     "net10.0": {
       "Bodu.Collections.Concurrent": {
         "type": "Direct",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "YTWeHiPWI88qxAjuq0L1J5tTl+WwlU5zrU4AnaV5kAteGR1Xi/tJfpZCK0RwrKxef+v0jl7bsUlU6wAioGhU/w==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "6V8R33cwBNYWsCJkWhIOWG4XiQUt0K9GOU3B7yXe4MihjJYZn3bGdaC9GA2xBWWpXE5mnROkvkxY/MEpbfE2ZQ==",
         "dependencies": {
-          "Bodu.Collections": "0.2.0"
+          "Bodu.Collections": "0.7.0"
         }
       },
       "Bodu.Core": {
         "type": "Direct",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tNe0YO6aI5uiBjDZZnajKNnIDoqf+HYGwB+rRZoUDJtMW0qFosQwmhi9P2FwE2SYYSwPNbuQJXQCaE9Bj0vF8A=="
       },
       "Microsoft.Extensions.Logging": {
         "type": "Direct",
@@ -67,27 +67,27 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Text.Encoding": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Text.Encoding": "[0.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
       "Bodu.Collections": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "JMfCNBPjen4T9jaM1l1ZiyaRoceOBEL/J+oUvwTwlwfxuHcK4L3Py23IJ/XcjNIbIwUa1vzDSyItThS6FpQ1Ww==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tmE5o56N5Sk3oTm99n9m6eNvSq1tNJSAdUZyvMYESNMhL09n8JN8E3JZ9X4YgwdAMSZeXphkBLcILBHwzXcrug==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "CbQmdOLH1aBMucSgi95+aYlCJXMRVifVvrEWC7QrP+Q+bQ1wzijQjpKuIzm0gFNYJ2oSGg4uz1BZvVgqdIqPoA==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       }
     }

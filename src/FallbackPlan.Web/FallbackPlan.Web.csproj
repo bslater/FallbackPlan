@@ -14,7 +14,7 @@
          framework — first-party, so ADR-0019's third-party surface grows by
          nothing (ADR-0036 §5). -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <!-- Prebuilt package from the committed external/packages feed: parameter
+    <!-- From nuget.org, pinned centrally: parameter
          validation (ADR-0019 section 4 / ADR-0021). -->
     <PackageReference Include="Bodu.Core" />
   </ItemGroup>

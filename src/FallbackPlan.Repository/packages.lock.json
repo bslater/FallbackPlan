@@ -4,9 +4,9 @@
     "net10.0": {
       "Bodu.Core": {
         "type": "Direct",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tNe0YO6aI5uiBjDZZnajKNnIDoqf+HYGwB+rRZoUDJtMW0qFosQwmhi9P2FwE2SYYSwPNbuQJXQCaE9Bj0vF8A=="
       },
       "Microsoft.Extensions.Logging.Abstractions": {
         "type": "Direct",
@@ -25,8 +25,8 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Text.Encoding": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Text.Encoding": "[0.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
@@ -48,7 +48,7 @@
       "fallbackplan.repository.catalogue": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
@@ -59,8 +59,8 @@
       "fallbackplan.repository.crypto": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Security.Cryptography": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -68,7 +68,7 @@
       "fallbackplan.repository.format": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "System.Formats.Cbor": "[10.0.10, )",
@@ -78,7 +78,7 @@
       "fallbackplan.repository.index": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -90,7 +90,7 @@
       "fallbackplan.repository.packing": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -101,7 +101,7 @@
       "fallbackplan.repository.segmentation": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -109,7 +109,7 @@
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -117,27 +117,27 @@
       "fallbackplan.storage.local": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "8NPdBL6MDQ1mKPy/UCKQnwSX+ZT8Akt2AeJzRX5aMtKKi8f/4jfwm8kIORqkzFSeiWL47/7A/zlEddWuAVAjLw==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "CbQmdOLH1aBMucSgi95+aYlCJXMRVifVvrEWC7QrP+Q+bQ1wzijQjpKuIzm0gFNYJ2oSGg4uz1BZvVgqdIqPoA==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Microsoft.Data.Sqlite": {

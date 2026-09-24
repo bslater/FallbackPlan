@@ -192,7 +192,7 @@
       "fallbackplan.agent": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Api": "[1.0.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Diagnostics": "[1.0.0, )",
@@ -212,7 +212,7 @@
       "fallbackplan.api": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -220,8 +220,8 @@
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Globalization.Recurrence": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Globalization.Recurrence": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -229,8 +229,8 @@
       "fallbackplan.diagnostics": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Collections.Concurrent": "[0.2.0, )",
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Collections.Concurrent": "[0.7.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging": "[10.0.10, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
@@ -239,8 +239,8 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Text.Encoding": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Text.Encoding": "[0.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
@@ -255,7 +255,7 @@
       "fallbackplan.filesystem.local": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Filesystem": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -270,8 +270,8 @@
       "fallbackplan.protocol": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Security.Cryptography": "[0.7.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
@@ -281,7 +281,7 @@
       "fallbackplan.replication": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
@@ -290,7 +290,7 @@
       "fallbackplan.repository": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Import.Abstractions": "[1.0.0, )",
           "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
@@ -307,7 +307,7 @@
       "fallbackplan.repository.catalogue": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
@@ -318,8 +318,8 @@
       "fallbackplan.repository.crypto": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Security.Cryptography": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Security.Cryptography": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -327,7 +327,7 @@
       "fallbackplan.repository.format": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "System.Formats.Cbor": "[10.0.10, )",
@@ -337,7 +337,7 @@
       "fallbackplan.repository.index": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -349,7 +349,7 @@
       "fallbackplan.repository.packing": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -360,7 +360,7 @@
       "fallbackplan.repository.segmentation": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -368,7 +368,7 @@
       "fallbackplan.restore": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Filesystem": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
@@ -377,7 +377,7 @@
       "fallbackplan.retention": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Application": "[1.0.0, )",
           "FallbackPlan.Repository": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
@@ -387,7 +387,7 @@
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -395,7 +395,7 @@
       "fallbackplan.storage.local": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -414,53 +414,53 @@
       },
       "Bodu.Collections": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "JMfCNBPjen4T9jaM1l1ZiyaRoceOBEL/J+oUvwTwlwfxuHcK4L3Py23IJ/XcjNIbIwUa1vzDSyItThS6FpQ1Ww==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tmE5o56N5Sk3oTm99n9m6eNvSq1tNJSAdUZyvMYESNMhL09n8JN8E3JZ9X4YgwdAMSZeXphkBLcILBHwzXcrug==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Collections.Concurrent": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "YTWeHiPWI88qxAjuq0L1J5tTl+WwlU5zrU4AnaV5kAteGR1Xi/tJfpZCK0RwrKxef+v0jl7bsUlU6wAioGhU/w==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "6V8R33cwBNYWsCJkWhIOWG4XiQUt0K9GOU3B7yXe4MihjJYZn3bGdaC9GA2xBWWpXE5mnROkvkxY/MEpbfE2ZQ==",
         "dependencies": {
-          "Bodu.Collections": "0.2.0"
+          "Bodu.Collections": "0.7.0"
         }
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tNe0YO6aI5uiBjDZZnajKNnIDoqf+HYGwB+rRZoUDJtMW0qFosQwmhi9P2FwE2SYYSwPNbuQJXQCaE9Bj0vF8A=="
       },
       "Bodu.Globalization.Recurrence": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "qclb18XDJXwMpRn/60TheOGO6qgEH2hQoZnEJ8XmMDyOtZMxBK3Om3umc8UB6lk+XWJJV1oE4hI3hMWmc8bbaQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "DVzJEBFSm7ieGSs4Pb/+jNFPriBjNNOoPh8+BOkijSszVAXsshjVwE0UYTb66CpxJCiGUhiLvn9mtN3iK1Rigg==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "8NPdBL6MDQ1mKPy/UCKQnwSX+ZT8Akt2AeJzRX5aMtKKi8f/4jfwm8kIORqkzFSeiWL47/7A/zlEddWuAVAjLw==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "CbQmdOLH1aBMucSgi95+aYlCJXMRVifVvrEWC7QrP+Q+bQ1wzijQjpKuIzm0gFNYJ2oSGg4uz1BZvVgqdIqPoA==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "FsCheck": {

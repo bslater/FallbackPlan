@@ -4,17 +4,17 @@
     "net10.0": {
       "Bodu.Core": {
         "type": "Direct",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "tNe0YO6aI5uiBjDZZnajKNnIDoqf+HYGwB+rRZoUDJtMW0qFosQwmhi9P2FwE2SYYSwPNbuQJXQCaE9Bj0vF8A=="
       },
       "Bodu.Security.Cryptography": {
         "type": "Direct",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "lTdLl04w25sKLE3SwPG8M1SGuVM4DOfV0/0CHE3dGaq6fS+JJQchgR0RQZ+xVODXxOWC0I3ZHbZDljZB8rrNgA==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "8NPdBL6MDQ1mKPy/UCKQnwSX+ZT8Akt2AeJzRX5aMtKKi8f/4jfwm8kIORqkzFSeiWL47/7A/zlEddWuAVAjLw==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Microsoft.Extensions.Logging.Abstractions": {
@@ -40,8 +40,8 @@
       "fallbackplan.application": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Globalization.Recurrence": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Globalization.Recurrence": "[0.7.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -49,27 +49,27 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Text.Encoding": "[0.2.0, )",
+          "Bodu.Core": "[0.7.0, )",
+          "Bodu.Text.Encoding": "[0.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
       "Bodu.Globalization.Recurrence": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "qclb18XDJXwMpRn/60TheOGO6qgEH2hQoZnEJ8XmMDyOtZMxBK3Om3umc8UB6lk+XWJJV1oE4hI3hMWmc8bbaQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "DVzJEBFSm7ieGSs4Pb/+jNFPriBjNNOoPh8+BOkijSszVAXsshjVwE0UYTb66CpxJCiGUhiLvn9mtN3iK1Rigg==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "requested": "[0.7.0, )",
+        "resolved": "0.7.0",
+        "contentHash": "CbQmdOLH1aBMucSgi95+aYlCJXMRVifVvrEWC7QrP+Q+bQ1wzijQjpKuIzm0gFNYJ2oSGg4uz1BZvVgqdIqPoA==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "0.7.0"
         }
       }
     }
