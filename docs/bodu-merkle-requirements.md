@@ -1,11 +1,19 @@
 # Requirements: an RFC 6962 Merkle tree and proof type for Bodu
 
-**Status: Raised, not yet satisfied** — `Bodu.Security.Cryptography` 0.2.0
-carries `MerkleTreeHash` and `ParallelMerkleTreeHash`, which share this
-document's domain-separation scheme and **not** its tree shape, and which
-expose no proof API ([§2](#2-current-state-and-gaps)).
+**Status: Answered upstream; byte-level acceptance pending adoption** —
+`Bodu.Security.Cryptography` **0.7.0** ships the type this document asked for.
+`MerkleTree`, `MerkleBlockAccumulator` and `MerkleBlockComputation` carry
+RFC 6962's tree shape, inclusion and consistency proofs, block mode, obtainable
+leaf hashes and the length-bound root of
+[§3.7](#37-the-tree-size-ambiguity-and-the-bound-root) — and the two divergent
+types this document was written against are **gone**. Each gap of
+[§2](#2-current-state-and-gaps) is answered in place below rather than deleted,
+because the gap list is the record of what was asked for and why.
+[Status against the shipped library](#status-against-the-shipped-library)
+separates what the published package establishes from what only running the
+vectors can.
 **Audience:** the Bodu maintainer and FallbackPlan contributors ·
-**Raised:** 2026-09-19
+**Raised:** 2026-09-19 · **Answered:** 2026-09-24
 
 FallbackPlan's repository format commits to each sealed blob twice: a flat
 `SHA-256` over the blob's bytes, and — since
@@ -63,6 +71,12 @@ out of scope ([§10](#10-non-goals)).
 
 Four gaps against this document, the first two measured rather than inferred.
 
+> **Answered, 2026-09-24.** All four are closed in 0.7.0, and the surface table
+> above describes a version this repository no longer consumes — slice 31 moved
+> it to 0.7.0 and the six packages are now at 1.0.0 upstream. The table is kept
+> because the gaps below are stated against it. Note what upstream did with the
+> two types it names: it **removed** them (§2.1, §2.4).
+
 ### 2.1 The tree shape is not RFC 6962's
 
 The domain-separation claim is accurate. The **tree** is a different tree.
@@ -102,6 +116,14 @@ implementation, and be wrong. Whatever else this document produces,
 MTH-F-012 should
 land.
 
+> **Answered.** `MerkleTree`'s own remarks now state the RFC's split — *"a
+> tree of n entries is reduced by splitting at k, the largest power of two
+> strictly below n … three entries therefore split 2 + 1 and never 1 + 2"* —
+> and `MerkleTreeHash` and `ParallelMerkleTreeHash`, the two types the table
+> above measured, **no longer exist** in 0.7.0 or 1.0.0. The divergence is not
+> documented; it is withdrawn. See MTH-F-012 and MTH-F-013, which asked for the
+> other remedy and got a stronger one.
+
 ### 2.2 There is no proof API
 
 Neither type can answer "give me the path for leaf *m*", and neither can verify
@@ -115,11 +137,23 @@ has no workaround: a consumer can hand-roll a root in twenty lines, but a
 correct inclusion-proof verifier is where the subtle failures live
 ([§3.4](#34-inclusion-proof-verification), [§3.7](#37-the-tree-size-ambiguity-and-the-bound-root)).
 
+> **Answered.** `AuthenticationPath` (from entries or from leaf hashes
+> already computed), `ConsistencyProof`, `VerifyInclusion`,
+> `VerifyInclusionOfLeafHash`, `VerifyBlockInclusion`, `VerifyInclusionBound`
+> and `VerifyConsistency` all ship, and the leaf hashes a path is built from
+> come out of the computation itself (`MerkleBlockComputation.LeafHashes`,
+> `MerkleBlockAccumulator.FinishComputation`) rather than out of diagnostics.
+
 ### 2.3 The empty tree throws
 
 `ComputeHash` over zero bytes raises `InvalidOperationException` ("No input data
 was provided"). RFC 6962 defines `MTH({}) = HASH()` — the hash of the empty
 string — and a log that has published nothing still has a head to sign.
+
+> **Answered.** `MerkleTree.HashEmpty` is documented as *"computes the empty
+> tree's root, H()"*, the level fold returns it *"when no leaf was added"*, and
+> block mode states that *"a zero-length input has zero blocks, not one empty
+> block"*. No exception.
 
 ### 2.4 Fan-out is a knob where the standard has none
 
@@ -127,6 +161,15 @@ RFC 6962 is binary. `fanOut` defaults to 3 on `MerkleTreeHash` and 2 on
 `ParallelMerkleTreeHash`, so two types in one library, both documented against
 the same RFC, disagree with each other out of the box. A conforming mode must
 not offer the knob at all.
+
+> **Answered in substance, not in letter — and the difference is worth
+> keeping.** The knob survives: `MerkleTree`'s constructor still takes a
+> fan-out. What changed is that it is fenced rather than free — `BinaryFanOut`
+> is documented as *"the fan-out at which the tree is RFC 6962's"*, `IsBinary`
+> says whether an instance is one, and `ThrowIfNotBinary` makes every
+> proof member refuse an instance that is not. So a non-binary tree can still
+> be computed and can no longer be *proved about*, which is a better answer
+> than MTH-F-001 asked for and is not the answer it asked for.
 
 ---
 
@@ -313,6 +356,54 @@ length is what a holder declares about a stored object.
 ---
 
 ## 4. Functional requirements
+
+### Status against the shipped library
+
+Established by reading the XML documentation and metadata inside the published
+`Bodu.Security.Cryptography` package (0.7.0, and 1.0.0 whose Merkle surface is
+identical member for member) — **not** by running anything. Most acceptance
+criteria below are *"every vector in Appendix A/B/C reproduces"*, and a vector
+run is a consumer's job; FallbackPlan's is slice 32, against its own frozen
+`merkle.json` and `fixture-repository-v3`.
+
+**Answered, with the shipped text as the evidence.** MTH-F-003 (`HashEmpty`),
+F-004 (`ComputeRoot` over entries), F-005 (`ComputeBlocked`, and a zero-length
+input having zero blocks), F-006 (`MerkleBlockComputation.LeafHashes`,
+`FinishComputation`, and an `AuthenticationPath` overload that takes them),
+F-007, F-008 (`ConsistencyProof`, `VerifyConsistency`), F-009
+(`VerifyBlockInclusion` returns `false` for every malformed proof and throws
+only on a null path or a non-binary instance), F-010 (`BindRoot`,
+`FinishBound`, `VerifyInclusionBound`), F-011 (`VerifyInclusion`'s own remarks:
+*"treeSize is trusted input. RFC 6962's verifier takes the tree size from its
+caller and cannot detect a false one"*), N-001 (*"one block plus one pending
+hash per tree level — logarithmic"*), N-002 (*"the root is bit-identical
+whichever path"*), N-003 (`WalkToHead` rejects a mis-sized path before walking
+it), N-004 (`CryptographicOperations.FixedTimeEquals`), N-005 (an algorithm
+factory and a digest length carried per instance), N-006 (*"every member here
+is static and parameter-driven … nothing is shared across threads by this
+code"*), N-007 (one dependency, `Bodu.Core`, managed), N-009 (nuget.org, in
+lock-step with the other five packages).
+
+**Answered in substance, not in letter.** MTH-F-001 asked for RFC 6962's shape
+*"with no fan-out knob"*. The shape is right and stated; the knob survives,
+fenced so that the proof members refuse a non-binary instance
+([§2.4](#24-fan-out-is-a-knob-where-the-standard-has-none)).
+
+**Answered by removal rather than by documentation.** MTH-F-012 asked that the
+existing divergent shape be *documented* for what it is, and MTH-F-013 that no
+change move a root those types already produce — *"a new type or a new
+explicitly-selected mode, never a fix applied in place"*. Upstream deleted
+`MerkleTreeHash` and `ParallelMerkleTreeHash` instead. That satisfies
+MTH-F-013's rationale completely — no root silently changed under anyone — and
+breaks its letter, because a consumer that had persisted a root from those
+types now has no code that reproduces it. FallbackPlan is unaffected: it never
+consumed them, which is the whole reason `Repository.Packing/BlobMerkle` was
+hand-rolled.
+
+**Not establishable from the published artifact.** MTH-N-008 (trimming and AOT
+cleanliness) and MTH-N-010 (whether these vectors are in the library's own
+suite) — the package carries neither a trim analysis nor its tests. Recorded as
+unverified rather than as met.
 
 ### Tree and root
 
@@ -815,7 +906,29 @@ the ones that distinguish a correct implementation from a plausible one.
 
 ## 11. Adoption in FallbackPlan
 
-If this lands upstream, `Repository.Packing/BlobMerkle` becomes a thin binding
+**It landed upstream; FallbackPlan has not yet adopted it.** Slice 32 is the
+adoption, and it is planned rather than done: `BlobMerkle` becomes a thin
+adapter and moves to `FallbackPlan.Repository.Crypto`, because
+`ArchitectureTests/DependencyRuleTests` confines `Bodu.Security.Cryptography`
+to that project and to `FallbackPlan.Protocol`, and the type is a cryptographic
+primitive rather than a packing detail. The twelve cases of
+`Repository.Tests/Packing/BlobMerkleTests`, the conformance vectors and
+`fixture-repository-v3`'s committed `covered_blob_merkle_roots` are what the
+delegation has to survive unchanged.
+
+One thing to carry into that decision, because the package states it about
+itself: the library is **"not independently audited"** and its side-channel
+resistance is **"best-effort, not guaranteed"** — its README and its nuspec
+description both say so. That is exactly the classification
+[ADR-0019](adr/0019-third-party-dependency-policy.md) §1 sorts dependencies by,
+and adopting the Merkle type puts third-party code beneath bytes this
+repository has already published and beneath the peer possession proof. The
+answer is not that the posture is acceptable in general; it is that the frozen
+vectors and fixtures are a falsifier the delegation must pass, and that the
+construction is SHA-256 tree arithmetic over the platform's own hash rather
+than a primitive of its own.
+
+When it is adopted, `Repository.Packing/BlobMerkle` becomes a thin binding
 rather than an implementation: the format's leaf size (1 MiB), the format's
 preimage (`[0, blob_length − 16)`), and the length-bound root, over a library
 primitive. `BlobMerkleAccumulator` is replaced by the streamed computation of
