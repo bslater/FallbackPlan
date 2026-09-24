@@ -309,11 +309,11 @@ already existed**, and it is precisely this data structure — fixed capacity,
 snapshot-based enumerator, MIT.
 
 What made it easy to miss is worth recording, because the same trap is still
-there. `external/packages/` vendors four Bodu packages, and `Bodu.Core`
-contains a `Bodu.Collections.*` namespace holding **extension methods only**.
-A search of the vendored feed therefore returns a collections namespace with no
-collections in it, which reads like evidence that no such type exists. It is
-not: the packages are published from `bslater/bodu`'s `local-packages/` feed
+there. `Bodu.Core` contains a `Bodu.Collections.*` namespace holding
+**extension methods only**. A search of the packages this repository consumes
+therefore returns a collections namespace with no collections in it, which
+reads like evidence that no such type exists. It is not: the packages come
+from `bslater/bodu`'s feed
 under a lock-step version, and this repository vendors only the subset it has
 needed so far. **The vendored feed is a record of what we have taken, never a
 statement of what exists.**

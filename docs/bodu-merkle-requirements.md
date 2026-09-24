@@ -462,10 +462,12 @@ length is what a holder declares about a stored object.
 - **MTH-N-008 — Trimmable and AOT-clean.** No reflection on
   the hot path; the type survives trimming and AOT publication without warnings.
 
-- **MTH-N-009 — Packaged for the committed feed.** Shipped
-  in `Bodu.Security.Cryptography` and published as a `.nupkg` suitable for
-  FallbackPlan's committed `external/packages` feed
-  ([ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)).
+- **MTH-N-009 — Packaged and published.** Shipped in
+  `Bodu.Security.Cryptography` and published to nuget.org, which is where
+  FallbackPlan consumes every Bodu package from
+  ([ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)
+  Amendment 2). Versions move in lock-step across the Bodu packages, so a
+  release carrying this must be one FallbackPlan can take whole.
 
 - **MTH-N-010 — Vectors ship with the library.** The
   Appendix vectors, or a superset, are in the library's own test suite as pinned

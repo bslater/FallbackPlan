@@ -7,7 +7,7 @@
     <PackageVersion Include="System.Formats.Cbor" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
-    <!-- Bodu, from nuget.org like everything else (ADR-0021 Amendment 1).
+    <!-- Bodu, from nuget.org like everything else (ADR-0021 Amendment 2).
          These were vendored as committed nupkgs while upstream published
          nothing; it publishes now, so the feed is gone. Upstream versions
          the packages in lock-step and they are taken and upgraded together:

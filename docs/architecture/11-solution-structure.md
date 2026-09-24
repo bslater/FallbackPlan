@@ -223,9 +223,9 @@ The neutral model exists so that the same import pipeline serves an importer for
 | General utilities | `Bodu.Core` | Referenced from `Repository.Packing` |
 | Base32 rendering | `Bodu.Text.Encoding` | **No platform implementation exists** — behind the strict lowercase adapter in `Domain.Base32` ([ADR-0019](../adr/0019-third-party-dependency-policy.md) §4) |
 
-### 5.1 Vendored dependencies
+### 5.1 Third-party dependencies
 
-Bodu is not published to nuget.org, so it is consumed as **prebuilt packages from the committed feed at `external/packages`** — the `bodu-local` source in `nuget.config`, version-pinned in `Directory.Packages.props`. The pin is the committed nupkg plus the upstream commit SHA recorded in [`external/packages/README.md`](../../external/packages/README.md); upgrades are deliberate, reviewed changes. Because the feed travels with the tree, a plain `git clone`, a GitHub ZIP download, and Visual Studio's clone dialog all restore identically — no submodule, no `--recursive`, and CI enforces archive-buildability with a dedicated job. → [ADR-0021](../adr/0021-consume-bodu-via-committed-package-feed.md)
+Bodu is consumed as **ordinary packages from nuget.org**, version-pinned in `Directory.Packages.props` like every other dependency, with `nuget.config`'s `packageSourceMapping` naming the one source that may answer to `Bodu.*`. The pin is the package identity and the lockfile hash; upgrades are deliberate, reviewed changes, and the six packages move together at one version because upstream versions them in lock-step. A plain `git clone`, a GitHub ZIP download and Visual Studio's clone dialog all restore identically — no submodule, no `--recursive`, and CI enforces archive-buildability with a dedicated job. Bodu was vendored as committed nupkgs under `external/packages` until upstream published to nuget.org; [`that directory's README`](../../external/packages/README.md) records what was there and why it emptied. → [ADR-0021](../adr/0021-consume-bodu-via-committed-package-feed.md)
 
 Two gates remain scoped to exclude `external/`: the warnings-as-errors build check (defensively — nothing under `external/` compiles today) and `eng/check-links.py`. The dependency policy — tiers, gates, containment, cross-verification — is unchanged. → [ADR-0019](../adr/0019-third-party-dependency-policy.md)
 

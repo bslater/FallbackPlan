@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-08
 **Requirements:** NFR-COMP-004, NFR-PORT-003
-**Related:** [ADR-0021](0021-consume-bodu-via-committed-package-feed.md), [specification 06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1), [external/packages/README.md](../../external/packages/README.md)
+**Related:** [ADR-0021](0021-consume-bodu-via-committed-package-feed.md), [specification 06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1), [ADR-0021 Amendment 2](0021-consume-bodu-via-committed-package-feed.md#amendment-2-2026-09--bodu-is-published-so-the-feed-is-gone)
 
 ---
 

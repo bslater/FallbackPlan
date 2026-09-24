@@ -357,9 +357,8 @@ public sealed class DependencyRuleTests
     /// list on purpose. Repository.Crypto currently contains only an assembly
     /// marker, so the compiler emits no reference to a library no code has
     /// called yet — an assembly-level assertion would fail today for a reason
-    /// that has nothing to do with the rule. The package reference (from the
-    /// committed external/packages feed, ADR-0021) is the containment that
-    /// exists right now, so it is the thing to pin.
+    /// that has nothing to do with the rule. The package reference (ADR-0021)
+    /// is the containment that exists right now, so it is the thing to pin.
     /// </summary>
     [TestMethod]
     public void ThirdPartyCryptography_ProjectFileCanary_StaysInRepositoryCrypto()

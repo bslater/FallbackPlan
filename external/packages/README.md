@@ -9,7 +9,7 @@ steps ([ADR-0021](../../docs/adr/0021-consume-bodu-via-committed-package-feed.md
 words by both `nuget.config` and the record: *the Bodu packages are not
 published to nuget.org*. They are now, so the packages come from nuget.org like
 every other dependency and the vendored copies are deleted
-([ADR-0021 Amendment 1](../../docs/adr/0021-consume-bodu-via-committed-package-feed.md),
+([ADR-0021 Amendment 2](../../docs/adr/0021-consume-bodu-via-committed-package-feed.md),
 2026-09-24). What survives is `nuget.config`'s `packageSourceMapping` entry for
 `Bodu.*`, which was never about the source being local: it states that one feed
 answers to a name, so a package squatted on a second source cannot shadow a

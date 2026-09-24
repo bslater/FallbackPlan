@@ -41,7 +41,7 @@ dotnet test  FallbackPlan.slnx -c Release
 
 Requires the .NET SDK pinned in [`global.json`](global.json).
 
-Bodu — the library supplying Argon2id, one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)) — is consumed as prebuilt packages from the committed [`external/packages`](external/packages/README.md) feed ([ADR-0021](docs/adr/0021-consume-bodu-via-committed-package-feed.md)), so restore needs nothing beyond this tree and nuget.org. Upgrading those packages is a deliberate, reviewed change; the procedure is in the feed's README.
+Bodu — the library supplying Argon2id, one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)) — is consumed as ordinary packages from nuget.org ([ADR-0021](docs/adr/0021-consume-bodu-via-committed-package-feed.md)), pinned in `Directory.Packages.props` and source-mapped in `nuget.config`. Upgrading them is a deliberate, reviewed change: the six move together at one version, and the conformance fixtures are what would catch an Argon2id or base32 behaviour change. The procedure is in [`external/packages/README.md`](external/packages/README.md), which also records the committed feed they used to come from.
 
 **Warnings are errors.** This is a backup engine; a warning we habitually ignore is a defect we ship. The gate covers `src/` and `tests/` and excludes `external/`.
 

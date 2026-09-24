@@ -80,7 +80,7 @@ Finding that is the whole argument for keeping the second implementation.
 
 ### 6. Vendoring mechanics
 
-> **Superseded by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md).** Bodu is now consumed as prebuilt packages from the committed `external/packages` feed; the submodule described below no longer exists. This section and Amendment 1's gitlink discussion are retained as the record of the earlier mechanics. The dependency policy in §§1–5 is unaffected.
+> **Superseded by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md).** Bodu is now consumed as ordinary packages from nuget.org (ADR-0021 Amendment 2, which retired the committed feed that first replaced the submodule); the submodule described below no longer exists. This section and Amendment 1's gitlink discussion are retained as the record of the earlier mechanics. The dependency policy in §§1–5 is unaffected.
 
 Bodu enters as a **git submodule** at `external/bodu` with project references, not as NuGet packages, because it is not published to nuget.org.
 

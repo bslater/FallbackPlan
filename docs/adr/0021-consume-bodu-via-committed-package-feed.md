@@ -18,6 +18,8 @@ Bodu is not published to nuget.org, but its repository carries a `local-packages
 
 ## Decision
 
+> **Amended 2026-09 by [Amendment 2](#amendment-2-2026-09--bodu-is-published-so-the-feed-is-gone).** Upstream now publishes to nuget.org, so the committed feed and the `bodu-local` source are deleted and every `Bodu.*` id resolves from nuget.org at 0.7.0. The source mapping survives; everything below describes the arrangement this amendment replaced.
+
 Bodu enters the build as **prebuilt NuGet packages committed to this repository** under `external/packages/`, which is the `bodu-local` source in `nuget.config`. The `external/bodu` submodule is removed.
 
 - The feed carries exactly the packages the dependency graph needs: `Bodu.Core` and `Bodu.Security.Cryptography`, taken from upstream's `local-packages/` feed at the commit the submodule was pinned to. Versions are pinned centrally in `Directory.Packages.props`; `packageSourceMapping` routes all `Bodu.*` IDs to the committed feed and everything else to nuget.org.
@@ -43,7 +45,7 @@ Bodu enters the build as **prebuilt NuGet packages committed to this repository*
 
 **Neutral**
 
-- ~840 KB of nupkgs are tracked in git instead of a gitlink. `.gitignore` re-includes exactly `external/packages/*.nupkg`.
+- ~840 KB of nupkgs are tracked in git instead of a gitlink. (This bullet also claimed `.gitignore` re-included exactly `external/packages/*.nupkg`. It never did — the re-include it describes named a `local-packages/` directory this repository does not have, and the nupkgs were tracked regardless. Noted by Amendment 2, which removed the dead entry along with the packages.)
 - The build-warning gate keeps its `/external/` exclusion defensively, though nothing under `external/` compiles today.
 
 ## Alternatives considered
@@ -98,9 +100,89 @@ one-to-one equivalent and were rewritten rather than approximated:
 `ThrowIfZeroOrNegative`, and `ObjectDisposedException.ThrowIf(flag, this)`
 became `ThrowHelper.ThrowIfDisposed(flag, nameof(BlobWriter))`.
 
+## Amendment 2 (2026-09) — Bodu is published, so the feed is gone
+
+This record's last alternative reads:
+
+> **Publish Bodu to nuget.org and consume normally.** The cleanest end state, but not this repository's decision to make — upstream publishing cadence and ownership are the maintainer's. The committed feed is forward-compatible with it: if the packages appear on nuget.org, the migration is a source-mapping change.
+
+They have appeared, at 0.5.0, 0.6.0 and 0.7.0 — all six of them — and the
+forecast held exactly: the migration was a source-mapping change.
+`external/packages` is deleted, `nuget.config`'s `bodu-local` source with it,
+and every `Bodu.*` id now resolves from nuget.org at **0.7.0**.
+
+**What the decision rested on, and what became of it.** The Context above opens
+with a fact rather than a preference — *"Bodu is not published to nuget.org"* —
+and everything the feed bought followed from it. It never bought independence
+from the network: `System.Formats.Cbor`, `Microsoft.Data.Sqlite`,
+`ZstdSharp.Port` and the two logging packages already made nuget.org a
+requirement for any restore at all, which the Consequences said in as many
+words (*"no network dependency beyond nuget.org"*). It bought availability of
+packages that could not otherwise be fetched. That is no longer a problem to
+solve, so the solution goes.
+
+**What survives, and why it is not an oversight.** `packageSourceMapping` keeps
+an entry for `Bodu.*`, now pointing at nuget.org. It reads like a leftover and
+is not: the mapping was never about the source being local. It states that one
+feed answers to a name, so a package squatted on a second source cannot shadow
+a real one — the `<clear/>`-plus-mapping posture of NFR-SUP-002/003, untouched
+by where the bytes come from.
+
+**The two Negative consequences this closes**, and they close honestly rather
+than by restatement. *"Prebuilt binaries are a coarser provenance unit than
+source at a SHA"* — the provenance is now the published package identity and
+the lockfile hash, which is what every other dependency in the tree has and is
+strictly more checkable than a SHA recorded in a README by hand. *"The
+committed packages can go stale relative to upstream without anything failing"*
+— still true, and still deliberate, because that is what a pin is; what changes
+is that noticing is now an ordinary outdated-package check rather than a
+comparison against a foreign repository's feed.
+
+**What is given up.** A `git clone` with no network can no longer restore. This
+was already true of every other package in the tree, so the Positive
+consequence it weakens (*"a plain `git clone`, a GitHub ZIP download, and
+Visual Studio's own clone all produce the same buildable tree"*) survives in
+substance: all three still produce the same tree and all three still need
+nuget.org, as they always did. Nothing about the Windows/Visual Studio flow
+that prompted this record regresses.
+
+**The upgrade, and why the verification is the whole of it.** All six move
+together at one version, as they always have: upstream versions them in
+lock-step and a mixed set pairs assemblies never built or tested against each
+other. Five minor versions is a real risk under committed bytes — Argon2id and
+base32 sit beneath the conformance vectors and both frozen repository fixtures,
+so an upstream behaviour change surfaces as a **fixture diff** rather than as a
+test that merely still compiles (NFR-COMP-004). It did not: the generator
+reproduced every vector file byte-identically, both fixtures read back from
+their frozen bytes, the Argon2id cross-verification against Konscious passed,
+the full suite was green, and `eng/recovery-drill.sh` recovered eleven files
+byte-identical from the passphrase alone on the Release binaries. A fixture
+that moves here is a decision for the owner — pin at the last compatible
+version, or take the change and say what it costs — never something to absorb
+by re-running the generator.
+
+**Adoption candidates, re-homed from the feed's README** now that the file it
+lived in documents a directory rather than a practice. Upstream ships packages
+this repository does not consume; they are recorded so a later phase reaches
+for the reviewed candidate rather than hand-rolling or pulling a stranger:
+
+| Package | Would serve | Earliest need |
+|---|---|---|
+| `Bodu.Text.Filter` | Wildcard and regex pattern filters — a candidate engine for the streaming scanner's include/exclude evaluation (policy manifest keys `include_rules`/`exclude_rules`, [06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1)) | Phase 1 |
+
+Adoption is now an ordinary reviewed dependency addition (ADR-0019's gates,
+`Directory.Packages.props`, lockfiles, full sweep) rather than a packing
+exercise. For this candidate it additionally requires demonstrating the library
+passes every case in `conformance/vectors/path-rules.json`: the `rules-v1`
+dialect is **specified** ([ADR-0024](0024-include-exclude-rule-dialect.md),
+06 §7.1) with a dependency-free reference implementation in
+`FallbackPlan.Domain.PathRules`, and the specification defines the dialect,
+never the library.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Submodule replaced by committed `external/packages` feed; ADR-0019 §6 mechanics superseded, dependency policy unchanged |
 | 2026-08 | Accepted (amended) | Amendment 1: `Bodu.Core` becomes the solution-wide guard-clause vocabulary; its containment canary is replaced by a rule on the recovery tool's closure |
+| 2026-09 | Accepted (amended) | Amendment 2: upstream published to nuget.org, so the committed feed is deleted and all six packages come from nuget.org at 0.7.0 — the migration this record's own last alternative forecast as "a source-mapping change". The `Bodu.*` source mapping survives, pointing at nuget.org |
