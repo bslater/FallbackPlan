@@ -2433,6 +2433,21 @@ public static class CliApplication
                 // bare tick (10 §1.2).
                 void RenderServiceStatus(StatusResult result)
                 {
+                    // Above the matrix, because it governs every row below it:
+                    // a shut window is why a set that reads "due" is not
+                    // running (ADR-0069). Omitted entirely when there is no
+                    // window, which is also what an older service says.
+                    if (result.BackgroundWindow is { } window)
+                    {
+                        var changes = DateTimeOffset.FromUnixTimeMilliseconds((long)window.ChangesAt)
+                            .ToLocalTime()
+                            .ToString("u", CultureInfo.InvariantCulture);
+                        output.WriteLine(
+                            window.Open
+                                ? $"background window {window.Text} — open, shuts {changes}"
+                                : $"background window {window.Text} — SHUT, opens {changes}");
+                    }
+
                     foreach (var notice in result.Notices)
                     {
                         output.WriteLine($"notice: {notice}");

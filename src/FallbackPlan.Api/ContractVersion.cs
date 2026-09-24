@@ -298,8 +298,26 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// cannot verify an upgrade record and goes on reporting the version
     /// each archive was **created** at.
     /// </para>
+    /// <para>
+    /// 1.37 puts the background window's state on `get_status` (ADR-0069):
+    /// the configured text, whether background work may start right now, and
+    /// when that next changes. The window is the first of NFR-PERF-013's four
+    /// named limits to exist, and it can hold every backup on an installation
+    /// for hours; before this a person could only find out by reading the
+    /// service's log, which is not where "why did nothing run last night" gets
+    /// asked. One nullable descriptor rather than three loose fields, so a
+    /// client tests "is there a window" once. Null from a service with no
+    /// window configured AND from one older than 1.37 — deliberately the same
+    /// answer, because a client does nothing different in the two cases and an
+    /// absent window has always meant always open. Reporting only: the window
+    /// is edited in the configuration file, as `max_concurrent_backups` is,
+    /// and a console control for it is owed rather than smuggled in behind a
+    /// status field. The state is evaluated at the instant `observed_at` names,
+    /// from the same parsed window the scheduler's pass uses, so a client
+    /// cannot catch the two disagreeing across a boundary.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 36);
+    public static ContractVersion Current { get; } = new(1, 37);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

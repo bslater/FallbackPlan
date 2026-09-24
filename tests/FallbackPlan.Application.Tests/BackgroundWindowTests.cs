@@ -164,6 +164,46 @@ public sealed class BackgroundWindowTests
         }
     }
 
+    [TestMethod]
+    public void AWindow_ReadsTheWallClockOfTheOffsetItIsGiven_NotTheInstant()
+    {
+        // The rule every caller has to honour and none of them can see from
+        // the call site. A window is a position on a clock face (ADR-0069),
+        // so IsOpen asks what the clock said where the offset says it is —
+        // which means one instant, handed over in two offsets, gets two
+        // answers. Hand it DateTimeOffset.UtcNow and it answers for UTC's
+        // clock face: on any machine east or west of Greenwich the status
+        // surface would then disagree with the pass by the machine's offset,
+        // and on a machine running UTC nothing would ever reveal it.
+        var window = Parse("22:00-06:00");
+
+        // One instant. 23:00 in Sydney is 13:00 in London on the same day.
+        var sydney = new DateTimeOffset(2026, 9, 22, 23, 0, 0, TimeSpan.FromHours(10));
+        var london = sydney.ToOffset(TimeSpan.FromHours(1));
+        Assert.AreEqual(sydney.UtcDateTime, london.UtcDateTime, "the two must name the same instant");
+
+        Assert.IsTrue(window.IsOpen(sydney), "23:00 on the Sydney clock is inside 22:00-06:00");
+        Assert.IsFalse(window.IsOpen(london), "13:00 on the London clock is not");
+    }
+
+    [TestMethod]
+    public void AWindow_PairsItsStateWithTheBoundaryAStatusShouldShow()
+    {
+        // What a reporting surface has to get right: the next change is
+        // NextOpen when shut and NextClose when open. Swapping them yields a
+        // status whose state and whose "next change" contradict each other,
+        // which is worse than reporting neither.
+        var window = Parse("22:00-06:00");
+
+        var noon = At("12:00");
+        Assert.IsFalse(window.IsOpen(noon));
+        Assert.IsGreaterThan(noon, window.NextOpen(noon), "shut: the boundary to show is the opening");
+
+        var midnight = At("00:00");
+        Assert.IsTrue(window.IsOpen(midnight));
+        Assert.IsGreaterThan(midnight, window.NextClose(midnight), "open: the boundary to show is the closing");
+    }
+
     private static BackgroundWindow Parse(string text)
     {
         Assert.IsTrue(BackgroundWindow.TryParse(text, out var window, out var defect), defect);

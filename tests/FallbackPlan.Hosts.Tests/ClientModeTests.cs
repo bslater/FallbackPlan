@@ -113,6 +113,65 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Status_WithABackgroundWindow_SaysWhetherItIsShut()
+    {
+        // The window governs every row the matrix prints, so a person asking
+        // `status` gets the answer to "why is this due set not running"
+        // without a second verb (contract 1.37, ADR-0069). The configuration
+        // is rewritten with a window that is shut right now, against the real
+        // clock rather than a fixed hour, so the case says what it means
+        // wherever it runs.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        var opens = DateTimeOffset.Now.AddHours(3);
+        var shut = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{opens:HH\\:mm}-{opens.AddHours(1):HH\\:mm}");
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        (ClientConfiguration.Load(configuration) with { BackgroundWindow = shut }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains($"background window {shut}", result.All, StringComparison.Ordinal);
+        Assert.Contains("SHUT", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Status_WithNoBackgroundWindow_PrintsNoLineAtAll()
+    {
+        // Every installation written before schema 6 has no window, so a
+        // line that appeared anyway — or printed "undefined" — would be a
+        // regression visible everywhere at once.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.DoesNotContain("background window", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Backup_ASetNamedWithAServiceRunning_IsRunByTheService()
     {
         // ADR-0028 §3 is unconditional: "the CLI connects to the service when

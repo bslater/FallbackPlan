@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.36
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.37
 
 ---
 
@@ -46,7 +46,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.36 — 56 commands. One line each; parameters, results
+The register as of 1.37 — 56 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -78,7 +78,8 @@ bound), `job_changes` / `job_failures` (since 1.22 — one run's diff against
 its predecessor and its capture failures, read from the repository on
 demand), `get_status` (the per-set, per-destination matrix — since 1.19
 with each destination's baseline facts, since 1.22 with each demotion's
-machine cause and the set's `last_completed_at`).
+machine cause and the set's `last_completed_at`, since 1.37 with the
+background window's state).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
@@ -140,3 +141,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.34 | `verified_chunk` on each destination row ([07 §3.6](../peer-protocol/07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)): of the objects the last passed verification proved, how many were proved by asking the destination for one leaf of the blob's Merkle commitment and its authentication path, checked against the root the writer signed into the index ([07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)). A **sampled** proof of the blob, counted apart from `verified_digest` — which reads every byte — so the cheaper tier cannot be rendered as the stronger one. Additive with a zero default |
 | 1.35 | `total` on `receipts_listed` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): how many receipts are on file for the `kind` and `repository` asked for, counted from file names rather than from what was read — so `limit` now bounds the **reading** as well as the answer, and a client can still say what share of the pile it is showing. Peer receipts are swept under a stated retention rule (NFR-OPS-008), and a count beside the rows is what makes a bound that is working visible. The count precedes the `set` filter, which can only be answered by reading a receipt, so a listing narrowed by set may return fewer rows than its limit while the total stands above both. Additive with a zero default |
 | 1.36 | `upgrade_set_format {set_name}` ([ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md)): one set's repository moved to the latest format this build writes, answering `configuration_change` so no result shape moves. The move is an **appended signed record**, not a rewritten descriptor: a destination seeds a descriptor only if absent and a peer keeps the copy it has, so a rewrite would carry the source alone and leave every copy claiming the older format over newer blobs. It takes no version — the service upgrades to the one version it writes, so a client cannot ask for a format this build could not read back. Refused by name for a set already at that version, for a set with no archive yet (one created here is born at the latest format), and while a run holds the set. What it changes is what the set **seals next**: everything already sealed stays exactly as it is, and the record reaches each destination on the next reconciling pass. Additive |
+| 1.37 | `background_window` on `status` (ADR-0069, landing with the records round): the configured window, whether background work may start right now, and when that next changes. The window is the first of NFR-PERF-013's four named limits to exist and it can hold every backup on an installation for hours; before this the only way to find out was the service's log, which is not where "why did nothing run last night" gets asked. One nullable descriptor rather than three loose fields, so a client tests "is there a window" once. Null from a service with no window configured **and** from one older than 1.37 — deliberately the same answer, because a client does nothing different in the two cases and an absent window has always meant always open. Reporting only: the window is edited in the configuration file, as `max_concurrent_backups` is, and a console control for it is owed. The state is evaluated at the instant `observed_at` names, from the same parsed window the scheduler's pass uses, so a client cannot catch the two disagreeing across a boundary. Additive |

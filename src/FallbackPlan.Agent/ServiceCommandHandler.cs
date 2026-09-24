@@ -2368,7 +2368,23 @@ public sealed partial class ServiceCommandHandler(
     private async ValueTask<ServiceResult> GetStatusAsync(CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;
-        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // One clock read, used for all three answers below. It was two —
+        // DateTimeOffset.UtcNow for ObservedAt and a separate .Now for each
+        // set's NextRun — and nothing depended on them agreeing until the
+        // background window arrived (ADR-0069): a status saying "shut" from
+        // one instant and "opens at 06:00" from another can contradict itself
+        // across a boundary, at exactly the moment somebody is looking.
+        //
+        // It is a LOCAL instant on purpose, and the reason is invisible from
+        // here: BackgroundWindow.IsOpen reads the wall clock of the offset it
+        // is handed, so UtcNow would answer for UTC's clock face and the
+        // status would disagree with the pass by this machine's offset —
+        // silently, and never on a machine that happens to run UTC. The
+        // millisecond stamp is the same number either way; a Unix timestamp
+        // names an instant and not a zone.
+        var observed = DateTimeOffset.Now;
+        var now = (ulong)observed.ToUnixTimeMilliseconds();
         var sets = new List<BackupSetStatusDescriptor>();
 
         foreach (var set in configuration.BackupSets)
@@ -2401,7 +2417,7 @@ public sealed partial class ServiceCommandHandler(
             if (!string.IsNullOrWhiteSpace(set.Schedule) && Schedule.TryParse(set.Schedule, out var schedule, out _))
             {
                 var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
-                nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now).ToString("u");
+                nextRun = schedule!.NextRun(anchor, observed).ToString("u");
             }
 
             sets.Add(new BackupSetStatusDescriptor(
@@ -2409,9 +2425,23 @@ public sealed partial class ServiceCommandHandler(
                 LastCompletedAt: lastCompleted == 0 ? null : lastCompleted));
         }
 
+        // From the parsed window, never from the presence of the text: a window
+        // that is SET is not a window that is SHUT, and reading the string's
+        // presence as the state is the mistake that looks right on a fixture
+        // and wrong every morning.
+        BackgroundWindowDescriptor? window = null;
+        if (configuration.EffectiveBackgroundWindow is { } configured)
+        {
+            var open = configured.IsOpen(observed);
+            var changes = open ? configured.NextClose(observed) : configured.NextOpen(observed);
+            window = new BackgroundWindowDescriptor(
+                configured.Text, open, (ulong)changes.ToUnixTimeMilliseconds());
+        }
+
         return new StatusResult(
             Environment.MachineName, sets, now,
-            [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")]);
+            [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")],
+            window);
     }
 
     /// <summary>

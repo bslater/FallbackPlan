@@ -60,4 +60,48 @@ public sealed class StatusRelayNamesTests
         Assert.IsFalse(seeded.GetProperty("needsFull").GetBoolean());
         Assert.AreEqual(5_000, seeded.GetProperty("baselineCompletedAt").GetInt64());
     }
+
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheBackgroundWindowNamesTheViewReads()
+    {
+        // Contract 1.37 (ADR-0069). windowNote() reads three camelCase names
+        // off this object; a rename compiles cleanly and quietly renders the
+        // clause as "undefined".
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets: [],
+            ObservedAt: 10_000,
+            Notices: [],
+            BackgroundWindow: new BackgroundWindowDescriptor("22:00-06:00", Open: false, ChangesAt: 20_000));
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var window = body.RootElement.GetProperty("backgroundWindow");
+        Assert.AreEqual("22:00-06:00", window.GetProperty("text").GetString());
+        Assert.IsFalse(window.GetProperty("open").GetBoolean());
+        Assert.AreEqual(20_000, window.GetProperty("changesAt").GetInt64());
+    }
+
+    [TestMethod]
+    public async Task GetStatus_WithNoWindow_RelaysNullRatherThanOmittingIt()
+    {
+        // The console tests one thing — is there a window — so the absence
+        // has to arrive as a value it can test, not as a missing property
+        // that reads the same as a typo.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult("hub", [], 10_000, []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(
+            JsonValueKind.Null,
+            body.RootElement.GetProperty("backgroundWindow").ValueKind);
+    }
 }
+

@@ -504,6 +504,47 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheBackgroundWindow_WireNamesAndPre137Default()
+    {
+        // Contract 1.37 (ADR-0069): the status surface says whether the
+        // background window is open and when it next changes, so "why did
+        // nothing run last night" is answerable without reading the
+        // service's log. One nullable descriptor rather than three loose
+        // fields, so a client tests "is there a window" once.
+        var json = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult(
+                "hub",
+                [],
+                ObservedAt: 10_000,
+                Notices: [],
+                BackgroundWindow: new BackgroundWindowDescriptor("22:00-06:00", Open: false, ChangesAt: 20_000)),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"background_window\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"text\":\"22:00-06:00\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"open\":false", json, StringComparison.Ordinal);
+        Assert.Contains("\"changes_at\":20000", json, StringComparison.Ordinal);
+
+        // The old frame is the modern one with the addition stripped, so the
+        // fixture cannot drift from the real serialization. A pre-1.37
+        // service never mentions the field and a client reads that as "no
+        // window" — the same thing a 1.37 service with none configured says,
+        // and honestly so: both mean "draw no line".
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult("hub", [], 10_000, [], new BackgroundWindowDescriptor("22:00-06:00", true, 20_000)),
+            FrameCodec.SerializerOptions);
+        var old = modern.Replace(
+            ",\"background_window\":{\"text\":\"22:00-06:00\",\"open\":true,\"changes_at\":20000}",
+            "",
+            StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<StatusResult>(result, out var status);
+        Assert.IsNull(status.BackgroundWindow);
+    }
+
+    [TestMethod]
     public void TheCurrentFile_WireNameAndPre122Default()
     {
         // Contract 1.22: the live feed names the file being processed. A

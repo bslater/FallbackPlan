@@ -856,6 +856,27 @@ public sealed record BackupSetStatusDescriptor(
     ulong? LastCompletedAt = null);
 
 /// <summary>
+/// The background window's state at the instant the status was observed
+/// (ADR-0069, NFR-PERF-013). Reporting only, in this contract version: the
+/// window is edited in the configuration file, as <c>max_concurrent_backups</c>
+/// is, and a console control for it is owed rather than built.
+/// </summary>
+/// <param name="Text">The configured window, <c>HH:mm-HH:mm</c> in the service machine's local time.</param>
+/// <param name="Open">
+/// Whether background work may start right now. Evaluated at the instant
+/// <see cref="StatusResult.ObservedAt"/> names and from the same parsed window
+/// the scheduler's pass uses, so a client cannot see the two disagree.
+/// </param>
+/// <param name="ChangesAt">
+/// When the state next changes, Unix milliseconds: the next opening when shut,
+/// the next closing when open. One boundary rather than both, because the
+/// other is not the one a person is waiting on; and an instant rather than a
+/// duration, because a duration computed at the service goes stale in the
+/// client's hands.
+/// </param>
+public sealed record BackgroundWindowDescriptor(string Text, bool Open, ulong ChangesAt);
+
+/// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
 /// this and never stored beside it, so the never-merge rules (NFR-OPS-002) hold
 /// wherever the summary is computed.
@@ -864,11 +885,20 @@ public sealed record BackupSetStatusDescriptor(
 /// <param name="Sets">Per-set detail.</param>
 /// <param name="ObservedAt">When the service produced this, Unix milliseconds.</param>
 /// <param name="Notices">Durable events awaiting a human — surfaced here until acknowledged (10 §3.1).</param>
+/// <param name="BackgroundWindow">
+/// The background window in force, or null (contract 1.37, ADR-0069). Null
+/// means the same thing from a service that has no window configured and from
+/// one older than 1.37: draw no line. Conflating them is honest here rather
+/// than lossy, because a client does nothing different in the two cases — and
+/// "no window" is itself the compatibility rule, an absent window being always
+/// open.
+/// </param>
 public sealed record StatusResult(
     string MachineName,
     IReadOnlyList<BackupSetStatusDescriptor> Sets,
     ulong ObservedAt,
-    IReadOnlyList<string> Notices) : ServiceResult;
+    IReadOnlyList<string> Notices,
+    BackgroundWindowDescriptor? BackgroundWindow = null) : ServiceResult;
 
 /// <summary>The client configuration as JSON.</summary>
 /// <param name="Json">The configuration document.</param>

@@ -1,5 +1,6 @@
 using System.Globalization;
 using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 
@@ -299,6 +300,65 @@ public sealed class BackgroundWindowTests : IDisposable
                 MaxPauseOverride = maxPause,
             },
             Timeout);
+    }
+
+    [TestMethod]
+    public async Task TheStatusSurface_SaysWhetherTheWindowIsOpenAndWhenItNextChanges()
+    {
+        // The limit was invisible: C1 and C2 can hold every backup on an
+        // installation for hours and the only way to find out was the
+        // service's log, which is not where "why did nothing run last night"
+        // gets asked (contract 1.37).
+        await using var shutRuntime = await StartAsync(ShutWindow);
+        Assert.IsInstanceOfType<StatusResult>(await StatusAsync(shutRuntime), out var shut);
+
+        Assert.IsNotNull(shut.BackgroundWindow);
+        Assert.AreEqual(ShutWindow, shut.BackgroundWindow.Text);
+        Assert.IsFalse(shut.BackgroundWindow.Open);
+        Assert.IsGreaterThan(
+            shut.ObservedAt,
+            shut.BackgroundWindow.ChangesAt,
+            "shut, so the boundary to show is the opening, and it is ahead of the observation");
+
+        // And the state is the one the pass acts on, not a second opinion:
+        // a status that disagrees with the rows beside it is worse than no
+        // status at all.
+        var pass = await Scheduler.RunPassAsync(shutRuntime, DateTimeOffset.Now, Timeout);
+        Assert.AreEqual("outside-window", Assert.ContainsSingle(pass.Sets).Outcome);
+    }
+
+    [TestMethod]
+    public async Task AnOpenWindow_IsReportedOpenWithItsClosing()
+    {
+        await using var runtime = await StartAsync(OpenWindow);
+
+        Assert.IsInstanceOfType<StatusResult>(await StatusAsync(runtime), out var status);
+
+        Assert.IsNotNull(status.BackgroundWindow);
+        Assert.IsTrue(status.BackgroundWindow.Open);
+        Assert.IsGreaterThan(
+            status.ObservedAt,
+            status.BackgroundWindow.ChangesAt,
+            "open, so the boundary to show is the closing");
+    }
+
+    [TestMethod]
+    public async Task NoWindow_IsReportedAsNone()
+    {
+        // Which a client reads exactly as it reads a pre-1.37 service: draw
+        // no line. Both mean the same thing, and an absent window has always
+        // meant always open.
+        await using var runtime = await StartAsync(window: null);
+
+        Assert.IsInstanceOfType<StatusResult>(await StatusAsync(runtime), out var status);
+
+        Assert.IsNull(status.BackgroundWindow);
+    }
+
+    private async Task<ServiceResult> StatusAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        return await handler.ExecuteAsync(new GetStatusCommand(), Timeout);
     }
 
     /// <summary>

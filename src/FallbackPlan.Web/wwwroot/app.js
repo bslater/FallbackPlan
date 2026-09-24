@@ -170,6 +170,30 @@ function rel(ms) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
+// rel()'s forward twin. A window's next change is ahead of now, and "in 4
+// hours" is the shape a person reads it in; rel() would say "-4 h ago".
+function until(ms) {
+  if (!ms) return "";
+  const s = Math.max(0, (Number(ms) - Date.now()) / 1000);
+  if (s < 60) return "in under a minute";
+  if (s < 3600) return `in ${Math.round(s / 60)} min`;
+  if (s < 172800) return `in ${Math.round(s / 3600)} h`;
+  return `in ${Math.round(s / 86400)} d`;
+}
+
+// The background window governs every set below it, so it belongs on the
+// overview's one-line summary rather than in a card of its own (ADR-0069).
+// Absent means no window — from a service that has none configured and from
+// one older than contract 1.37 alike, which is the same instruction either
+// way: draw no line.
+function windowNote() {
+  const w = S.status?.backgroundWindow;
+  if (!w) return "";
+  return w.open
+    ? ` Background window ${esc(w.text)} — open, shuts ${esc(until(w.changesAt))}.`
+    : ` Background window ${esc(w.text)} — <strong>shut</strong>, opens ${esc(until(w.changesAt))}.`;
+}
+
 function setName(backupSetId) {
   const set = S.sets.find(s => s.id === backupSetId);
   return set ? set.name : (backupSetId ? backupSetId.slice(0, 12) + "…" : "—");
@@ -550,7 +574,7 @@ function renderOverview() {
   if (sets.length === 0) {
     el.innerHTML = `
       <h2>Overview</h2>
-      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}</p>
+      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}${windowNote()}</p>
       <div class="card empty"><span class="big">🗂</span>
         No backup sets are configured yet.<br>
         Create one under <a href="#config">Configuration</a> — add a destination first; every set needs at least one.
@@ -567,7 +591,7 @@ function renderOverview() {
 
   el.innerHTML = `
     <h2>Overview</h2>
-    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.</p>
+    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.${windowNote()}</p>
     <div class="set-stack">${sets.map(renderSetCard).join("")}</div>`;
 
   // The CSP forbids inline style attributes, so mark widths are set from
