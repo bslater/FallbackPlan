@@ -322,6 +322,20 @@ Repository-level multi-writer semantics are unaffected.
 
 ### Amendment (2026-09): the CPU cap this record anticipated was never built
 
+> **2026-09, scoped to this amendment.** One of the four now exists. The
+> **time window** was built as [ADR-0069](0069-the-background-window.md), and
+> it was built out of this record's own machinery rather than beside it: the
+> pause gate §4 gives a running capture is what a closing window asks for, and
+> [ADR-0047](0047-backup-pool-and-priorities.md)'s max-pause cap — which
+> self-cancels a long-parked run into the interruption-safe re-run path — is
+> exactly the behaviour a closure lasting all night needs, already written and
+> already tested. So the sentence below should be read as naming **three**
+> limits that do not exist, not four, and the last paragraph's "scoped
+> decision somebody takes on purpose" is what taking one looked like. What the
+> paragraph says about the CPU cap in particular is unchanged: its acceptance
+> is machine-dependent in a way this project cannot settle from a container,
+> and it is the figure NFR-PERF-007 already discounts for the same reason.
+
 §3's default was chosen to satisfy **NFR-OPS-004** and **NFR-PERF-013**, and
 the 2026-08 amendment above ends by saying that "NFR-PERF-013's CPU cap
 should be measured against that rather than assumed from the number".
@@ -452,3 +466,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |
 | 2026-08 | Accepted (amended) | Amendment 4: the writer lane is a pool of 1..5 with priorities in the queue key and a pause gate at the pipeline's file boundary, and the pass no longer awaits its transfer phases ([ADR-0047](0047-backup-pool-and-priorities.md)) |
 | 2026-09 | Accepted (amended) | The 2026-09 amendment: NFR-PERF-013's CPU cap was never built, and neither were its disk, network or time-window limits — `Domain/Configuration/CapturePolicy`'s `Concurrency` is the only configured bound and bounds parallel work rather than CPU. The requirement's yielding half is built; its measurable half does not exist |
+| 2026-09 | Accepted (amended) | One of the four is now built: the **time window** ([ADR-0069](0069-the-background-window.md)), out of this record's own §4 pause gate rather than beside it. CPU, disk and network remain unbuilt, and the CPU cap's acceptance stays machine-dependent in a way a container cannot settle |

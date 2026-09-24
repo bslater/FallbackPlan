@@ -92,6 +92,15 @@ Exported via OpenTelemetry. These exist to make the performance targets in [`../
 
 **Jobs and the pool** ([ADR-0047](../adr/0047-backup-pool-and-priorities.md)) — pool occupancy · queue depth and time-to-slot by priority band · preemption count · pause age against the max-pause bound · resumes versus expiries.
 
+**Background limits** ([ADR-0069](../adr/0069-the-background-window.md)) — whether the configured time
+window is open, and when it next changes · runs the window parked, and runs it held out of starting ·
+parks that expired against the max-pause bound while the window stayed shut, which is the figure that
+says a window is set wider than the work it is holding. NFR-PERF-013 names four limits and this is the
+first to exist; its CPU, disk and network counterparts have nothing to report because there is nothing
+configured to observe. The window's state is not only a metric: it is on `get_status` from contract 1.37
+and on the console and CLI, because "why did nothing run last night" is a question a window creates and
+answering it should not require reading the service's log.
+
 The emphasised metrics are the ones tied directly to NFR-PERF thresholds. Without them, "object-store request amplification" — a named major risk with packing as its mitigation — has no way of being detected when the mitigation stops working.
 
 ## 3. Job state machine

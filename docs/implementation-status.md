@@ -4,7 +4,7 @@
 
 ---
 
-Sixty-eight decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Sixty-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -92,6 +92,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0066](adr/0066-the-format-upgrade-record.md) | The format-upgrade record: a repository moves to a newer format by an appended signed object rather than by a rewritten descriptor — which no copy would accept — so the move rides every ordinary replication path, takes effect at the next sealed object, and leaves everything already sealed exactly as it is; format 3 is what the product creates, and an existing format-2 set is upgraded on request and never pushed | Built | `Repository.Format/Lifecycle/FormatUpgradeRecord` · `Repository/RepositoryLifecycle` · `Domain/FormatLimits` · `Agent/ServiceRuntime` · `Agent/ServiceCommandHandler.Configuration.cs` · `Agent/ReplicationResponder` · `Agent/AgentHost` · `Recovery/RecoverySession`, `Recovery/RecoveryHost` · `Api/ContractVersion` (1.36) · the console's notice control · `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Hosts.Tests/FormatUpgradeTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`; [notes](#0066--two-objects-carry-one-version) |
 | [0067](adr/0067-the-keyless-compactor.md) | The keyless compactor: a blob holding a live minority is rewritten by copying its live records' sealed bytes verbatim into a fresh blob — no content key is held, because at format 3 a record's key is its object's and its nonce rides its own prefix — and the pass publishes supersessions and deletes nothing, leaving the collector to condemn the drained blob on its own terms once every record it held resolves elsewhere | Built | `Retention/CompactionPolicy` · `Retention/CollectionPlanner` · `Retention/RetentionRunner` · `Repository.Packing/BlobReader` · `Repository.Packing/BlobWriter` · `Repository/BlobCompactor` · `Repository/CompactionPublication` · `Repository/CompactionPass` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`; [notes](#0067--the-rewrite-that-holds-no-key) |
 | [0068](adr/0068-the-catalogue-directed-restore-read.md) | The catalogue-directed restore read: a restore loads nothing, reads each record straight from the location the catalogue holds, opens a blob through its footer only when a fast read fails, and coalesces neighbouring records into one ranged read whose first run reaches down to the envelope — 11 GETs over 11 blobs where the same restore cost 93 | Built | `Repository/PrefetchPolicy` · `Repository/RepositoryReader` · `Repository/RestoreEngine` · `Repository.Packing/BlobReader` · `Repository.Packing/RecordFraming` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreBreadthTests`; [notes](#0068--a-restore-fetches-what-it-needs) |
+| [0069](adr/0069-the-background-window.md) | The background window: the first of NFR-PERF-013's four named limits to exist. `HH:mm-HH:mm` in local time, installation-wide in the configuration file, absent meaning always open; it gates exactly what the scheduler starts with nobody waiting and never gates a person. A capture running when the window shuts parks through ADR-0047's own pause gate and the pool holds every background run down until it opens — the suspension reused whole, not rebuilt | Built | `Application/BackgroundWindow` · `Application/ClientConfiguration` · `Agent/Scheduler` · `Agent/JobScheduler` · `Agent/PauseGate` · `Agent/Log` · `Agent/ServiceCommandHandler` · `Api/Results.cs` · `Api/ContractVersion.cs` · `Cli/CliApplication` · `Application.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundHoldTests`, `Web.Tests/ConsoleBackgroundWindowScriptTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`; [notes](#0069--one-of-four) |
 | [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
 
 ---
@@ -1422,3 +1423,54 @@ absorbed: a sparse restore of one small record out of large blobs cannot fold
 the envelope, so it costs two reads a blob; and the plan verb's reachability
 probe (`Restore/RestoreBlobSet`, FR-RST-003) still opens each metadata blob
 through its footer, which is a different question asked before anything moves.
+
+### 0069 — one of four
+
+NFR-PERF-013 promises that background activity observes configured CPU, disk,
+network and **time-window** limits, and until this record none of the four
+existed. The round that filled the last unmeasured performance rows went
+looking for the CPU cap to measure and found nothing to measure, so the row
+was corrected from *unmeasured* to **unbuilt**; it was the only **Unproved**
+row on the [proof page](proof-obligations.md). This is the first of the four,
+and it is the one a person actually asks for — *don't back up while I'm
+working* — and the one a container can settle deterministically, CPU being
+exactly the figure NFR-PERF-007 already discounts as container measurement.
+
+**The keystone is that the suspension already existed and already did the
+right thing.** [ADR-0047](adr/0047-backup-pool-and-priorities.md) Amendment 1's
+preemption pauses a running job through `Agent/PauseGate`, waits for it to
+park at a file boundary, and bounds the park with a max-pause cap whose own
+doc comment describes self-cancelling "to the interruption-safe re-run path".
+That is precisely what a window closing over a running capture needs, and it
+was already built and already tested. The window needed somewhere to ask —
+and one rule that is the least obvious part of the design.
+
+**The hold is a standing state of the pool, not a per-job ask.**
+`Agent/JobScheduler`'s writer pump resumes the best-ranked parked run *the
+moment a worker frees*, which is exactly what a park does — so a one-shot
+`Pause()` from the pass would be undone within milliseconds by the worker the
+park itself released. `HoldBackgroundAsync`/`ReleaseBackground` stand instead,
+and while the hold stands the pump neither resumes a parked background run nor
+starts a queued one. The queued half costs one peek: the lane's key sorts
+user-initiated first, so a background head means every entry behind it is
+background too.
+
+Two live defects surfaced while building it and were fixed here. A person's
+pass **deadlocked against the hold it had just placed** — `RunPassAsync`
+hard-coded `userInitiated: false` at every enqueue site, so `agent run --once`
+inside a shut window was rightly let through the gate and then refused by the
+pool it had itself held; the pass's initiation now travels to the work it
+queues. And the journal's park reason was **about to become a lie**:
+`PauseGate` hard-coded *"suspended for a higher-priority run"* into the row a
+park writes, which is the sentence a person reads the next morning to answer
+why their backup stopped at ten. The reason is carried per ask now, first ask
+winning it.
+
+What is **not** built, and stays named: the other three limits. And two limits
+of the window itself — only a capture parks, because only writer-lane jobs
+carry a pause gate, so a fan-out or a drill already in flight runs to
+completion; and the window is enforced to the granularity of a pass tick. The
+window is **reported** on `get_status` (contract 1.37), the CLI and the
+console, and **edited in the configuration file only**, as
+`max_concurrent_backups` is; the console control is owed rather than smuggled
+in behind a status field.
