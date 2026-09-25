@@ -16,10 +16,10 @@
          conformance fixtures, so an upgrade that changes either surfaces as
          a fixture diff rather than as a test that merely still compiles
          (NFR-COMP-004). -->
-    <PackageVersion Include="Bodu.Core" Version="0.7.0" />
-    <PackageVersion Include="Bodu.Security.Cryptography" Version="0.7.0" />
-    <PackageVersion Include="Bodu.Text.Encoding" Version="0.7.0" />
-    <PackageVersion Include="Bodu.Globalization.Recurrence" Version="0.7.0" />
+    <PackageVersion Include="Bodu.Core" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Security.Cryptography" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Text.Encoding" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Globalization.Recurrence" Version="1.0.0" />
     <!-- The diagnostics ring buffer (ADR-0043 §6): a lock-free Vyukov MPMC
          ConcurrentCircularBuffer<T> with drop-oldest eviction, which is the
          data structure the client log feed needs and one this repository has
@@ -27,8 +27,8 @@
          only by FallbackPlan.Diagnostics, which the Agent and CLI reference —
          never Repository.Format, so never the recovery tool's closure. MIT.
          Bodu.Collections is its declared dependency, not a direct use. -->
-    <PackageVersion Include="Bodu.Collections.Concurrent" Version="0.7.0" />
-    <PackageVersion Include="Bodu.Collections" Version="0.7.0" />
+    <PackageVersion Include="Bodu.Collections.Concurrent" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Collections" Version="1.0.0" />
   </ItemGroup>
   <ItemGroup Label="Logging">
     <!-- The abstraction only, in every shipped assembly: ILogger, NullLogger and
