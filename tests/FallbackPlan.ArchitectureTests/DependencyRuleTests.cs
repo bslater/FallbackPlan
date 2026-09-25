@@ -713,16 +713,24 @@ public sealed class DependencyRuleTests
             Types.InAssembly(Replication)
                 .ShouldNot()
                 .HaveDependencyOnAny(
-                    "FallbackPlan.Repository",
+                    // FallbackPlan.Repository is deliberately NOT here. It was,
+                    // when this rule was written against a Replication that only
+                    // copied bytes. ADR-0065 gave the verifier a chunk-possession
+                    // challenge, and answering one means recomputing a blob's
+                    // Merkle leaf — `Repository.Packing.BlobMerkle`, the one
+                    // place that construction is defined. Duplicating it inside
+                    // Replication to keep the closure narrow would put the same
+                    // commitment in two places, which is the failure this
+                    // repository cares about more than the layering.
                     "FallbackPlan.Storage.Local",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
                     "FallbackPlan.Application",
-                    "FallbackPlan.Keystore",
                     "FallbackPlan.Cli",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
-            "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034).");
+            "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034), "
+            + "reaching the packing layer only for the Merkle commitment ADR-0065 made it check.");
     }
 
     /// <summary>

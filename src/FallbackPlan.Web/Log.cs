@@ -62,30 +62,8 @@ internal static partial class Log
         EventId = 4105, Level = LogLevel.Trace,
         Message = "Event stream ended after {Events} event(s)")]
     internal static partial void EventStreamEnded(ILogger logger, long events);
-    [LoggerMessage(
-        EventId = 4110, Level = LogLevel.Trace,
-        Message = "{Endpoint} answered {StatusCode} in {ElapsedMilliseconds} ms")]
-    internal static partial void RequestHandled(
-        ILogger logger, string endpoint, int statusCode, long elapsedMilliseconds);
 
-    [LoggerMessage(
-        EventId = 4111, Level = LogLevel.Debug,
-        Message = "Setup answered '{Outcome}' (kit included: {KitIncluded})")]
-    internal static partial void SetupOutcome(ILogger logger, string outcome, bool kitIncluded);
 
-    [LoggerMessage(
-        EventId = 4112, Level = LogLevel.Debug,
-        Message = "Recovery-kit rebuild answered '{Outcome}' (kit included: {KitIncluded})")]
-    internal static partial void RecoveryKitOutcome(ILogger logger, string outcome, bool kitIncluded);
 
-    [LoggerMessage(
-        EventId = 4113, Level = LogLevel.Trace,
-        Message = "Relayed {Command}; the service answered {Result} in {ElapsedMilliseconds} ms")]
-    internal static partial void CommandRelayed(
-        ILogger logger, string command, string result, long elapsedMilliseconds);
 
-    [LoggerMessage(
-        EventId = 4114, Level = LogLevel.Trace,
-        Message = "Served {Path} ({ByteCount} bytes, embedded at build time)")]
-    internal static partial void StaticAssetServed(ILogger logger, string path, int byteCount);
 }

@@ -2027,10 +2027,7 @@ const setupActions = {
       return;
     }
 
-    trace("setup-finish", {
-      outcome: body?.outcome ?? null, hasKit: !!body?.kit,
-      kitMachineLength: body?.kit?.machine?.length ?? 0, kitTextLength: body?.kit?.text?.length ?? 0,
-    });
+    trace("setup-finish", { outcome: body?.outcome ?? null });
     U.busy = false;
     if (body?.outcome !== "provisioned") {
       toast("warn", body?.detail ?? "Setup did not complete.");
@@ -2124,7 +2121,7 @@ const setupActions = {
       // below handles a service that would not answer.
     }
 
-    trace("setup-kit-done", { result: result?.result ?? null });
+    trace("setup-done", { result: result?.result ?? null });
     U.busy = false;
     const lines = U.setupLines;
     U = null;
