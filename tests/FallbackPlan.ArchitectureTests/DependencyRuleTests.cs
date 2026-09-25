@@ -726,6 +726,7 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
                     "FallbackPlan.Application",
+                    "FallbackPlan.Keystore",
                     "FallbackPlan.Cli",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
