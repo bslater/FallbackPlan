@@ -67,6 +67,9 @@
   <data name="HardlinkGrouper_ContentIDKeyExactlyBytes" xml:space="preserve">
     <value>The content-ID key is exactly 32 bytes.</value>
   </data>
+  <data name="RecoveryRecipient_MasterKeyExactlyBytes" xml:space="preserve">
+    <value>The master key is exactly 32 bytes.</value>
+  </data>
   <data name="KekDerivation_KDFSaltExactlyBytesGot" xml:space="preserve">
     <value>The KDF salt is exactly {0} bytes; got {1}.</value>
   </data>

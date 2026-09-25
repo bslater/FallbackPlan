@@ -99,46 +99,73 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// ADR-0028 §5 rejected. A session token crosses on the two verbs that
     /// mint and present it and nowhere else, and no password or hash reaches
     /// any result or any log record.
-    /// 1.17 carries the backup pool's ordering (ADR-0047): backup sets and
+    /// 1.17 added claim_replicas (ADR-0070), the verb a
+    /// machine rebuilt from bare metal uses to get its data back. A
+    /// destination serves a replica only to the identity its attribution
+    /// ledger names, and that identity died with the state directory, so the
+    /// passphrase proves the household instead. The command carries the
+    /// Argon2id root sealed to the service's recipient key — derived on the
+    /// client from the passphrase and the recovery kit's salt and parameters,
+    /// because a rebuilt machine has the kit and no repository to read the
+    /// salt from — and names a pairing rather than a destination, since
+    /// configuration is one of the things a claim exists to recover. Null
+    /// claims from every pairing. claimed_replicas answers per peer, an
+    /// unreachable one reported beside the rest rather than aborting them.
+    /// claim_replicas is withdrawn as of this merge and no service answers
+    /// it: the property it served — the passphrase claims the replica and the
+    /// device identity does not — is built instead under ADR-0053 Amendment 2,
+    /// reached by the reclaim path. The number is not reused; a client that
+    /// sends the verb is answered as it would be for any verb this service
+    /// does not implement.
+    /// 1.18 added consistency_method to snapshot_descriptor: 1 live, 2 VSS,
+    /// 3 filesystem snapshot, 4 application-quiesced. The snapshot manifest
+    /// has carried it since the format was written and nothing read it, while
+    /// specification 06 §6 and architecture 06 §5 both said it was surfaced.
+    /// Every snapshot this build takes reports 1, honestly; the value exists
+    /// on the contract now so that the day a snapshot provider lands, what it
+    /// records is already visible. Null from an older service, which is not
+    /// the same fact as 1 — "captured live" and "would not say" are different
+    /// answers to a person deciding whether to trust a restored database.
+    /// 1.19 carries the backup pool's ordering (ADR-0047): backup sets and
     /// destinations gain an optional priority on their descriptors — higher
     /// runs or ships first among waiting work of the same initiation, and a
     /// person still outranks any priority. Null on an upsert preserves, so a
-    /// pre-1.17 client edits nothing it cannot see. Alongside (no wire
+    /// pre-1.19 client edits nothing it cannot see. Alongside (no wire
     /// change): saving a new set queues its first backup at once, and a set
     /// gaining a destination queues that destination's seed.
-    /// 1.18 carries retire_staging (ADR-0046): a migrated direct-ship set's
+    /// 1.20 carries retire_staging (ADR-0046): a migrated direct-ship set's
     /// staging archive is deleted only by this explicit verb, and only when
     /// deletion would lose nothing the live history needs (the refusal's
     /// condition as ADR-0046 Amendment 2 states it; no wire change).
-    /// 1.19 puts the full-backup facts on the status matrix (ADR-0047 §§5–6):
+    /// 1.21 puts the full-backup facts on the status matrix (ADR-0047 §§5–6):
     /// each destination row says when its baseline completed and whether the
     /// pair is still owed its seed, so a console can render "awaiting full
     /// backup" instead of a bare "behind". Additive with defaults — a
-    /// pre-1.19 client simply does not see the fields.
-    /// 1.20 puts the counted plan on the progress stream (FR-SVC-006's
+    /// pre-1.21 client simply does not see the fields.
+    /// 1.22 puts the counted plan on the progress stream (FR-SVC-006's
     /// determinate half): a backup first counts what it will process, and
     /// every progress report then carries total_files and total_bytes — the
     /// denominator a client divides by for a percentage and a time estimate.
     /// Null until the count completes and from producers that never count
-    /// (the single-stream path, verification sweeps, pre-1.20 services), so
+    /// (the single-stream path, verification sweeps, pre-1.22 services), so
     /// additive with defaults: a client seeing null falls back to the
     /// indeterminate meter it always had. The watch frame also gains the
     /// client's session token: a watch takes its own connection with its own
     /// authentication gate, and without the session every watch on an
     /// installation with accounts was anonymous — answered with an empty
     /// stream, so no progress ever reached a signed-in console. Additive the
-    /// same way: a pre-1.20 service ignores the field, a pre-1.20 client
+    /// same way: a pre-1.22 service ignores the field, a pre-1.22 client
     /// keeps its anonymous watch.
-    /// 1.21 adds restart_service (ADR-0049): an in-process recycle of the
+    /// 1.23 adds restart_service (ADR-0049): an in-process recycle of the
     /// running service — Owner-only, local callers only, refused before
     /// setup and under --once. The acknowledgement is flushed before the
     /// teardown, and the restart signs every session out (the FR-USR-003
     /// contract, unchanged).
-    /// 1.22 is the completed-run record and its drill-down (ADR-0050,
+    /// 1.24 is the completed-run record and its drill-down (ADR-0050,
     /// FR-SVC-018), plus the carried behind-reason (ADR-0027 §4). The job
     /// row gains the run's terminal numbers — files_seen/done/reused/failed,
     /// bytes_seen/stored, total_files/total_bytes — all nullable with null
-    /// defaults, so an old service's rows and a pre-1.22 journal's rows read
+    /// defaults, so an old service's rows and a pre-1.24 journal's rows read
     /// as "not recorded", never as zeroes. list_jobs gains an optional limit
     /// (null keeps the ask-for-everything meaning; the journal outgrows a
     /// frame eventually). Two new read verbs serve the details on demand:
@@ -152,9 +179,9 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// (reason) beside the prose, and the set row gains last_completed_at —
     /// the operand the behind-demotion compares against — both additive with
     /// null defaults.
-    /// 1.23 surfaces the storage shape (ADR-0046): the set descriptor
+    /// 1.25 surfaces the storage shape (ADR-0046): the set descriptor
     /// gains direct_ship — null preserves, the semantics every additive
-    /// field on this surface shares, so a pre-1.23 client's upsert cannot
+    /// field on this surface shares, so a pre-1.25 client's upsert cannot
     /// silently convert a set between staging and direct-ship. An explicit
     /// value sets it: a direct-ship set must reference at least one
     /// local-path destination (the sink does not serve peers yet), the
@@ -162,7 +189,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// flipped on migrates at its next open in the same process — no
     /// service restart — with staging retained as a read-only seed source
     /// until retire_staging.
-    /// 1.24 puts a completion figure on each destination row: held bytes,
+    /// 1.26 puts a completion figure on each destination row: held bytes,
     /// owed bytes, and when they were counted. Counted by the sync pass,
     /// which lists both sides anyway, rather than by the status poll, which
     /// would have to list a whole replica to answer. Owed is by the
@@ -170,7 +197,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// complete when it holds its own keep-set. Additive with defaults, and
     /// the timestamp is what separates "holds none of it" from "nobody has
     /// counted" — a client without it must not draw an empty gauge.
-    /// 1.25 adds the restore drill's answer to each destination row: when a
+    /// 1.27 adds the restore drill's answer to each destination row: when a
     /// drill last brought a sampled file back out of that destination's own
     /// replica, how many files it restored, and why it could not when it
     /// could not (ADR-0054). Three states a client must keep apart — never
@@ -181,7 +208,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// sync state on purpose: a destination can hold every byte it was sent,
     /// prove possession of them, and still not restore. Additive with
     /// defaults.
-    /// 1.26 adds `reclaim_grant` to the retention command (ADR-0055 §6): a
+    /// 1.28 adds `reclaim_grant` to the retention command (ADR-0055 §6): a
     /// collection run's authority to author deletions on a write-only set —
     /// the derived reclaim sub-root, sealed end-to-end to this service's
     /// recipient key and rendered as hex, the same permitted shape under
@@ -190,8 +217,8 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// service derived the key itself). A write-only set applying without one
     /// is refused by name rather than falling back to the key it publishes
     /// with. Additive:
-    /// a pre-1.26 client's retention command still parses, and still reports.
-    /// 1.27 adds `drill_limit` to each destination row (ADR-0054 Amendment
+    /// a pre-1.28 client's retention command still parses, and still reports.
+    /// 1.29 adds `drill_limit` to each destination row (ADR-0054 Amendment
     /// 2): what a passing drill could not prove. A write-only set's replica
     /// seals its content to a key the service does not hold, so its drill
     /// proves the road back as far as the sealed content — the replica
@@ -199,9 +226,9 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// and segment records are found — and states that limit instead of
     /// reporting the passphrase's absence as damage. A limit rides beside a
     /// null failure: it is a pass, and a client must not render it as a
-    /// failure. Additive with a default: a pre-1.27 client reads such a row
+    /// failure. Additive with a default: a pre-1.29 client reads such a row
     /// as a plain pass, which overstates by exactly the limit it cannot see.
-    /// 1.28 puts the installation's public derivation parameters on
+    /// 1.30 puts the installation's public derivation parameters on
     /// describe_service — the Argon2id salt and parameters, and the sealing
     /// public key — so a client holding the passphrase can derive the
     /// restore grant a set-up installation's restore needs (ADR-0042 §5)
@@ -210,7 +237,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// value is public by construction (each archive's descriptor records the
     /// same three facts) and null until setup has run. Additive with
     /// defaults.
-    /// 1.29 withdraws the recovery kit (ADR-0060): `confirm_recovery_kit`
+    /// 1.31 withdraws the recovery kit (ADR-0060): `confirm_recovery_kit`
     /// is gone, `describe_service` no longer carries `kit_status` or
     /// `kit_confirmed_at`, and `setup_state` is two-valued again —
     /// `setup_required` or `ready`. A minor with removals, admitted under
@@ -219,7 +246,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// exactly as it read one from a pre-1.15 service, and a client that
     /// still knows `kit_required` treats it as an unfinished ceremony. A
     /// 2.0 would protect a client nobody has.
-    /// 1.30 adds adoption of a destination's archives (ADR-0061):
+    /// 1.32 adds adoption of a destination's archives (ADR-0061):
     /// `discover_archives` lists what a declared destination holds by
     /// descriptor alone — repository id, format, creation facts, the public
     /// derivation parameters and sealing key, snapshot count and highest
@@ -232,7 +259,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// the archive's own public derivation parameters and sealing key, so a
     /// client derives a restore grant per set: an adopted set keeps the salt
     /// its archive was born under, which is not the installation's. Additive.
-    /// 1.31 adds the operator's re-attribution (ADR-0053 §3):
+    /// 1.33 adds the operator's re-attribution (ADR-0053 §3):
     /// `list_replica_attributions` answers every replica stored here with
     /// its owner's fingerprint and label and whether a claim key is on
     /// record — never the key — and `reattribute_replica` points one at a
@@ -240,14 +267,14 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// key existed by a machine that died before publishing one. Owner-only
     /// and local callers only, like `restart_service`; refused by name for a
     /// replica its owner can claim with the passphrase. Additive.
-    /// 1.32 adds the verification tiers to each destination row:
+    /// 1.34 adds the verification tiers to each destination row:
     /// `verified_sealed` and `verified_digest` say how many of the proved
     /// objects a record's AEAD tag proved and how many the signed
     /// whole-blob digest proved — the latter being the proof a write-only
     /// set's data plane has, its records being sealed to a key the service
-    /// does not hold. Additive with zero defaults; a pre-1.32 client reads
+    /// does not hold. Additive with zero defaults; a pre-1.34 client reads
     /// the row as before, with the coverage it always had.
-    /// 1.33 adds `list_receipts` (ADR-0063, ADR-0064): every receipt filed
+    /// 1.35 adds `list_receipts` (ADR-0063, ADR-0064): every receipt filed
     /// under the state directory — deletion and replication, the ones this
     /// device signed as a destination and the ones it verified as a
     /// commander — answered as `receipts_listed` rows of facts newest
@@ -259,18 +286,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// role, any caller scope: it is an audit listing of what a peer already
     /// said under its own signature. Additive.
     /// <para>
-    /// 1.34 adds `verified_chunk` to each destination row (ADR-0065): of the
+    /// 1.36 adds `verified_chunk` to each destination row (ADR-0065): of the
     /// objects the last passed verification proved, how many were proved by
     /// asking the destination for one leaf of the blob's Merkle commitment
     /// and its authentication path, checked against the root the writer
     /// signed into the index. It is a <b>sampled</b> proof of the blob and
     /// is counted apart from `verified_digest`, which reads every byte, so
     /// that the cheaper tier cannot be rendered as the stronger one.
-    /// Additive with a zero default; a pre-1.34 client reads the row as it
-    /// did and a pre-1.34 service answers zero, which is true of it.
+    /// Additive with a zero default; a pre-1.36 client reads the row as it
+    /// did and a pre-1.36 service answers zero, which is true of it.
     /// </para>
     /// <para>
-    /// 1.35 adds `total` to `receipts_listed`: how many receipts are on file
+    /// 1.37 adds `total` to `receipts_listed`: how many receipts are on file
     /// for the kind and repository asked for, counted from names rather than
     /// from what was read, so `limit` can bound the reading and a client can
     /// still say what share of the pile it is showing. Peer receipts are now
@@ -279,12 +306,12 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// precedes the set filter, which can only be answered by reading a
     /// receipt, so a listing narrowed by set may return fewer rows than its
     /// limit while the total is larger than both. Additive with a zero
-    /// default; a pre-1.35 client ignores it and a pre-1.35 service answers
+    /// default; a pre-1.37 client ignores it and a pre-1.37 service answers
     /// zero, which reads as "this service does not count", not as "nothing
     /// is on file".
     /// </para>
     /// <para>
-    /// 1.36 adds `upgrade_set_format` (ADR-0066): one set's repository is
+    /// 1.38 adds `upgrade_set_format` (ADR-0066): one set's repository is
     /// moved to the latest format this build writes, by appending a signed
     /// format-upgrade record rather than by rewriting the descriptor — which
     /// no destination would ever accept, since each seeds a descriptor only
@@ -299,7 +326,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// each archive was **created** at.
     /// </para>
     /// <para>
-    /// 1.37 puts the background window's state on `get_status` (ADR-0069):
+    /// 1.39 puts the background window's state on `get_status` (ADR-0069):
     /// the configured text, whether background work may start right now, and
     /// when that next changes. The window is the first of NFR-PERF-013's four
     /// named limits to exist, and it can hold every backup on an installation
@@ -307,7 +334,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// service's log, which is not where "why did nothing run last night" gets
     /// asked. One nullable descriptor rather than three loose fields, so a
     /// client tests "is there a window" once. Null from a service with no
-    /// window configured AND from one older than 1.37 — deliberately the same
+    /// window configured AND from one older than 1.39 — deliberately the same
     /// answer, because a client does nothing different in the two cases and an
     /// absent window has always meant always open. Reporting only: the window
     /// is edited in the configuration file, as `max_concurrent_backups` is,
@@ -317,7 +344,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// cannot catch the two disagreeing across a boundary.
     /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 37);
+    public static ContractVersion Current { get; } = new(1, 39);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

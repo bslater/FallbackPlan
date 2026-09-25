@@ -21,6 +21,30 @@ if (params.get("token")) {
 }
 const token = sessionStorage.getItem("fbp-token");
 
+/* ---------------------------------------------------------------- trace */
+
+// Which build of this page is running. app.js is embedded in the console
+// binary and served with no version marker, so a misbehaving page used to
+// be unable to say where it came from — and a stale binary serving an old
+// page is exactly the failure this line exists to catch. Bump it when a
+// diagnosis needs to tell two builds apart.
+const CONSOLE_ASSET_VERSION = "2026-08-24.1";
+
+// Browser-local tracing. Lines go to console.debug — visible once devtools
+// shows Verbose — and to a bounded ring that fbpTraceDump() renders for a
+// bug report. Nothing is relayed anywhere: the console's relay surface is
+// deliberately narrow, and a trace that left the browser would be a log
+// channel this product does not have. Call sites must never pass secrets:
+// state objects go through a redacting projector (setupView), never raw.
+const TRACE_RING = [];
+function trace(where, detail) {
+  const line = `${new Date().toISOString()} ${where} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`;
+  TRACE_RING.push(line);
+  if (TRACE_RING.length > 200) TRACE_RING.shift();
+  console.debug("[fbp]", line);
+}
+globalThis.fbpTraceDump = () => TRACE_RING.join("\n");
+
 // The SERVICE session, which is a different thing from the console's bearer
 // token above. The bearer token says this browser may talk to this console;
 // this says which person is acting on the service behind it. Held per browser
@@ -241,13 +265,15 @@ async function api(command, { signal } = {}) {
     throw new ConsoleError("unreachable", "The console process stopped answering.");
   }
 
-  if (response.status === 401) { gateEl.hidden = false; appEl.hidden = true; throw new ConsoleError("token", "Token refused."); }
+  if (response.status === 401) { trace("api", `${command?.command ?? "?"} — 401, token refused`); gateEl.hidden = false; appEl.hidden = true; throw new ConsoleError("token", "Token refused."); }
   if (response.status === 503) {
+    trace("api", `${command?.command ?? "?"} — 503, service not listening`);
     setConnected(false);
     const body = await safeJson(response);
     throw new ConsoleError("unreachable", body?.message ?? "The service is not listening.");
   }
   if (!response.ok) {
+    trace("api", `${command?.command ?? "?"} — HTTP ${response.status}`);
     const body = await safeJson(response);
     throw new ConsoleError("transport", body?.message ?? `The console answered ${response.status}.`);
   }
@@ -394,6 +420,9 @@ async function refreshDesc() {
     // a service still saying it has an unfinished ceremony, and is treated so.
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
+    if ((result.setupState ?? null) !== S.setupState) {
+      trace("refreshDesc", { setupState: result.setupState ?? null, was: S.setupState, rerenderGate: changed });
+    }
     S.setupState = result.setupState ?? null;
     S.signedInUser = result.signedInUser ?? null;
     S.signedInRole = result.signedInRole ?? null;
@@ -832,6 +861,22 @@ function renderSetCard(set) {
 
 /* ----- snapshots ----- */
 
+// How the capture was taken (specification 06 §6). The specification's own
+// words, not a friendlier paraphrase: "best-effort live capture" and
+// "application-consistent" are materially different promises, and a person
+// deciding whether to trust a restored database is exactly who this is for.
+// A service too old to report it shows nothing rather than claiming "live" on
+// its behalf — those are different answers.
+function consistencyName(method) {
+  switch (method) {
+    case 1: return "live capture";
+    case 2: return "VSS";
+    case 3: return "filesystem snapshot";
+    case 4: return "application-quiesced";
+    default: return `unknown (${method})`;
+  }
+}
+
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
   const snapshots = [...S.snapshots].reverse()
@@ -857,7 +902,8 @@ function renderSnapshots() {
               <td><b>${esc(fmtWhen(s.capturedAt))}</b><div class="detail mono">${esc(s.snapshotId.slice(0, 16))}…</div></td>
               <td>${esc(setName(s.backupSetId))}</td>
               <td class="num">${fmtCount(s.files)}</td>
-              <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}</td>
+              <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}
+                  ${s.consistencyMethod == null ? "" : `<div class="detail">${esc(consistencyName(s.consistencyMethod))}</div>`}</td>
               <td>${(s.destinations ?? []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ") || "<span class='detail'>—</span>"}</td>
               <td>
                 <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}">Browse</button>
@@ -869,9 +915,17 @@ function renderSnapshots() {
 
 /* ----- jobs ----- */
 
+// Jobs the user has commanded away, by id — the card shows "Cancelling…"
+// and disarms its button until the journal settles the job. Client-side
+// courtesy state only; the journal stays the authority.
+const CANCELLING = new Set();
+
 function renderJobs() {
   const el = document.getElementById("view-jobs");
   const live = S.jobs.filter(j => !SETTLED.has(j.state));
+  for (const id of CANCELLING) {
+    if (!live.some(j => j.id === id)) CANCELLING.delete(id);
+  }
   const settled = [...S.jobs.filter(j => SETTLED.has(j.state))].reverse().slice(0, 50);
 
   el.innerHTML = `
@@ -958,7 +1012,8 @@ function renderLiveJob(job) {
         <span><b>${fmtBytes(progress.bytesStored)}</b> written of <b>${fmtBytes(progress.bytesSeen)}</b> read</span>
       </div>` : `<div class="job-stats"><span>Waiting for the first progress event…</span></div>`}
     <div class="actions-row">
-      <button type="button" class="btn small" data-action="cancel-job" data-job="${esc(job.id)}">✕ Cancel</button>
+      <button type="button" class="btn small" data-action="cancel-job" data-job="${esc(job.id)}"
+        ${cancelling ? "disabled" : ""}>${cancelling ? "Cancelling…" : "✕ Cancel"}</button>
     </div>
   </div>`;
 }
@@ -1657,10 +1712,19 @@ function renderSetupGate() {
         account: { user: "", password: "", confirm: "", check: null, hash: null } };
   appEl.hidden = true;
   host.hidden = false;
+  trace("renderSetupGate", setupView());
   setupRender();
 }
 
 function setupRender() {
+  trace("setupRender", setupView());
+  // While the ceremony owns the screen, no modal may sit over it — an open
+  // dialog makes the whole page inert. Nothing opens one on purpose any
+  // more; if a path ever does, heal and say so rather than freeze.
+  if (dialog.open) {
+    trace("setupRender", "a modal was open over the ceremony — closing it");
+    closeDialog();
+  }
   const host = document.getElementById("setup");
   const body = [setupStep1, setupStep2, setupStep3][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
@@ -1668,6 +1732,11 @@ function setupRender() {
       `<span class="rst-step ${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
     ${body}
   </div>`;
+  // The strength bar's width cannot be an inline style attribute — the CSP
+  // (default-src 'self', no unsafe-inline) blocks those, which is how the
+  // meter came to render with no bar at all. A CSSOM assignment is permitted.
+  const bar = host.querySelector("[data-meter-width]");
+  if (bar) bar.style.width = `${bar.dataset.meterWidth}%`;
   if (U.step === 2) {
     const field = document.getElementById("setup-pass");
     field?.focus();
@@ -1883,6 +1952,7 @@ function setupSchedulePasswordCheck() {
 // policy — see WebConsoleHost.AssessPassphraseAsync for why that is worth a
 // round trip.
 let setupStrengthTimer = null;
+let setupStrengthWarned = false;
 function setupScheduleStrength() {
   clearTimeout(setupStrengthTimer);
   setupStrengthTimer = setTimeout(async () => {
@@ -1894,7 +1964,10 @@ function setupScheduleStrength() {
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
         body: JSON.stringify({ candidate }),
       });
-      if (!response.ok || !U) return;
+      if (!response.ok || !U) {
+        trace("setupScheduleStrength", `no meter update — status ${response.status}, ceremony ${U ? "live" : "gone"}`);
+        return;
+      }
       U.strength = await response.json();
       // Patched in place, never a full step re-render: the answer arrives
       // while the operator is typing, and rebuilding the step would replace
@@ -1902,6 +1975,13 @@ function setupScheduleStrength() {
       setupApplyStrength();
     } catch {
       // The meter is a courtesy; the submit is where the policy is enforced.
+      // But a meter that never answers leaves step 2's Continue disabled with
+      // nothing on screen saying why — so this failure gets a voice, once.
+      trace("setupScheduleStrength", "strength probe failed — Continue stays disabled until it answers");
+      if (!setupStrengthWarned) {
+        setupStrengthWarned = true;
+        toast("warn", "The passphrase meter could not be reached; the Continue button stays off until it answers.");
+      }
     }
   }, 250);
 }
@@ -1926,6 +2006,7 @@ const setupActions = {
   },
 
   async "setup-finish"() {
+    trace("setup-finish", "posting /api/setup");
     U.busy = true;
     setupRender();
     let body;
@@ -1939,12 +2020,17 @@ const setupActions = {
       });
       body = await response.json();
     } catch {
+      trace("setup-finish", "fetch failed — console unreachable");
       U.busy = false;
       toast("bad", "The console process stopped answering.");
       setupRender();
       return;
     }
 
+    trace("setup-finish", {
+      outcome: body?.outcome ?? null, hasKit: !!body?.kit,
+      kitMachineLength: body?.kit?.machine?.length ?? 0, kitTextLength: body?.kit?.text?.length ?? 0,
+    });
     U.busy = false;
     if (body?.outcome !== "provisioned") {
       toast("warn", body?.detail ?? "Setup did not complete.");
@@ -2038,6 +2124,7 @@ const setupActions = {
       // below handles a service that would not answer.
     }
 
+    trace("setup-kit-done", { result: result?.result ?? null });
     U.busy = false;
     const lines = U.setupLines;
     U = null;
@@ -2116,9 +2203,18 @@ const actions = {
 
   async "cancel-job"(el) {
     await withBusy(el, async () => {
+      trace("cancel-job", { jobId: el.dataset.job });
       const result = await run({ command: "cancel_job", jobId: el.dataset.job }, { errToast: "Cancel refused" });
-      if (result) toast("ok", "Cancellation commanded — the job will record Cancelled.");
-      refreshJobs();
+      trace("cancel-job", { jobId: el.dataset.job, acknowledged: !!result });
+      if (result) {
+        // The card carries the state from here: the button disarms and the
+        // badge says Cancelling… until the journal settles the job — a
+        // toast alone was missable, and a still-identical card after a
+        // successful command read as a click that did nothing.
+        CANCELLING.add(el.dataset.job);
+        toast("ok", "Cancellation commanded — the job will record Cancelled.");
+      }
+      await refreshJobs();
     });
   },
 
@@ -4753,6 +4849,7 @@ function toast(kind, text) {
 /* ---------------------------------------------------------------- wiring */
 
 function boot() {
+  trace("boot", { assetVersion: CONSOLE_ASSET_VERSION, hash: location.hash, hasToken: !!token });
   // Theme: system by default; the toggle pins an explicit choice.
   const savedTheme = localStorage.getItem("fbp-theme");
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
@@ -4772,7 +4869,13 @@ function boot() {
     }
     const el = event.target.closest("[data-action]");
     if (!el) return;
-    if (U && el.dataset.action.startsWith("setup-")) { setupActions[el.dataset.action]?.(el); return; }
+    if (el.dataset.action.startsWith("setup-")) {
+      // A setup control with no ceremony state behind it is the silent-inert
+      // failure this page has been stranded on before — it gets a trace line.
+      if (U) setupActions[el.dataset.action]?.(el);
+      else trace("click", `setup action ${el.dataset.action} ignored — no ceremony state`);
+      return;
+    }
     actions[el.dataset.action]?.(el);
   });
 
@@ -4780,8 +4883,9 @@ function boot() {
     // First-run setup owns the page when it is showing, so its fields are
     // matched before anything else looks at the event.
     const setupField = event.target.closest("[data-action-input^='setup-']");
-    if (setupField && U) {
-      setupActions[setupField.dataset.actionInput]?.(setupField);
+    if (setupField) {
+      if (U) setupActions[setupField.dataset.actionInput]?.(setupField);
+      else trace("input", `setup input ${setupField.dataset.actionInput} ignored — no ceremony state`);
       return;
     }
 
@@ -4792,8 +4896,9 @@ function boot() {
   });
 
   document.addEventListener("change", event => {
-    if (U && event.target.matches("[data-action-change^='setup-']")) {
-      setupActions[event.target.dataset.actionChange]?.(event.target);
+    if (event.target.matches("[data-action-change^='setup-']")) {
+      if (U) setupActions[event.target.dataset.actionChange]?.(event.target);
+      else trace("change", `setup control ${event.target.dataset.actionChange} ignored — no ceremony state`);
       return;
     }
 

@@ -50,7 +50,7 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-MAN-001 | [02 §6](../architecture/02-repository-format.md#6-manifests) | — | `Repository.Tests/CatalogueRebuildTests` | 0 |
 | FR-MAN-002 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | [0010](../adr/0010-local-store-separation.md) | `Repository.Tests/CatalogueTests`, `Repository.Tests/StaleCatalogueTests` *(the cache read adversarially: ahead of the store must not dangle, behind is cost only)* | 0 |
 | FR-MAN-003 | [02 §6.1](../architecture/02-repository-format.md#61-immutable-metadata-objects) | [0007](../adr/0007-logical-object-identifiers-in-manifests.md) | `Repository.Tests/ManifestCodecTests`, `Repository.Tests/ManifestRoundTripTests`, `Repository.Tests/MetadataOnlyChangeTests` | 0 |
-| FR-MAN-004 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.Tests/SnapshotPublicationTests` | 1 |
+| FR-MAN-004 | [02 §6.3](../architecture/02-repository-format.md#63-sharding-and-encoding) | [0003](../adr/0003-canonical-metadata-encoding.md) | `Repository.Tests/SnapshotPublicationTests` *(the graph still publishes and restores when the source will not hold still)* | 1 |
 | FR-MAN-005 | [02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild) | — | `Repository.Tests/CatalogueTests` | 1 |
 | FR-MAN-006 | [03 §5](../architecture/03-crypto.md#5-deduplication-trust-domains) | [0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md) | `Repository.Tests/IncrementalBackupTests`, `Repository.Tests/SecondBackupReuseTests` | 0 |
 | FR-MAN-007 | [02 §5.2](../architecture/02-repository-format.md#52-layout) | [0052](../adr/0052-relocatable-records-format-v3.md) | `Repository.Tests/BlobWriterAndReaderTests`, `Repository.Tests/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` *(the footer locates every record from the blob and keys alone at format 3 too, on frozen bytes)* | 0 |
@@ -108,6 +108,15 @@ A test may also need to **name a requirement in order to disclaim it**, which ha
 | FR-KIT-005 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-credential) | [0060](../adr/0060-the-passphrase-is-the-recovery-credential.md) | *(unmet; withdrawn by ADR-0060 — there is no kit status to surface)* | 1 |
 | FR-KIT-006 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-credential) | [0060](../adr/0060-the-passphrase-is-the-recovery-credential.md) | *(unmet; withdrawn by ADR-0060 — re-homed as FR-DRL-001)* | 1 |
 | FR-KIT-007 | [08 §4](../architecture/08-restore-and-recovery.md#4-recovery-credential) | [0060](../adr/0060-the-passphrase-is-the-recovery-credential.md) | *(unmet; withdrawn by ADR-0060 — re-homed as FR-DRL-002)* | 1 |
+
+### Disaster recovery
+
+Every cell here is an honest untested marker rather than a class name. The ceremony these requirements describe is specified and not yet built, and the drill that proves them — destroying the state directory *and* the archives, then recovering over the wire — is the phase-2 work [ADR-0070](../adr/0070-replica-claim-after-total-loss.md) sequences. Naming a test now would be the exact fiction this column was rebuilt to stop.
+
+| ID | Arch | ADR | Test | Phase |
+|----|------|-----|------|-------|
+| FR-DR-005 | [08 §6](../architecture/08-restore-and-recovery.md#6-what-must-survive-a-clean-machine) | [0053](../adr/0053-peer-claim-and-configuration-recovery.md), [0055](../adr/0055-reclaim-authority.md) | *(unbuilt; nothing in the product refuses a claimant's retention instruction pending the destination operator's acknowledgement, so there is no behaviour to test yet. The refusals that do exist are the reclaim-signature ones of ADR-0055 and ADR-0059, which answer who signed rather than whether the operator has acknowledged who is now asking. The work would be carried by the retention gate the replication responder applies and a per-attribution acknowledgement in the replica-owner store)* | 2 |
+| FR-DR-009 | [08 §6](../architecture/08-restore-and-recovery.md#6-what-must-survive-a-clean-machine) | [0061](../adr/0061-adopt-a-destinations-archives.md) | *(unbuilt; a recovered configuration is reported and then acted on rather than held for confirmation, and the contract's own result documentation says so in as many words, "reported, not refused". The work would be carried by a confirmation step in the adoption ceremony the service command handler serves, and by the console's wizard)* | 2 |
 
 ### Write-only repositories
 

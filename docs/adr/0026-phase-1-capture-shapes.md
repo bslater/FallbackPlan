@@ -55,6 +55,48 @@ string — the convention import provenance already established
 Unknown diagnostic keys are permitted (readers treat diagnostics as
 informational text); *writers* in this repository emit only documented keys.
 
+#### Amendment (2026-08): what "no complete read" means
+
+The row above ends "A file with **no** complete read is instead an
+error-manifest entry, reason 4", and that clause was ambiguous enough to be
+implemented as nothing at all: reason 4 was never produced by any code path
+until this amendment. It has two readings, and the wrong one is dangerous
+enough to be worth writing down.
+
+**A complete read is one that ran from the start of the file to the source's
+end without an I/O fault.** A revalidation that disagrees afterwards does not
+make the read incomplete — it makes the *content* stale, which is precisely
+what `captured-inconsistent: <attempts>` is for.
+
+The rejected reading is "a read revalidation accepted". Under it, exhausting
+the attempt bound would itself be reason 4 — and a log being appended to never
+revalidates, so every backup of every machine with an active log would
+reference an error manifest. `capture_status` would be 2 for ever, retention
+would find no complete snapshot to fill a daily bucket or the min-generations
+floor (07 §2), and NFR-OPS-002's `degraded` state would mean nothing because it
+would always be on. That reading also makes `captured-inconsistent:
+<attempts>` unreachable, which is the internal evidence against it: the
+diagnostic names an attempt count, so it exists for the exhausted case.
+
+Three consequences follow.
+
+**Reason 4 requires evidence of change as well as an incomplete read.** A read
+that faulted against an object revalidation says is unchanged is a medium
+fault — reason 3 — because a failing disk and a file being rewritten under the
+reader raise the same exception, and only the probe separates them. A file
+that vanished before the open keeps reason 2 whether the deletion lands just
+before or just after it; a race window that changes the reported *reason* is
+nondeterministic reporting an operator cannot act on.
+
+**A revalidation that cannot observe the object at all is the
+`<attempts>` case, not a clean capture.** The bytes are complete; what nobody
+can state any more is what they are the content of.
+
+**An attempt that faulted is not retried.** The read budget is for a file that
+*changed*, not for one that will not read: a failed attempt has already claimed
+segment object identifiers that its records may never have reached, and a
+second attempt would emit references to records that do not exist.
+
 ### 3 `capture_status` triggers
 
 `capture_status = 2` (partial) **iff the snapshot references a non-empty
@@ -203,3 +245,4 @@ only cheap because the format is pre-freeze.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Ten shapes pinned ahead of the first scanner-written manifest (phase-1 wave G1) |
+| 2026-08 | Accepted | Decision 2 amended after a coverage pass found reason 4 specified and unreachable, and a file deleted mid-read recorded as clean. "No complete read" now says which reading it means and why the other one ends with a machine that backs up nightly and keeps nothing. Both are fixed and tested; `capture_status` still means exactly what decision 3 says, so no consumer of it moves |

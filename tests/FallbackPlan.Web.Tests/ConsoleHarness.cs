@@ -27,7 +27,7 @@ internal sealed class ConsoleHarness : IAsyncDisposable
 
     public HttpClient Http { get; }
 
-    public static async Task<ConsoleHarness> StartAsync()
+    public static async Task<ConsoleHarness> StartAsync(Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         var state = Path.Combine(Path.GetTempPath(), "fbp-web", Guid.NewGuid().ToString("n")[..12]);
         Directory.CreateDirectory(state);
@@ -35,7 +35,7 @@ internal sealed class ConsoleHarness : IAsyncDisposable
         var auth = ConsoleAuth.CreateWithRandomToken();
         var clients = new FakeClientFactory();
         var console = await WebConsoleHost.StartAsync(
-            new WebConsoleOptions { StateDirectory = state, Port = 0 }, clients, auth);
+            new WebConsoleOptions { StateDirectory = state, Port = 0 }, clients, auth, logger);
 
         return new ConsoleHarness(state, console, auth, clients);
     }

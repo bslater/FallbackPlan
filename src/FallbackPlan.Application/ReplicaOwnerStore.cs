@@ -1,7 +1,37 @@
 using Bodu;
+using FallbackPlan.Domain;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace FallbackPlan.Application;
+
+/// <summary>
+/// What a destination knows about one replica it holds: who it belongs to, and
+/// the credential by which someone could prove it is theirs again.
+/// </summary>
+/// <param name="Fingerprint">The owning peer's fingerprint.</param>
+/// <param name="ClaimTokenHex">
+/// The token this destination minted for the replica (peer-protocol 07 §5.3),
+/// lower-hex. Not a secret — its job is to be <em>unique to this
+/// destination</em>, so a proof produced here is inert anywhere else. Null
+/// until the replica is first accepted under the claim feature.
+/// </param>
+/// <param name="ClaimPublicKeyHex">
+/// The public half the source registered against that token, lower-hex. Null
+/// for a replica stored before the ceremony, or by a source that does not
+/// implement it — which is why an unclaimable replica says so by name rather
+/// than failing as a wrong passphrase.
+/// </param>
+/// <param name="ClaimAwaitingAcknowledgement">
+/// Whether a claim moved this attribution and the destination's operator has
+/// not yet acknowledged it. While true, retention instructions from the
+/// claiming identity are refused, deleting nothing (peer-protocol 06 §3).
+/// </param>
+public sealed record ReplicaAttribution(
+    [property: JsonPropertyName("fingerprint")] string Fingerprint,
+    [property: JsonPropertyName("claim_token")] string? ClaimTokenHex = null,
+    [property: JsonPropertyName("claim_public_key")] string? ClaimPublicKeyHex = null,
+    [property: JsonPropertyName("claim_awaiting_acknowledgement")] bool ClaimAwaitingAcknowledgement = false);
 
 /// <summary>
 /// Which peer each replica repository belongs to: <c>replica-owners.json</c>
@@ -11,12 +41,22 @@ namespace FallbackPlan.Application;
 /// computable number across sessions and restarts.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Unlike the sync ledger this is <b>not</b> sacrificial: an attribution lost
 /// is a quota that can no longer be enforced and, later, a retention command
 /// that cannot be validated against its owner. It is still recoverable — the
 /// owner is whoever next offers the repository over an authenticated session —
 /// so a corrupt file is set aside rather than fatal, and the store refills as
 /// peers return.
+/// </para>
+/// <para>
+/// It also carries the claim credential (ADR-0070): the token this destination
+/// minted and the public key the source registered against it. Losing those to
+/// a corrupt file costs a re-registration on the next session rather than an
+/// unclaimable replica, because the source can always register again — but a
+/// destination that loses them while the source is gone forever has lost that
+/// household's recovery, which is why the file is written atomically.
+/// </para>
 /// </remarks>
 /// <param name="Fingerprint">The owning peer's fingerprint.</param>
 /// <param name="ReclaimPublicKey">
@@ -107,6 +147,43 @@ public sealed class ReplicaOwnerStore
             }
         }
     }
+
+    /// <summary>
+    /// Reads either shape this file has had. Before the claim ceremony each
+    /// value was the owning fingerprint as a bare string; it is now an object.
+    /// </summary>
+    /// <remarks>
+    /// The older shape is <b>migrated, never discarded</b>. Deserialising it as
+    /// the newer one would throw, and the catch above would move a perfectly
+    /// good ledger aside as corrupt — silently unattributing every replica the
+    /// destination holds, which is the quota gone and every retention command
+    /// unvalidatable until each peer happened to return. A format change is not
+    /// damage and must not be mistaken for it.
+    /// </remarks>
+    private static Dictionary<string, ReplicaAttribution> Read(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("The attribution ledger is not a JSON object.");
+        }
+
+        var owners = Empty();
+        foreach (var entry in document.RootElement.EnumerateObject())
+        {
+            owners[entry.Name] = entry.Value.ValueKind switch
+            {
+                JsonValueKind.String => new ReplicaAttribution(entry.Value.GetString()!),
+                JsonValueKind.Object => entry.Value.Deserialize<ReplicaAttribution>(SerializerOptions)
+                    ?? throw new JsonException("An attribution entry is null."),
+                _ => throw new JsonException("An attribution entry is neither a fingerprint nor a record."),
+            };
+        }
+
+        return owners;
+    }
+
+    private static Dictionary<string, ReplicaAttribution> Empty() => new(StringComparer.Ordinal);
 
     /// <summary>
     /// Attributes a repository to a peer, or confirms an existing attribution.

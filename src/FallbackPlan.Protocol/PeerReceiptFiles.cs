@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using FallbackPlan.Application;
+using FallbackPlan.Domain;
 
 namespace FallbackPlan.Protocol;
 

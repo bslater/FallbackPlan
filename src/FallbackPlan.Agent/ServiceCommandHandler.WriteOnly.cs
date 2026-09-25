@@ -2,7 +2,6 @@ using FallbackPlan.Api;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
-using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
@@ -67,7 +66,7 @@ public sealed partial class ServiceCommandHandler
             var path = set.DirectShip ? runtime.SetMetadataPath(set.Id) : runtime.ArchivePath(set.Id);
             var exists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
             Directory.CreateDirectory(path);
-            var store = new LocalFileSystemObjectStore(path);
+            var store = StoreComposition.OpenLocal(path);
             var lines = new List<string>();
 
             if (exists)

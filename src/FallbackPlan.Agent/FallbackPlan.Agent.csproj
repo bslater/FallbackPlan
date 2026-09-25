@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- The 04 §5.1 kill sweep runs through the ship-sink's fault-injection
        seams (ServiceOptions.ReplicaStoreDecorator / AvailableBytesProbe),
@@ -26,6 +26,7 @@
     <ProjectReference Include="..\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
     <ProjectReference Include="..\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
+    <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
     <ProjectReference Include="..\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
   </ItemGroup>

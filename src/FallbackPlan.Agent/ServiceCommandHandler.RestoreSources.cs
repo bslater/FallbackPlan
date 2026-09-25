@@ -3,7 +3,6 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
-using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 
 namespace FallbackPlan.Agent;
@@ -177,7 +176,9 @@ public sealed partial class ServiceCommandHandler
                     Convert.ToHexStringLower(row.BackupSetId.Span),
                     row.CapturedAt,
                     row.CaptureStatus,
-                    catalogue.CountFiles(row.SnapshotId.Span)));
+                    catalogue.CountFiles(row.SnapshotId.Span),
+                    Destinations: null,
+                    ConsistencyMethod: row.ConsistencyMethod));
             }
         }
 
@@ -230,7 +231,7 @@ public sealed partial class ServiceCommandHandler
                 continue;
             }
 
-            var store = new LocalFileSystemObjectStore(replicaRoot);
+            var store = StoreComposition.OpenLocal(replicaRoot);
             OpenedRepository repository;
             try
             {

@@ -6,8 +6,8 @@ namespace FallbackPlan.Api.Tests;
 /// <summary>
 /// NFR-SEC-009: key material never crosses the command surface, in either
 /// direction, under any setting. As amended by ADR-0042, exactly one shape
-/// is carved out: hex-rendered sealed envelopes on the two named write-only
-/// ceremonies — asserted here as precisely as the bans.
+/// is carved out: hex-rendered sealed envelopes on the named ceremonies —
+/// asserted here as precisely as the bans.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -150,9 +150,18 @@ public sealed class KeyMaterialConfinementTests
         // NFR-SEC-009 [amended] (ADR-0042 §4): the ONE permitted shape of key
         // material in transit is a sealed envelope — hex-rendered, end-to-end
         // encrypted to the service's recipient key, opaque to every relay —
-        // and only on the two ceremonies that need one. This test is the
+        // and only on the ceremonies that need one. This test is the
         // carve-out's fence: the fields must stay string-typed (never raw
         // bytes), and must not quietly spread to other verbs.
+        //
+        // claim_replicas is the fourth, added by decision (ADR-0070). It is
+        // the same shape and the same reason as the three above: the Argon2id
+        // root is derived where the passphrase was typed, and what crosses is
+        // an envelope only this service can open. It could not be avoided by
+        // deriving service-side, because a machine rebuilt from bare metal has
+        // no repository to read the KDF salt from — the recovery kit carries
+        // it, and the kit is on the client. Sealing it is what keeps the
+        // passphrase itself off the surface.
         var envelopeMembers = ContractTypes()
             .SelectMany(type => type
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)

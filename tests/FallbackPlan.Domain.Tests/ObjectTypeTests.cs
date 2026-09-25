@@ -23,6 +23,7 @@ public sealed class ObjectTypeTests
     [DataRow((byte)0x0D, ObjectType.Lease)]
     [DataRow((byte)0x0E, ObjectType.Tombstone)]
     [DataRow((byte)0x0F, ObjectType.AuditPeriodRecord)]
+    [DataRow((byte)0x10, ObjectType.SetConfiguration)]
     public void TryFromValue_WhenTheValueIsAssigned_ShouldResolveToItsType(byte value, ObjectType expected)
     {
         Assert.IsTrue(ObjectTypes.IsValid(value));
@@ -33,7 +34,7 @@ public sealed class ObjectTypeTests
     [TestMethod]
     [DataRow((byte)0x00)]
     [DataRow((byte)0x07)] // reserved: store-blob-key domain separator, never a record type
-    [DataRow((byte)0x10)]
+    [DataRow((byte)0x11)] // the first value above the assigned range
     [DataRow((byte)0xFF)]
     public void TryFromValue_WhenTheValueIsUnassignedOrReserved_ShouldReturnFalse(byte value)
     {

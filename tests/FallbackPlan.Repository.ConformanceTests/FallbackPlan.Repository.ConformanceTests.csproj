@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Repository\FallbackPlan.Repository.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <!-- From nuget.org, pinned centrally (ADR-0021). -->
     <PackageReference Include="Bodu.Security.Cryptography" />
   </ItemGroup>

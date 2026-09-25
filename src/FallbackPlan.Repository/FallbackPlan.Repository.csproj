@@ -10,7 +10,6 @@
     <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
     <ProjectReference Include="..\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
-    <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

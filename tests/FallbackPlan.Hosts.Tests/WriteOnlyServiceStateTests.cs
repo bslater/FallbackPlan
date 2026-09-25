@@ -1,6 +1,6 @@
 using FallbackPlan.Agent;
-using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;

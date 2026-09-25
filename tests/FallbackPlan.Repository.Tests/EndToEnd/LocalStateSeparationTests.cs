@@ -1,4 +1,5 @@
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;

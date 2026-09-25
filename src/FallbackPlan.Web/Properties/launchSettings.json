@@ -12,7 +12,7 @@
       "commandLineArgs": "--port 5099",
       "launchBrowser": false
     },
-    "console (debug logging)": {
+    "console (quiet — shipped default)": {
       "commandName": "Project",
       "commandLineArgs": "--port 5099 --log-level debug",
       "launchBrowser": false

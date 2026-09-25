@@ -6,13 +6,14 @@ using KdfParameters = FallbackPlan.Domain.Configuration.Argon2Parameters;
 namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
-/// The two sealed envelopes a write-only repository's ceremonies exchange
-/// (ADR-0042 §4): <b>provisioning</b> carries the write bundle plus the KDF
-/// salt and parameters the descriptor must record, and a <b>restore grant</b>
-/// carries the derived scalar alone. Each is sealed end-to-end to the
-/// service's published recipient key with its own associated-data purpose,
-/// so one can never be replayed as the other — and the passphrase itself is
-/// in neither.
+/// The sealed envelopes a service's ceremonies exchange (ADR-0042 §4,
+/// ADR-0070): <b>provisioning</b> carries the write bundle plus the KDF salt
+/// and parameters the descriptor must record, a <b>restore grant</b> carries
+/// the derived scalar alone, and a <b>claim root</b> carries the Argon2id
+/// output a rebuilt machine proves a replica with. Each is sealed end-to-end
+/// to the service's published recipient key with its own associated-data
+/// purpose, so none can be replayed as another — and the passphrase itself is
+/// in none of them.
 /// </summary>
 public static class WriteOnlyProvisioning
 {

@@ -38,7 +38,7 @@ All eight documents are now written; the table says which are also implemented. 
 | 04 | [Verification](04-verification.md) | The keyed random-range challenge and its sampling policy | Written; implemented |
 | 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
 | 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
-| 07 | [Retrieval](07-retrieval.md) | An owner reading its own replica back: listing, ranged reads, the owner inventory | Written; implemented |
+| 07 | [Retrieval](07-retrieval.md) | An owner reading its own replica back: listing, ranged reads, the owner inventory, and the passphrase-proved **claim** that restores an owner's access after total loss (§5) | Written; implemented except §5's claim |
 
 Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, in `FallbackPlan.Protocol`: the keypair and its durable device key, the pairing ceremony (key agreement, transcript, short authentication string, confirmation signature and the four messages that carry them), grants (01 §3) and terms (01 §4), and the whole session layer of 02 — the four-state machine, channel-bound authentication, framing with its pre-allocation bounds, version selection and feature negotiation, and the coarse refusal codes. `FallbackPlan.Protocol.Tests` exercises all of it over loopback TCP, including the man-in-the-middle relay that channel binding defeats; `FallbackPlan.Hosts.Tests` performs the pairing ceremony between two real operating-system processes.
 

@@ -1,7 +1,7 @@
 using Bodu;
+using FallbackPlan.Domain;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using FallbackPlan.Application;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Agent;

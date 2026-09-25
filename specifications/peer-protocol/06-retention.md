@@ -39,6 +39,10 @@ A spoke whose attribution carries no key yet cannot manufacture a verdict from a
 
 The floor check needs no decryption: a spoke counts the snapshot objects it holds under the repository's `snapshots/` prefix, subtracts the named deletions, and compares. The floor is the one safeguard that holds when the hub is fully compromised — a ransomed hub cannot instruct history below it ([architecture 07 §5](../../docs/architecture/07-retention-and-gc.md#5-destructive-change-safeguards)) — which is why the refusal is loud and total rather than a partial, best-effort delete.
 
+**The claim interlock is deliberately asymmetric with reading, and the asymmetry is the point.** A claimed replica is readable the instant the proof verifies ([07 §5.9](07-retrieval.md#59-what-a-claim-does-and-does-not-carry)), because a disaster is exactly when the far household is least reachable and a recovery that waits on a sleeping friend is a recovery that fails. Deleting waits, because the two acts have different blast radii. A passphrase that has fallen into the wrong hands lets its holder *read* what that passphrase already decrypts wherever they find it — gating that on a human buys nothing and costs real recoveries — but it must not let them quietly destroy the copy that outlived the machine they took it from.
+
+The floor of §3 bounds a compromised hub that was never lost; this bounds a stolen passphrase arriving as a stranger. Neither replaces the other: an acknowledged claim is still held to the floor.
+
 A key the spoke does not hold is not an error: deletion is idempotent, the exchange may be a resume, and the ack counts only what was actually removed.
 
 ## 4 Messages

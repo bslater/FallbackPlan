@@ -107,6 +107,37 @@ The recovery kit is withdrawn ([ADR-0060](../adr/0060-the-passphrase-is-the-reco
 | FR-KIT-006 **[amended]** | Withdrawn; re-homed as FR-DRL-001. | — |
 | FR-KIT-007 **[amended]** | Withdrawn; re-homed as FR-DRL-002. | — |
 
+## Disaster recovery
+
+The recovery kit above answers the case where the *store* survives and the machine's local state does not. This section answers the harder one: the machine itself is gone — ransomware, theft, fire, or a rebuild from bare metal after malware — and the only surviving copy is a replica at a destination. Durable local state is not a cache and does not come back with it ([architecture 00](../architecture/00-overview.md)), so the recovering device is a **new** device identity as far as every destination is concerned ([ADR-0010](../adr/0010-local-store-separation.md)). The ceremony that answers it is [ADR-0053](../adr/0053-peer-claim-and-configuration-recovery.md); [ADR-0070](../adr/0070-replica-claim-after-total-loss.md) reached the same conclusion independently and is superseded by it.
+
+| ID | Requirement | Acceptance |
+|----|-------------|-----------|
+| FR-DR-005 **[new]** | A claimed replica shall be readable without further human action at the destination, and retention instructions from the claiming identity shall be refused, deleting nothing, until the destination's operator acknowledges the claim. | A restore from a freshly claimed replica completes unattended; a retention instruction against it removes no object and names the unacknowledged claim as the reason. |
+| FR-DR-009 **[new]** | A recovered configuration shall be presented for confirmation before it takes effect, with each root's recorded path shown as a hint and flagged where it does not resolve on this machine. | Reconstruction cannot complete without confirming the roots; a recorded path that does not exist is reported rather than captured from, and the retention policy is shown before it can delete anything. |
+
+Both rows are **unbuilt**, and deliberately so. They are the two properties of the
+disaster-recovery review that the claim ceremony this repository *did* build does
+not have. Nothing today stops a successful claimant issuing deletions: the
+refusals that exist are the reclaim-signature ones of
+[ADR-0055](../adr/0055-reclaim-authority.md) and
+[ADR-0059](../adr/0059-session-bound-deletion-authority.md), which answer a
+different question — who signed the instruction, not whether the destination's
+operator has acknowledged who is now asking. And a recovered configuration is
+reported and then acted on rather than confirmed first; `Api/Results.cs` says so
+in as many words, "reported, not refused". Neither has a proof obligation yet,
+because the proof page tracks invariants the product claims and it does not yet
+claim these.
+
+**Owed, and not built here.** The review also found that the repository does not
+carry the set's **retention policy** as part of its recorded shape. The policy
+manifest carries the set's name, its roots and its schedule (FR-MAN-018) and
+stops there, so a machine that reconstructs a set from the repository alone
+recovers everything about it except what it is allowed to delete. Recorded as
+owed rather than written as a requirement, because the row that carries it
+should arrive with the work.
+
+
 ## Write-only repositories
 
 Every repository ([ADR-0042](../adr/0042-write-only-repositories.md); the only format since [ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) severs writing from reading: the service seals file contents to an asymmetric public key and holds nothing that opens them.

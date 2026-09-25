@@ -18,9 +18,9 @@ A fourth namespace, `/format-upgrade/<to-version>`, belongs to nobody in particu
 
 Nothing before phase 4 writes any of them — no component takes a lease, tombstones an object, or writes an audit period — so their shapes were deliberately left uninvented rather than guessed at ([Q17](../../docs/open-questions.md#closed)). They are specified here, ahead of the collector, so that the collector is written against a format instead of establishing one by accident.
 
-All three are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`.
+All four are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`, set configuration `0x10`.
 
-Only one of the three is signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
+Two of the four are signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. A **set-configuration object tells a rebuilt machine what to protect and what to delete**, which is authority of the same kind, so it is signed too (§5.4). A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
 
 The format-upgrade record of §5 is signed for the same reason a tombstone is — it decides what a reader does — and is the one lifecycle object that is **not** a sealed standalone record. §5.2 says why.
 

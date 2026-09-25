@@ -64,6 +64,13 @@ public sealed class PeerSession
     /// its own grant either way.
     /// </summary>
     public PeerTerms? TheirTerms { get; }
+
+    /// <summary>
+    /// SHA-256 over this session's bound context (02 §3.2) — what a payload
+    /// binds itself to so it cannot be replayed into another connection. A
+    /// replica claim signs it (07 §5.6).
+    /// </summary>
+    public ReadOnlyMemory<byte> TranscriptHash { get; }
 }
 
 /// <summary>

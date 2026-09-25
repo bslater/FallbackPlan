@@ -37,30 +37,12 @@
         "resolved": "10.0.10",
         "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
       },
-      "fallbackplan.application": {
-        "type": "Project",
-        "dependencies": {
-          "Bodu.Core": "[0.7.0, )",
-          "Bodu.Globalization.Recurrence": "[0.7.0, )",
-          "FallbackPlan.Domain": "[1.0.0, )",
-          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
-        }
-      },
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
           "Bodu.Core": "[0.7.0, )",
           "Bodu.Text.Encoding": "[0.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
-        }
-      },
-      "Bodu.Globalization.Recurrence": {
-        "type": "CentralTransitive",
-        "requested": "[0.7.0, )",
-        "resolved": "0.7.0",
-        "contentHash": "DVzJEBFSm7ieGSs4Pb/+jNFPriBjNNOoPh8+BOkijSszVAXsshjVwE0UYTb66CpxJCiGUhiLvn9mtN3iK1Rigg==",
-        "dependencies": {
-          "Bodu.Core": "0.7.0"
         }
       },
       "Bodu.Text.Encoding": {

@@ -55,6 +55,11 @@ internal static class Strings
     internal static string HardlinkGrouper_ContentIDKeyExactlyBytes => Get(nameof(HardlinkGrouper_ContentIDKeyExactlyBytes));
 
     /// <summary>
+    /// The master key is exactly 32 bytes.
+    /// </summary>
+    internal static string RecoveryRecipient_MasterKeyExactlyBytes => Get(nameof(RecoveryRecipient_MasterKeyExactlyBytes));
+
+    /// <summary>
     /// The KDF salt is exactly {0} bytes; got {1}.
     /// </summary>
     private static string KekDerivation_KDFSaltExactlyBytesGot => Get(nameof(KekDerivation_KDFSaltExactlyBytesGot));

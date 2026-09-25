@@ -573,6 +573,9 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
         };
     }
 
+    /// <inheritdoc />
+    public ulong? DeviceOf(string path) => TryStat(path, out var stat) ? stat.Device : null;
+
     /// <summary>
     /// The revalidation stat (architecture 06 §1): size, mtime, identity —
     /// compared before and after a read to detect mid-read change.

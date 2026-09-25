@@ -1,4 +1,4 @@
-namespace FallbackPlan.Application;
+namespace FallbackPlan.Domain;
 
 /// <summary>
 /// A client-state failure with a message for the operator — distinct from

@@ -99,7 +99,8 @@ public sealed class CatalogueProjector
                 manifest.PublicationGeneration,
                 manifest.CaptureStatus,
                 signatureState,
-                manifest.CaptureCompletedAt);
+                manifest.CaptureCompletedAt,
+                manifest.ConsistencyMethod);
             snapshots++;
 
             var (entries, versions) = await ProjectTreeAsync(

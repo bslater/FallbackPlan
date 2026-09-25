@@ -209,4 +209,14 @@ public interface IFileSystemSource
 
     /// <summary>Opens a named alternate stream's content (Windows; throws elsewhere).</summary>
     Stream OpenAlternateStream(ScanEntry entry, string streamName);
+
+    /// <summary>
+    /// The volume identity <paramref name="path"/> sits on, or null when the
+    /// platform will not say. The failure-domain comparison (FR-SNP-007)
+    /// wants exactly this and nothing more — the hosts used to get it by
+    /// calling a static on the concrete source, which no test double could
+    /// intercept, so device probing sat outside the seam everything else in
+    /// this interface exists to provide.
+    /// </summary>
+    ulong? DeviceOf(string path);
 }
