@@ -163,4 +163,25 @@
   <data name="SealedContentKey_AadExactlyBytes" xml:space="preserve">
     <value>The sealed-share associated data is exactly {0} bytes.</value>
   </data>
+  <data name="BlobWriter_DataBlobSealsPerRecord" xml:space="preserve">
+    <value>A format-3 data blob seals a key per record; create it with CreateSealed (specification 05 §2.2).</value>
+  </data>
+  <data name="BlobWriter_FormatVersionNotWritable" xml:space="preserve">
+    <value>This writer emits format {0} and format {1} containers; {2} is neither.</value>
+  </data>
+  <data name="BlobWriter_RelocationNeedsFormatThree" xml:space="preserve">
+    <value>A sealed record is copied between blobs only in format 3, where its key and nonce travel with it (ADR-0052 Amendment 1).</value>
+  </data>
+  <data name="BlobWriter_RelocatedRecordLength" xml:space="preserve">
+    <value>The relocated bytes are {0}; the source entry declares {1}.</value>
+  </data>
+  <data name="BlobReader_RecordShareDoesNotOpen" xml:space="preserve">
+    <value>This record's sealed content key does not open under the granted authority — a tampered or transplanted share, contained to this record (specification 05 §2.2).</value>
+  </data>
+  <data name="BlobWriter_ResumeNeedsSealingKey" xml:space="preserve">
+    <value>Resuming a format-3 data blob needs the repository's sealing public key: every further record seals a key of its own (specification 05 §2.2).</value>
+  </data>
+  <data name="BlobWriter_RelocatedProfileUnsupported" xml:space="preserve">
+    <value>The relocated record names a compression or encryption profile this writer does not implement; refused, not guessed (specification 00 §3).</value>
+  </data>
 </root>

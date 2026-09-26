@@ -41,17 +41,110 @@ public static class PeerSessionNegotiation
     public const string RetrievalFeature = "retrieval";
 
     /// <summary>
-    /// The peer accepts a passphrase-proved claim that re-points a replica's
-    /// attribution (07 §5), and offers a token so one can be armed (03 §3.2.1).
+    /// A peer that offers this requires every <see cref="RetentionOffer"/> page
+    /// to carry a reclaim signature it can verify
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5; 06 §3).
     /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="RetentionInstructionFeature"/> rather than
+    /// folded into it, because the two say different things: one is "I accept
+    /// deletion instructions at all", the other is "and I will not act on one
+    /// that is not signed". A destination offering both refuses an unsigned
+    /// instruction; a commander whose repository publishes no reclaim key
+    /// simply never gets the second into the intersection, and is told what is
+    /// missing instead of being refused mid-exchange.
+    /// </remarks>
+    public const string SignedRetentionFeature = "signed-retention";
+
+    /// <summary>
+    /// The peer verifies a retention signature over the session's identifier
+    /// as well as the page ([02 §3.5](../../specifications/peer-protocol/02-session.md);
+    /// [06 §4.1](../../specifications/peer-protocol/06-retention.md#41-retentionoffer)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It tells a <b>commander how to sign</b> and gates no check. A spoke
+    /// holding a reclaim key requires the bound signature whatever the hello
+    /// said, because a check the sender can opt out of is not a check
+    /// (02 §6); what the feature buys is that a current commander talking to
+    /// an older spoke signs the encoding that spoke can verify, instead of
+    /// having every page refused.
+    /// </para>
+    /// <para>
+    /// The other direction has no such kindness and cannot: an older commander
+    /// signs the unbound encoding and a current spoke will not accept it,
+    /// because accepting both is accepting the replayable one. Its retention
+    /// is refused, loudly and by name, until it is upgraded — which costs a
+    /// deletion not made, never a backup not taken.
+    /// </para>
+    /// </remarks>
+    public const string SessionBoundRetentionFeature = "session-bound-retention";
+
+    /// <summary>
+    /// Both sides understand a transfer that begins part-way through an object
+    /// ([ADR-0057](../../docs/adr/0057-resumable-object-transfer.md); 03 §5).
+    /// </summary>
+    /// <remarks>
+    /// It gates both halves at once — the destination declaring what it part
+    /// holds, and the source beginning an object at a non-zero offset —
+    /// because either half alone is a protocol error to the other side: an
+    /// older destination reads a chunk at a non-zero offset as
+    /// <see cref="PeerRefusalReason.Malformed"/>, correctly, since without the
+    /// agreement there is nothing it could mean.
+    /// </remarks>
+    public const string PartialObjectResumeFeature = "partial-object-resume";
+
+    /// <summary>
+    /// The claim ceremony (03 §6;
+    /// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)):
+    /// a machine rebuilt after total loss proves a replica is its own under
+    /// the claim key its predecessor published, and the attribution follows
+    /// it to the new device identity.
+    /// </summary>
+    /// <remarks>
+    /// Gating on a feature is safe here in a way it was not for
+    /// <see cref="SignedRetentionFeature"/>, because withholding it can only
+    /// make the destination refuse. A party that omits it is asking for less
+    /// authority, not more, so there is nothing for an attacker to gain by
+    /// declining to offer it.
+    /// <para>
+    /// Redefined rather than versioned when the ceremony became two-phase —
+    /// open, parameters, claim, accepted ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// Amendment 2): nothing outside this repository ever spoke the
+    /// one-message shape, so a second token would have named a peer that
+    /// does not exist.
+    /// </para>
+    /// </remarks>
     public const string ReplicaClaimFeature = "replica-claim";
+
+    /// <summary>
+    /// The peer answers a Merkle chunk challenge over its replica of a blob
+    /// (07 §3.6): one leaf's bytes and its authentication path, checked at
+    /// the source against the root the writer signed into the index.
+    /// </summary>
+    /// <remarks>
+    /// Offered, never required, and a gate is safe here for the reason
+    /// 02 §6 permits one — its absence can only mean <b>more</b> work for
+    /// the destination, not less scrutiny. A peer that does not offer it is
+    /// read back whole, exactly as every peer is today; the feature buys the
+    /// destination its own bandwidth, so declining it is self-harm rather
+    /// than evasion.
+    /// </remarks>
+    public const string ChunkPossessionFeature = "chunk-possession";
 
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
-        [
-            DestinationVerificationFeature, RetentionInstructionFeature, TerminationNoticeFeature,
-            RetrievalFeature, ReplicaClaimFeature,
-        ];
+    [
+        DestinationVerificationFeature,
+        RetentionInstructionFeature,
+        SignedRetentionFeature,
+        SessionBoundRetentionFeature,
+        TerminationNoticeFeature,
+        RetrievalFeature,
+        PartialObjectResumeFeature,
+        ReplicaClaimFeature,
+        ChunkPossessionFeature,
+    ];
 
     /// <summary>Builds the hello this build sends.</summary>
     /// <param name="agentVersion">Informational build string.</param>

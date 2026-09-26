@@ -1,8 +1,9 @@
 using FallbackPlan.Domain;
 using System.Buffers.Binary;
-using System.Globalization;
 using System.Security.Cryptography;
 using Bodu;
+using FallbackPlan.Api;
+using FallbackPlan.Application;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 
@@ -101,15 +102,6 @@ public sealed class GrantRecipient : IDisposable
     /// <exception cref="SealedContentException">The envelope does not open.</exception>
     public byte[] OpenGrant(ReadOnlySpan<byte> sealedBytes) =>
         WriteOnlyProvisioning.OpenGrant(_privateKey, sealedBytes);
-
-    /// <summary>
-    /// Opens a claim-root envelope sealed to this recipient (ADR-0046). The
-    /// caller owns the bytes and must zero them: this is the passphrase's
-    /// Argon2id output, held only for the length of one claim exchange.
-    /// </summary>
-    /// <exception cref="SealedContentException">The envelope does not open, or is not a claim root.</exception>
-    public byte[] OpenClaimRoot(ReadOnlySpan<byte> sealedBytes) =>
-        WriteOnlyProvisioning.OpenClaimRoot(_privateKey, sealedBytes);
 
     /// <inheritdoc />
     public void Dispose() => CryptographicOperations.ZeroMemory(_privateKey);
@@ -213,7 +205,15 @@ public sealed class WriteCredentialStore(string stateDirectory)
 /// </remarks>
 public sealed class InstallationProvisioning : IDisposable
 {
-    /// <summary>The serialised length: magic, credential, salt, and three KDF fields.</summary>
+    /// <summary>The serialised length of a currently-shaped provisioning: magic, credential, salt, and three KDF fields.</summary>
+    /// <remarks>
+    /// Not the only length that parses. The credential embedded here has more
+    /// than one shape (<see cref="RepositoryWriteCredential.LengthOf"/>), so
+    /// a bundle an older build wrote is shorter and is still this
+    /// installation's — refusing it would report the installation's own
+    /// credential as damage, with no way back, since saving deliberately
+    /// never overwrites.
+    /// </remarks>
     public const int SerializedLength =
         8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
 
@@ -258,13 +258,13 @@ public sealed class InstallationProvisioning : IDisposable
     /// <summary>The serialised form the store persists.</summary>
     public byte[] ToBytes()
     {
-        var bytes = new byte[SerializedLength];
         var credential = Credential.ToBytes();
+        var bytes = new byte[8 + credential.Length + KekDerivation.SaltLength + 4 + 4 + 1];
         try
         {
             Magic.CopyTo(bytes, 0);
             credential.CopyTo(bytes, 8);
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credential.Length;
             _kdfSalt.CopyTo(bytes, offset);
             offset += KekDerivation.SaltLength;
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), KdfParameters.MemoryKiB);
@@ -283,13 +283,22 @@ public sealed class InstallationProvisioning : IDisposable
     /// <exception cref="ArgumentException">The bytes are not an installation provisioning.</exception>
     public static InstallationProvisioning FromBytes(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length != SerializedLength || !bytes[..8].SequenceEqual(Magic))
+        // Sized from the credential the bytes carry rather than from the one
+        // this build writes, so a bundle from before a member was added still
+        // reads. The total is still exact — only the credential's share of it
+        // varies.
+        var credentialLength = bytes.Length > 8 && bytes[..8].SequenceEqual(Magic)
+            ? RepositoryWriteCredential.LengthOf(bytes[8..])
+            : -1;
+        if (credentialLength < 0
+            || bytes.Length != 8 + credentialLength + KekDerivation.SaltLength + 4 + 4 + 1)
         {
             throw new ArgumentException(
-                $"A serialised installation provisioning is exactly {SerializedLength} bytes.", nameof(bytes));
+                $"A serialised installation provisioning is a magic, a write credential, a "
+                + $"{KekDerivation.SaltLength}-byte salt and three KDF fields.", nameof(bytes));
         }
 
-        var offset = 8 + RepositoryWriteCredential.SerializedLength;
+        var offset = 8 + credentialLength;
         var credential = RepositoryWriteCredential.FromBytes(bytes[8..offset]);
         var salt = bytes.Slice(offset, KekDerivation.SaltLength);
         var kdf = offset + KekDerivation.SaltLength;
@@ -423,139 +432,5 @@ public sealed class InstallationCredentialStore(string stateDirectory)
         {
             CryptographicOperations.ZeroMemory(bytes);
         }
-    }
-}
-
-/// <summary>
-/// Whether the operator has said they saved this installation's recovery
-/// kit — the last thing first-run setup waits for (FR-KIT-004, ADR-0044).
-/// </summary>
-/// <remarks>
-/// <para>
-/// It records the kit's <b>checksum</b>, never the kit. A kit stored on the
-/// machine being backed up is not a recovery kit; a service that could hand
-/// one out would have made itself a second factor, and this file exists
-/// precisely so it does not have to.
-/// </para>
-/// <para>
-/// It is durable because the alternative is a modal nobody can be made to
-/// read. A closed tab between provisioning and confirming leaves the
-/// installation in <c>kit_required</c>, and the ceremony resumes there.
-/// </para>
-/// </remarks>
-public sealed class RecoveryKitConfirmation(string stateDirectory)
-{
-    private string Path_ => Path.Combine(stateDirectory, "recovery-kit.confirmed");
-
-    /// <summary>Whether a kit has been confirmed saved.</summary>
-    public bool Holds => File.Exists(Path_);
-
-    /// <summary>The confirmed kit's checksum, or null when none has been confirmed.</summary>
-    public string? Checksum
-    {
-        get
-        {
-            var path = Path_;
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            // First line is the checksum; the rest is for whoever opens the
-            // file wondering what it is.
-            var text = File.ReadAllText(path).AsSpan();
-            var newline = text.IndexOfAny('\r', '\n');
-            return (newline < 0 ? text : text[..newline]).Trim().ToString();
-        }
-    }
-
-    /// <summary>
-    /// The kit's status, in the two values an installation kit can have
-    /// (FR-KIT-005): <c>"never_saved"</c> or <c>"saved"</c>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Two, not the three the requirement's wording implies, and the reason is
-    /// in what an installation kit contains. FR-KIT-005 names the third state
-    /// <em>stale</em> and says changing destinations causes it — but an
-    /// installation kit carries no destinations at all (ADR-0013 as amended),
-    /// so its stated trigger cannot fire.
-    /// </para>
-    /// <para>
-    /// Nor can anything else cause it. The kit holds the KDF salt, the Argon2id
-    /// parameters and the sealing public key, and all three are fixed for the
-    /// life of the installation — that is exactly what makes one passphrase
-    /// open every archive it ever writes. What is left is the issuing device
-    /// and the issue time, both informational. Regenerating a kit therefore
-    /// yields different bytes only because <c>issued_at</c> moved, which means
-    /// comparing checksums across regenerations proves nothing and a
-    /// freshness test would be theatre.
-    /// </para>
-    /// </remarks>
-    public string Status => Holds ? "saved" : "never_saved";
-
-    /// <summary>
-    /// When the operator confirmed, Unix milliseconds, or null when none has
-    /// been confirmed or the record predates the timestamp being written.
-    /// </summary>
-    /// <remarks>
-    /// Read from the file's own annotation rather than from its modification
-    /// time: a state directory restored from a backup carries somebody else's
-    /// mtimes, and "when was this confirmed" is a question about the ceremony,
-    /// not about the filesystem.
-    /// </remarks>
-    public ulong? ConfirmedAtUnixMilliseconds
-    {
-        get
-        {
-            var path = Path_;
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
-            foreach (var line in File.ReadLines(path))
-            {
-                const string marker = "# Confirmed at ";
-                if (!line.StartsWith(marker, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var rest = line.AsSpan(marker.Length);
-                var end = rest.IndexOf(' ');
-                var digits = end < 0 ? rest : rest[..end];
-                return ulong.TryParse(digits, CultureInfo.InvariantCulture, out var value) ? value : null;
-            }
-
-            return null;
-        }
-    }
-
-    /// <summary>Records a confirmation, replacing any earlier one.</summary>
-    /// <param name="kitChecksum">The kit's SHA-256, lowercase hex.</param>
-    /// <param name="confirmedAtUnixMilliseconds">When the operator confirmed.</param>
-    public void Save(string kitChecksum, ulong confirmedAtUnixMilliseconds)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(kitChecksum);
-
-        Directory.CreateDirectory(stateDirectory);
-        var path = Path_;
-        var temporary = path + ".tmp";
-
-        File.WriteAllText(
-            temporary,
-            kitChecksum + Environment.NewLine
-                + "# The SHA-256 of the recovery kit this installation's operator confirmed saving."
-                + Environment.NewLine
-                + "# Confirmed at " + confirmedAtUnixMilliseconds.ToString(CultureInfo.InvariantCulture)
-                + " (Unix ms). The kit itself is deliberately NOT here." + Environment.NewLine);
-
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-
-        File.Move(temporary, path, overwrite: true);
     }
 }

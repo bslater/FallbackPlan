@@ -16,8 +16,11 @@ public sealed class Ed25519ConformanceTests
 {
     private static JsonDocument Vectors { get; } =
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "ed25519.json")));
-
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
+    /// <summary>The pinned root every vector group derives from (write-only.json).</summary>
+    private static byte[] Root =>
+        Convert.FromHexString(
+            JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", "write-only.json")))
+                .RootElement.GetProperty("inputs").GetProperty("root").GetString()!);
 
     [TestMethod]
     public void Ed25519_EveryRfc8032Case_ReproducesItsPublicKeyAndSignature()
@@ -39,7 +42,8 @@ public sealed class Ed25519ConformanceTests
     [TestMethod]
     public void Ed25519_EveryFormatCase_ReproducesFromItsDerivedSeed()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var authority = WriteOnlyDerivation.FromRoot(Root);
+        using var credential = authority.Credential.Clone();
 
         foreach (var vectorCase in Vectors.RootElement.GetProperty("format_cases").EnumerateArray())
         {
@@ -50,9 +54,9 @@ public sealed class Ed25519ConformanceTests
             // only cross-checks the derivation.
             Assert.AreEqual(
                 vectorCase.GetProperty("seed").GetString(),
-                Convert.ToHexStringLower(hierarchy.DeriveSigningKeySeed(generation)));
+                Convert.ToHexStringLower(credential.DeriveSigningKeySeed(generation)));
 
-            using var signer = RepositorySigner.Create(hierarchy, generation);
+            using var signer = RepositorySigner.Create(credential, generation);
 
             Assert.AreEqual(
                 vectorCase.GetProperty("public_key").GetString(),
@@ -66,8 +70,9 @@ public sealed class Ed25519ConformanceTests
     [TestMethod]
     public void Ed25519_AnyTamperedByte_FailsVerification()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var authority = WriteOnlyDerivation.FromRoot(Root);
+        using var credential = authority.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var message = "FallbackPlan tamper probe"u8.ToArray();
         var signature = signer.Sign(message);
@@ -88,9 +93,10 @@ public sealed class Ed25519ConformanceTests
     [TestMethod]
     public void Ed25519_DifferentKeyGenerations_DeriveDifferentKeyPairs()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var zero = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
-        using var one = RepositorySigner.Create(hierarchy, new KeyGeneration(1));
+        using var authority = WriteOnlyDerivation.FromRoot(Root);
+        using var credential = authority.Credential.Clone();
+        using var zero = RepositorySigner.Create(credential, KeyGeneration.Zero);
+        using var one = RepositorySigner.Create(credential, new KeyGeneration(1));
 
         Assert.IsFalse(zero.PublicKey.SequenceEqual(one.PublicKey));
 

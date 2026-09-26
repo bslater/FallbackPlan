@@ -13,8 +13,15 @@ namespace FallbackPlan.Application;
 /// </remarks>
 internal static partial class Log
 {
+    // Debug, deliberately: the scheduler reads through this path every pass,
+    // and at Information this one message was nearly the whole of the tier an
+    // operator reads, saying each time that nothing had happened. The record
+    // stays — "what was in force when this ran" must remain answerable — at
+    // the level of routine mechanics. The Information-worthy event is change,
+    // and only a host that remembers the previous load can see change, so the
+    // Agent's runtime announces that (event 3742).
     [LoggerMessage(
-        EventId = 3400, Level = LogLevel.Information,
+        EventId = 3400, Level = LogLevel.Debug,
         Message = "Configuration loaded at schema {Schema}: {Sets} sets, {Destinations} destinations")]
     internal static partial void ConfigurationLoaded(
         ILogger logger, int schema, int sets, int destinations);

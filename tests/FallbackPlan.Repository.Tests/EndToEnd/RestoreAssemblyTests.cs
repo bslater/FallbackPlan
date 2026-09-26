@@ -40,7 +40,7 @@ public sealed class RestoreAssemblyTests : ArchiveTestHarness
             straight[1] with { ObjectId = straight[0].ObjectId },
         ];
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // The honest list with the expected hash still restores.

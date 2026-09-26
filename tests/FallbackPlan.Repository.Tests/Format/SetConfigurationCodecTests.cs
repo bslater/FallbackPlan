@@ -5,8 +5,8 @@ namespace FallbackPlan.Repository.Tests.Format;
 
 /// <summary>
 /// The set-configuration object's two codecs (specification 11 §5.2–§5.3;
-/// ADR-0047): the outer record a destination stores, and the payload sealed
-/// inside it. FR-DR-006, FR-DR-007.
+/// ADR-0071): the outer record a destination stores, and the payload sealed
+/// inside it. ADR-0071, ADR-0071.
 /// </summary>
 /// <remarks>
 /// The absence cases matter as much as the round trips. A repository written

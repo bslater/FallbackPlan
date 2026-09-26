@@ -65,6 +65,10 @@ public static class SessionBinding
 
     private const string InitiatorLabel = "fbp-peer-v1:tls-binding:initiator";
     private const string ResponderLabel = "fbp-peer-v1:tls-binding:responder";
+    private const string SessionIdLabel = "fbp-peer-v1:session-id";
+
+    /// <summary>Length of a session identifier.</summary>
+    public const int SessionIdLength = 32;
 
     /// <summary>Generates a nonce for this connection.</summary>
     /// <returns>Fresh random bytes.</returns>
@@ -93,68 +97,34 @@ public static class SessionBinding
         Validate(responder, nameof(responder));
 
         var label = role == PeerSessionRole.Initiator ? InitiatorLabel : ResponderLabel;
-        var length = label.Length
-            + sizeof(ushort)
-            + (PeerIdentity.KeyLength * 2)
-            + (TlsPublicKeyHashLength * 2)
-            + (NonceLength * 2);
-
-        var transcript = new byte[length];
-        var at = 0;
+        var context = Context(initiator, responder);
+        var transcript = new byte[label.Length + context.Length];
 
         Encoding.ASCII.GetBytes(label, transcript);
-        at += label.Length;
-
-        BinaryPrimitives.WriteUInt16BigEndian(transcript.AsSpan(at), BindingVersion);
-        at += sizeof(ushort);
-
-        // Fixed-length fields in a fixed order, so there is no separator to get
-        // wrong and no pair of different inputs that produce one transcript.
-        initiator.Identity.PublicKey.CopyTo(transcript.AsSpan(at));
-        at += PeerIdentity.KeyLength;
-        responder.Identity.PublicKey.CopyTo(transcript.AsSpan(at));
-        at += PeerIdentity.KeyLength;
-
-        initiator.TlsPublicKeyHash.Span.CopyTo(transcript.AsSpan(at));
-        at += TlsPublicKeyHashLength;
-        responder.TlsPublicKeyHash.Span.CopyTo(transcript.AsSpan(at));
-        at += TlsPublicKeyHashLength;
-
-        initiator.Nonce.Span.CopyTo(transcript.AsSpan(at));
-        at += NonceLength;
-        responder.Nonce.Span.CopyTo(transcript.AsSpan(at));
+        context.CopyTo(transcript.AsSpan(label.Length));
 
         return transcript;
     }
 
     /// <summary>
-    /// SHA-256 over the <b>role-independent</b> context — the transcript of
-    /// §3.2 without either side's label — so both ends of one connection
-    /// compute the same value.
+    /// The context of 02 §3.2 — what every construction here is built over,
+    /// and what nothing here writes twice.
     /// </summary>
-    /// <param name="initiator">The initiator's contribution.</param>
-    /// <param name="responder">The responder's contribution.</param>
-    /// <returns>The 32-byte context hash.</returns>
     /// <remarks>
-    /// The role labels exist so the two proofs cannot be reflected at one
-    /// another, which is exactly why they must be <em>excluded</em> here: a
-    /// value that differed by role would give the claimant and the destination
-    /// two different bindings and no proof would ever verify. What this is for
-    /// is binding a later payload — a replica claim (07 §5.6) — to the one
-    /// connection and the one pair of identities that authenticated on it.
+    /// Fixed-length fields in a fixed order, so there is no separator to get
+    /// wrong and no pair of different inputs that produce one context.
     /// </remarks>
-    public static byte[] ContextHash(
+    private static byte[] Context(
         SessionBindingContribution initiator, SessionBindingContribution responder)
     {
-        Validate(initiator, nameof(initiator));
-        Validate(responder, nameof(responder));
-
         var context = new byte[
-            sizeof(ushort) + (PeerIdentity.KeyLength * 2)
-            + (TlsPublicKeyHashLength * 2) + (NonceLength * 2)];
+            sizeof(ushort)
+            + (PeerIdentity.KeyLength * 2)
+            + (TlsPublicKeyHashLength * 2)
+            + (NonceLength * 2)];
         var at = 0;
 
-        BinaryPrimitives.WriteUInt16BigEndian(context.AsSpan(at), BindingVersion);
+        BinaryPrimitives.WriteUInt16BigEndian(context, BindingVersion);
         at += sizeof(ushort);
 
         initiator.Identity.PublicKey.CopyTo(context.AsSpan(at));
@@ -171,7 +141,54 @@ public static class SessionBinding
         at += NonceLength;
         responder.Nonce.Span.CopyTo(context.AsSpan(at));
 
-        return SHA256.HashData(context);
+        return context;
+    }
+
+    /// <summary>
+    /// A name for this connection that both ends compute alike
+    /// (specification peer-protocol 02 §3.5).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SHA-256</c> over a label of its own and the same context
+    /// <see cref="Transcript"/> is built from: both identities, both channel
+    /// bindings, and both fresh nonces. Neither end controls it — an initiator
+    /// chooses its own nonce and its own ephemeral certificate and cannot
+    /// steer the result onto a value a past session had — so a signature made
+    /// over it is a signature that expires when the connection does.
+    /// </para>
+    /// <para>
+    /// <b>Role-neutral, where the transcript is deliberately not.</b> The two
+    /// roles sign under different labels so a proof cannot be reflected back
+    /// at the peer that made it; an identifier has the opposite requirement,
+    /// since its whole use is that both ends reach the same bytes. The
+    /// separate label is what keeps the two constructions from ever meeting
+    /// (<a href="../../specifications/peer-protocol/00-conventions.md">00 §4</a>):
+    /// no input to one can be read as an input to the other.
+    /// </para>
+    /// <para>
+    /// It shares <see cref="BindingVersion"/> with the transcript on purpose.
+    /// The version is inside the context, so a build that changed this
+    /// construction without bumping it would not merely disagree here — it
+    /// would fail authentication first, which is the loud failure rather than
+    /// the puzzling one.
+    /// </para>
+    /// </remarks>
+    /// <param name="initiator">The contribution of the side that opened the connection.</param>
+    /// <param name="responder">The contribution of the side that accepted it.</param>
+    /// <returns>The 32-byte identifier.</returns>
+    public static byte[] SessionId(
+        SessionBindingContribution initiator, SessionBindingContribution responder)
+    {
+        Validate(initiator, nameof(initiator));
+        Validate(responder, nameof(responder));
+
+        var context = Context(initiator, responder);
+        var material = new byte[SessionIdLabel.Length + context.Length];
+        Encoding.ASCII.GetBytes(SessionIdLabel, material);
+        context.CopyTo(material.AsSpan(SessionIdLabel.Length));
+
+        return SHA256.HashData(material);
     }
 
     /// <summary>Signs the transcript for this side's role.</summary>

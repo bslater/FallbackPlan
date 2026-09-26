@@ -345,4 +345,51 @@ internal static class Strings
     /// </summary>
     internal static string FormatSealedContentKey_AadExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, SealedContentKey_AadExactlyBytes, arg0);
+
+    /// <summary>
+    /// A format-3 data blob seals a key per record; create it with CreateSealed (specification 05 §2.2).
+    /// </summary>
+    internal static string BlobWriter_DataBlobSealsPerRecord => Get(nameof(BlobWriter_DataBlobSealsPerRecord));
+
+    /// <summary>
+    /// This writer emits format {0} and format {1} containers; {2} is neither.
+    /// </summary>
+    private static string BlobWriter_FormatVersionNotWritable => Get(nameof(BlobWriter_FormatVersionNotWritable));
+
+    /// <summary>
+    /// This writer emits format {0} and format {1} containers; {2} is neither.
+    /// </summary>
+    internal static string FormatBlobWriter_FormatVersionNotWritable(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, BlobWriter_FormatVersionNotWritable, arg0, arg1, arg2);
+
+    /// <summary>
+    /// A sealed record is copied between blobs only in format 3, where its key and nonce travel with it (ADR-0052 Amendment 1).
+    /// </summary>
+    internal static string BlobWriter_RelocationNeedsFormatThree => Get(nameof(BlobWriter_RelocationNeedsFormatThree));
+
+    /// <summary>
+    /// The relocated bytes are {0}; the source entry declares {1}.
+    /// </summary>
+    private static string BlobWriter_RelocatedRecordLength => Get(nameof(BlobWriter_RelocatedRecordLength));
+
+    /// <summary>
+    /// The relocated bytes are {0}; the source entry declares {1}.
+    /// </summary>
+    internal static string FormatBlobWriter_RelocatedRecordLength(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, BlobWriter_RelocatedRecordLength, arg0, arg1);
+
+    /// <summary>
+    /// This record's sealed content key does not open under the granted authority — a tampered or transplanted share, contained to this record (specification 05 §2.2).
+    /// </summary>
+    internal static string BlobReader_RecordShareDoesNotOpen => Get(nameof(BlobReader_RecordShareDoesNotOpen));
+
+    /// <summary>
+    /// Resuming a format-3 data blob needs the repository's sealing public key: every further record seals a key of its own (specification 05 §2.2).
+    /// </summary>
+    internal static string BlobWriter_ResumeNeedsSealingKey => Get(nameof(BlobWriter_ResumeNeedsSealingKey));
+
+    /// <summary>
+    /// The relocated record names a compression or encryption profile this writer does not implement; refused, not guessed (specification 00 §3).
+    /// </summary>
+    internal static string BlobWriter_RelocatedProfileUnsupported => Get(nameof(BlobWriter_RelocatedProfileUnsupported));
 }

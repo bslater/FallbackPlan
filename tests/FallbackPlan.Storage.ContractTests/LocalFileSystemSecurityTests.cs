@@ -23,6 +23,55 @@ public sealed class LocalFileSystemSecurityTests : IDisposable
         _ => ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false));
 
     [TestMethod]
+    public async Task Store_RootedAtAPathWithATrailingSeparator_StillResolvesItsOwnKeys()
+    {
+        // Found by the recovery drill, which is where it would have been
+        // found for real. Every shell's tab-completion of a directory
+        // appends a separator, so `--repo /media/usb/<archive>/` is what a
+        // person actually types — and Path.GetFullPath preserves that
+        // separator, so the containment check compared each resolved path
+        // against a root ending in two of them and nothing could ever match.
+        //
+        // What made it serious is where it struck: the refusal reads
+        // "resolves outside the store root", which sounds like a damaged or
+        // hostile archive rather than a slash, and the person reading it is
+        // by definition mid-recovery on a machine that has just been rebuilt.
+        var store = new LocalFileSystemObjectStore(_root + Path.DirectorySeparatorChar);
+        var key = ObjectKey.Parse("repository-format");
+
+        await store.PutAsync(key, Content([1, 2, 3]), PutConditions.None, CancellationToken.None);
+
+        var metadata = await store.GetMetadataAsync(key, CancellationToken.None);
+        Assert.IsTrue(metadata.Found, "a trailing separator must not make a store unable to read itself");
+
+        var opened = await store.OpenReadAsync(key, range: null, CancellationToken.None);
+        Assert.IsNotNull(opened.Content);
+        using var content = opened.Content;
+        using var read = new MemoryStream();
+        await content.CopyToAsync(read, CancellationToken.None);
+        SequenceAssert.AreEqual(new byte[] { 1, 2, 3 }, read.ToArray());
+    }
+
+    [TestMethod]
+    public async Task Store_WithAndWithoutATrailingSeparator_AreTheSameStore()
+    {
+        // The two spellings name one directory, so they must behave as one
+        // store: what a person writes through the path their shell completed
+        // is what the same path without the separator reads back. The
+        // containment rule is untouched by this — a key cannot express
+        // traversal in the first place, ObjectKey refuses ".." at parse time,
+        // and the symlink cases above are what the check actually guards.
+        var slashed = new LocalFileSystemObjectStore(_root + Path.DirectorySeparatorChar);
+        var bare = new LocalFileSystemObjectStore(_root);
+        var key = ObjectKey.Parse("blobs/meta/abcd/shared");
+
+        await slashed.PutAsync(key, Content([7, 7, 7]), PutConditions.None, CancellationToken.None);
+
+        var seen = await bare.GetMetadataAsync(key, CancellationToken.None);
+        Assert.IsTrue(seen.Found, "one directory must not read as two stores depending on how it was spelled");
+    }
+
+    [TestMethod]
     public async Task Store_ASymlinkedDirectoryInsideTheRoot_RefusesTheOperation()
     {
         var store = new LocalFileSystemObjectStore(_root);

@@ -1,6 +1,5 @@
 using FallbackPlan.Api;
 using FallbackPlan.Repository.Crypto;
-using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -24,25 +23,6 @@ public sealed partial class ServiceCommandHandler
         + "makes the archives readable at all — so setup runs exactly once (ADR-0044, ADR-0042 §11).";
 
     private ServiceResult ProvisionInstallation(ProvisionInstallationCommand command)
-    {
-        var answer = ProvisionInstallationCore(command);
-
-        // The discriminator, never the envelope: which refusal the ceremony
-        // met is the diagnosis, and the envelope is sealed key material.
-        var log = runtime.LoggerFor<ServiceCommandHandler>();
-        if (log.IsEnabled(LogLevel.Debug))
-        {
-            Log.ProvisionOutcome(log, answer switch
-            {
-                ConfigurationChangeResult => "provisioned",
-                ServiceError error => error.Reason.ToString(),
-                _ => answer.GetType().Name,
-            });
-        }
-        return answer;
-    }
-
-    private ServiceResult ProvisionInstallationCore(ProvisionInstallationCommand command)
     {
         if (Scope == CallerScope.Remote)
         {
@@ -126,64 +106,6 @@ public sealed partial class ServiceCommandHandler
             "The passphrase is not stored here, or in the backup, or anywhere else — this service can add to "
                 + "your history and browse its structure, but it can never read your files back.",
             "It can never be changed, and if it is lost the backup is unrecoverable. Keep it somewhere safe.",
-        ]);
-    }
-
-    private ServiceResult ConfirmRecoveryKit(ConfirmRecoveryKitCommand command)
-    {
-        var answer = ConfirmRecoveryKitCore(command);
-        var log = runtime.LoggerFor<ServiceCommandHandler>();
-        if (log.IsEnabled(LogLevel.Debug))
-        {
-            Log.RecoveryKitConfirmation(log, answer switch
-            {
-                ConfigurationChangeResult => "confirmed",
-                ServiceError error => error.Reason.ToString(),
-                _ => answer.GetType().Name,
-            });
-        }
-        return answer;
-    }
-
-    private ServiceResult ConfirmRecoveryKitCore(ConfirmRecoveryKitCommand command)
-    {
-        if (Scope == CallerScope.Remote)
-        {
-            // The person confirming has to be the person holding the kit,
-            // and a remote operator cannot be (ADR-0044 §5).
-            return new ServiceError(
-                ServiceErrorReason.Refused,
-                "Confirming the recovery kit runs on the service's own machine, where the kit was written.");
-        }
-
-        if (!runtime.InstallationCredential.Holds)
-        {
-            // Out of order rather than wrong: there is no installation to
-            // have a kit for yet.
-            return new ServiceError(
-                ServiceErrorReason.Refused,
-                "This installation has no passphrase yet, so it has no recovery kit to confirm — run setup "
-                + "first (ADR-0044).");
-        }
-
-        var checksum = command.KitChecksum?.Trim() ?? string.Empty;
-        if (checksum.Length != 64 || !checksum.All(Uri.IsHexDigit))
-        {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                "A kit checksum is the 64 hex characters of its SHA-256.");
-        }
-
-        runtime.KitConfirmation.Save(
-            checksum.ToLowerInvariant(), (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-
-        return new ConfigurationChangeResult(
-        [
-            "Recovery kit saved. This installation is now fully set up.",
-            "The kit and your passphrase are two separate things and both are needed. Keep them apart: a kit "
-                + "beside the passphrase it protects is one thing to lose, not two.",
-            "The kit holds no passphrase and no keys — it is safe to print, and useless to anyone without "
-                + "your passphrase.",
         ]);
     }
 }

@@ -10,6 +10,7 @@ using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
@@ -98,7 +99,7 @@ public interface IOperationGateway : IAsyncDisposable
     /// <summary>
     /// Converges destinations now, outside the schedule (FR-DEST-002). Only a
     /// service can serve this — the fan-out needs its scheduler, ledger and
-    /// staging archives — so direct mode refuses with directions.
+    /// per-set archives — so direct mode refuses with directions.
     /// </summary>
     /// <param name="setName">The set to sync, or null for every configured set.</param>
     /// <param name="destinationName">The destination to sync, or null for each set's every destination.</param>
@@ -110,8 +111,8 @@ public interface IOperationGateway : IAsyncDisposable
     /// Reports what changed under a set's source since its last backup —
     /// new, updated, moved, deleted, and files the rules no longer include
     /// (ADR-0038, FR-SVC-009). Only a service can serve this — the rescan
-    /// reads the set's staging catalogue under the service's runtime — so
-    /// direct mode refuses with directions.
+    /// reads the set's catalogue under the service's runtime — so direct
+    /// mode refuses with directions.
     /// </summary>
     /// <param name="setName">The set to compare, or null for the default set.</param>
     /// <param name="sampleLimit">The most paths listed per bucket; null takes the service default.</param>
@@ -217,7 +218,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, LocalMode(address), client);
+                    return new ServiceGateway(client, LocalMode(address), client, passphraseEnvironmentVariable);
                 }
             }
 
@@ -287,7 +288,7 @@ public static class OperationGateway
                 {
                     var address = session.StateDirectory;
                     session.Dispose();
-                    return new ServiceGateway(client, LocalMode(address), client);
+                    return new ServiceGateway(client, LocalMode(address), client, passphraseEnvironmentVariable);
                 }
             }
 
@@ -296,6 +297,53 @@ public static class OperationGateway
         catch
         {
             session.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Opens the gateway for a command that named no repository: the running
+    /// service holding <paramref name="stateDirectory"/> — by default the
+    /// machine's shared installation state, the same one a bare service start
+    /// serves (FR-SVC-016) — exactly as the web console connects. There is no
+    /// direct fallback here, deliberately: direct mode IS the repository, so
+    /// without <c>--repo</c> the only honest answer when nothing listens is a
+    /// stated refusal with directions, never a guess at which archive was
+    /// meant.
+    /// </summary>
+    /// <param name="stateDirectory">The state directory, or null for the shared default.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="passphraseEnvironmentVariable">
+    /// The variable naming the passphrase, when one was given: what a restore
+    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// </param>
+    /// <returns>The gateway; dispose to close the connection.</returns>
+    public static async ValueTask<IOperationGateway> OpenServiceOnlyAsync(
+        string? stateDirectory, CancellationToken cancellationToken, string? passphraseEnvironmentVariable = null)
+    {
+        var state = stateDirectory is { Length: > 0 } ? stateDirectory : InstallationDefaults.StateDirectory;
+
+        LocalServiceClient client;
+        try
+        {
+            client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException)
+        {
+            throw new CliFailureException(
+                $"no service is listening for '{state}'. Start one (`fallbackplan-agent`), or name --repo to "
+                + "work on a repository directly.");
+        }
+
+        try
+        {
+            await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+            return new ServiceGateway(client, LocalMode(state), client, passphraseEnvironmentVariable);
+        }
+        catch
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
             throw;
         }
     }
@@ -310,6 +358,10 @@ public static class OperationGateway
     /// <param name="stateDirectory">The console's state directory (its peer identity and pairings).</param>
     /// <param name="fingerprint">The fingerprint of the pinned service to expect.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
+    /// <param name="passphraseEnvironmentVariable">
+    /// The variable naming the passphrase, when one was given: what a restore
+    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// </param>
     /// <returns>The gateway; dispose to close the session and release the device key.</returns>
     /// <remarks>
     /// There is no direct-mode fallback here, deliberately: a remote console does
@@ -322,12 +374,13 @@ public static class OperationGateway
         int port,
         string stateDirectory,
         string fingerprint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? passphraseEnvironmentVariable = null)
     {
         var connection = await RemotePeer.ConnectAsync(
             host, port, stateDirectory, fingerprint, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
 
-        return new ServiceGateway(connection.Client, RemoteMode(host, port), connection);
+        return new ServiceGateway(connection.Client, RemoteMode(host, port), connection, passphraseEnvironmentVariable);
     }
 
     private static string LocalMode(string stateDirectory) =>
@@ -346,8 +399,13 @@ public static class OperationGateway
 /// or cares which. <paramref name="owned"/> is what closing the gateway
 /// disposes: on the local binding that is the client itself; on the remote
 /// binding it is the connection holder that also releases the device key.
+/// <paramref name="passphraseEnvironmentVariable"/> names the passphrase when
+/// the verb was given one: a restore on a set-up installation derives its
+/// grant from it here, where the person typed (ADR-0042 §5).
 /// </remarks>
-internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IAsyncDisposable owned) : IOperationGateway
+internal sealed class ServiceGateway(
+    IFallbackPlanClient client, string mode, IAsyncDisposable owned, string? passphraseEnvironmentVariable = null)
+    : IOperationGateway
 {
     /// <summary>How often to ask the service whether the job has finished.</summary>
     /// <remarks>
@@ -447,17 +505,144 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     {
         ThrowHelper.ThrowIfNull(request);
 
-        var result = await SendAsync<RestoreResult>(
-            new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory),
-            "a restore",
-            cancellationToken).ConfigureAwait(false);
+        // A set-up installation holds no content key (ADR-0042 §7): a
+        // restore reads sealed content under a grant, and the grant is
+        // derived here — where the passphrase is — from the parameters the
+        // service publishes (contract 1.28), proved against its sealing
+        // public key before anything is sent, and handed over sealed to its
+        // recipient key. The console's ceremony, at the shell.
+        var source = await OpenGrantedSourceAsync(request.SnapshotId, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var result = await SendAsync<RestoreResult>(
+                new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory, Source: source),
+                "a restore",
+                cancellationToken).ConfigureAwait(false);
 
-        return new OperationReport(
-            result.Failed == 0,
-            [
-                string.Create(CultureInfo.InvariantCulture,
-                    $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
-            ]);
+            return new OperationReport(
+                result.Failed == 0,
+                [
+                    string.Create(CultureInfo.InvariantCulture,
+                        $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
+                ]);
+        }
+        finally
+        {
+            if (source is not null)
+            {
+                await client.ExecuteAsync(new CloseRestoreSourceCommand(source), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Opens a restore source under a derived grant when the service is a
+    /// set-up installation; null when it holds its own keys, in which case
+    /// the restore runs against the set's archive as before.
+    /// </summary>
+    private async ValueTask<string?> OpenGrantedSourceAsync(string snapshotId, CancellationToken cancellationToken)
+    {
+        var description = await SendAsync<ServiceDescriptionResult>(
+            new DescribeServiceCommand(), "a description of the service", cancellationToken).ConfigureAwait(false);
+
+        if (description is not
+            {
+                RestoreGrantRecipient.Length: > 0,
+                KdfSalt.Length: > 0,
+                KdfMemoryKib: { } memoryKib,
+                KdfIterations: { } iterations,
+                KdfParallelism: { } parallelism,
+                SealingPublicKey.Length: > 0,
+            })
+        {
+            return null;
+        }
+
+        if (passphraseEnvironmentVariable is null)
+        {
+            throw new CliFailureException(
+                "this service is a set-up installation, and restoring reads sealed content: name "
+                + "--passphrase-env <VAR> so the restore grant can be derived here (ADR-0042).");
+        }
+
+        // A restore source is opened by set, and the snapshot names no set
+        // a client can rely on — a snapshot a direct-mode backup wrote
+        // carries the archive's own identity, not the configured set's — so
+        // the sets are tried in order and the first whose archive lists the
+        // snapshot is the one. Every other source opened on the way is
+        // closed again.
+        //
+        // The grant is derived PER SET (contract 1.30): a set's archive
+        // normally shares the installation's salt, but one adopted from a
+        // destination (ADR-0061) keeps the salt it was born under, and only a
+        // grant derived under that salt reproduces its sealing key. One
+        // derivation per distinct salt, so the ordinary installation still
+        // runs Argon2id once.
+        var sets = await SendAsync<BackupSetsResult>(
+            new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+        var envelopesBySalt = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var recipient = Convert.FromHexString(description.RestoreGrantRecipient);
+        using var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable);
+
+        string? EnvelopeFor(string saltHex, Argon2Parameters parameters, string sealingPublicKeyHex)
+        {
+            if (envelopesBySalt.TryGetValue(saltHex, out var known))
+            {
+                return known;
+            }
+
+            using var authority = WriteOnlyDerivation.Derive(
+                passphrase, parameters, Convert.FromHexString(saltHex), KdfValidationMode.OpenRepository);
+            var envelope = authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(sealingPublicKeyHex))
+                ? Convert.ToHexStringLower(WriteOnlyProvisioning.SealGrant(recipient, authority.SealingPrivateKey))
+                : null;
+            envelopesBySalt[saltHex] = envelope;
+            return envelope;
+        }
+
+        foreach (var set in sets.Sets)
+        {
+            var envelope = set is { KdfSalt.Length: > 0, KdfMemoryKib: { } setMemory, KdfIterations: { } setIterations, KdfParallelism: { } setLanes, SealingPublicKey.Length: > 0 }
+                ? EnvelopeFor(
+                    set.KdfSalt,
+                    new Argon2Parameters { MemoryKiB = setMemory, Iterations = setIterations, Parallelism = setLanes },
+                    set.SealingPublicKey)
+                : EnvelopeFor(
+                    description.KdfSalt,
+                    new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
+                    description.SealingPublicKey);
+            if (envelope is null)
+            {
+                // Not this set's passphrase; the next set may be adopted from
+                // elsewhere and answer to it.
+                continue;
+            }
+
+            if (await client.ExecuteAsync(
+                    new OpenRestoreSourceCommand(set.Name, Envelope: envelope), cancellationToken).ConfigureAwait(false)
+                is not RestoreSourceOpenedResult opened)
+            {
+                continue;
+            }
+
+            if (opened.Snapshots.Any(
+                candidate => string.Equals(candidate.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)))
+            {
+                return opened.SourceId;
+            }
+
+            await client.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
+        if (envelopesBySalt.Count > 0 && envelopesBySalt.Values.All(envelope => envelope is null))
+        {
+            throw new CliFailureException(
+                "the passphrase does not reproduce this installation's credential — nothing was sent.");
+        }
+
+        throw new CliFailureException($"no configured set's archive holds snapshot '{snapshotId}'.");
     }
 
     /// <inheritdoc/>
@@ -565,7 +750,11 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
         JobState.CompletedWithFailures =>
             "PARTIAL — the snapshot is committed, but not everything could be read",
         JobState.Cancelled => "cancelled",
-        JobState.Paused => "PAUSED — resumable; the service will not finish it unattended",
+        // The cause belongs on the detail line beside this one, which carries
+        // the run's own park reason: since ADR-0069 the pool has two askers —
+        // a higher-priority arrival and a background window that has shut —
+        // and naming one of them here would be wrong half the time.
+        JobState.Paused => "PAUSED — suspended with its state held; it resumes unattended",
         JobState.FailedRecoverable => "FAILED (recoverable) — the service retries on its next pass",
         JobState.FailedPermanent => "FAILED — needs intervention; it will not be retried",
         _ => state.ToString().ToLowerInvariant(),
@@ -576,10 +765,12 @@ internal sealed class ServiceGateway(IFallbackPlanClient client, string mode, IA
     /// <see cref="JobState.CompletedWithFailures"/> belongs here for the same
     /// reason <see cref="JobState.Complete"/> does — it is terminal. Omitting
     /// it would leave <c>AwaitJobAsync</c> polling a job that will never
-    /// transition again.
+    /// transition again. <see cref="JobState.Paused"/> is deliberately NOT
+    /// here (ADR-0047 Amendment 1): a suspended run resumes unattended when a pool
+    /// slot frees, so a caller waiting on it keeps waiting.
     /// </remarks>
     private static bool HasSettled(JobState state) => state is
-        JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled or JobState.Paused
+        JobState.Complete or JobState.CompletedWithFailures or JobState.Cancelled
         or JobState.FailedRecoverable or JobState.FailedPermanent;
 
     private async ValueTask<JobDescriptor> AwaitJobAsync(string jobId, CancellationToken cancellationToken)
@@ -661,20 +852,17 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
             : catalogue.EnumerateSnapshots()
                 .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(backupSetId));
 
-        // A write-only repository takes the device trust domain (ADR-0042):
-        // verify-on-reuse reads content, which it cannot.
         var orchestrator = new PublicationOrchestrator(
-            session.Repository.Keys.WriteOnly
-                ? CapturePolicy.Default with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device }
-                : CapturePolicy.Default,
+            CapturePolicy.Default,
             session.Repository.RepositoryId,
             session.Writer,
             session.CurrentGeneration,
             session.Repository.Keys,
-            session.Repository.Hierarchy,
+            session.Repository.Credential,
             session.Store,
             session.CreateSequence(),
             session.SpoolDirectory,
+            session.Repository.EffectiveFormatVersion,
             observer: null,
             catalogue);
 
@@ -807,7 +995,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         using (var journalReader = new JournalReader(
-            session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy))
+            session.Store, session.Repository.RepositoryId, session.Repository.Credential))
         {
             var (records, unparseable, journalFindings) = await journalReader
                 .LoadAsync(session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
@@ -866,7 +1054,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         }
 
         using var reader = new RepositoryReader(session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        // No load at all: the catalogue says where every record is, so the
+        // read goes straight there and a blob is opened through its footer
+        // only when that fails (NFR-PERF-009). Opening even the blobs a plan
+        // needs cost three ranged reads each — locator, footer, envelope —
+        // before a byte of payload.
+        reader.UseLocationSource(catalogue.ResolveLocation);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan,
@@ -917,7 +1111,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         string? setName, string? destinationName, CancellationToken cancellationToken) =>
         // Fan-out belongs to the service: its scheduler owns the transfer
         // lane, its ledger records the outcome, and its runtime holds every
-        // set's staging archive. A direct-mode copy would race all three.
+        // set's archive. A direct-mode copy would race all three.
         throw new CliFailureException(Strings.DirectGateway_SyncNeedsTheService);
 
     /// <inheritdoc/>
@@ -931,8 +1125,8 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
     /// <inheritdoc/>
     public ValueTask<OperationReport> PreviewSetChangesAsync(
         string? setName, int? sampleLimit, CancellationToken cancellationToken) =>
-        // The rescan reads a set's staging catalogue, which the running
-        // service holds open — a second direct open would race its writer.
+        // The rescan reads a set's catalogue, which the running service
+        // holds open — a second direct open would race its writer.
         throw new CliFailureException(Strings.DirectGateway_ChangesNeedsTheService);
 
     /// <inheritdoc/>

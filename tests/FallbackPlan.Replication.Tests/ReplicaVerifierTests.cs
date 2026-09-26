@@ -1,4 +1,12 @@
+using System.Security.Cryptography;
+using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Replication;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -10,7 +18,10 @@ namespace FallbackPlan.Replication.Tests;
 /// it draws between <i>proved nothing</i> and <i>proved everything</i> is
 /// load-bearing: a run that could not read its own ground truth must not be
 /// spelled like a clean sweep (FR-VER-003). These are the unit-level proofs of
-/// that distinction, and of what a replica's silence costs it.
+/// that distinction, and of what a replica's silence costs it. The digest
+/// tier (FR-VER-001, FR-WOR-003): a sealed blob the service cannot open is
+/// proved by hashing its bytes at the replica against the digest the writer
+/// signed into the index, and only within a byte budget.
 /// </summary>
 [TestClass]
 public sealed class ReplicaVerifierTests
@@ -138,6 +149,144 @@ public sealed class ReplicaVerifierTests
         var outcome = await ReplicaVerifier.VerifyAsync(source, replica, samples, CancellationToken.None);
 
         Assert.AreEqual(samples[0].Key, outcome.Failed.Single());
+    }
+
+    [TestMethod]
+    public async Task ProveSealed_ASealedBlobWithASignedDigest_IsProvedByDigest()
+    {
+        // A write-only set's data blob: the footer opens under the structure
+        // key, the records are sealed to a key this side does not hold, and
+        // the tag proof stops at the container. The signed whole-blob digest
+        // is the independent thing left, and it proves the payload bytes are
+        // the ones the writer sealed.
+        var replica = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, blobId, digest) = await SeedSealedBlobAsync(replica);
+        using (repository)
+        {
+            var outcome = await ReplicaVerifier.ProveSealedAsync(
+                replica, [key.Value], repository, CancellationToken.None,
+                signedDigestOf: id => id.Equals(blobId) ? digest : null);
+
+            Assert.AreEqual(1, outcome.Passed);
+            Assert.AreEqual(1, outcome.Digest, "proved by the digest, and said so");
+            Assert.AreEqual(0, outcome.Sealed, "no tag was opened, so none is claimed");
+            Assert.IsEmpty(outcome.Failed);
+        }
+    }
+
+    [TestMethod]
+    public async Task ProveSealed_ARottedByteUnderTheSealedContent_FailsByDigest()
+    {
+        // Rot inside a sealed record: the footer still authenticates, the
+        // record's tag would refuse but nobody here can try it, and without
+        // the digest tier the blob is neither proved nor failed — a replica
+        // quietly holding damaged bytes for ever. The digest catches it.
+        var replica = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, blobId, digest) = await SeedSealedBlobAsync(replica);
+        using (repository)
+        {
+            var path = PathFor(_replicaPath, key.Value);
+            var bytes = File.ReadAllBytes(path);
+            bytes[200] ^= 0xFF;
+            File.WriteAllBytes(path, bytes);
+
+            var outcome = await ReplicaVerifier.ProveSealedAsync(
+                replica, [key.Value], repository, CancellationToken.None,
+                signedDigestOf: id => id.Equals(blobId) ? digest : null);
+
+            Assert.AreEqual(0, outcome.Passed);
+            Assert.AreEqual(key.Value, outcome.Failed.Single());
+        }
+    }
+
+    [TestMethod]
+    public async Task ProveSealed_NoDigestIsKnown_LeavesTheBlobNeitherProvedNorFailed()
+    {
+        // Today's posture, kept: a sealed blob with nothing independent to
+        // check it against is not damage and is not proof. Proving nothing
+        // must still not be spelled like proving everything.
+        var replica = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, _, _) = await SeedSealedBlobAsync(replica);
+        using (repository)
+        {
+            var outcome = await ReplicaVerifier.ProveSealedAsync(
+                replica, [key.Value], repository, CancellationToken.None, signedDigestOf: _ => null);
+
+            Assert.AreEqual(0, outcome.Passed);
+            Assert.AreEqual(0, outcome.Digest);
+            Assert.IsEmpty(outcome.Failed);
+            Assert.IsFalse(outcome.ProvedSomething);
+        }
+    }
+
+    [TestMethod]
+    public async Task ProveSealed_TheByteBudgetIsSpent_LeavesTheBlobUnproved()
+    {
+        // The tier reads whole blobs, so it is bounded in bytes per run and
+        // never loops: a blob the budget cannot cover is left unproved and
+        // unblamed, for the next run's cursor to reach.
+        var replica = new LocalFileSystemObjectStore(_replicaPath);
+        var (repository, key, blobId, digest) = await SeedSealedBlobAsync(replica);
+        using (repository)
+        {
+            var outcome = await ReplicaVerifier.ProveSealedAsync(
+                replica, [key.Value], repository, CancellationToken.None,
+                signedDigestOf: id => id.Equals(blobId) ? digest : null,
+                digestByteBudget: 16);
+
+            Assert.AreEqual(0, outcome.Passed);
+            Assert.AreEqual(0, outcome.Digest);
+            Assert.IsEmpty(outcome.Failed);
+        }
+    }
+
+    private static readonly WriterId Writer =
+        WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
+
+    /// <summary>
+    /// A write-only repository at the replica with one sealed data blob in
+    /// it, and the digest the writer would sign into the delta for it.
+    /// </summary>
+    private async Task<(OpenedRepository Repository, ObjectKey Key, BlobId BlobId, byte[] Digest)> SeedSealedBlobAsync(
+        LocalFileSystemObjectStore replica)
+    {
+        var repository = await RepositoryLifecycle.CreateAsync(
+            replica, TestAuthority.Shared.Credential.Clone(), new byte[16], Argon2Parameters.CreationMinimums,
+            createdBy: "verifier-tests", 1_722_600_000_000, CancellationToken.None);
+
+        var spool = Path.Combine(_root, "spool");
+        Directory.CreateDirectory(spool);
+        var structureKey = repository.Keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
+        await using var writer = BlobWriter.CreateSealed(
+            repository.RepositoryId, Writer, KeyGeneration.Zero, structureKey, repository.Keys.SealingPublicKey,
+            blobCounter: 1, EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, spool,
+            FormatVersions.ContainerVersion(repository.Descriptor.FormatVersion, dataClass: false));
+
+        using var ids = new ObjectIdDeriver(repository.Keys.ContentIdKey);
+        for (var i = 0; i < 3; i++)
+        {
+            var payload = new byte[2048 + i];
+            Random.Shared.NextBytes(payload);
+            await writer.AppendRecordAsync(
+                ObjectType.SegmentRecord, ids.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(payload)),
+                CompressionProfile.None, (ulong)payload.Length, payload, CancellationToken.None);
+        }
+
+        await using var sealedBlob = await writer.SealAsync(CancellationToken.None);
+        using var storeKeys = new StoreBlobKeyDeriver(repository.Keys.KeyIdKey);
+        var key = BlobStoreKeys.ForBlob(sealedBlob.BlobClass, storeKeys.Derive(sealedBlob.BlobId));
+        var put = await replica.PutAsync(key, sealedBlob.OpenContentAsync, PutConditions.IfNotExists, CancellationToken.None);
+        Assert.AreEqual(PutOutcome.Created, put.Outcome);
+
+        // The digest the delta carries is SHA-256 over everything but the
+        // sixteen-byte locator (07 §2.2). Computed here from the bytes on
+        // disk rather than taken from the writer, so the test agrees with the
+        // specification and not merely with the code under test.
+        var bytes = File.ReadAllBytes(PathFor(_replicaPath, key.Value));
+        var digest = SHA256.HashData(bytes.AsSpan(0, bytes.Length - 16));
+        Assert.IsTrue(digest.AsSpan().SequenceEqual([.. sealedBlob.Digest]), "the writer's digest is the locator's preimage");
+
+        return (repository, key, sealedBlob.BlobId, digest);
     }
 
     /// <summary>Writes matching objects to both stores and returns a sample per object.</summary>

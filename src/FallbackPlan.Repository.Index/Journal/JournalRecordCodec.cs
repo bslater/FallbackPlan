@@ -66,14 +66,14 @@ public static class JournalRecordCodec
     public static uint? VerifyByDescent(
         ReadOnlySpan<byte> signedBytes,
         ReadOnlySpan<byte> signature,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         uint maxGeneration)
     {
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         for (var generation = (long)maxGeneration; generation >= 0; generation--)
         {
-            using var signer = RepositorySigner.Create(hierarchy, new KeyGeneration((uint)generation));
+            using var signer = RepositorySigner.Create(credential, new KeyGeneration((uint)generation));
             if (signer.Verify(signedBytes, signature))
             {
                 return (uint)generation;

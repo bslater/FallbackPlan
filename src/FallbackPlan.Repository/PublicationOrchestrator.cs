@@ -29,6 +29,14 @@ public interface IIntentScope
 /// <summary>The nine steps of the canonical publication order (specification 08 §10).</summary>
 public enum PublicationStep
 {
+    /// <summary>
+    /// 0 — before the first step: nothing is durable yet. Not a step of the
+    /// order; the value a failure log carries when a publication died in the
+    /// preparation window — the spool hygiene sweep, the source probe, the
+    /// rule check — with no intent published.
+    /// </summary>
+    Preparing = 0,
+
     /// <summary>1 — the write intent is durable.</summary>
     PublishIntent = 1,
 
@@ -117,10 +125,15 @@ public sealed partial class PublicationOrchestrator
     private readonly WriterId _writerId;
     private readonly KeyGeneration _generation;
     private readonly RepositoryKeySet _keys;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly IObjectStore _store;
     private readonly WriterSequence _sequence;
     private readonly string _spoolDirectory;
+
+    // The descriptor's version, carried whole rather than resolved here:
+    // what each blob is stamped with depends on its class as well, and
+    // FormatVersions.ContainerVersion is the one place that decides.
+    private readonly ushort _repositoryFormatVersion;
     private readonly IPublicationObserver? _observer;
     private readonly Catalogue.Catalogue? _catalogue;
     private readonly IJobProgressReporter? _progress;
@@ -140,19 +153,21 @@ public sealed partial class PublicationOrchestrator
         WriterId writerId,
         KeyGeneration generation,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         IObjectStore store,
         WriterSequence sequence,
         string spoolDirectory,
+        ushort repositoryFormatVersion,
         IPublicationObserver? observer = null,
         Catalogue.Catalogue? catalogue = null,
         IJobProgressReporter? progress = null,
         ILogger? logger = null)
     {
         _catalogue = catalogue;
+        _repositoryFormatVersion = repositoryFormatVersion;
         ThrowHelper.ThrowIfNull(policy);
         ThrowHelper.ThrowIfNull(keys);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
@@ -172,16 +187,16 @@ public sealed partial class PublicationOrchestrator
 
         // ADR-0042 §7's gate, in the same place: the repository domain
         // verifies other writers' segments by READING their content, and a
-        // write-only holder cannot — every verification would answer
+        // writer holds no content key — every verification would answer
         // unavailable and quietly turn the hardened domain into re-archiving.
         // Refused with the remedy named rather than left to degrade; the
-        // hosts choose the device domain for write-only sets.
-        if (keys.WriteOnly && policy.DedupTrustDomain == DedupTrustDomain.Repository)
+        // device domain is the default (ADR-0006, amended).
+        if (policy.DedupTrustDomain == DedupTrustDomain.Repository)
         {
             throw new ArgumentException(
                 "The repository trust domain verifies other writers' segments by reading their content, "
-                + "which a write-only repository cannot do (ADR-0042). Use the device domain — the "
-                + "write-only default — or repository-unverified with its acknowledgement.",
+                + "which a writer cannot do (ADR-0042). Use the device domain — the default — or "
+                + "repository-unverified with its acknowledgement.",
                 nameof(policy));
         }
 
@@ -190,7 +205,7 @@ public sealed partial class PublicationOrchestrator
         _writerId = writerId;
         _generation = generation;
         _keys = keys;
-        _hierarchy = hierarchy;
+        _credential = credential;
         _store = store;
         _sequence = sequence;
         _spoolDirectory = spoolDirectory;
@@ -204,7 +219,9 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
-        _lastStep = PublicationStep.PublishIntent;
+        // Preparing until the intent is durable: a failure in the pre-intent
+        // window (the hygiene sweep, the void deltas) completed no step.
+        _lastStep = PublicationStep.Preparing;
 
         try
         {
@@ -238,15 +255,16 @@ public sealed partial class PublicationOrchestrator
         // (05 §6.3), and this writer owns the directory exclusively.
         BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
 
         // Leftovers first: numbers a previous run allocated and never
         // accounted for get their void deltas (07 §4) before new work — a
         // crash's and a cancellation's alike, on the next publication rather
-        // than the next restart (ADR-0029 §4). Reading the obligations here,
-        // in the serialised writer lane, is what makes the live pending set
-        // safe: nothing else is allocating.
+        // than the next restart (ADR-0029 §4). Reading the obligations here
+        // is safe because this set's writer sequence has exactly one
+        // publication against it — the pool widened the lane, not the
+        // per-set hold (ADR-0047): nothing else is allocating.
         foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
@@ -273,8 +291,8 @@ public sealed partial class PublicationOrchestrator
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
         // upload — each blob's covering extension durable before its put.
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
-            _logger);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryFormatVersion, scope, _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
         RecordStep(PublicationStep.SegmentAndSeal, snapshotForLog);
@@ -283,7 +301,7 @@ public sealed partial class PublicationOrchestrator
         // step-4 window; the snapshot's discoverable copy waits for step 7.
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, logger: _logger);
+            _policy.BlobWriteProfile, _repositoryFormatVersion, scope, logger: _logger);
 
         ObjectId fileVersionId, rootTreeId, policyId, snapshotObjectId;
         SnapshotManifest snapshot;
@@ -344,7 +362,7 @@ public sealed partial class PublicationOrchestrator
                 ClientVersion = job.ClientVersion,
             };
 
-            using (var signer = RepositorySigner.Create(_hierarchy, _generation))
+            using (var signer = RepositorySigner.Create(_credential, _generation))
             {
                 encodedSnapshot = SnapshotManifestCodec.Encode(
                     snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));
@@ -367,10 +385,22 @@ public sealed partial class PublicationOrchestrator
             var entries = new List<IndexEntry>();
             var covered = new List<BlobId>();
             var digests = new List<ReadOnlyMemory<byte>>();
+
+            // The Merkle commitment beside the flat digest, at format 3 and
+            // above only (07 §2.3): a reader that predates key 11 refuses a
+            // delta carrying it, and such a reader is entitled to read a
+            // format-2 repository.
+            var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
+            var merkleRoots = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in archive.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
                 digests.Add(blob.Digest.ToArray());
+                if (publishRoots)
+                {
+                    merkleRoots.Add(blob.MerkleRoot.ToArray());
+                }
+
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -385,7 +415,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var (deltaId, _) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
+                _generation.Value, covered, entries, digests, merkleRoots, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 

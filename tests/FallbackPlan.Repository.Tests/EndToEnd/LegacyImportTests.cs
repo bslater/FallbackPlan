@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class LegacyImportTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>A legacy archive made of in-memory byte arrays — FR-CP-002's "arbitrary byte stream".</summary>
     private sealed class SyntheticLegacySource(params (string Name, byte[] Content, string LegacyId)[] versions)
         : ILegacyArchiveSource
@@ -45,10 +43,11 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     }
 
     private PublicationOrchestrator CreateOrchestrator(
-        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy) => new(
-        SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+        Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential) => new(
+        SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
         new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-        SpoolDirectory);
+        SpoolDirectory,
+        FormatVersions.SealedDataPlane);
 
     private static byte[] Content(int seed, int length = 700_000)
     {
@@ -62,7 +61,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var first = Content(seed: 1);
         var second = Content(seed: 2);
@@ -70,7 +69,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
             ("report-v1.doc", first, "legacy:0001"),
             ("report-v2.doc", second, "legacy:0002"));
 
-        var imported = await new LegacyImportPipeline(CreateOrchestrator(store, keys, hierarchy)).ImportAsync(
+        var imported = await new LegacyImportPipeline(CreateOrchestrator(store, keys, credential)).ImportAsync(
             source,
             deviceId: Enumerable.Repeat((byte)0x22, 16).ToArray(),
             backupSetId: Enumerable.Repeat((byte)0x33, 16).ToArray(),
@@ -82,7 +81,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
 
         // Each imported version restores byte-identically through the
         // ordinary read path — no import-specific reader exists to diverge.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         foreach (var (expected, version) in new[] { (first, imported[0]), (second, imported[1]) })
@@ -107,10 +106,10 @@ public sealed class LegacyImportTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var content = Content(seed: 7);
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy);
+        var orchestrator = CreateOrchestrator(store, keys, credential);
 
         // Import the bytes, then publish the same bytes natively under the
         // same name into the same repository.
@@ -136,7 +135,7 @@ public sealed class LegacyImportTests : ArchiveTestHarness
                 ClientVersion: "tests/1.0"),
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var importedRead = await reader.ReadSegmentAsync(imported[0].Published.FileVersionObjectId, CancellationToken.None);

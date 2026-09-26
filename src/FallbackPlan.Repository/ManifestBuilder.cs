@@ -29,6 +29,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
     private readonly IBlobCounterAllocator _counters;
     private readonly string _spoolDirectory;
     private readonly BlobWriteProfile _blobProfile;
+    private readonly ushort _containerVersion;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
     private readonly byte[] _metadataClassKey;
@@ -48,6 +49,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
         IBlobCounterAllocator counters,
         string spoolDirectory,
         BlobWriteProfile blobProfile,
+        ushort repositoryFormatVersion,
         IIntentScope? intentScope = null,
         ReusePredicate? mayReuse = null,
         ILogger? logger = null)
@@ -59,6 +61,12 @@ public sealed class ManifestBuilder : IAsyncDisposable
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
 
         _logger = logger;
+
+        // Metadata blobs are stamped by the repository's version, which is
+        // not the repository's number: a format-2 archive's metadata blobs
+        // are symmetric containers stamped 1 (ADR-0014 Amendment 1), and a
+        // format-3 archive's are stamped 3.
+        _containerVersion = FormatVersions.ContainerVersion(repositoryFormatVersion, dataClass: false);
         _repositoryId = repositoryId;
         _writerId = writerId;
         _generation = generation;
@@ -167,7 +175,8 @@ public sealed class ManifestBuilder : IAsyncDisposable
             EncryptionProfile.Aes256GcmV1,
             _blobProfile,
             _spoolDirectory,
-            logger: _logger);
+            logger: _logger,
+            formatVersion: _containerVersion);
 
         await _writer.AppendRecordAsync(
             objectType,
@@ -374,6 +383,7 @@ public sealed class ManifestBuilder : IAsyncDisposable
                 storeBlobKey,
                 storeKey,
                 sealedBlob.Digest,
+                sealedBlob.MerkleRoot,
                 sealedBlob.RecordTable.Count,
                 sealedBlob.Length,
                 sealedBlob.RecordTable));

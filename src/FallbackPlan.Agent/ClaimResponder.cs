@@ -1,199 +1,196 @@
 using Bodu;
-using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Protocol;
-using FallbackPlan.Storage.Abstractions;
-using System.Security.Cryptography;
+using FallbackPlan.Repository;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
 /// <summary>
-/// The destination side of the replica claim (peer-protocol 07 §5;
-/// ADR-0046): a peer that has lost its device identity proves it holds the
-/// repository's <em>passphrase</em>, and the attribution moves to whatever
-/// identity it has now.
+/// The destination side of the claim ceremony (peer-protocol 03 §6;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// Amendment 2): a machine rebuilt after total loss proves a replica is its
+/// own with the passphrase and nothing else, and the attribution follows it
+/// to the device identity it now has.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Everything here runs on a destination, which holds no repository key of any
-/// kind. That is why it can work: the credential it compares against is a
-/// public key a source registered while the pairing was still alive, and the
-/// signature is checked with nothing else. A destination never learns the
-/// passphrase, never derives anything from it, and cannot itself produce a
-/// proof for a replica it stores.
+/// What makes this safe is that the proof is a key the <em>previous</em>
+/// machine published, at first attribution, while it still existed — and one
+/// this destination has never been able to change since. A claimant that can
+/// sign under it holds the installation's passphrase, which is the same
+/// person who could open every backup in the replica anyway.
 /// </para>
 /// <para>
-/// The set identifiers the result carries come from the store's own key
-/// namespace — <c>snapshots/&lt;device-id&gt;/&lt;backup-set-id&gt;/…</c>
-/// (specification 01 §2), where the set id is opaque rather than secret — so
-/// answering them needs no decryption either.
+/// The claimant cannot derive that key alone: it derives from the passphrase
+/// and the installation's KDF salt, and the salt is inside the replica,
+/// behind the attribution gate. So the ceremony has two phases in one
+/// session. The claimant opens; this side answers with the distinct
+/// salt-and-parameter pairs behind every replica here that carries a claim
+/// key — to a paired peer, and only what a paired peer could learn by holding
+/// a replica; never a repository id, never a sealing public key, never whose
+/// each pair is — and the claimant answers with one signed claim per pair.
+/// </para>
+/// <para>
+/// A claim that matches nothing and a claim whose signature does not verify
+/// refuse <b>identically</b>, which is the same rule
+/// <see cref="RetrievalResponder"/> follows for the same reason: telling the
+/// two apart would turn this into a way to ask a stranger's peer whether it
+/// holds a given key. Both answers are computed for every entry before any
+/// is acted on, so the refusal does not time differently either. A wrong
+/// passphrase reaches here as a key nobody recorded and is refused the same
+/// way — the claimant can only be told "wrong passphrase" by an archive of
+/// its own, and it has none.
+/// </para>
+/// <para>
+/// Nothing here decrypts, and nothing here is a restore. The claim moves a
+/// pointer in the attribution ledger; what the claimant may then read back it
+/// reads through the ordinary retrieval session, and can only open with the
+/// passphrase it already proved it has.
 /// </para>
 /// </remarks>
 internal static class ClaimResponder
 {
-    /// <summary>A backup-set identifier is 16 bytes.</summary>
-    private const int SetIdLength = 16;
-
-    /// <summary>Serves one claim exchange over an open peer stream.</summary>
-    /// <param name="replicasRoot">Where replicas live, one directory per repository id.</param>
-    /// <param name="stream">The open session stream, positioned after the claim request.</param>
-    /// <param name="peer">
-    /// The authenticated peer. Its 32-byte public key — not the displayed
-    /// fingerprint, which is a truncated hash — is what a proof binds to.
-    /// </param>
-    /// <param name="owners">The attribution ledger (peer-protocol 05 §2).</param>
-    /// <param name="transcriptHash">This session's bound context hash (02 §3.2).</param>
-    /// <param name="stateDirectory">Where a durable notice is raised when an attribution moves.</param>
+    /// <summary>Serves one claim ceremony over an open peer stream.</summary>
+    /// <param name="replicasRoot">Where this peer keeps the replicas it stores.</param>
+    /// <param name="stream">The open session stream, positioned after the claimant's open.</param>
+    /// <param name="peer">The authenticated claimant.</param>
+    /// <param name="owners">The replica attribution ledger (peer-protocol 05 §2).</param>
+    /// <param name="sessionId">This session's identifier (02 §3.5).</param>
     /// <param name="cancellationToken">Stops serving.</param>
-    /// <returns>The repository ids whose attribution moved, for the caller to log.</returns>
+    /// <returns>The repositories re-attributed.</returns>
     public static async Task<IReadOnlyList<string>> ServeAsync(
         string replicasRoot,
         Stream stream,
         PeerGrant peer,
         Application.ReplicaOwnerStore owners,
-        ReadOnlyMemory<byte> transcriptHash,
-        string stateDirectory,
+        ReadOnlyMemory<byte> sessionId,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(replicasRoot);
         ThrowHelper.ThrowIfNull(stream);
         ThrowHelper.ThrowIfNull(peer);
         ThrowHelper.ThrowIfNull(owners);
-        ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
 
-        var fingerprint = peer.Identity.Fingerprint;
-
-        // One challenge per replica this identity does not already own that
-        // carries a registered credential. A replica with no credential is not
-        // offered at all: it cannot be claimed, and pretending otherwise would
-        // send a claimant hunting for a passphrase problem it does not have.
-        var issued = new Dictionary<string, ClaimCandidate>(StringComparer.Ordinal);
-        foreach (var repositoryIdHex in owners.ClaimableBy(fingerprint))
+        try
         {
-            if (owners.Find(repositoryIdHex)?.ClaimTokenHex is not { } tokenHex)
+            // A session that never authenticated has no identifier, and a
+            // claim signed over nothing would verify in every session at
+            // once. Refused before anything is served.
+            if (sessionId.Length != SessionBinding.SessionIdLength)
             {
-                continue;
+                throw new PeerProtocolException(
+                    PeerRefusalReason.TermsRefused,
+                    "A claim is bound to the session it is made in, and this session has no identifier (03 §6).");
             }
 
-            issued[repositoryIdHex] = new ClaimCandidate(
-                Convert.FromHexString(repositoryIdHex),
-                Convert.FromHexString(tokenHex),
-                RandomNumberGenerator.GetBytes(ReplicaClaimProof.NonceLength));
-        }
+            var parameters = await ParametersAsync(replicasRoot, owners, cancellationToken).ConfigureAwait(false);
+            await PeerFrame.WriteAsync(stream, parameters, cancellationToken).ConfigureAwait(false);
 
-        await PeerFrame.WriteAsync(
-            stream, new ClaimChallenge([.. issued.Values]), cancellationToken).ConfigureAwait(false);
+            // Exactly one claim follows, and nothing else may: the answer
+            // above is the whole of what a claimant needs, and a second
+            // round would be a second look at the ledger.
+            var claim = await ReplicationWire.ReadAsync(
+                stream, PeerMessageType.ReplicationClaim, ReplicationClaim.Read, cancellationToken)
+                .ConfigureAwait(false);
 
-        var frame = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
-        if (frame is null)
-        {
-            // A claimant that reads an empty challenge and hangs up is the
-            // ordinary case, not a fault.
-            return [];
-        }
-
-        if (frame.Value.Type != PeerMessageType.ClaimProof)
-        {
-            throw new PeerProtocolException(
-                PeerRefusalReason.Malformed,
-                $"A {frame.Value.Type} is not part of a claim exchange (07 §5).");
-        }
-
-        var proof = ClaimProof.Read(frame.Value.Body);
-        var claimed = new List<ClaimedReplica>();
-        var moved = new List<string>();
-
-        foreach (var answer in proof.Answers)
-        {
-            var repositoryIdHex = Convert.ToHexStringLower(answer.RepositoryId.Span);
-
-            // Every check, and all three must hold. A proof for a candidate
-            // this session did not issue is refused even if it verifies:
-            // otherwise a claimant could replay one nonce forever.
-            if (!issued.TryGetValue(repositoryIdHex, out var candidate)
-                || owners.Find(repositoryIdHex)?.ClaimPublicKeyHex is not { } registered
-                || !CryptographicOperations.FixedTimeEquals(
-                    answer.ClaimPublicKey.Span, Convert.FromHexString(registered)))
+            var signed = ReplicationClaim.EncodeForSigning(sessionId.Span, peer.Identity.Fingerprint);
+            var verified = true;
+            var claimed = new SortedSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < claim.ClaimPublicKeys.Count; index++)
             {
-                continue;
+                // Every entry is checked and every match collected before
+                // either decides anything — an early exit on the first bad
+                // signature would time differently from a claim that matched
+                // nothing.
+                verified &= Repository.Crypto.RepositorySigner.VerifyWithPublicKey(
+                    claim.ClaimPublicKeys[index].Span, signed, claim.Signatures[index].Span);
+                foreach (var repositoryIdHex in owners.ClaimedBy(Convert.ToHexStringLower(claim.ClaimPublicKeys[index].Span)))
+                {
+                    claimed.Add(repositoryIdHex);
+                }
             }
 
-            // Rebuilt from this side's own copy of every field. Nothing the
-            // claimant sent decides what it signed.
-            var message = ReplicaClaimProof.Message(
-                candidate.RepositoryId.Span,
-                candidate.ClaimToken.Span,
-                candidate.Nonce.Span,
-                transcriptHash.Span,
-                peer.Identity.PublicKey);
-
-            if (!ReplicaClaimProof.Verify(answer.ClaimPublicKey.Span, message, answer.Signature.Span)
-                || !owners.TryReattribute(repositoryIdHex, fingerprint))
+            if (!verified || claimed.Count == 0)
             {
-                continue;
+                throw new PeerProtocolException(
+                    PeerRefusalReason.TermsRefused,
+                    "No replica here is claimable under that key.");
             }
 
-            moved.Add(repositoryIdHex);
-            claimed.Add(new ClaimedReplica(
-                answer.RepositoryId,
-                await SetIdsAsync(replicasRoot, repositoryIdHex, cancellationToken).ConfigureAwait(false)));
-        }
+            foreach (var repositoryIdHex in claimed)
+            {
+                owners.Reattribute(repositoryIdHex, peer.Identity.Fingerprint);
+            }
 
-        if (moved.Count > 0)
+            var accepted = claimed.ToList();
+            await PeerFrame.WriteAsync(
+                stream,
+                new ReplicationClaimAccepted([.. accepted.Select(id => (ReadOnlyMemory<byte>)Convert.FromHexString(id))]),
+                cancellationToken)
+                .ConfigureAwait(false);
+
+            return accepted;
+        }
+        catch (PeerProtocolException exception)
         {
-            // The operator is told, and retention stays refused until they
-            // acknowledge it (06 §3). Reading is already available: a disaster
-            // is when the far household is least reachable.
-            var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            Application.NoticeStore.Open(stateDirectory).Raise(
-                "replica-claimed",
-                $"Peer {fingerprint} proved the passphrase for {moved.Count} replica(s) held here and now owns "
-                + "them. Restores are served already; ageing them is refused until you acknowledge this.",
-                now);
-        }
+            if (!exception.ReceivedFromPeer)
+            {
+                await ReplicationWire.TryRefuseAsync(stream, exception).ConfigureAwait(false);
+            }
 
-        await PeerFrame.WriteAsync(stream, new ClaimResult(claimed), cancellationToken).ConfigureAwait(false);
-        return moved;
+            throw;
+        }
     }
 
     /// <summary>
-    /// The backup-set identifiers a replica's snapshots carry, read from the
-    /// store's key namespace rather than from any manifest.
+    /// The distinct salt-and-parameter pairs behind every claimable replica
+    /// here, sorted by salt (03 §6). A replica whose descriptor does not read
+    /// is skipped rather than fatal: the claimant should still reach the
+    /// replicas that do, and the damaged one is a finding for the sweep.
     /// </summary>
-    private static async Task<IReadOnlyList<ReadOnlyMemory<byte>>> SetIdsAsync(
-        string replicasRoot, string repositoryIdHex, CancellationToken cancellationToken)
+    private static async Task<ReplicationClaimParameters> ParametersAsync(
+        string replicasRoot, Application.ReplicaOwnerStore owners, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(replicasRoot, repositoryIdHex);
-        if (!Directory.Exists(path))
-        {
-            return [];
-        }
+        var pairs = new SortedDictionary<byte[], Argon2Parameters>(Comparer<byte[]>.Create(
+            (left, right) => left.AsSpan().SequenceCompareTo(right)));
 
-        var store = StoreComposition.OpenLocal(path);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var setIds = new List<ReadOnlyMemory<byte>>();
-
-        await foreach (var entry in store.ListAsync(
-            ObjectPrefix.Parse("snapshots/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
+        foreach (var (repositoryIdHex, _) in owners.WithClaimKey())
         {
-            // snapshots/<device-id>/<backup-set-id>/<snapshot-id>
-            var parts = entry.Key.Value.Split('/');
-            if (parts.Length < 4 || !seen.Add(parts[2]))
+            var replicaPath = Path.Combine(replicasRoot, repositoryIdHex);
+            if (!Directory.Exists(replicaPath))
             {
                 continue;
             }
 
-            var setId = new byte[SetIdLength];
-            if (Base32.TryDecode(parts[2], setId, out var written) && written == SetIdLength)
+            try
             {
-                setIds.Add(setId);
+                var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(
+                    new LocalFileSystemObjectStore(replicaPath), cancellationToken).ConfigureAwait(false);
+                var salt = descriptor.KdfSalt.ToArray();
+                if (salt.Length == ReplicationClaimParameters.SaltLength && !pairs.ContainsKey(salt))
+                {
+                    pairs.Add(salt, descriptor.KdfParameters);
+                }
             }
-
-            if (setIds.Count == ClaimResult.MaximumSetIds)
+            catch (Exception exception) when (exception is RepositoryOpenException or IOException or UnauthorizedAccessException)
             {
-                break;
+                // A replica with no readable descriptor cannot be claimed
+                // through this ceremony; it is not a reason to refuse the
+                // ones that can.
             }
         }
 
-        return setIds;
+        // The wire bound is the wire bound: a destination storing for more
+        // installations than the answer can name serves the first by salt
+        // order, which is the one order that says nothing about who arrived
+        // when. A household is one or two installations.
+        var served = pairs.Take(ReplicationClaimParameters.MaximumEntries).ToList();
+
+        return new ReplicationClaimParameters(
+            [.. served.Select(pair => (ReadOnlyMemory<byte>)pair.Key)],
+            [.. served.Select(pair => pair.Value.MemoryKiB)],
+            [.. served.Select(pair => pair.Value.Iterations)],
+            [.. served.Select(pair => pair.Value.Parallelism)]);
     }
 }

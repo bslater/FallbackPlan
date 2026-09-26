@@ -85,6 +85,11 @@ public sealed class ArchiveSession : IAsyncDisposable
     private BlobWriter? _writer;
     private bool _resumeAttempted;
 
+    // The repository's version, not a blob's: what this session stamps into
+    // the containers it writes is FormatVersions.ContainerVersion of it, and
+    // the two numbers differ for every format-2 metadata blob.
+    private readonly ushort _repositoryFormatVersion;
+
     internal ArchiveSession(
         CapturePolicy policy,
         RepositoryId repositoryId,
@@ -97,9 +102,11 @@ public sealed class ArchiveSession : IAsyncDisposable
         SpoolPinnedConfiguration pinned,
         IIntentScope? intentScope,
         ReusePredicate? mayReuseSegment,
+        ushort repositoryFormatVersion,
         ILogger? logger = null)
     {
         _logger = logger;
+        _repositoryFormatVersion = repositoryFormatVersion;
         _mayReuseSegment = mayReuseSegment;
         _policy = policy;
         _repositoryId = repositoryId;
@@ -110,20 +117,13 @@ public sealed class ArchiveSession : IAsyncDisposable
         _spoolDirectory = spoolDirectory;
         _pinned = pinned;
         _intentScope = intentScope;
-        // A write-only repository has no data key: its data blobs seal their
-        // records under per-blob content keys, and the footer — the structure
-        // plane — derives from the METADATA class key (ADR-0042 §2). The
-        // session's class key is therefore the structure key there, and the
-        // sealing public key rides beside it for CreateSealed below.
-        if (keys.WriteOnly)
-        {
-            _classKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
-            _sealingPublicKey = keys.SealingPublicKey.ToArray();
-        }
-        else
-        {
-            _classKey = keys.DeriveClassKey(BlobClass.Data, generation);
-        }
+        // A repository has no data key: its data blobs seal their records
+        // under per-blob content keys, and the footer — the structure plane —
+        // derives from the METADATA class key (ADR-0042 §2). The session's
+        // class key is therefore the structure key, and the sealing public
+        // key rides beside it for CreateSealed below.
+        _classKey = keys.DeriveClassKey(BlobClass.Metadata, generation);
+        _sealingPublicKey = keys.SealingPublicKey.ToArray();
 
         _objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         _storeKeyDeriver = new StoreBlobKeyDeriver(keys.KeyIdKey);
@@ -878,6 +878,7 @@ public sealed class ArchiveSession : IAsyncDisposable
                 storeBlobKey,
                 storeKey,
                 sealedBlob.Digest,
+                sealedBlob.MerkleRoot,
                 sealedBlob.RecordTable.Count,
                 sealedBlob.Length,
                 sealedBlob.RecordTable);
@@ -994,6 +995,8 @@ public sealed class ArchiveSession : IAsyncDisposable
             }
         }
 
+        var containerVersion = FormatVersions.ContainerVersion(_repositoryFormatVersion, dataClass: true);
+
         return _sealingPublicKey is null
             ? BlobWriter.Create(
                 _repositoryId,
@@ -1006,7 +1009,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 _policy.BlobWriteProfile,
                 _spoolDirectory,
                 pinned: _pinned,
-                logger: _logger)
+                logger: _logger,
+                formatVersion: containerVersion)
             : BlobWriter.CreateSealed(
                 _repositoryId,
                 _writerId,
@@ -1018,7 +1022,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 _policy.BlobWriteProfile,
                 _spoolDirectory,
                 pinned: _pinned,
-                logger: _logger);
+                logger: _logger,
+                formatVersion: containerVersion);
     }
 
     /// <summary>
@@ -1038,8 +1043,13 @@ public sealed class ArchiveSession : IAsyncDisposable
             _policy.EncryptionProfile,
             _policy.BlobWriteProfile,
             _pinned,
-            _sealingPublicKey is null ? FormatLimits.FormatVersion : FormatLimits.SealedFormatVersion,
-            _logger);
+            FormatVersions.ContainerVersion(_repositoryFormatVersion, dataClass: true),
+            _logger,
+            // A format-3 data blob seals a key into every record it appends,
+            // so a resumed writer needs the public key to go on doing that;
+            // a format-2 one carries its one key in the envelope and ignores
+            // this (05 §2.2).
+            _sealingPublicKey ?? default(ReadOnlySpan<byte>));
 
         if (result is not ResumeResult.Resumed resumed)
         {

@@ -8,7 +8,7 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.Format;
 
 /// <summary>
-/// The manifest codecs (specification 06; FR-MAN-003, FR-ARCH-010,
+/// The manifest codecs (specification 06; FR-MAN-003, FR-MAN-018, FR-ARCH-010,
 /// NFR-PORT-003): round-trips are exact, unknown keys are rejected so
 /// physical location has nowhere to hide (exit criteria 2 and 9), the
 /// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the
@@ -299,8 +299,8 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_SignedAndRoundTripped_VerifiesThroughTheTwoPassConstruction()
     {
-        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();
         var signedBytes = SnapshotManifestCodec.EncodeForSigning(manifest);
@@ -319,8 +319,8 @@ public sealed class ManifestCodecTests
     [TestMethod]
     public void SnapshotManifest_AFieldIsTampered_FailsVerificationAsASecurityFinding()
     {
-        using var hierarchy = new KeyHierarchy([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var manifest = SampleSnapshot();
         var stored = SnapshotManifestCodec.Encode(manifest, signer.Sign(SnapshotManifestCodec.EncodeForSigning(manifest)));
@@ -389,6 +389,128 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void PolicyManifest_WithRecordedShape_RoundTripsCanonically()
+    {
+        // ADR-0061: the set's shape travels in the archive so a rebuilt
+        // machine can re-declare the set from it. Keys 10-12 are optional;
+        // a label is absent for a single root and present for several.
+        var policy = NinePolicyKeys() with
+        {
+            Roots =
+            [
+                new RecordedRoot("/home/ben/Documents", "Documents"),
+                new RecordedRoot("/mnt/photos", "Photos"),
+            ],
+            SetName = "docs",
+            Schedule = "every 1h",
+        };
+
+        var bytes = PolicyManifestCodec.Encode(policy);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+
+        SequenceAssert.AreEqual(bytes, PolicyManifestCodec.Encode(decoded));
+        Assert.HasCount(2, decoded.Roots);
+        Assert.AreEqual("/home/ben/Documents", decoded.Roots[0].Path);
+        Assert.AreEqual("Documents", decoded.Roots[0].Label);
+        Assert.AreEqual("docs", decoded.SetName);
+        Assert.AreEqual("every 1h", decoded.Schedule);
+
+        var unlabelled = NinePolicyKeys() with { Roots = [new RecordedRoot("/srv/data", null)] };
+        var decodedUnlabelled = PolicyManifestCodec.Decode(PolicyManifestCodec.Encode(unlabelled));
+        Assert.IsNull(Assert.ContainsSingle(decodedUnlabelled.Roots).Label);
+        Assert.IsNull(decodedUnlabelled.SetName);
+        Assert.IsNull(decodedUnlabelled.Schedule);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_WithoutRecordedShape_EncodesTheNineKeyMapUnchanged()
+    {
+        // Every archive written before ADR-0061 carries the nine-key map, and
+        // a manifest that records no shape must still produce exactly it: the
+        // optional keys are absent, not empty. 0xA9 is a definite-length CBOR
+        // map of nine entries.
+        var bytes = PolicyManifestCodec.Encode(NinePolicyKeys());
+
+        Assert.AreEqual((byte)0xA9, bytes[0]);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+        Assert.IsEmpty(decoded.Roots);
+        Assert.IsNull(decoded.SetName);
+        Assert.IsNull(decoded.Schedule);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_ARootCarryingAnUnknownKey_IsRejected()
+    {
+        // The recorded root's inner map is pinned to keys 1 (label) and
+        // 2 (path); a third key is refused as every other unknown key is.
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(10);
+        WriteNinePolicyKeys(writer);
+        writer.WriteKey(10);
+        writer.WriteStartArray(1);
+        writer.WriteStartMap(2);
+        writer.WriteKey(2);
+        writer.WriteTextString("/srv/data");
+        writer.WriteKey(3);
+        writer.WriteTextString("smuggled");
+        writer.WriteEndMap();
+        writer.WriteEndArray();
+        writer.WriteEndMap();
+
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
+            PolicyManifestCodec.Decode(writer.Encode()));
+        Assert.Contains("root", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static PolicyManifest NinePolicyKeys() => new()
+    {
+        SegmentationProfile = 0x0001,
+        SegmentSizeOrTarget = 1024 * 1024,
+        CompressionProfile = 0x0001,
+        CompressionThresholdPermille = 50,
+        EncryptionProfile = 0x0001,
+        BlobTargetSize = 64 * 1024 * 1024,
+        BlobMaxSize = 256 * 1024 * 1024,
+        BlobMaxRecordCount = 65_536,
+        DedupTrustDomain = 1,
+        ExcludeRules = ["**/.cache/**"],
+    };
+
+    private static void WriteNinePolicyKeys(FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter writer)
+    {
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(2);
+        writer.WriteStartMap(1);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(1024 * 1024);
+        writer.WriteEndMap();
+        writer.WriteKey(3);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(4);
+        writer.WriteUnsignedInteger(50);
+        writer.WriteKey(5);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(6);
+        writer.WriteStartMap(3);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(64 * 1024 * 1024);
+        writer.WriteKey(2);
+        writer.WriteUnsignedInteger(256 * 1024 * 1024);
+        writer.WriteKey(3);
+        writer.WriteUnsignedInteger(65_536);
+        writer.WriteEndMap();
+        writer.WriteKey(7);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteKey(8);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+        writer.WriteKey(9);
+        writer.WriteStartArray(0);
+        writer.WriteEndArray();
+    }
+
+    [TestMethod]
     public void ErrorManifest_EncodedAndDecoded_RoundTrips()
     {
         var manifest = new ErrorManifest(
@@ -404,6 +526,29 @@ public sealed class ManifestCodecTests
         Assert.ContainsSingle(decoded.Failures);
         Assert.AreEqual(CaptureFailureReason.ChangedDuringRead, decoded.Failures[0].Reason);
         Assert.AreEqual(2, decoded.Failures[0].PathComponents.Count);
+    }
+
+    /// <summary>
+    /// Specification 06 assigns reason 8 — a filename with no faithful
+    /// repository encoding is refused, never substituted — and the encoder
+    /// writes it unchecked. A decoder that rejects 8 as unassigned makes
+    /// every snapshot carrying such a refusal unreadable at exactly the
+    /// moment somebody asks what failed.
+    /// </summary>
+    [TestMethod]
+    public void ErrorManifest_ReasonNameNotRepresentable_RoundTrips()
+    {
+        var manifest = new ErrorManifest(
+        [
+            new CaptureFailure(
+                ["home"u8.ToArray(), new byte[] { 0xEF, 0xBF, 0xBD }],
+                CaptureFailureReason.NameNotRepresentable,
+                "the name does not survive conversion in both directions"),
+        ]);
+
+        var decoded = ErrorManifestCodec.Decode(ErrorManifestCodec.Encode(manifest));
+
+        Assert.AreEqual(CaptureFailureReason.NameNotRepresentable, Assert.ContainsSingle(decoded.Failures).Reason);
     }
 
     [TestMethod]

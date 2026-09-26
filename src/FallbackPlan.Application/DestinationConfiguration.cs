@@ -155,6 +155,37 @@ public sealed record DestinationConfiguration
     [JsonPropertyName("deep_verify_interval_days")]
     public int? DeepVerifyIntervalDays { get; init; }
 
+    /// <summary>
+    /// How often a restore drill brings a sampled file back out of this
+    /// destination's replica, in days. For a local path, absent takes the
+    /// default; for a peer, absent means <b>never</b> — a peer is drilled
+    /// only on a cadence written here, because the drill reads over the
+    /// peer's link ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md),
+    /// Amendment 3).
+    /// </summary>
+    /// <remarks>
+    /// Much longer than the sweep's interval because a drill is much more
+    /// expensive — it rebuilds a catalogue from the replica's own index plane
+    /// and writes real bytes — and because what it watches for changes far
+    /// more slowly than rot does. Zero or negative is refused at load rather
+    /// than silently meaning "never": a local path nobody drills is a
+    /// decision, and it has to be spelled out somewhere a reader can see it.
+    /// A peer's drill is the opposite default for the opposite reason — its
+    /// bandwidth is somebody else's — so there the absence is the decision.
+    /// </remarks>
+    [JsonPropertyName("drill_interval_days")]
+    public int? DrillIntervalDays { get; init; }
+
+    /// <summary>
+    /// The destination's priority (ADR-0047): among waiting transfers of the
+    /// same initiation, higher ships first, and a prioritised backup writes
+    /// to its destinations in this order. Absent means 0; a set's reference
+    /// may override it for that set alone.
+    /// </summary>
+    [JsonPropertyName("priority")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Priority { get; init; }
+
     /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
     [JsonIgnore]
     public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;
@@ -281,6 +312,25 @@ public sealed record SetDestinationReference
 
     /// <summary>The per-destination retention override, when one applies (FR-GC-010).</summary>
     public RetentionConfiguration? Retention { get; init; }
+
+    /// <summary>
+    /// This set's override of the destination's own priority (ADR-0047);
+    /// null defers to the destination's declaration.
+    /// </summary>
+    public int? Priority { get; init; }
+
+    /// <summary>
+    /// The effective transfer priority of a <c>(set, destination)</c> pair
+    /// (ADR-0047): the set's override, else the destination's declaration,
+    /// else 0. One resolution rule, shared, so ship order, restore-read
+    /// order and the transfer queue can never disagree about which copy
+    /// comes first.
+    /// </summary>
+    /// <param name="reference">The set's reference to the destination, when the set holds one.</param>
+    /// <param name="destination">The destination's declaration, when it resolves.</param>
+    /// <returns>The priority the pair's work carries.</returns>
+    public static int EffectivePriority(SetDestinationReference? reference, DestinationConfiguration? destination) =>
+        reference?.Priority ?? destination?.Priority ?? 0;
 }
 
 /// <summary>
@@ -305,6 +355,7 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         string? name = null;
         RetentionConfiguration? retention = null;
+        int? priority = null;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
         {
             var property = reader.GetString();
@@ -317,6 +368,9 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
                 case "retention":
                     retention = JsonSerializer.Deserialize<RetentionConfiguration>(ref reader, options);
                     break;
+                case "priority":
+                    priority = reader.GetInt32();
+                    break;
                 default:
                     throw new JsonException($"A destination reference has no field '{property}'.");
             }
@@ -324,12 +378,12 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         return name is null
             ? throw new JsonException("A destination reference names no 'ref'.")
-            : new SetDestinationReference { Ref = name, Retention = retention };
+            : new SetDestinationReference { Ref = name, Retention = retention, Priority = priority };
     }
 
     public override void Write(Utf8JsonWriter writer, SetDestinationReference value, JsonSerializerOptions options)
     {
-        if (value.Retention is null)
+        if (value is { Retention: null, Priority: null })
         {
             writer.WriteStringValue(value.Ref);
             return;
@@ -337,8 +391,17 @@ internal sealed class SetDestinationReferenceConverter : JsonConverter<SetDestin
 
         writer.WriteStartObject();
         writer.WriteString("ref", value.Ref);
-        writer.WritePropertyName("retention");
-        JsonSerializer.Serialize(writer, value.Retention, options);
+        if (value.Retention is not null)
+        {
+            writer.WritePropertyName("retention");
+            JsonSerializer.Serialize(writer, value.Retention, options);
+        }
+
+        if (value.Priority is { } priority)
+        {
+            writer.WriteNumber("priority", priority);
+        }
+
         writer.WriteEndObject();
     }
 }

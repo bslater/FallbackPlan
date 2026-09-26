@@ -150,6 +150,44 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
+    public async Task LocalBinding_ProgressCarryingThePlan_RoundTripsTheTotals()
+    {
+        // Contract 1.20's additive fields: the counted plan survives the
+        // socket, and a report without one still answers null rather than
+        // zero — the client's cue for an indeterminate meter.
+        var service = new FakeService();
+        await using var listener = LocalServiceListener.Start(service, _state);
+        await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
+
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(Timeout);
+        var progressEvents = client.WatchAsync(stopping.Token);
+
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    return progress.Progress;
+                }
+
+                return null;
+            },
+            stopping.Token);
+
+        while (!watching.IsCompleted)
+        {
+            service.Emit(new JobProgress(
+                "job-1", JobState.Packing, 120, 120, 40, 1, 4096, 2048, TotalFiles: 500, TotalBytes: 1_000_000));
+            await Task.Delay(50, stopping.Token);
+        }
+
+        var received = await watching;
+        Assert.IsNotNull(received);
+        Assert.AreEqual(500L, received.TotalFiles);
+        Assert.AreEqual(1_000_000L, received.TotalBytes);
+    }
+
+    [TestMethod]
     public async Task Connect_WhenNoServiceIsListening_ShouldThrowWithAStatedReason()
     {
         var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(

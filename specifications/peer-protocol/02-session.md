@@ -126,6 +126,22 @@ The certificate A sees is the attacker's, not B's, so the `spki_hash` values in 
 
 The freshness that makes each connection's transcript unique comes from two independent places: the ephemeral certificate keypair, which an attacker cannot use without its private key, and the nonces. The nonces are carried because §1's "never reuse a certificate" is a rule a peer **cannot verify about the other side** — it would have to remember every certificate it had ever seen. A fresh nonce from each side makes the transcript unique whether or not the peer honoured that rule, and costs nothing, since both `SessionAuth` messages are sent without waiting.
 
+### 3.5 The session identifier
+
+Both sides derive a 32-byte name for the connection from the same context:
+
+```text
+session_id = SHA-256("fbp-peer-v1:session-id" ‖ context)
+```
+
+where `context` is §3.2's, unchanged. It is **role-neutral**: §3.2's two labels exist so a proof cannot be reflected, and an identifier has the opposite requirement, because its whole use is that both ends reach the same bytes. The third label is what keeps the constructions apart, so no input to one can be read as an input to the other. → [00 §4](00-conventions.md#4-domain-separation)
+
+It is available once §3.3's checks have passed and not before: a name derived from a claim nobody has proved is a name for a session that may not exist.
+
+A payload uses it to say **this session** rather than merely *this repository* — a signature over material that includes it is one a recording of the exchange cannot replay into a later connection, because neither end controls the value. An initiator chooses its own nonce and its own ephemeral certificate and can steer the result onto no value a past connection had. [06 §4.1](06-retention.md#41-retentionoffer) is the first use.
+
+`session_id` shares `binding_version` with the transcript deliberately. The version sits inside `context`, so a build that changed this derivation without bumping it would fail §3.3 authentication before reaching any payload — the loud failure rather than the puzzling one.
+
 ## 4 Session establishment
 
 In `Authenticated`:
@@ -185,8 +201,16 @@ The features defined so far:
 | `destination-verification` | The peer answers keyed random-range challenges ([04](04-verification.md)). A source **requires** this of a destination it replicates to, so declining it refuses the session rather than silently forgoing the check |
 | `termination-notice` | The peer understands `PeeringTermination` ([01 §3.1](01-identity-and-pairing.md#31-ending-a-peering)) |
 | `retention-instruction` | The peer accepts `RetentionOffer` within its floor ([06](06-retention.md)) |
-| `retrieval` | The peer serves an owner's replica back to it ([07](07-retrieval.md)) |
-| `replica-claim` | The peer accepts a passphrase-proved claim that re-points a replica's attribution ([07 §5](07-retrieval.md#5-claiming-a-replica)) |
+| `signed-retention` | The peer requires every `RetentionOffer` page to carry a reclaim signature it can verify ([06 §3](06-retention.md#3-what-the-spoke-validates); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)). An **announcement**, never a gate: a spoke enforces on the key it recorded, not on this feature |
+| `session-bound-retention` | The peer verifies a `RetentionOffer` signature over the session identifier as well as the page ([§3.5](#35-the-session-identifier); [06 §4.1](06-retention.md#41-retentionoffer)). Tells a **commander how to sign**; a spoke requires whichever form it offered |
+| `retrieval` | An owner may read its own replica back over the session ([07](07-retrieval.md)) |
+| `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
+| `replica-claim` | A machine rebuilt after total loss may prove a replica is its own and have the attribution follow it, holding the passphrase and nothing else: the destination serves the KDF salts and costs to derive against, then checks one claim per derivation ([03 §6](03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) Amendment 2). A gate is safe here because withholding it can only make the destination refuse |
+| `chunk-possession` | The peer answers a Merkle chunk challenge over its replica of a blob ([07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)): one leaf's bytes and its authentication path, checked at the source against the root the writer signed into the index. A gate is safe here because its absence can only mean **more** work for the destination — a peer that does not offer it is read back whole, as every peer is today, so declining is self-harm rather than evasion |
+
+`signed-retention` is separate from `retention-instruction` rather than folded into it, because the two say different things: one is *I accept deletion instructions at all*, the other is *and I will not act on one I cannot prove came from the repository's reclaim authority*. It tells a commander at the hello what it will be held to, rather than leaving it refused mid-exchange after the objects have already crossed.
+
+It says what the spoke expects and **decides nothing**, which is a rule worth stating in general and not only here: *a feature MUST NOT be the sole gate on a check that defends one side against the other.* The intersection is computed from both hellos, so conditioning such a check on a feature hands the decision to the party being checked. Where a check exists to constrain a peer, it is gated on a fact this side holds — for [06 §3](06-retention.md#3-what-the-spoke-validates), the reclaim public key recorded at first attribution. Features remain the right mechanism for what the other side can *understand*, which is what every other row in this table is about — and for a capability whose absence can only mean **less** authority, which is why `replica-claim` may be a gate where `signed-retention` may not: omitting it refuses a claim, and no attacker gains by being refused.
 
 The mechanism predates its first feature deliberately — retrofitting negotiation onto a deployed protocol means a flag day — and `termination-notice` is the proof it was worth specifying early: the message it gates is announced only to peers that offered it, and an older build is never sent a type it would refuse as `message_unknown`.
 
@@ -215,13 +239,15 @@ frame = u32(payload_length) ‖ payload
 | 9 | `SessionAuthProof` | §3.1 |
 | 10 | `PeeringTermination` | [01 §3.1](01-identity-and-pairing.md#31-ending-a-peering) |
 | 11–255 | Reserved for this specification | — |
-| 256–261 | Replication | [03](03-replication.md#6-framing-and-limits) |
+| 256–261 | Replication | [03](03-replication.md#7-framing-and-limits) |
 | 262–263 | Retention instructions | [06](06-retention.md#4-messages) |
 | 264–265 | Verification | [04](04-verification.md#4-messages) |
+| 266 | Partial-object declaration | [03 §3.3.1](03-replication.md#331-replicationpartial) |
+| 267–270 | Replica claim | [03 §6](03-replication.md#6-the-claim) |
+| 271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 | 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
-| 278–281 | Replica claim | [07 §5](07-retrieval.md#5-claiming-a-replica) |
-| 282 | `ClaimRegister` | [03 §3.2.1](03-replication.md#321-registering-the-claim-credential) |
-| 283+ | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
+| 278–279 | Chunk possession | [07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279) |
+| 280+ | Reserved for later payload documents | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 

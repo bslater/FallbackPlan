@@ -14,10 +14,11 @@ namespace FallbackPlan.Domain.Configuration;
 /// <para>
 /// <b>What this is not.</b> It is not zxcvbn. It consults no dictionary, no
 /// word list, and no breach corpus, so it cannot distinguish a strong
-/// passphrase from a famous quotation of the same shape — <c>Password1234</c>
-/// passes, and saying so plainly is more useful than implying otherwise.
-/// It is a floor that catches the obviously bad, and calling it a floor is
-/// the honest description of what it does.
+/// passphrase from a famous quotation of the same shape —
+/// <c>Password-12345678</c> satisfies every stated rule and passes, and
+/// saying so plainly is more useful than implying otherwise. It is a floor
+/// that catches the obviously bad, and calling it a floor is the honest
+/// description of what it does.
 /// </para>
 /// </remarks>
 public enum PassphraseStrengthBand
@@ -57,11 +58,20 @@ public enum PassphraseFinding
     /// <summary>Long, but built from very few distinct characters.</summary>
     FewDistinctCharacters,
 
-    /// <summary>Long enough that a single character class is no longer a weakness.</summary>
+    /// <summary>Long enough that a single character class no longer costs score — the composition rules still apply.</summary>
     LengthCarriesIt,
 
     /// <summary>Three or more character classes are present.</summary>
     VariedCharacterClasses,
+
+    /// <summary>No uppercase letter. The composition rules require one.</summary>
+    NoUppercase,
+
+    /// <summary>Fewer than two digits. The composition rules require two.</summary>
+    FewerThanTwoDigits,
+
+    /// <summary>No special character — nothing that is neither letter nor digit. The composition rules require one.</summary>
+    NoSpecialCharacter,
 }
 
 /// <summary>What <see cref="PassphraseStrength.Assess"/> concluded.</summary>
@@ -100,10 +110,13 @@ public static class PassphraseStrength
 {
     /// <summary>
     /// The enforced floor, and the single source for it — specification 03
-    /// §2.1 asks for a minimum and names no number; ADR-0044 §6 names this
-    /// one.
+    /// §2.1 asks for a minimum and names no number; ADR-0044 §6 as amended
+    /// names this one.
     /// </summary>
-    public const int MinimumLength = 12;
+    public const int MinimumLength = 16;
+
+    /// <summary>The composition rules require at least this many digits.</summary>
+    public const int MinimumDigits = 2;
 
     /// <summary>At or above this score a candidate is <see cref="PassphraseStrengthBand.Fair"/>.</summary>
     private const int FairScore = 40;
@@ -208,14 +221,85 @@ public static class PassphraseStrength
                 ? PassphraseStrengthBand.Fair
                 : PassphraseStrengthBand.Weak;
 
+        // The composition rules (ADR-0044 §6 as amended): an uppercase
+        // letter, two digits, a special character. A miss caps the band at
+        // Weak whatever the score — the meter must never show a passing bar
+        // over a refusal — and every unmet rule is named at once, so a
+        // person fixes the checklist in one pass.
+        var composition = ScanComposition(candidate);
+        if (!composition.HasUppercase)
+        {
+            findings.Add(PassphraseFinding.NoUppercase);
+        }
+
+        if (composition.DigitCount < MinimumDigits)
+        {
+            findings.Add(PassphraseFinding.FewerThanTwoDigits);
+        }
+
+        if (!composition.HasSpecial)
+        {
+            findings.Add(PassphraseFinding.NoSpecialCharacter);
+        }
+
+        if (!composition.Satisfied && band > PassphraseStrengthBand.Weak)
+        {
+            band = PassphraseStrengthBand.Weak;
+        }
+
         return new PassphraseAssessment(band, score, findings);
+    }
+
+    /// <summary>The composition facts both policies read (this one and <see cref="PasswordPolicy"/>).</summary>
+    /// <param name="HasUppercase">Whether any rune is uppercase.</param>
+    /// <param name="DigitCount">How many runes are digits.</param>
+    /// <param name="HasSpecial">Whether any rune is neither letter nor digit.</param>
+    internal readonly record struct CompositionFacts(bool HasUppercase, int DigitCount, bool HasSpecial)
+    {
+        /// <summary>Whether every composition rule is met.</summary>
+        public bool Satisfied => HasUppercase && DigitCount >= MinimumDigits && HasSpecial;
+    }
+
+    /// <summary>
+    /// One pass over the runes for the composition rules. Classified by
+    /// Unicode category, like everything here, so the verdict is the same
+    /// under every culture; "special" means neither letter nor digit, which
+    /// deliberately includes spaces — a separator is exactly the kind of
+    /// character the rule wants present.
+    /// </summary>
+    internal static CompositionFacts ScanComposition(string value)
+    {
+        var upper = false;
+        var digits = 0;
+        var special = false;
+
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsUpper(rune))
+            {
+                upper = true;
+            }
+
+            if (System.Text.Rune.IsDigit(rune))
+            {
+                digits++;
+            }
+            else if (!System.Text.Rune.IsLetter(rune))
+            {
+                special = true;
+            }
+        }
+
+        return new CompositionFacts(upper, digits, special);
     }
 
     /// <summary>
     /// The length as a reader would count it: one per grapheme cluster, so a
-    /// combining sequence or an astral character counts once.
+    /// combining sequence or an astral character counts once. Shared with
+    /// <see cref="PasswordPolicy"/> so the two floors cannot disagree about
+    /// what "a character" is.
     /// </summary>
-    private static int TextElementCount(string value)
+    internal static int TextElementCount(string value)
     {
         var count = 0;
         var enumerator = System.Globalization.StringInfo.GetTextElementEnumerator(value);

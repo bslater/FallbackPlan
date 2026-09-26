@@ -28,7 +28,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     public async Task Upload_AtAnyConcurrency_WritesEachBlobsCoveringIntentBeforeItsPut(int concurrency)
     {
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var store = CreateStore();
 
         // The store records the order it saw things in. Intents are journal
@@ -36,7 +36,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         // written first" is answerable from the sequence alone.
         var observed = new RecordingStore(store);
 
-        var orchestrator = CreateOrchestrator(observed, keys, hierarchy, concurrency: concurrency);
+        var orchestrator = CreateOrchestrator(observed, keys, credential, concurrency: concurrency);
 
         using var source = new MemoryStream(BuildFile(seed: 7, regions: 40));
         var published = await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x51), TestCancellation);
@@ -52,7 +52,7 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
         // rides on blob B's extension, which is exactly the interleaving a
         // concurrent uploader could produce. The extension that names THIS
         // blob id is the one 08 §3.1 requires to be durable first.
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, TestCancellation);
         Assert.AreEqual(0, unparseable);
 
@@ -83,11 +83,11 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     public async Task BackupAndRestore_AtAnyConcurrency_RestoresBytesIdenticalToTheSource(int concurrency)
     {
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var store = CreateStore();
 
         var content = BuildFile(seed: 11, regions: 40);
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency);
+        var orchestrator = CreateOrchestrator(store, keys, credential, concurrency: concurrency);
 
         using var source = new MemoryStream(content);
         await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x52), TestCancellation);
@@ -108,11 +108,11 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
     public async Task Upload_AtAnyConcurrency_GivesEveryBlobDenseAscendingOrdinals(int concurrency)
     {
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var store = CreateStore();
 
         var content = BuildFile(seed: 13, regions: 40);
-        var orchestrator = CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency);
+        var orchestrator = CreateOrchestrator(store, keys, credential, concurrency: concurrency);
 
         using var source = new MemoryStream(content);
         var published = await orchestrator.PublishAsync(Job(source, snapshotSeed: 0x53), TestCancellation);

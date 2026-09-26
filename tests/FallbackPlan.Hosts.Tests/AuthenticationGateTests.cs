@@ -2,6 +2,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -85,7 +86,7 @@ public sealed class AuthenticationGateTests : IDisposable
     private AuthenticatingService Connect() => new(_inner, _users, _sessions, _log);
 
     private void GiveTheInstallationAnOwner() =>
-        _users.Create("ben", "a-good-password", parameters: Fast);
+        _users.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
     [TestMethod]
     public async Task AnInstallationWithNoAccounts_IsNotLockedOut()
@@ -129,18 +130,6 @@ public sealed class AuthenticationGateTests : IDisposable
 
         Assert.AreEqual("setup_required", described.SetupState);
         Assert.IsFalse(_users.HasAccounts, "and it has no accounts either, so the override had its chance");
-    }
-
-    [TestMethod]
-    public async Task AKitStillOwed_AlsoKeepsItsOwnState()
-    {
-        _inner.SetupState = "kit_required";
-        var connection = Connect();
-
-        var described = (ServiceDescriptionResult)await connection.ExecuteAsync(
-            new DescribeServiceCommand(), CancellationToken.None);
-
-        Assert.AreEqual("kit_required", described.SetupState);
     }
 
     [TestMethod]
@@ -195,7 +184,7 @@ public sealed class AuthenticationGateTests : IDisposable
             await connection.ExecuteAsync(new DescribeServiceCommand(), CancellationToken.None));
 
         Assert.IsInstanceOfType<SessionResult>(
-            await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None));
+            await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None));
     }
 
     [TestMethod]
@@ -204,7 +193,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var connection = Connect();
 
-        await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
         var answered = await connection.ExecuteAsync(new GetStatusCommand(), CancellationToken.None);
 
         Assert.IsInstanceOfType<AcknowledgedResult>(answered);
@@ -221,7 +210,7 @@ public sealed class AuthenticationGateTests : IDisposable
         var wrongPassword = (ServiceError)await connection.ExecuteAsync(
             new LoginCommand("ben", "not-the-password"), CancellationToken.None);
         var wrongName = (ServiceError)await connection.ExecuteAsync(
-            new LoginCommand("nobody", "a-good-password"), CancellationToken.None);
+            new LoginCommand("nobody", "A-good-passw0rd9"), CancellationToken.None);
 
         Assert.AreEqual(wrongPassword.Message, wrongName.Message);
         Assert.DoesNotContain("exist", wrongName.Message, StringComparison.OrdinalIgnoreCase);
@@ -236,7 +225,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var first = Connect();
         var minted = (SessionResult)await first.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var second = Connect();
         Assert.IsInstanceOfType<ServiceError>(
@@ -269,7 +258,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var first = Connect();
         var minted = (SessionResult)await first.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var second = Connect();
         await second.ExecuteAsync(new ResumeSessionCommand(minted.Token), CancellationToken.None);
@@ -289,7 +278,7 @@ public sealed class AuthenticationGateTests : IDisposable
         GiveTheInstallationAnOwner();
         var before = Connect();
         var minted = (SessionResult)await before.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         _sessions = new SessionRegistry();
         var after = Connect();
@@ -305,7 +294,7 @@ public sealed class AuthenticationGateTests : IDisposable
         _sessions = new SessionRegistry(idleTimeout: TimeSpan.FromMilliseconds(1));
         var connection = Connect();
         var minted = (SessionResult)await connection.ExecuteAsync(
-            new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         await Task.Delay(20, CancellationToken.None);
 
@@ -318,7 +307,7 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var connection = Connect();
-        await connection.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var described = (ServiceDescriptionResult)await connection.ExecuteAsync(
             new DescribeServiceCommand(), CancellationToken.None);
@@ -332,12 +321,12 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
-        await owner.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var operatorConnection = Connect();
         await operatorConnection.ExecuteAsync(
-            new LoginCommand("sam", "another-password"), CancellationToken.None);
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var refusedCreate = (ServiceError)await operatorConnection.ExecuteAsync(
             new CreateUserCommand("mallory", "third-password"), CancellationToken.None);
@@ -350,11 +339,91 @@ public sealed class AuthenticationGateTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RestartService_IsTheOwnersAlone()
+    {
+        // The second Owner-only privilege after account management
+        // (ADR-0049): a restart interrupts everyone's runs and signs
+        // everybody out, so an operator may not command it.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var refused = (ServiceError)await operatorConnection.ExecuteAsync(
+            new RestartServiceCommand(), CancellationToken.None);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("owner", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        // The owner's restart passes the gate to the inner service.
+        var before = _inner.Executed;
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await owner.ExecuteAsync(new RestartServiceCommand(), CancellationToken.None));
+        Assert.AreEqual(before + 1, _inner.Executed, "the owner's restart must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task ReattributeReplica_IsTheOwnersAlone()
+    {
+        // The third Owner-only privilege (ADR-0053 §3): re-pointing which
+        // paired device owns a replica stored here hands somebody else's
+        // backup to a device — the operator's own machine, the owner's call.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var command = new ReattributeReplicaCommand(new string('c', 32), "ABCDEF");
+        var refused = (ServiceError)await operatorConnection.ExecuteAsync(command, CancellationToken.None);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("owner", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        // The listing is any signed-in account's; only the re-point is gated.
+        var before = _inner.Executed;
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await operatorConnection.ExecuteAsync(new ListReplicaAttributionsCommand(), CancellationToken.None));
+        Assert.IsInstanceOfType<AcknowledgedResult>(await owner.ExecuteAsync(command, CancellationToken.None));
+        Assert.AreEqual(before + 2, _inner.Executed, "the listing and the owner's re-point must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task ReattributeReplica_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
+    {
+        // As for restart: nobody owns the override until the first account
+        // exists, and the bootstrap window admits only the verbs that create it.
+        var refused = (ServiceError)await Connect().ExecuteAsync(
+            new ReattributeReplicaCommand(new string('c', 32), "ABCDEF"), CancellationToken.None);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.AreEqual(0, _inner.Executed, "the inner service was never reached");
+    }
+
+    [TestMethod]
+    public async Task RestartService_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
+    {
+        // The bootstrap window admits exactly the verbs that create the
+        // first account — an unset-up installation is not restartable by
+        // whoever can reach the socket.
+        var refused = (ServiceError)await Connect().ExecuteAsync(
+            new RestartServiceCommand(), CancellationToken.None);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.AreEqual(0, _inner.Executed, "the inner service was never reached");
+    }
+
+    [TestMethod]
     public async Task DeletingTheOwner_IsRefusedThroughTheContractToo()
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var refused = (ServiceError)await owner.ExecuteAsync(
             new DeleteUserCommand("ben"), CancellationToken.None);
@@ -370,11 +439,11 @@ public sealed class AuthenticationGateTests : IDisposable
         // close a console.
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
-        await owner.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
 
         var theirs = Connect();
-        await theirs.ExecuteAsync(new LoginCommand("sam", "another-password"), CancellationToken.None);
+        await theirs.ExecuteAsync(new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await theirs.ExecuteAsync(new GetStatusCommand(), CancellationToken.None));
 
@@ -392,14 +461,14 @@ public sealed class AuthenticationGateTests : IDisposable
         // person. The verb names no account for exactly that reason.
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var changed = await owner.ExecuteAsync(
-            new ChangePasswordCommand("a-good-password", "a-newer-password"), CancellationToken.None);
+            new ChangePasswordCommand("A-good-passw0rd9", "A-newer-passw0rd9"), CancellationToken.None);
 
         Assert.IsInstanceOfType<AcknowledgedResult>(changed);
         Assert.IsInstanceOfType<SessionResult>(
-            await Connect().ExecuteAsync(new LoginCommand("ben", "a-newer-password"), CancellationToken.None));
+            await Connect().ExecuteAsync(new LoginCommand("ben", "A-newer-passw0rd9"), CancellationToken.None));
     }
 
     [TestMethod]
@@ -407,7 +476,7 @@ public sealed class AuthenticationGateTests : IDisposable
     {
         GiveTheInstallationAnOwner();
         var owner = Connect();
-        await owner.ExecuteAsync(new LoginCommand("ben", "a-good-password"), CancellationToken.None);
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
 
         var listed = (UserListResult)await owner.ExecuteAsync(new ListUsersCommand(), CancellationToken.None);
 
@@ -442,14 +511,14 @@ public sealed class AuthenticationGateTests : IDisposable
         // FR-USR-002 over the channel this arc adds. Asserted against every
         // record the whole flow produced, rendered, rather than against the
         // call sites one at a time.
-        const string Password = "Sup3rSecretPhrase";
+        const string Password = "Sup3r-Secr3tPhrase";
         _users.Create("ben", Password, parameters: Fast);
 
         var connection = Connect();
         await connection.ExecuteAsync(new LoginCommand("ben", "wrong-one-first"), CancellationToken.None);
         var minted = (SessionResult)await connection.ExecuteAsync(
             new LoginCommand("ben", Password), CancellationToken.None);
-        await connection.ExecuteAsync(new CreateUserCommand("sam", "another-password"), CancellationToken.None);
+        await connection.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
         await connection.ExecuteAsync(new LogoutCommand(), CancellationToken.None);
 
         Assert.IsNotEmpty(_log.Records, "the flow logged nothing, so this would prove nothing");
@@ -460,7 +529,7 @@ public sealed class AuthenticationGateTests : IDisposable
                 " ", record.Values.Select(value => $"{value.Key}={value.Value}"));
 
             Assert.DoesNotContain(Password, rendered, StringComparison.Ordinal);
-            Assert.DoesNotContain("another-password", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain("Another-passw0rd9", rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(minted.Token, rendered, StringComparison.Ordinal);
         }
 
@@ -470,5 +539,64 @@ public sealed class AuthenticationGateTests : IDisposable
             _log.Records.Where(record => record.Values.Any(value =>
                 value.Value is string text && text.Contains("ben", StringComparison.Ordinal))),
             "no record named the account, so the assertions above prove only that nothing was logged");
+    }
+
+    [TestMethod]
+    public async Task ARefusedResume_LeavesARecordButNeverTheToken()
+    {
+        // Twenty-one hours of trace-level service log showed a client failing
+        // every command for sixteen minutes without one line saying why: the
+        // gate refused resumes silently, and the listener's generic "answered
+        // ServiceError" was all there was. A refusal that common must name
+        // itself — and still must not name the token, which is a credential
+        // whether or not it has lapsed (NFR-SEC-006).
+        GiveTheInstallationAnOwner();
+        var connection = Connect();
+
+        var stale = new string('b', 64);
+        var answered = await connection.ExecuteAsync(
+            new ResumeSessionCommand(stale), CancellationToken.None);
+
+        Assert.IsInstanceOfType<ServiceError>(answered);
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3755));
+        Assert.AreEqual(LogLevel.Debug, record.Level);
+        foreach (var logged in _log.Records)
+        {
+            var rendered = string.Join(" ", logged.Values.Select(value => $"{value.Key}={value.Value}"));
+            Assert.DoesNotContain(stale, rendered, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task ASuccessfulResume_LeavesATraceNamingTheUser()
+    {
+        GiveTheInstallationAnOwner();
+        var first = Connect();
+        var minted = (SessionResult)await first.ExecuteAsync(
+            new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+
+        var second = Connect();
+        await second.ExecuteAsync(new ResumeSessionCommand(minted.Token), CancellationToken.None);
+
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3756));
+        Assert.AreEqual(LogLevel.Trace, record.Level);
+        Assert.AreEqual("ben", record.Value("User"));
+    }
+
+    [TestMethod]
+    public async Task AGatedRefusal_LeavesATraceNamingTheCommand()
+    {
+        // The other half of the silent sixteen minutes: each relayed command
+        // was refused for want of a session, and the log never said which
+        // verb or why. At trace, the wedge describes itself.
+        GiveTheInstallationAnOwner();
+        var connection = Connect();
+
+        var answered = await connection.ExecuteAsync(new GetStatusCommand(), CancellationToken.None);
+
+        Assert.IsInstanceOfType<ServiceError>(answered);
+        var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3757));
+        Assert.AreEqual(LogLevel.Trace, record.Level);
+        Assert.AreEqual(nameof(GetStatusCommand), record.Value("Command"));
     }
 }

@@ -50,7 +50,7 @@ public sealed record ReplicaAttribution(
 /// peers return.
 /// </para>
 /// <para>
-/// It also carries the claim credential (ADR-0046): the token this destination
+/// It also carries the claim credential (ADR-0070): the token this destination
 /// minted and the public key the source registered against it. Losing those to
 /// a corrupt file costs a re-registration on the next session rather than an
 /// unclaimable replica, because the source can always register again — but a
@@ -58,15 +58,47 @@ public sealed record ReplicaAttribution(
 /// household's recovery, which is why the file is written atomically.
 /// </para>
 /// </remarks>
+/// <param name="Fingerprint">The owning peer's fingerprint.</param>
+/// <param name="ReclaimPublicKey">
+/// The repository's reclaim public key, lower-hex, as the source published it
+/// at first attribution ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)
+/// §5); null for an attribution recorded before the decision, or by a source
+/// that published none.
+/// <para>
+/// A destination holds no repository keys by design, so this is the only
+/// thing it can check a deletion instruction's signature against — the
+/// exception ADR-0020's amendment carves out of "nothing stores a public
+/// key", which is true inside the key boundary and not beyond it.
+/// </para>
+/// </param>
+/// <param name="ClaimPublicKey">
+/// The owning installation's claim public key, lower-hex, as the source
+/// published it at first attribution
+/// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// §1); null for an attribution recorded before the decision, or by a source
+/// that published none.
+/// <para>
+/// What a machine rebuilt after total loss proves its ownership with. It is
+/// the <em>installation's</em> key rather than the repository's, because a
+/// claimant that has lost the repository cannot reach a repository-derived
+/// key — so the same 32 bytes appear against every repository one
+/// installation stores here, while the attribution stays per repository,
+/// because the quota and the retrieval gate are.
+/// </para>
+/// </param>
+public sealed record ReplicaOwner(
+    string Fingerprint, string? ReclaimPublicKey = null, string? ClaimPublicKey = null);
+
+/// <inheritdoc cref="ReplicaOwnerStore"/>
 public sealed class ReplicaOwnerStore
 {
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
     private readonly string _path;
-    private readonly Dictionary<string, ReplicaAttribution> _owners;
+    private readonly Dictionary<string, ReplicaOwner> _owners;
     private readonly Lock _gate = new();
 
-    private ReplicaOwnerStore(string path, Dictionary<string, ReplicaAttribution> owners)
+    private ReplicaOwnerStore(string path, Dictionary<string, ReplicaOwner> owners)
     {
         _path = path;
         _owners = owners;
@@ -83,17 +115,36 @@ public sealed class ReplicaOwnerStore
 
         if (!File.Exists(path))
         {
-            return new ReplicaOwnerStore(path, Empty());
+            return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(StringComparer.Ordinal));
         }
 
+        var text = File.ReadAllText(path);
         try
         {
-            return new ReplicaOwnerStore(path, Read(File.ReadAllText(path)));
+            var owners = JsonSerializer.Deserialize<Dictionary<string, ReplicaOwner>>(text, SerializerOptions) ?? [];
+            return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(owners, StringComparer.Ordinal));
         }
         catch (JsonException)
         {
-            File.Move(path, path + ".corrupt", overwrite: true);
-            return new ReplicaOwnerStore(path, Empty());
+            // The pre-reclaim shape was a flat id-to-fingerprint map. Lifted
+            // rather than set aside, because an attribution discarded is a
+            // quota that stops being enforceable and a peer that has to
+            // re-offer to be recognised — too high a price for a field that
+            // was simply not there yet. The file rewrites in the new shape on
+            // the next attribution.
+            try
+            {
+                var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(text, SerializerOptions) ?? [];
+                return new ReplicaOwnerStore(
+                    path,
+                    legacy.ToDictionary(
+                        pair => pair.Key, pair => new ReplicaOwner(pair.Value), StringComparer.Ordinal));
+            }
+            catch (JsonException)
+            {
+                File.Move(path, path + ".corrupt", overwrite: true);
+                return new ReplicaOwnerStore(path, new Dictionary<string, ReplicaOwner>(StringComparer.Ordinal));
+            }
         }
     }
 
@@ -144,21 +195,84 @@ public sealed class ReplicaOwnerStore
     /// <b>different</b> peer — the offer is refused rather than one household's
     /// archive counting against another's quota (05 §2).
     /// </returns>
-    public bool TryAttribute(string repositoryIdHex, string fingerprint)
+    /// <param name="reclaimPublicKey">
+    /// The reclaim public key the source published with its offer (ADR-0055
+    /// §5), or null when it published none. Recorded at first attribution and
+    /// <b>never replaced</b> afterwards: the key a destination checks deletion
+    /// instructions against must not be replaceable by whoever is sending the
+    /// instructions, or the check would be one the attacker controls.
+    /// </param>
+    /// <param name="claimPublicKey">
+    /// The claim public key the source published with its offer
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1),
+    /// or null when it published none. Recorded and never replaced on the
+    /// same rule, which matters more here than for the reclaim key: this is
+    /// what decides which device the replica will be handed back to, so a key
+    /// a later offer could overwrite would let whoever can reach this peer
+    /// nominate themselves the owner.
+    /// </param>
+    public bool TryAttribute(
+        string repositoryIdHex,
+        string fingerprint,
+        string? reclaimPublicKey = null,
+        string? claimPublicKey = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
         ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
 
         lock (_gate)
         {
-            if (_owners.TryGetValue(repositoryIdHex, out var attribution))
+            if (_owners.TryGetValue(repositoryIdHex, out var owner))
             {
-                return string.Equals(attribution.Fingerprint, fingerprint, StringComparison.Ordinal);
+                if (!string.Equals(owner.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                // A first attribution that recorded no key — an older source,
+                // or one provisioned before the decision — may still learn it
+                // once. Filling an absence is not replacing an answer, and the
+                // alternative is a peering that can never be secured without
+                // being torn down and rebuilt. Each key fills independently:
+                // a source may publish one and not the other.
+                var filled = owner;
+                if (filled.ReclaimPublicKey is null && reclaimPublicKey is { Length: > 0 })
+                {
+                    filled = filled with { ReclaimPublicKey = reclaimPublicKey };
+                }
+
+                if (filled.ClaimPublicKey is null && claimPublicKey is { Length: > 0 })
+                {
+                    filled = filled with { ClaimPublicKey = claimPublicKey };
+                }
+
+                if (filled != owner)
+                {
+                    _owners[repositoryIdHex] = filled;
+                    AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
+                }
+
+                return true;
             }
 
-            _owners[repositoryIdHex] = new ReplicaAttribution(fingerprint);
-            Persist();
+            _owners[repositoryIdHex] = new ReplicaOwner(
+                fingerprint,
+                reclaimPublicKey is { Length: > 0 } ? reclaimPublicKey : null,
+                claimPublicKey is { Length: > 0 } ? claimPublicKey : null);
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
             return true;
+        }
+    }
+
+    /// <summary>The attribution for one repository, or null when there is none.</summary>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    public ReplicaOwner? Find(string repositoryIdHex)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
+
+        lock (_gate)
+        {
+            return _owners.GetValueOrDefault(repositoryIdHex);
         }
     }
 
@@ -177,176 +291,103 @@ public sealed class ReplicaOwnerStore
         }
     }
 
-    /// <summary>What this destination holds for one replica, or null if it holds none.</summary>
-    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
-    public ReplicaAttribution? Find(string repositoryIdHex)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
-
-        lock (_gate)
-        {
-            return _owners.GetValueOrDefault(repositoryIdHex);
-        }
-    }
-
     /// <summary>
-    /// Returns the token to offer a source so it can register a claim
-    /// credential, minting one on first need. Null once a credential is
-    /// registered: the destination asks exactly once, and never re-offers a
-    /// token for a replica that can already be claimed.
+    /// Every repository recorded against a claim public key
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) §1).
     /// </summary>
-    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
-    /// <param name="mintToken">Produces a fresh 16-byte token.</param>
-    /// <returns>The token as lower-hex, or null when nothing should be offered.</returns>
-    public string? OfferClaimToken(string repositoryIdHex, Func<byte[]> mintToken)
+    /// <remarks>
+    /// The claim key is the <em>installation's</em>, so one key selects every
+    /// repository that installation stores here — which is what lets a
+    /// claimant that holds no repository id ask for its replicas by proving a
+    /// key instead of naming a repository.
+    /// </remarks>
+    /// <param name="claimPublicKey">The claim public key, lower-hex.</param>
+    /// <returns>The repository ids, lower-hex.</returns>
+    public IReadOnlyList<string> ClaimedBy(string claimPublicKey)
     {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
-        ThrowHelper.ThrowIfNull(mintToken);
-
-        lock (_gate)
-        {
-            if (!_owners.TryGetValue(repositoryIdHex, out var attribution)
-                || attribution.ClaimPublicKeyHex is not null)
-            {
-                return null;
-            }
-
-            if (attribution.ClaimTokenHex is { } existing)
-            {
-                return existing;
-            }
-
-            var token = Convert.ToHexStringLower(mintToken());
-            _owners[repositoryIdHex] = attribution with { ClaimTokenHex = token };
-            Persist();
-            return token;
-        }
-    }
-
-    /// <summary>
-    /// Records the public half a source derived from its passphrase and this
-    /// destination's token.
-    /// </summary>
-    /// <returns>
-    /// <see langword="false"/> when no token was offered for this repository,
-    /// or one is already registered — a registration is answered once, and a
-    /// later one must not silently replace the credential a recovery depends
-    /// on.
-    /// </returns>
-    public bool TryRegisterClaimKey(string repositoryIdHex, string claimPublicKeyHex)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
-        ThrowHelper.ThrowIfNullOrWhiteSpace(claimPublicKeyHex);
-
-        lock (_gate)
-        {
-            if (!_owners.TryGetValue(repositoryIdHex, out var attribution)
-                || attribution.ClaimTokenHex is null
-                || attribution.ClaimPublicKeyHex is not null)
-            {
-                return false;
-            }
-
-            _owners[repositoryIdHex] = attribution with { ClaimPublicKeyHex = claimPublicKeyHex };
-            Persist();
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// The replicas a dialling peer could be challenged to claim: every one
-    /// carrying a registered credential that this identity does not already
-    /// own (peer-protocol 07 §5.5).
-    /// </summary>
-    /// <param name="fingerprint">The dialling peer's fingerprint.</param>
-    public IReadOnlyList<string> ClaimableBy(string fingerprint)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(claimPublicKey);
 
         lock (_gate)
         {
             return [.. _owners
-                .Where(pair => pair.Value.ClaimPublicKeyHex is not null
-                    && !string.Equals(pair.Value.Fingerprint, fingerprint, StringComparison.Ordinal))
-                .Select(pair => pair.Key)
-                .Order(StringComparer.Ordinal)];
+                .Where(pair => string.Equals(pair.Value.ClaimPublicKey, claimPublicKey, StringComparison.Ordinal))
+                .Select(pair => pair.Key)];
         }
     }
 
     /// <summary>
-    /// Moves a replica's attribution to the peer that proved the passphrase,
-    /// and marks the claim as awaiting the operator's acknowledgement.
+    /// Every repository whose attribution carries a claim public key, with
+    /// that key — what the claim ceremony's first answer is built from
+    /// (peer-protocol 03 §6): the destination reads each such replica's
+    /// descriptor for the salt and parameters a claimant must derive under.
     /// </summary>
-    /// <returns>
-    /// <see langword="false"/> when the repository is unknown or carries no
-    /// registered credential; a caller must have verified a proof against that
-    /// credential before calling.
-    /// </returns>
-    public bool TryReattribute(string repositoryIdHex, string fingerprint)
+    /// <returns>Repository ids, lower-hex, each with its recorded claim public key, in no particular order.</returns>
+    public IReadOnlyList<(string RepositoryIdHex, string ClaimPublicKey)> WithClaimKey()
+    {
+        lock (_gate)
+        {
+            return [.. _owners
+                .Where(pair => pair.Value.ClaimPublicKey is { Length: > 0 })
+                .Select(pair => (pair.Key, pair.Value.ClaimPublicKey!))];
+        }
+    }
+
+    /// <summary>
+    /// Every attribution this destination holds, ids ascending — the
+    /// operator's view ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// §3): whose each replica is, and whether a claim key is on record,
+    /// which decides whether its owner's passphrase can move it or only the
+    /// operator can.
+    /// </summary>
+    /// <returns>Repository ids, lower-hex, each with its attribution as recorded.</returns>
+    public IReadOnlyList<(string RepositoryIdHex, ReplicaOwner Owner)> All()
+    {
+        lock (_gate)
+        {
+            return [.. _owners
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (pair.Key, pair.Value))];
+        }
+    }
+
+    /// <summary>
+    /// Points a replica at a new device identity, the claim ceremony having
+    /// proved the claimant is the same owner (ADR-0053 §2).
+    /// </summary>
+    /// <remarks>
+    /// The only writer here that changes a fingerprint, and the one place
+    /// <see cref="TryAttribute"/>'s "already stored here for another peer"
+    /// rule is deliberately set aside. It is set aside on <em>proof</em>, and
+    /// the proof is not this store's to check — the store holds no
+    /// cryptography and knows no keys, so a caller that skipped the signature
+    /// would be a caller that skipped the ceremony. The two recorded public
+    /// keys are kept exactly as they were: the same passphrase re-derives
+    /// them, so a claimant that could replace them could only replace them
+    /// with themselves, and anyone else must not.
+    /// </remarks>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    /// <param name="fingerprint">The claimant's fingerprint.</param>
+    /// <returns><see langword="false"/> when no such repository is attributed here.</returns>
+    public bool Reattribute(string repositoryIdHex, string fingerprint)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
         ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
 
         lock (_gate)
         {
-            if (!_owners.TryGetValue(repositoryIdHex, out var attribution)
-                || attribution.ClaimPublicKeyHex is null)
+            if (!_owners.TryGetValue(repositoryIdHex, out var owner))
             {
                 return false;
             }
 
-            // Re-claiming what you already own is idempotent and raises no
-            // notice: it moves nothing, so there is nothing for an operator to
-            // be told about.
-            if (string.Equals(attribution.Fingerprint, fingerprint, StringComparison.Ordinal))
+            if (string.Equals(owner.Fingerprint, fingerprint, StringComparison.Ordinal))
             {
                 return true;
             }
 
-            _owners[repositoryIdHex] = attribution with
-            {
-                Fingerprint = fingerprint,
-                ClaimAwaitingAcknowledgement = true,
-            };
-            Persist();
+            _owners[repositoryIdHex] = owner with { Fingerprint = fingerprint };
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
             return true;
         }
     }
-
-    /// <summary>
-    /// Whether a claim on this replica is still waiting for the destination's
-    /// operator — the gate retention instructions are refused behind
-    /// (peer-protocol 06 §3).
-    /// </summary>
-    public bool IsClaimAwaitingAcknowledgement(string repositoryIdHex)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
-
-        lock (_gate)
-        {
-            return _owners.TryGetValue(repositoryIdHex, out var attribution)
-                && attribution.ClaimAwaitingAcknowledgement;
-        }
-    }
-
-    /// <summary>
-    /// Records that the destination's operator acknowledged a claim, releasing
-    /// the retention gate. Idempotent.
-    /// </summary>
-    public void AcknowledgeClaim(string repositoryIdHex)
-    {
-        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
-
-        lock (_gate)
-        {
-            if (_owners.TryGetValue(repositoryIdHex, out var attribution)
-                && attribution.ClaimAwaitingAcknowledgement)
-            {
-                _owners[repositoryIdHex] = attribution with { ClaimAwaitingAcknowledgement = false };
-                Persist();
-            }
-        }
-    }
-
-    private void Persist() => AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
 }

@@ -26,6 +26,7 @@ namespace FallbackPlan.Agent;
 public sealed class ProgressHub : IJobProgressReporter
 {
     private readonly List<Channel<JobProgressEvent>> _subscribers = [];
+    private readonly Dictionary<string, JobProgressEvent> _latest = [];
     private readonly Lock _gate = new();
     private long _sequence;
 
@@ -42,6 +43,18 @@ public sealed class ProgressHub : IJobProgressReporter
             // sequence exists precisely so a client can spot a gap.
             var published = new JobProgressEvent(++_sequence, progress);
 
+            // The per-job snapshot a later subscriber is handed on arrival.
+            // A settled job leaves the map: its story belongs to the journal,
+            // and replaying it would render a finished job as live.
+            if (HasSettled(progress.State))
+            {
+                _latest.Remove(progress.JobId);
+            }
+            else
+            {
+                _latest[progress.JobId] = published;
+            }
+
             foreach (var subscriber in _subscribers)
             {
                 // Bounded and drop-oldest: TryWrite never blocks the engine.
@@ -49,6 +62,13 @@ public sealed class ProgressHub : IJobProgressReporter
             }
         }
     }
+
+    private static bool HasSettled(JobState state) => state is
+        JobState.Complete
+        or JobState.CompletedWithFailures
+        or JobState.Cancelled
+        or JobState.FailedRecoverable
+        or JobState.FailedPermanent;
 
     /// <summary>Streams progress to one watcher until it stops listening.</summary>
     /// <param name="cancellationToken">Ends the subscription.</param>
@@ -60,10 +80,11 @@ public sealed class ProgressHub : IJobProgressReporter
     /// <c>async IAsyncEnumerable</c> runs none of its body until the first
     /// <c>MoveNextAsync</c>, so registering inside one leaves a caller who
     /// holds the enumerable — and believes it is watching — subscribed to
-    /// nothing. <see cref="Report"/> writes only to registered subscribers and
-    /// nothing replays, so every event in that window was lost. For a UI
-    /// attaching to a running job that is silent data loss; for the service
-    /// tests it was a flake that only appeared when the thread pool was busy.
+    /// nothing. <see cref="Report"/> writes only to registered subscribers,
+    /// and the only replay is the latest snapshot per live job, so the
+    /// missed sequence in that window was lost. For a UI attaching to a
+    /// running job that is silent data loss; for the service tests it was a
+    /// flake that only appeared when the thread pool was busy.
     /// </para>
     /// <para>
     /// The trade is deliberate: a caller that asks to watch and never
@@ -85,6 +106,18 @@ public sealed class ProgressHub : IJobProgressReporter
 
         lock (_gate)
         {
+            // The latest snapshot per live job rides ahead of the live feed —
+            // never the missed sequence, just enough for a console arriving
+            // mid-run to render a meter at once instead of waiting for the
+            // next file to complete (which, mid-enormous-file, can be a long
+            // wait). Written before the subscription is visible to Report,
+            // so a concurrent report cannot interleave behind its own
+            // snapshot.
+            foreach (var snapshot in _latest.Values)
+            {
+                channel.Writer.TryWrite(snapshot);
+            }
+
             _subscribers.Add(channel);
         }
 

@@ -7,28 +7,30 @@
 ## 1 Hierarchy
 
 ```text
-passphrase ──Argon2id──▶ key-encryption key (KEK)
-                              │
-                              │ wraps
-                              ▼
-                      repository master key (32 bytes, random at creation)
-                              │
-                              │ HKDF-Expand, domain-separated
-              ┌───────────────┼───────────────┬───────────────┬──────────────┐
-              ▼               ▼               ▼               ▼              ▼
-        content-ID key   data key[gen]  metadata key[gen]  signing key[gen]  key-ID key
-              │               │               │
-              │               └───────┬───────┘
-              ▼                       ▼
-      object identifiers        per-blob keys
+passphrase + kdf_salt + kdf_parameters ──Argon2id──▶ root (32 bytes; never stored)
+                                                        │
+                                                        │ HKDF-Expand, domain-separated
+        ┌──────────────┬──────────────┬─────────────────┼──────────────┬──────────────┬──────────────┐
+        ▼              ▼              ▼                 ▼              ▼              ▼              ▼
+  sealing scalar  structure root  signing root   content-ID key   key-ID key   reclaim root   claim root
+        │              │              │
+        ▼              ▼              ▼
+  X25519 public   metadata key[g]  signing seed[g]
+  (descriptor)         │
+                       ▼
+                 per-blob keys (structure) · data-blob content keys are random and sealed to the public key (05 §2.1)
 ```
 
-The master key is never used to encrypt anything directly. Every key that touches data is derived from it with explicit domain separation, so a compromise of one derived key does not extend to the others.
+Every repository derives its whole key material from one passphrase, and nothing is stored that could reproduce any of it without the passphrase. The root is never used to encrypt anything directly; every key that touches data is an independent one-way HKDF output of it, so a compromise of one derived key does not extend to the others.
 
-## 2 Key-encryption key
+The **write credential** — the structure root, signing root, content-ID key and key-ID key, plus the three public keys — is what a writing service holds ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)). It publishes and cannot read content back: file contents seal to the sealing **public** key, and the private scalar exists only where the passphrase is present. The reclaim and claim roots are likewise withheld from the credential ([ADR-0055](../../docs/adr/0055-reclaim-authority.md), [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)); only their public halves travel with it.
+
+> **Format 1 is withdrawn.** An earlier format wrapped a random master key under a passphrase-derived key-encryption key and stored it at `/keys/<key-id>`, with a symmetric data-key family beneath it. It was withdrawn before any freeze, with no installed base, in favour of the derivation above ([ADR-0014 amendment](../../docs/adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). The *symmetric* construction it defined — the per-blob key of §5 and the record framing of [04](04-record.md) — is the one format 2 kept byte for byte for its structure plane, which is why those containers still stamp `format_version = 1` ([04 §4](04-record.md#4-associated-data)).
+
+## 2 The root
 
 ```text
-KEK = Argon2id(
+root = Argon2id(
           password    = passphrase (UTF-8, NFC-normalised, no trailing newline),
           salt        = kdf_parameters.salt,
           memory      = kdf_parameters.memory_kib,
@@ -37,9 +39,11 @@ KEK = Argon2id(
           tag_length  = 32)
 ```
 
-Parameters come from the repository descriptor ([01 §3.3](01-object-layout.md#33-kdf-parameters)) and are public.
+Parameters come from the repository descriptor ([01 §3.3](01-object-layout.md#33-kdf-parameters)) and are public. The 32-byte output is the **root** of §1 — used only as HKDF input, never stored, never wrapped.
 
-Minimum acceptable parameters for a new repository: **64 MiB memory, 3 iterations, parallelism 4**. A writer MUST NOT create a repository below these. A reader MUST accept lower values in an existing repository — refusing would make an old repository unrecoverable, which is a worse outcome than a weaker KEK — but SHOULD warn.
+Minimum acceptable parameters for a new repository: **64 MiB memory, 3 iterations, parallelism 4**. A writer MUST NOT create a repository below these. A reader MUST accept lower values in an existing repository — refusing would make an old repository unrecoverable, which is a worse outcome than a weaker root — but SHOULD warn.
+
+The descriptor's copy of the sealing public key ([01 §3.2](01-object-layout.md#32-body) key 9) is the **wrong-passphrase verifier**: derive the root, expand the sealing scalar, compute its public key, compare. No decryption is involved and nothing is unwrapped; equality is the whole test. A reader MUST report a mismatch as a wrong passphrase *or* an altered descriptor without distinguishing the two — confirming a correct passphrase to an attacker holding a modified descriptor is the same leak the old unwrap rule guarded against.
 
 ### 2.1 The passphrase is constrained too, and the primitive will not do it for you
 
@@ -53,68 +57,41 @@ Passphrase normalisation matters: the same passphrase typed on macOS and Linux c
 
 ## 3 The key object
 
-`/keys/<key-id>` holds the wrapped master key.
+There is none. A repository stores no key material: the descriptor's salt, parameters and public key plus the passphrase reproduce everything (§2), and the `/keys/` namespace of format 1 does not exist in format 2 ([01 §2](01-object-layout.md#2-namespace)). A reader MUST NOT look for one, and a store that carries objects under `keys/` is carrying something this format did not write.
 
-```text
-offset  size   field
-------  -----  -------------------------------------------------------------
-     0      8  magic         = 0x46 42 50 4B 4B 45 59 53   ("FBPKKEYS")
-     8      2  format_version u16
-    10      2  kek_profile    u16  (AEAD suite used for wrapping, §6)
-    12     12  wrap_nonce     bytes[12]
-    24     16  key_id         bytes[16]
-    40      4  cbor_length    u32, max 4 096
-    44      N  wrapped        AEAD ciphertext of the CBOR key bundle
-  44+N     16  wrap_tag       AEAD authentication tag
-```
-
-`kek_profile` MUST be `aes-256-gcm-v1` (`0x0001`) in format version 1. The 12-byte `wrap_nonce` field is sized for it exactly, and a 24-byte-nonce suite could not be represented in this layout at all — which is one reason the extended-nonce profile was withdrawn rather than accommodated (§6.1). Restricting the wrap costs nothing: wrapping happens once per repository open, so hardware acceleration is irrelevant, and a fixed-offset header stays fixed. → [ADR-0005](../../docs/adr/0005-aead-suite-and-nonce-construction.md)
-
-Unwrapping uses:
-
-```text
-AAD = magic ‖ format_version ‖ kek_profile ‖ key_id
-```
-
-so the wrapped bundle cannot be moved to a different key object or a different repository without authentication failing.
-
-A failed unwrap means the passphrase is wrong **or** the object has been tampered with, and a reader MUST NOT try to distinguish the two in a message to the user. Distinguishing them would confirm a correct passphrase to an attacker holding a modified key object.
-
-### 3.1 Key bundle
-
-| Key | Type | Value |
-|-----|------|-------|
-| 1 | bytes[32] | `master_key` |
-| 2 | u32 | `current_data_generation` |
-| 3 | u32 | `current_metadata_generation` |
-| 4 | u64 | `created_at` |
+This section keeps its number so that references written against format 1 still resolve to the sentence that says what became of it.
 
 ## 4 Derived keys
 
-All derivation uses **HKDF-Expand** ([RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) §2.3) with HMAC-SHA256, taking the master key directly as the pseudorandom key. The extract step is omitted because the master key is already 32 uniformly random bytes; extracting again would add nothing.
+All derivation uses **HKDF-Expand** ([RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) §2.3) with HMAC-SHA256, taking the root — or a sub-root — directly as the pseudorandom key. The extract step is omitted because the root is already 32 uniformly random bytes; extracting again would add nothing.
 
 ```text
-derive(info) = HKDF-Expand(PRK = master_key, info = info, L = 32)
+root             = Argon2id(passphrase, kdf_salt, kdf_parameters)      (§2)
+
+sealing_scalar   = HKDF-Expand(root, "fbp/seal/v2",        32)   → X25519 keypair; the public half is descriptor key 9
+structure_root   = HKDF-Expand(root, "fbp/metadata/v2",    32)
+content_id_key   = HKDF-Expand(root, "fbp/content-id/v2",  32)
+key_id_key       = HKDF-Expand(root, "fbp/key-id/v2",      32)
+signing_root     = HKDF-Expand(root, "fbp/signing/v2",     32)
+reclaim_root     = HKDF-Expand(root, "fbp/reclaim/v2",     32)
+claim_seed       = HKDF-Expand(root, "fbp/claim/v2",       32)   → Ed25519; not generational (ADR-0053 §1)
+
+metadata_key[g]  = HKDF-Expand(structure_root, "fbp/metadata-generation/v2" ‖ u32(g), 32)
+signing_seed[g]  = HKDF-Expand(signing_root,   "fbp/signing-generation/v2"  ‖ u32(g), 32)
+reclaim_seed[g]  = HKDF-Expand(reclaim_root,   "fbp/reclaim-generation/v2"  ‖ u32(g), 32)
 ```
 
-| Key | `info` |
-|-----|--------|
-| Content-ID key | `"fbp/content-id/v1"` |
-| Key-ID key | `"fbp/key-id/v1"` |
-| Data key, generation *g* | `"fbp/data/v1" ‖ u32(g)` |
-| Metadata key, generation *g* | `"fbp/metadata/v1" ‖ u32(g)` |
-| Signing key, generation *g* | `"fbp/signing/v1" ‖ u32(g)` |
-| Recovery recipient key | `"fbp/recovery/v1"` |
+Info strings are ASCII, without a terminating NUL. Domain separation is by the string, not by chance. The per-generation keys expand from sub-roots rather than from `root` precisely so a holder of a sub-root can derive every generation without carrying anything that walks back up.
 
-Info strings are ASCII, without a terminating NUL. Domain separation is by the string, not by chance.
+The **write credential** is `structure_root`, `content_id_key`, `key_id_key`, `signing_root` and the public halves of the sealing, reclaim and claim keys. Every member is an independent one-way output: possession of the whole credential yields neither the root, nor the passphrase, nor the sealing scalar, nor either private authority. There is **no data-key family**: data-class record content encrypts under per-blob random content keys sealed to the public key ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)), and data-blob *footers* and everything metadata-class use `metadata_key[g]` through the [§5](#5-per-blob-keys) construction.
 
-The **recovery recipient key** is an X25519 scalar, not an Ed25519 seed: it is a *recipient*, and what is sealed to it is the set-configuration envelope of [11 §5](11-lifecycle-objects.md#5-set-configuration-object). It is ungenerational because what it protects is not per-snapshot state — a repository has one recovery recipient for its life, and a recovering device must be able to derive it from the passphrase alone without first learning which generation to ask for. A format-v2 repository does not derive this key: it already has an X25519 recipient in its descriptor (`fbp/seal/v2`) and seals the envelope to that one instead, so one construction serves both formats with no second key to distribute.
+The signing, reclaim and claim seeds are **Ed25519 private-key seeds** in the sense of [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) §5.1.5 — the input to the seed-expansion step, not a pre-clamped scalar. Every mainstream Ed25519 API takes exactly this. The signing public key is computed from the seed by any holder of the signing root, which is why the format stores no signing public key anywhere: signatures are repository-scoped, not device-scoped. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md). The reclaim and claim public keys are carried in the write credential and published to peers, because a keyless destination has to check them and cannot derive them ([ADR-0055 §5](../../docs/adr/0055-reclaim-authority.md), [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
 
-The signing key's 32 derived bytes are an **Ed25519 private-key seed** in the sense of [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) §5.1.5 — the input to the seed-expansion step, not a pre-clamped scalar. Every mainstream Ed25519 API takes exactly this. The corresponding public key is computed from the seed by any holder of the master key, which is why the format stores no public key anywhere: signatures in format version 1 are repository-scoped, not device-scoped. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md)
+The conformance vectors for this tree are [`write-only.json`](conformance/vectors/write-only.json).
 
 ### 4.1 Generations
 
-Data and metadata keys are generational. Introducing a new generation lets a repository migrate to a new key without rewriting existing objects: old objects remain readable under the old generation, and new writes use the new one.
+The metadata, signing and reclaim keys are generational. Introducing a new generation lets a repository migrate to a new key without rewriting existing objects: old objects remain readable under the old generation, and new writes use the new one.
 
 A blob records the generation it used in its cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)), so a reader always knows which to derive.
 
@@ -126,12 +103,12 @@ A blob records the generation it used in its cleartext envelope ([05 §2](05-blo
 blob_salt = 32 bytes from a CSPRNG, drawn once per blob
 
 blob_key  = HKDF-Expand(
-                PRK  = data_key[generation]          (or metadata_key[generation]),
+                PRK  = metadata_key[generation]      (the structure plane: metadata blobs and every blob's footer),
                 info = "fbp/blob/v1" ‖ blob_salt ‖ writer_id ‖ u64(blob_counter),
                 L    = 32)
 ```
 
-`blob_salt`, `writer_id` and `blob_counter` are all stored in the blob's cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)), so a reader can reproduce the derivation from the blob and the repository keys alone.
+`blob_salt`, `writer_id` and `blob_counter` are all stored in the blob's cleartext envelope ([05 §2](05-blob.md#2-cleartext-envelope)), so a reader can reproduce the derivation from the blob and the repository keys alone. A data blob's *records* do not use this key: they encrypt under the blob's random content key, sealed to the public key ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)), and only its footer derives as above.
 
 ### 5.1 Why per-blob keys
 
@@ -151,6 +128,33 @@ Binding `writer_id` and `blob_counter` means a collision would additionally requ
 
 A blob key MUST NOT be stored. It is derived when the blob is written and re-derived when it is read. A compromise of one blob key exposes exactly one blob.
 
+### 5.4 Format v3: the key is the record's
+
+In a format-3 repository ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) the blob key of §5 opens the **footer only**, in every blob class. A record's key is scoped to the record, so that its sealed bytes can be copied into another blob and still open there:
+
+```text
+metadata record, and a data record where no sealed data plane applies:
+
+record_key = HKDF-Expand(
+                 PRK  = metadata_key[generation]     (the blob's envelope generation)
+                 info = "fbp/record/v3" ‖ u8(object_type) ‖ object_id,
+                 L    = 32)
+
+data record in the sealed data plane:
+
+record_key = 32 random bytes, drawn per record and sealed to the sealing
+             public key with associated data repository_id ‖ object_id,
+             carried in the record's prefix (05 §2.2)
+```
+
+The derivation inputs of the first case are the record header's own fields ([04 §2](04-record.md#2-framing)), so a reader holding the class key derives the key from the record alone; nothing about the container enters it. The second case is §9's sealed content key with `blob_id` replaced by `object_id`, and for the same reason: a derived key is derivable by whoever holds the class key, and in a write-only repository the service holds it and must not read content (FR-WOR-001).
+
+**Nonce uniqueness moves with the key.** §5.1's argument — one writer, one blob, one increasing ordinal — no longer applies to a record; the record carries a random 12-byte nonce ([04 §3](04-record.md#3-nonce)), and under one object's derived key there are at most a handful of messages ever (the same object sealed by different writers, or stored differently by one), so the birthday budget is never approached. The reason the nonce is random rather than zero is stated in [04 §3](04-record.md#3-nonce) and MUST be understood by an implementer before deviating from it.
+
+**The seed a writer resumes from.** A writer MUST NOT store per-record content keys. For a data blob it draws one random 32-byte **record-key seed** per blob, keeps it only in the spool checkpoint ([05 §6.2](05-blob.md#62-everything-that-could-vary-is-pinned)), derives each record's content key as `HKDF-Expand(seed, "fbp/record-seed/v3" ‖ object_id, 32)`, seals that key into the record, and destroys the seed at seal. A reader never sees the seed and needs nothing but the sealed share; the derivation exists so that an interrupted spool can be authenticated on resume without a key per record on disk.
+
+**Generations.** The derived key takes the generation the blob's envelope records ([05 §2](05-blob.md#2-cleartext-envelope)). A record moved between blobs MUST be placed in a blob of the same key generation; rotation (§7) rewrites, as it always has.
+
 ## 6 AEAD suites
 
 | Profile | Value | Suite | Key | Nonce | Tag | Implementation |
@@ -158,7 +162,7 @@ A blob key MUST NOT be stored. It is derived when the blob is written and re-der
 | `aes-256-gcm-v1` | `0x0001` | AES-256-GCM | 32 | 12 | 16 | Platform (`System.Security.Cryptography.AesGcm`) |
 | *Reserved* | `0x0002` | — | — | — | — | Withdrawn before freeze (§6.1). MUST NOT be assigned to another suite |
 
-**Format version 1 admits exactly one record AEAD.** A writer MUST use `aes-256-gcm-v1`; a reader MUST refuse any other profile value, including `0x0002`. This table governs **records only** — key wrapping is fixed to the same suite (§3).
+**The format admits exactly one record AEAD.** A writer MUST use `aes-256-gcm-v1`; a reader MUST refuse any other profile value, including `0x0002`. This table governs **records**; the sealed content key of [05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key) is fixed to the same suite over an X25519 agreement.
 
 `0x0002` stays reserved rather than being freed for reuse. Draft repositories and draft readers exist that understood it as XChaCha20-Poly1305, and a value that means one thing in a draft and another in the frozen format is the kind of ambiguity a version number cannot repair.
 
@@ -191,60 +195,34 @@ No other suite is permitted. A writer MUST reject an unapproved suite at configu
 
 ### 6.2 A note for the security review
 
-AES-GCM is **not key-committing**: a ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the master key and an attacker without it cannot choose them. It is recorded because the `repository-unverified` deduplication domain accepts records from other writers without verification, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. → [PT-15](../../docs/review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)
+AES-GCM is **not key-committing**: a ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the root or are drawn by the writer, and an attacker without either cannot choose them. It is recorded because the `repository-unverified` deduplication domain accepts records from other writers without verification, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. → [PT-15](../../docs/review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)
 
 ## 7 Rotation
 
 | Operation | Rewrites | Cost |
 |-----------|----------|------|
-| Change passphrase | `/keys/<key-id>`, and `/repository-format` when the KDF salt is refreshed (a new salt SHOULD be drawn) | Trivial |
-| New data-key generation | Nothing; new writes use it | Trivial |
-| Full data-key rotation | Every blob, in the background | Proportional to repository size |
+| Change passphrase | **Not possible** — see below | — |
+| New metadata-key generation | Nothing; new writes use it | Trivial |
+| Full rotation | Every blob, in the background | Proportional to repository size |
 
-Changing the passphrase does **not** re-encrypt data. A user interface MUST say so plainly, because users routinely believe otherwise, and a user who thinks a password change has protected them from an attacker holding old blobs is worse off than one who knows it has not.
-
-An earlier revision of the table said the change rewrote `/keys/<key-id>` *only* — but the KDF salt lives in `/repository-format` (01 §3.3), so a passphrase change that draws a fresh salt rewrites the descriptor too. The row now says what the operation actually touches.
-
-**Write-only repositories (format v2, [ADR-0042](../../docs/adr/0042-write-only-repositories.md)) have no passphrase change.** Every v2 key derives directly from the passphrase; changing it would change every derived key and orphan every sealed blob. A v2 repository's passphrase is fixed for its life — the remedy for a passphrase the user wishes to retire is a new repository.
+**There is no passphrase change.** Every key derives directly from the passphrase (§4); changing it would change every derived key and orphan every sealed blob. A repository's passphrase is fixed for its life — the remedy for a passphrase the user wishes to retire is a new repository ([ADR-0042 §11](../../docs/adr/0042-write-only-repositories.md)). A user interface MUST say so at creation, because users routinely believe otherwise, and a user who thinks a password can be changed later has not been told what they are agreeing to.
 
 ## 8 What is never written down
 
-The passphrase, the KEK, the master key in unwrapped form, any derived key, and any blob key MUST NOT appear in any durable object, log, telemetry payload, crash dump, or configuration export.
+The passphrase, the root, the sealing scalar, the reclaim and claim seeds, any member of the write credential, any blob key and any blob content key MUST NOT appear in any durable repository object, log, telemetry payload, crash dump, or configuration export. The one deliberate exception is the spool checkpoint's in-flight content key ([05 §6.2](05-blob.md#62-everything-that-could-vary-is-pinned)) — writer-local state, never a repository object, destroyed at seal.
 
 Redaction MUST be by declared type rather than by string matching, so that a newly added secret-bearing field is protected by construction rather than by someone remembering to add a pattern. → NFR-SEC-006
 
 ## 9 Write-only repositories (format v2)
 
-A format-v2 repository ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)) severs writing from reading: file contents seal to an asymmetric public key, and the machine that writes backups holds nothing that opens them. Its key material derives **entirely and only** from the passphrase.
+Every repository is write-only, and format 2 is the only format: the term names the shape §1–§4 describe, in which the machine that writes backups holds nothing that opens them ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)). This section keeps its heading because the decision records and the older documents cite it; its content is now the body of this document.
 
-### 9.1 Derivation
+What a repository does **not** have, said once:
 
-```text
-root = Argon2id(passphrase, kdf_salt, kdf_parameters)      (32 bytes; §2's KDF, unchanged)
-
-sealing_scalar   = HKDF-Expand(root, "fbp/seal/v2",        32)   → X25519 keypair
-structure_root   = HKDF-Expand(root, "fbp/metadata/v2",    32)
-content_id_key   = HKDF-Expand(root, "fbp/content-id/v2",  32)
-key_id_key       = HKDF-Expand(root, "fbp/key-id/v2",      32)
-signing_root     = HKDF-Expand(root, "fbp/signing/v2",     32)
-
-metadata_key[g]  = HKDF-Expand(structure_root, "fbp/metadata-generation/v2" ‖ u32(g), 32)
-signing_seed[g]  = HKDF-Expand(signing_root,   "fbp/signing-generation/v2"  ‖ u32(g), 32)
-```
-
-The **write bundle** — everything except `sealing_scalar` and `root` — is what a service holds. Every member is an independent one-way HKDF output: possession of the whole bundle yields neither the root, nor the passphrase, nor the sealing private key, nor any sibling key. The per-generation keys expand from sub-roots rather than from `root` precisely so the bundle can derive them without carrying anything that walks back up.
-
-The sealing **public** key is recorded in the descriptor ([01 §3.2](01-object-layout.md#32-body) key 9) and doubles as the wrong-passphrase verifier: derive and compare, no decryption, no oracle beyond equality.
-
-### 9.2 What a v2 repository does not have
-
-- **No `/keys/` namespace.** There is no wrapped key object and no KEK: the descriptor's salt and parameters plus the passphrase reproduce everything. A v2 repository's `/keys/` prefix MUST be empty.
-- **No passphrase change** (§7): the passphrase is the root; changing it would change every derived key and orphan every sealed blob.
-- **No data-key family.** Data-class record content encrypts under per-blob random content keys sealed to the public key ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); data-blob *footers* and everything metadata-class use `metadata_key[g]` through the [§5](#5-per-blob-keys) construction unchanged.
-
-### 9.3 What is never written down, again
-
-§8 applies with the v2 additions: the `root`, the `sealing_scalar`, the write bundle's members, and any blob content key MUST NOT appear in any durable repository object. The one deliberate exception is the spool checkpoint's in-flight content key ([05 §6.2](05-blob.md#62-everything-that-could-vary-is-pinned)) — writer-local state, never a repository object, destroyed at seal.
+- **No `/keys/` namespace** (§3) — no wrapped key object, no key-encryption key.
+- **No passphrase change** (§7).
+- **No data-key family** (§4) — content keys are random and sealed; the structure plane derives.
+- **No stored private authority** — the sealing scalar, the reclaim seed and the claim seed exist only where the passphrase is present, and reach a service, if at all, as a grant sealed to its recipient key for one run ([ADR-0042 §5](../../docs/adr/0042-write-only-repositories.md), [ADR-0055 §6](../../docs/adr/0055-reclaim-authority.md)).
 
 ---
 

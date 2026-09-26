@@ -12,7 +12,7 @@ namespace FallbackPlan.Hosts.Tests;
 public sealed class AgentInstallVerbTests
 {
     [TestMethod]
-    public async Task Install_ForSystemd_PrintsTheUnitAndTheUnlockReminder()
+    public async Task Install_ForSystemd_PrintsTheUnitAndTheSetupReminder()
     {
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
@@ -21,10 +21,10 @@ public sealed class AgentInstallVerbTests
         Assert.AreEqual(0, result.ExitCode, result.Error);
         Assert.Contains("[Service]", result.Output, StringComparison.Ordinal);
         Assert.Contains("WantedBy=multi-user.target", result.Output, StringComparison.Ordinal);
-        // The reminder to seed the keystore as the service account is guidance,
-        // so it is on standard error, not in the redirectable artifact.
-        Assert.Contains("unlock", result.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain("unlock", result.Output, StringComparison.Ordinal);
+        // The reminder to run setup as the service account is guidance, so
+        // it is on standard error, not in the redirectable artifact.
+        Assert.Contains("setup --archives", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("setup --archives", result.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -61,11 +61,18 @@ public sealed class AgentInstallVerbTests
     }
 
     [TestMethod]
-    public async Task Install_WithoutRepo_IsRefused()
+    public async Task Install_WithoutTheArchivesFlag_BakesTheDefaultIntoTheDefinition()
     {
-        var result = await HostHarness.RunAsync(AgentHost.RunAsync, "install", "--state", "/var/lib/fallbackplan");
+        // Path flags stopped being a prerequisite when the paths gained
+        // defaults (FR-SVC-016): a definition printed without --archives
+        // names the default root explicitly, so the registered service runs
+        // on exactly the installation a bare `run` would.
+        var result = await HostHarness.RunAsync(
+            AgentHost.RunAsync, "install", "--state", "/var/lib/fallbackplan");
 
-        Assert.AreEqual(1, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        Assert.Contains(FallbackPlan.Api.InstallationDefaults.ArchivesRoot, result.Output, StringComparison.Ordinal);
+        Assert.Contains("/var/lib/fallbackplan", result.Output, StringComparison.Ordinal);
     }
 
     /// <summary>

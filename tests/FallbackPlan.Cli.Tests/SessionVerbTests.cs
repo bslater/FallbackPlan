@@ -16,7 +16,7 @@ public sealed class SessionVerbTests : IDisposable
     public SessionVerbTests()
     {
         Directory.CreateDirectory(_harness.StatePath);
-        Environment.SetEnvironmentVariable(_passwordVariable, "the-owner-password");
+        Environment.SetEnvironmentVariable(_passwordVariable, "The-0wner-passw0rd");
     }
 
     public void Dispose()
@@ -67,6 +67,17 @@ public sealed class SessionVerbTests : IDisposable
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.IsNull(cache.Token);
         Assert.Contains("could not be reached", result.All, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public async Task Restart_WithNoServiceListening_SaysSoRatherThanPretending()
+    {
+        // Like login: only a running service can restart, so "no service" is
+        // the honest answer rather than a reason to do anything here.
+        var result = await CliHarness.RunRawAsync("restart", "--state", _harness.StatePath);
+
+        Assert.AreNotEqual(0, result.ExitCode);
+        Assert.Contains("running service", result.All, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]

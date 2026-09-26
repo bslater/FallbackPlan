@@ -43,30 +43,27 @@ internal static partial class Log
         Message = "The service holding the writer role did not answer the start-up probe")]
     internal static partial void ServiceUnreachable(ILogger logger);
 
+    // What only this process knows about a session it relays: that it chose
+    // not to forward a command because the service had already refused the
+    // session it rode in on. The service logs its own refusal (3755); this is
+    // the console's half — the command that was consequently never sent. The
+    // token itself has no parameter to ride in, deliberately.
     [LoggerMessage(
-        EventId = 4110, Level = LogLevel.Trace,
-        Message = "{Endpoint} answered {StatusCode} in {ElapsedMilliseconds} ms")]
-    internal static partial void RequestHandled(
-        ILogger logger, string endpoint, int statusCode, long elapsedMilliseconds);
+        EventId = 4103, Level = LogLevel.Debug,
+        Message = "A relayed session was refused by the service; {Command} was not sent")]
+    internal static partial void RelayedSessionRefused(ILogger logger, string command);
 
     [LoggerMessage(
-        EventId = 4111, Level = LogLevel.Debug,
-        Message = "Setup answered '{Outcome}' (kit included: {KitIncluded})")]
-    internal static partial void SetupOutcome(ILogger logger, string outcome, bool kitIncluded);
+        EventId = 4104, Level = LogLevel.Trace,
+        Message = "Event stream opened (session presented: {SessionPresented})")]
+    internal static partial void EventStreamOpened(ILogger logger, bool sessionPresented);
 
     [LoggerMessage(
-        EventId = 4112, Level = LogLevel.Debug,
-        Message = "Recovery-kit rebuild answered '{Outcome}' (kit included: {KitIncluded})")]
-    internal static partial void RecoveryKitOutcome(ILogger logger, string outcome, bool kitIncluded);
+        EventId = 4105, Level = LogLevel.Trace,
+        Message = "Event stream ended after {Events} event(s)")]
+    internal static partial void EventStreamEnded(ILogger logger, long events);
 
-    [LoggerMessage(
-        EventId = 4113, Level = LogLevel.Trace,
-        Message = "Relayed {Command}; the service answered {Result} in {ElapsedMilliseconds} ms")]
-    internal static partial void CommandRelayed(
-        ILogger logger, string command, string result, long elapsedMilliseconds);
 
-    [LoggerMessage(
-        EventId = 4114, Level = LogLevel.Trace,
-        Message = "Served {Path} ({ByteCount} bytes, embedded at build time)")]
-    internal static partial void StaticAssetServed(ILogger logger, string path, int byteCount);
+
+
 }

@@ -44,8 +44,10 @@ public sealed partial class ServiceCommandHandler
         {
             (credential, kdfSalt, kdfParameters) = runtime.GrantRecipient.OpenProvision(envelope);
         }
-        catch (SealedContentException)
+        catch (Exception malformed) when (malformed is SealedContentException or ArgumentException)
         {
+            // Too short to be an envelope at all, or sealed to someone else:
+            // both are "not an envelope this service can open".
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument,
                 "The provisioning envelope does not open — it was sealed to a different service's recipient key.");
@@ -53,12 +55,21 @@ public sealed partial class ServiceCommandHandler
 
         using (credential)
         {
-            var path = runtime.ArchivePath(set.Id);
+            // The set's repository lives where its shape says (ADR-0046): a
+            // direct-ship set's is its metadata store beside the state, a
+            // staging set's is its staging archive. Routing by flag keeps a
+            // provision-then-flag ceremony from minting a staging archive
+            // that would read as a bogus migration source — and existence is
+            // asked of the SAME path, so an already-captured direct-ship set
+            // adopts its metadata store instead of mis-detecting against an
+            // empty staging directory.
+            var path = set.DirectShip ? runtime.SetMetadataPath(set.Id) : runtime.ArchivePath(set.Id);
+            var exists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
             Directory.CreateDirectory(path);
             var store = StoreComposition.OpenLocal(path);
             var lines = new List<string>();
 
-            if (runtime.ArchiveExists(set.Id))
+            if (exists)
             {
                 // Adoption (ADR-0042 §10): a descriptor is already there — a
                 // moved archive, a restored replica, or a state directory that
@@ -77,16 +88,8 @@ public sealed partial class ServiceCommandHandler
                     // the provisioning verb.
                     return new ServiceError(
                         ServiceErrorReason.Failed,
-                        $"Set '{set.Name}' has a staging archive whose descriptor does not read: {damaged.Message}");
+                        $"Set '{set.Name}' has a repository whose descriptor does not read: {damaged.Message}");
                 }
-                if (!RepositoryLifecycle.IsWriteOnly(descriptor))
-                {
-                    return new ServiceError(
-                        ServiceErrorReason.InvalidArgument,
-                        $"Set '{set.Name}' has a format {descriptor.FormatVersion} staging archive — an existing "
-                        + "repository cannot become write-only; write-only is chosen at creation (ADR-0042).");
-                }
-
                 if (!credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
                 {
                     return new ServiceError(
@@ -99,12 +102,14 @@ public sealed partial class ServiceCommandHandler
             }
             else
             {
-                var opened = await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+                var opened = await RepositoryLifecycle.CreateAsync(
                         store, credential, kdfSalt, kdfParameters, createdBy: Environment.MachineName,
                         (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
                     .ConfigureAwait(false);
                 opened.Dispose();
-                lines.Add($"Set '{set.Name}' now has a write-only (format 2) staging archive; the write credential is stored.");
+                lines.Add(set.DirectShip
+                    ? $"Set '{set.Name}' now has a write-only (format 2) metadata store; the write credential is stored."
+                    : $"Set '{set.Name}' now has a write-only (format 2) staging archive; the write credential is stored.");
             }
 
             runtime.WriteCredentials.Save(set.Id, credential);
@@ -112,5 +117,100 @@ public sealed partial class ServiceCommandHandler
             lines.Add("Restore and adoption need the passphrase again; if it is lost the backup is unrecoverable.");
             return new ConfigurationChangeResult(lines);
         }
+    }
+
+    /// <summary>
+    /// Opens this run's reclaim grant, or explains why the run cannot proceed
+    /// without one ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Three answers, and the middle one is the whole point. A repository that
+    /// does not declare <c>reclaim-authority</c> needs nothing. A v1
+    /// repository that does declare it derives the key from the master key it
+    /// already holds, so it needs nothing either — §3 is explicit that the
+    /// split defends the write-only shape and not that one. A <b>write-only</b>
+    /// repository that declares it cannot derive the key at all, so without a
+    /// grant it is refused by name rather than falling back to the key it
+    /// publishes with.
+    /// </para>
+    /// <para>
+    /// A dry run authors nothing and therefore needs no authority: refusing to
+    /// even report would make the safe half of retention depend on the
+    /// dangerous half's credential.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, ServiceError? Refusal)> OpenReclaimGrantAsync(
+        Application.BackupSetConfiguration set,
+        ArchiveHandle archive,
+        bool apply,
+        string? envelopeHex,
+        CancellationToken cancellationToken)
+    {
+        var declares = archive.Repository.Descriptor.RequiredFeatures.Contains(
+            Repository.Format.Descriptor.RepositoryDescriptorCodec.FeatureReclaimAuthority);
+
+        if (!declares || !apply)
+        {
+            return (null, null);
+        }
+
+        if (envelopeHex is null or { Length: 0 })
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Set '{set.Name}': applying retention needs a reclaim grant: this service "
+                + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
+                + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
+                + "with the command."));
+        }
+
+        byte[] root;
+        try
+        {
+            root = runtime.GrantRecipient.OpenGrant(Convert.FromHexString(envelopeHex));
+        }
+        catch (FormatException)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument, "The reclaim-grant envelope is not hex."));
+        }
+        catch (Repository.Crypto.SealedContentException)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "The reclaim-grant envelope does not open — it was sealed to a different service's recipient key."));
+        }
+
+        Repository.Crypto.ReclaimAuthority grant;
+        try
+        {
+            grant = new Repository.Crypto.ReclaimAuthority(root);
+        }
+        catch (ArgumentException)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "The reclaim-grant envelope did not carry a reclaim sub-root of the expected length."));
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(root);
+        }
+
+        // Proved before it authors anything: a wrong grant would otherwise
+        // write tombstones nothing can verify, and the next sweep would report
+        // them as forgeries — an alarm about an attack that never happened.
+        if (!await Retention.StagingSweep.GrantProvesOutAsync(
+            archive.Store, archive.Repository, grant, cancellationToken).ConfigureAwait(false))
+        {
+            grant.Dispose();
+            return (null, new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"The reclaim grant does not verify set '{set.Name}''s existing tombstones — it was derived from "
+                + "a different passphrase."));
+        }
+
+        return (grant, null);
     }
 }

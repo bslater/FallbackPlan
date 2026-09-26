@@ -22,6 +22,9 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
 [JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
+[JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
+[JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
+[JsonDerivedType(typeof(ListReceiptsCommand), "list_receipts")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
 [JsonDerivedType(typeof(RevokePairingInviteCommand), "revoke_pairing_invite")]
@@ -29,6 +32,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RunBackupCommand), "run_backup")]
 [JsonDerivedType(typeof(CancelJobCommand), "cancel_job")]
 [JsonDerivedType(typeof(ListJobsCommand), "list_jobs")]
+[JsonDerivedType(typeof(JobChangesCommand), "job_changes")]
+[JsonDerivedType(typeof(JobFailuresCommand), "job_failures")]
 [JsonDerivedType(typeof(ListSnapshotsCommand), "list_snapshots")]
 [JsonDerivedType(typeof(ListDirectoryCommand), "list_directory")]
 [JsonDerivedType(typeof(PlanRestoreCommand), "plan_restore")]
@@ -36,7 +41,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(OpenRestoreSourceCommand), "open_restore_source")]
 [JsonDerivedType(typeof(ProvisionWriteOnlySetCommand), "provision_write_only_set")]
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
-[JsonDerivedType(typeof(ConfirmRecoveryKitCommand), "confirm_recovery_kit")]
+[JsonDerivedType(typeof(DiscoverArchivesCommand), "discover_archives")]
+[JsonDerivedType(typeof(AdoptArchiveCommand), "adopt_archive")]
 [JsonDerivedType(typeof(GetDiagnosticsCommand), "get_diagnostics")]
 [JsonDerivedType(typeof(SetLogLevelCommand), "set_log_level")]
 [JsonDerivedType(typeof(ReadLogCommand), "read_log")]
@@ -46,6 +52,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
+[JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
+[JsonDerivedType(typeof(UpgradeSetFormatCommand), "upgrade_set_format")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
 [JsonDerivedType(typeof(ExportConfigurationCommand), "export_configuration")]
 [JsonDerivedType(typeof(DescribeServiceCommand), "describe_service")]
@@ -56,8 +64,24 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(CreateUserCommand), "create_user")]
 [JsonDerivedType(typeof(DeleteUserCommand), "delete_user")]
 [JsonDerivedType(typeof(ChangePasswordCommand), "change_password")]
-[JsonDerivedType(typeof(ClaimReplicasCommand), "claim_replicas")]
+[JsonDerivedType(typeof(RestartServiceCommand), "restart_service")]
 public abstract record ServiceCommand;
+
+/// <summary>
+/// Restarts the service in place (contract 1.21; ADR-0049): the host tears
+/// the runtime down — listeners, queue, archives, the writer role — and
+/// starts it again in the same process, so the outcome is identical on
+/// every platform whatever the service manager's restart policy says.
+/// </summary>
+/// <remarks>
+/// Owner-only (the second such privilege after account management,
+/// ADR-0045), local callers only (a paired console must not cut a machine
+/// it cannot see, ADR-0028 §6), and refused before setup. The reply is
+/// flushed before teardown begins; everything that lives in service memory
+/// — sessions above all — dies with the old runtime, which is the
+/// documented FR-USR-003 contract: a restart signs everybody out.
+/// </remarks>
+public sealed record RestartServiceCommand : ServiceCommand;
 
 /// <summary>
 /// Authenticates a person and mints a session (FR-USR-001, FR-USR-003;
@@ -284,6 +308,44 @@ public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
 /// </param>
 public sealed record UnpairCommand(string Fingerprint, bool Notify = true, string? Endpoint = null) : ServiceCommand;
 
+/// <summary>
+/// Every replica stored here and whose it is (contract 1.31;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// §3) — the operator's view of the attribution ledger. Local callers only.
+/// </summary>
+public sealed record ListReplicaAttributionsCommand : ServiceCommand;
+
+/// <summary>
+/// The receipts filed under this installation's state directory (contract
+/// 1.33): deletion receipts
+/// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)) and replication
+/// receipts ([ADR-0064](../../docs/adr/0064-replication-receipts.md)), the
+/// ones this device signed as a destination and the ones it verified as a
+/// commander, interleaved newest first. An audit listing of facts the peer
+/// already stated under its own signature, so any signed-in role and any
+/// caller scope may read it.
+/// </summary>
+/// <param name="Kind"><c>deletion</c> or <c>replication</c>, or null for both.</param>
+/// <param name="Set">Only receipts this installation filed as the commander of the named set, or null.</param>
+/// <param name="Repository">Only receipts for one repository, by its id as 32 hex digits, or null.</param>
+/// <param name="Limit">At most this many, newest first; null for every one.</param>
+public sealed record ListReceiptsCommand(
+    string? Kind = null, string? Set = null, string? Repository = null, int? Limit = null) : ServiceCommand;
+
+/// <summary>
+/// Points a replica stored here at a different paired device (contract 1.31;
+/// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+/// §3): the operator's override for the one replica the passphrase-only
+/// claim cannot reach — one attributed before the claim key existed, by a
+/// machine that died before any later offer could publish one. Owner-only,
+/// local callers only, and refused by name for a replica that carries a
+/// claim key: its owner proves ownership with the passphrase, and the
+/// override must not stand in for that proof.
+/// </summary>
+/// <param name="RepositoryId">The replica's repository id, lower-hex — the name of its directory under <c>replicas</c>.</param>
+/// <param name="Fingerprint">The new owner's fingerprint, or an unambiguous prefix of it; it must be paired here as a device that stores here.</param>
+public sealed record ReattributeReplicaCommand(string RepositoryId, string Fingerprint) : ServiceCommand;
+
 /// <summary>Runs a backup now, outside the schedule.</summary>
 /// <param name="SetName">The set to run; null runs the default set.</param>
 /// <param name="Full">Whether to ignore prior versions and re-capture everything.</param>
@@ -299,7 +361,32 @@ public sealed record CancelJobCommand(string JobId) : ServiceCommand;
 
 /// <summary>Lists jobs, most recent last.</summary>
 /// <param name="ActiveOnly">Whether to omit finished jobs.</param>
-public sealed record ListJobsCommand(bool ActiveOnly) : ServiceCommand;
+/// <param name="Limit">
+/// Keep only the newest this-many rows (contract 1.22). Null keeps the
+/// pre-1.22 meaning — everything — but the journal grows for the life of the
+/// installation and <see cref="Transport.FrameCodec.MaximumFrameBytes"/> caps
+/// a reply, so a history view should bound its ask.
+/// </param>
+public sealed record ListJobsCommand(bool ActiveOnly, int? Limit = null) : ServiceCommand;
+
+/// <summary>
+/// What a completed run changed, against its predecessor (contract 1.22,
+/// ADR-0050): the committed snapshot diffed with the set's previous one in
+/// the catalogue — exact counts, bounded samples. Refused for a run that
+/// committed no snapshot: a failed or cancelled run has nothing to diff.
+/// </summary>
+/// <param name="JobId">The journal row whose run is asked about.</param>
+/// <param name="SampleLimit">Paths per bucket; clamped by the service.</param>
+public sealed record JobChangesCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
+
+/// <summary>
+/// What a completed run could not capture (contract 1.22, ADR-0050): the
+/// snapshot's error manifest read back — each failure's path, typed reason
+/// and the scanner's own words. A clean run answers zero.
+/// </summary>
+/// <param name="JobId">The journal row whose run is asked about.</param>
+/// <param name="SampleLimit">Failures listed; clamped by the service.</param>
+public sealed record JobFailuresCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
 
 /// <summary>Lists committed snapshots.</summary>
 public sealed record ListSnapshotsCommand : ServiceCommand;
@@ -380,8 +467,7 @@ public sealed record RunRestoreCommand(
 /// scalar, sealed end-to-end to this service's published recipient key and
 /// rendered as hex. The one shape of key material NFR-SEC-009 permits on the
 /// contract — opaque to every relay, opened only inside the service, held
-/// only for the source handle's life. Null opens structure-plane only on a
-/// write-only set; v1 sets ignore it.
+/// only for the source handle's life. Null opens the structure plane only.
 /// </param>
 public sealed record OpenRestoreSourceCommand(
     string SetName, string? DestinationName = null, string? Envelope = null) : ServiceCommand;
@@ -439,27 +525,63 @@ public sealed record ProvisionWriteOnlySetCommand(string SetName, string Envelop
 public sealed record ProvisionInstallationCommand(string Envelope) : ServiceCommand;
 
 /// <summary>
-/// Records that the operator has saved the installation's recovery kit,
-/// which is the last thing first-run setup waits for (FR-KIT-004,
-/// ADR-0044's 2026-08 amendment).
+/// Lists the archives a declared destination holds, by descriptor alone
+/// (ADR-0061 §2, contract 1.30): what a rebuilt machine pointed at the drive
+/// its backups are on sees before it holds any credential.
+/// </summary>
+/// <remarks>
+/// Credential-free by construction. Every fact in the answer is read from
+/// the unencrypted descriptor or counted from cleartext object names, so the
+/// verb reveals nothing a directory listing of the destination would not;
+/// the sealing public key it carries is the verifier a client compares its
+/// own derivation against before sending anything.
+/// </remarks>
+/// <param name="DestinationName">The declared destination to look in.</param>
+public sealed record DiscoverArchivesCommand(string DestinationName) : ServiceCommand;
+
+/// <summary>
+/// Adopts one of a destination's archives under its original repository id
+/// and set id (ADR-0061 §3): the set is re-declared from the shape the
+/// archive records — name, roots, schedule, rules — the metadata is copied
+/// beside the state, the credential stored, and the destination's ledger
+/// seeded so the next backup is incremental against the replica.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The <b>checksum, not the kit</b>. The service never holds a copy: a kit
-/// stored on the machine being backed up is not a recovery kit, and a
-/// service able to hand one out would have made itself a second factor.
-/// What it keeps is enough to say <em>which</em> kit was saved, so a later
-/// one can be told apart from the one in the drawer.
+/// The same sealed shape as <see cref="ProvisionWriteOnlySetCommand"/>, but
+/// derived against the <em>discovered</em> archive's salt and parameters
+/// rather than the installation's: the rebuilt machine's own salt is new,
+/// and only a credential derived under the archive's opens it. The service
+/// proves the derived sealing public key against the descriptor before it
+/// stores anything.
 /// </para>
 /// <para>
-/// Local callers only, for the same reason setup is: the person confirming
-/// has to be the person holding the kit.
+/// The optional fields override what the archive records, field by field,
+/// and are required exactly when the archive records nothing to take —
+/// an archive written for no configured set, or before the shape was
+/// recorded. A recorded root that does not exist on this machine is
+/// reported, never refused: the person edits the set.
 /// </para>
 /// </remarks>
-/// <param name="KitChecksum">
-/// The kit's SHA-256, lowercase hex — the last 32 bytes of its framed form.
+/// <param name="DestinationName">The declared destination holding the archive.</param>
+/// <param name="RepositoryId">The archive's repository id, 32 hex, as discovery listed it.</param>
+/// <param name="Envelope">
+/// The provisioning envelope — write bundle plus the archive's KDF salt and
+/// parameters — sealed to the service's recipient key and rendered as hex
+/// (NFR-SEC-009's permitted shape).
 /// </param>
-public sealed record ConfirmRecoveryKitCommand(string KitChecksum) : ServiceCommand;
+/// <param name="SetName">The set's name; null takes the recorded one.</param>
+/// <param name="Roots">The set's roots; null takes the recorded ones.</param>
+/// <param name="Schedule">The set's schedule; null takes the recorded one.</param>
+/// <param name="Priority">The set's priority (ADR-0047); null means none.</param>
+public sealed record AdoptArchiveCommand(
+    string DestinationName,
+    string RepositoryId,
+    string Envelope,
+    string? SetName = null,
+    IReadOnlyList<BackupRootDescriptor>? Roots = null,
+    string? Schedule = null,
+    int? Priority = null) : ServiceCommand;
 
 /// <summary>
 /// Asks what this service is logging and where it is putting it (ADR-0043 §6,
@@ -561,7 +683,20 @@ public sealed record CheckCommand(string Level) : ServiceCommand;
 /// half, which is why it is not the default (FR-GC-005).
 /// </summary>
 /// <param name="Apply">False reports only; true tombstones and sweeps.</param>
-public sealed record RetentionCommand(bool Apply) : ServiceCommand;
+/// <param name="ReclaimGrant">
+/// A collection run's authority to author deletions on a write-only set
+/// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6): the derived
+/// reclaim sub-root, sealed end-to-end to this service's published recipient
+/// key and rendered as hex — the same shape, and the same permitted exception
+/// under NFR-SEC-009, as ADR-0042 §5's restore grant. Held for the run and
+/// zeroed with it.
+/// <para>
+/// Null is correct for a dry run, which authors nothing. A set declaring
+/// <c>reclaim-authority</c> and applying without one is refused by name
+/// rather than falling back to the key it publishes with.
+/// </para>
+/// </param>
+public sealed record RetentionCommand(bool Apply, string? ReclaimGrant = null) : ServiceCommand;
 
 /// <summary>
 /// Converges destinations now, outside the schedule (ADR-0034 §3,
@@ -600,6 +735,29 @@ public sealed record SyncCommand(string? BackupSetName, string? DestinationName)
 public sealed record VerifyDestinationCommand(
     string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
 
+/// <summary>
+/// Retires a direct-ship set's staging archive (ADR-0046, contract 1.18):
+/// deletes the local copy a migrated set no longer publishes into. Refused
+/// by name while the set is not direct-ship, or while staging holds any
+/// object that has not reached a destination — retirement must never be the
+/// act that loses the last copy of anything.
+/// </summary>
+/// <param name="SetName">The set whose staging archive to retire.</param>
+public sealed record RetireStagingCommand(string SetName) : ServiceCommand;
+
+/// <summary>
+/// Upgrades one set's repository to the latest format this build writes
+/// (ADR-0066, contract 1.36): appends a signed format-upgrade record, so
+/// the set seals the newer format from its next blob while everything
+/// already sealed stays readable exactly as it is. There is no version
+/// parameter — the service upgrades to the one version it can write, so a
+/// client cannot ask for a format this build would not understand. The act
+/// cannot be undone: nothing removes the record and nothing rewrites a
+/// sealed blob.
+/// </summary>
+/// <param name="SetName">The set whose repository to upgrade.</param>
+public sealed record UpgradeSetFormatCommand(string SetName) : ServiceCommand;
+
 /// <summary>Reports the user-level protection status per set (architecture 10 §1).</summary>
 public sealed record GetStatusCommand : ServiceCommand;
 
@@ -608,42 +766,3 @@ public sealed record ExportConfigurationCommand : ServiceCommand;
 
 /// <summary>Reports what this service is and what it is doing.</summary>
 public sealed record DescribeServiceCommand : ServiceCommand;
-
-/// <summary>
-/// Claims the replicas a peer holds for this household, after the device
-/// identity that owned them is gone (ADR-0046; peer-protocol 07 §5).
-/// </summary>
-/// <remarks>
-/// <para>
-/// This is the verb a rebuilt machine reaches for. A destination serves a
-/// replica back only to the identity its attribution ledger names, and that
-/// identity died with the state directory — so the passphrase, which survived
-/// in a human's keeping, is what proves the household is the same one. The
-/// destination has a token it minted while the pairing was still alive and the
-/// public half of a credential the passphrase reproduces; this side derives the
-/// private half against that token and signs.
-/// </para>
-/// <para>
-/// Deliberately not addressed by destination name. After bare metal there is
-/// no configuration to name one — recovering it is the point — so this takes a
-/// pairing, exactly as <see cref="UnpairCommand"/> does, and defaults to every
-/// pairing there is.
-/// </para>
-/// </remarks>
-/// <param name="Envelope">
-/// The claim root — the Argon2id output of the passphrase and the recovery
-/// kit's KDF salt and parameters — sealed to this service's recipient key and
-/// rendered as hex. The passphrase itself never crosses this contract, and the
-/// root is held only for the exchange.
-/// </param>
-/// <param name="Fingerprint">
-/// The pairing to claim from, or an unambiguous prefix of it; null claims from
-/// every pairing. A recovering household has usually just re-paired with
-/// whoever answered and need not yet know which of them holds what.
-/// </param>
-/// <param name="Endpoint">
-/// Where to dial, as <c>host:port</c>; null consults the endpoint recorded
-/// with the pairing. Only meaningful alongside a fingerprint.
-/// </param>
-public sealed record ClaimReplicasCommand(
-    string Envelope, string? Fingerprint = null, string? Endpoint = null) : ServiceCommand;

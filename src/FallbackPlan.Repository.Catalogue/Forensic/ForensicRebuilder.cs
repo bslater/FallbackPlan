@@ -48,25 +48,47 @@ public sealed class ForensicRebuilder : IDisposable
 {
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly StoreBlobKeyDeriver _storeKeyDeriver;
 
-    /// <summary>Creates a rebuilder over the key hierarchy — footers and keys are all a scan needs (FR-MAN-007).</summary>
-    public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy)
+    // The target walk reads one metadata record at a time, and every read
+    // needs the containing blob's record table to find the record's offset.
+    // Opening a reader per record re-issues three range reads and re-decrypts
+    // and re-decodes a table that can hold 65 536 entries — so a walk over a
+    // blob's R records cost 4R range reads and O(R^2) table scanning, against
+    // NFR-PERF-012's rate and NFR-PERF-015's time to first restored file.
+    //
+    // One blob is cached rather than many, because a footer's table can reach
+    // 16 MiB and NFR-PERF-001 bounds memory by configured limits and not by
+    // repository size. One is enough: manifests written together land in the
+    // same blob and the walk descends the tree in the order it was written,
+    // so consecutive reads hit the same blob nearly always. The index beside
+    // it turns the table lookup from a scan into a probe.
+    private BlobId? _cachedBlobId;
+    private BlobReader? _cachedReader;
+    private Dictionary<ObjectId, RecordTableEntry>? _cachedTable;
+
+    /// <summary>Creates a rebuilder over the write credential — footers and keys are all a scan needs (FR-MAN-007).</summary>
+    public ForensicRebuilder(IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         _store = store;
         _repositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
-        _storeKeyDeriver = new StoreBlobKeyDeriver(hierarchy.DeriveKeyIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
+        _storeKeyDeriver = new StoreBlobKeyDeriver(credential.KeyIdKey.ToArray());
     }
 
+    // The reader asks for a blob's STRUCTURE class, which is the metadata
+    // plane for every blob — a sealed data blob's footer derives from the
+    // metadata key too (ADR-0042 §2). There is no data key to hand out.
     private byte[] DeriveClassKey(BlobClass blobClass, KeyGeneration generation) =>
-        blobClass == BlobClass.Data ? _hierarchy.DeriveDataKey(generation) : _hierarchy.DeriveMetadataKey(generation);
+        blobClass == BlobClass.Metadata
+            ? _credential.DeriveMetadataKey(generation)
+            : throw new InvalidOperationException("A repository holds no data class key (specification 03 §9.2).");
 
     /// <summary>Runs the scan into <paramref name="target"/>.</summary>
     public async ValueTask<ForensicReport> RebuildAsync(
@@ -164,33 +186,40 @@ public sealed class ForensicRebuilder : IDisposable
                 entry.Length,
                 digest: default);
 
+            // Forensic provenance: the envelope's generation, writer and
+            // counter — deterministic, footer-derived, and below any real
+            // published entry at a later generation (07 §10 reports;
+            // precedence still decides).
+            //
+            // One delta for the whole blob, not one per record. The
+            // catalogue's delta ledger is UNIQUE (writer_id, sequence) and
+            // every record of a blob shares the blob's counter, so a delta
+            // per record would be taken for a re-application of the first
+            // and every record after it would be dropped — a rebuild that
+            // reported a complete index holding one record per blob.
+            target.ApplyDelta(
+                DeltaId.FromBytes(System.Security.Cryptography.SHA256.HashData(
+                    reader.Envelope.BlobId.ToArray()).AsSpan(0, 16)),
+                new IndexDelta
+                {
+                    WriterId = reader.Envelope.WriterId,
+                    Sequence = reader.Envelope.BlobCounter,
+                    Generation = reader.Envelope.KeyGeneration.Value,
+                    Entries =
+                    [
+                        .. reader.RecordTable.Select(record => new IndexEntry(
+                            record.ObjectId,
+                            reader.Envelope.BlobId,
+                            record.PhysicalOffset,
+                            record.StoredLength,
+                            record.CompressionProfileValue,
+                            record.EncryptionProfileValue,
+                            IndexEntryType.Insertion)),
+                    ],
+                });
+
             foreach (var record in reader.RecordTable)
             {
-                // Forensic provenance: the envelope's generation, writer, and
-                // counter — deterministic, footer-derived, and below any real
-                // published entry at a later generation (07 §10 reports;
-                // precedence still decides).
-                target.ApplyDelta(
-                    DeltaId.FromBytes(System.Security.Cryptography.SHA256.HashData(
-                        [.. reader.Envelope.BlobId.ToArray(), .. record.ObjectId.ToArray()]).AsSpan(0, 16)),
-                    new IndexDelta
-                    {
-                        WriterId = reader.Envelope.WriterId,
-                        Sequence = reader.Envelope.BlobCounter,
-                        Generation = reader.Envelope.KeyGeneration.Value,
-                        Entries =
-                        [
-                            new IndexEntry(
-                                record.ObjectId,
-                                reader.Envelope.BlobId,
-                                record.PhysicalOffset,
-                                record.StoredLength,
-                                record.CompressionProfileValue,
-                                record.EncryptionProfileValue,
-                                IndexEntryType.Insertion),
-                        ],
-                    });
-
                 indexed.TryAdd(record.ObjectId, reader.Envelope.BlobId);
             }
 
@@ -237,7 +266,7 @@ public sealed class ForensicRebuilder : IDisposable
             try
             {
                 var record = StandaloneRecordFraming.Parse(bytes);
-                var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+                var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
                 try
                 {
                     if (!StandaloneRecordCipher.TryOpen(record, _repositoryId, metadataKey, out var plaintext))
@@ -275,7 +304,7 @@ public sealed class ForensicRebuilder : IDisposable
             // the rebuilt catalogue answers `snapshots` (schema v2).
             int signatureState;
             using (var signer = RepositorySigner.Create(
-                _hierarchy, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
+                _credential, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
             {
                 signatureState = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? 1 : 2;
             }
@@ -392,31 +421,77 @@ public sealed class ForensicRebuilder : IDisposable
             return null;
         }
 
+        if (!await EnsureCachedAsync(blobId, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        if (!_cachedTable!.TryGetValue(objectId, out var entry))
+        {
+            return null;
+        }
+
+        var read = await _cachedReader!.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
+        return read.Outcome == RecordReadOutcome.Ok ? read.Plaintext : null;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="blobId"/> the cached blob, answering false when
+    /// it cannot be opened. A blob that fails to open is not a finding here:
+    /// the scan has already opened every blob it listed and recorded whatever
+    /// damage it found, so a failure at this point means the object went away
+    /// under us and the record is simply unreachable.
+    /// </summary>
+    private async ValueTask<bool> EnsureCachedAsync(BlobId blobId, CancellationToken cancellationToken)
+    {
+        if (_cachedBlobId is { } cached && cached.Equals(blobId))
+        {
+            return true;
+        }
+
+        ReleaseCached();
+
         var storeKey = BlobStoreKeys.ForBlob(BlobClass.Metadata, _storeKeyDeriver.Derive(blobId));
 
         var metadata = await _store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
         if (!metadata.Found)
         {
-            return null;
+            return false;
         }
 
-        using var reader = await BlobReader.OpenAsync(
-            _store, storeKey, metadata.Metadata!.Length, _repositoryId, DeriveClassKey, _objectIdDeriver, cancellationToken)
+        // A blob reached here was opened by the scan already, so a format
+        // failure now is not the local corruption ScanBlobAsync records as a
+        // finding — it is the object changing underneath a read-only pass.
+        // It propagates, as it did before this blob was held across records.
+        var reader = await BlobReader.OpenAsync(
+            _store, storeKey, metadata.Metadata!.Length, _repositoryId, DeriveClassKey, _objectIdDeriver,
+            cancellationToken)
             .ConfigureAwait(false);
 
-        var entry = reader.RecordTable.FirstOrDefault(record => record.ObjectId == objectId);
-        if (entry == default)
+        var table = new Dictionary<ObjectId, RecordTableEntry>(reader.RecordTable.Count);
+        foreach (var record in reader.RecordTable)
         {
-            return null;
+            table.TryAdd(record.ObjectId, record);
         }
 
-        var read = await reader.ReadRecordAsync(entry, cancellationToken).ConfigureAwait(false);
-        return read.Outcome == RecordReadOutcome.Ok ? read.Plaintext : null;
+        _cachedBlobId = blobId;
+        _cachedReader = reader;
+        _cachedTable = table;
+        return true;
+    }
+
+    private void ReleaseCached()
+    {
+        _cachedReader?.Dispose();
+        _cachedBlobId = null;
+        _cachedReader = null;
+        _cachedTable = null;
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
+        ReleaseCached();
         _objectIdDeriver.Dispose();
         _storeKeyDeriver.Dispose();
     }

@@ -19,23 +19,22 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class SourceComparerTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        Storage.Abstractions.IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        Storage.Abstractions.IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
             SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer: null,
             catalogue);
 
@@ -68,8 +67,8 @@ public sealed class SourceComparerTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        await CreateOrchestrator(store, keys, hierarchy, catalogue).PublishAsync(Job(source), CancellationToken.None);
+        using var credential = CreateCredential();
+        await CreateOrchestrator(store, keys, credential, catalogue).PublishAsync(Job(source), CancellationToken.None);
         return Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId;
     }
 

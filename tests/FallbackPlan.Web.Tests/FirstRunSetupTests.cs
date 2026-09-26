@@ -3,8 +3,9 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using FallbackPlan.Api;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
+using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Web.Tests;
@@ -16,12 +17,16 @@ namespace FallbackPlan.Web.Tests;
 /// and what reaches the service is a sealed envelope rather than the
 /// passphrase.
 /// </summary>
+/// <remarks>
+/// The ceremony ends at the passphrase (ADR-0060): nothing is handed back
+/// to save, and there is no second step to resume at.
+/// </remarks>
 [TestClass]
 public sealed class FirstRunSetupTests
 {
     private const string StrongPassphrase = "Vault-Door-19-Kestrel-Harbour";
 
-    /// <summary>The device identity a kit records as its issuer (FR-KIT-001).</summary>
+    /// <summary>The device identity the service describes itself with.</summary>
     private const string DeviceIdHex = "00112233445566778899aabbccddeeff";
 
     private static HttpRequestMessage Post(ConsoleHarness harness, string path, string json)
@@ -109,6 +114,78 @@ public sealed class FirstRunSetupTests
     }
 
     [TestMethod]
+    public async Task Setup_ALongPassphraseMissingTheComposition_IsWeakAndNamesTheRules()
+    {
+        // Length alone stopped being enough (ADR-0044 §6 as amended): the
+        // refusal's findings name the missing uppercase, digits and special
+        // character so the operator fixes the checklist in one pass.
+        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
+        await using var harness = await ConsoleHarness.StartAsync();
+        Describes(harness, recipient, "setup_required");
+
+        using var body = await SetupAsync(harness,
+            """{"passphrase":"twentylowercasechars","confirmation":"twentylowercasechars","acknowledged":true}""");
+
+        Assert.AreEqual("weak", body.RootElement.GetProperty("outcome").GetString());
+        var findings = string.Join(" | ", body.RootElement.GetProperty("findings")
+            .EnumerateArray().Select(finding => finding.GetString()));
+        Assert.Contains("uppercase", findings, StringComparison.Ordinal);
+        Assert.Contains("two digits", findings, StringComparison.Ordinal);
+        Assert.Contains("special character", findings, StringComparison.Ordinal);
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<ProvisionInstallationCommand>());
+    }
+
+    [TestMethod]
+    public async Task PasswordCheck_AnswersEachRuleAndAsksTheServiceNothing()
+    {
+        // The account form's checklist speaks the same policy the service
+        // enforces (FR-USR-001 as amended) — one implementation, one verdict,
+        // and both polarities proven on the bytes.
+        await using var harness = await ConsoleHarness.StartAsync();
+
+        foreach (var (candidate, acceptable, named) in new (string, bool, string?)[]
+                 {
+                     ("Owner-Pass-19!", true, null),
+                     ("Aa12!Aa12", false, "10 characters"),          // 9 — below the floor
+                     ("long-enough-42!", false, "uppercase"),
+                     ("Long-Enough-Here!", false, "two digits"),
+                     ("LongEnough42x9", false, "special character"),
+                 })
+        {
+            using var response = await harness.Http.SendAsync(Post(
+                harness, "/api/password-check", $$"""{"candidate":"{{candidate}}"}"""));
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+            Assert.AreEqual(
+                acceptable, body.RootElement.GetProperty("acceptable").GetBoolean(), $"'{candidate}'");
+            if (named is not null)
+            {
+                Assert.Contains(named, string.Join(" | ", body.RootElement.GetProperty("findings")
+                    .EnumerateArray().Select(finding => finding.GetString())), StringComparison.Ordinal);
+            }
+        }
+
+        Assert.IsEmpty(harness.Clients.Client.Received, "the checklist asks the service nothing");
+    }
+
+    [TestMethod]
+    public async Task PasswordCheck_WithoutTheConsoleToken_IsRefused()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post, new Uri("/api/password-check", UriKind.Relative))
+        {
+            Content = new StringContent(
+                """{"candidate":"Owner-Pass-19!"}""", System.Text.Encoding.UTF8, "application/json"),
+        };
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [TestMethod]
     public async Task Setup_AcceptedPassphrase_SendsASealedEnvelopeAndNeverThePassphrase()
     {
         var recipientScalar = RandomNumberGenerator.GetBytes(32);
@@ -143,141 +220,12 @@ public sealed class FirstRunSetupTests
             harness.Clients.Client.Received.All(command =>
                 command is DescribeServiceCommand or ProvisionInstallationCommand),
             "the ceremony speaks exactly two verbs");
-    }
 
-    [TestMethod]
-    public async Task Setup_Provisioned_HandsBackTheKitInBothFormsWithIdenticalContent()
-    {
-        // FR-KIT-003's machine/printable equivalence, asserted where the
-        // operator actually receives them: the text is a rendering of the
-        // very bytes offered as a file, not a second encoding of the same
-        // idea.
-        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
-        await using var harness = await ConsoleHarness.StartAsync();
-        Describes(harness, recipient, "setup_required");
-
-        using var body = await SetupAsync(harness,
-            $$"""{"passphrase":"{{StrongPassphrase}}","confirmation":"{{StrongPassphrase}}","acknowledged":true}""");
-
-        Assert.AreEqual("provisioned", body.RootElement.GetProperty("outcome").GetString());
-        var kit = body.RootElement.GetProperty("kit");
-
-        var framed = Convert.FromBase64String(kit.GetProperty("machine").GetString()!);
-        var text = kit.GetProperty("text").GetString()!;
-
-        SequenceAssert.AreEqual(framed, RecoveryKitText.ParseToFramed(text));
-        Assert.AreEqual(
-            Convert.ToHexStringLower(SHA256.HashData(framed.AsSpan(0, framed.Length - 32))),
-            kit.GetProperty("checksum").GetString(),
-            "the checksum the page will confirm is the kit's own");
-
-        var parsed = RecoveryKitCodec.Parse(framed);
-        Assert.IsTrue(parsed.IsInstallationKit);
-        Assert.IsNull(parsed.RepositoryId);
-    }
-
-    [TestMethod]
-    public async Task Setup_TheKitItHandsBack_CarriesNoPassphraseAndNoKeyMaterial()
-    {
-        // The kit is what a person prints and leaves in a drawer. FR-KIT-002
-        // at the bytes the console actually served.
-        var recipientScalar = RandomNumberGenerator.GetBytes(32);
-        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(recipientScalar));
-        await using var harness = await ConsoleHarness.StartAsync();
-        Describes(harness, recipient, "setup_required");
-
-        using var body = await SetupAsync(harness,
-            $$"""{"passphrase":"{{StrongPassphrase}}","confirmation":"{{StrongPassphrase}}","acknowledged":true}""");
-
-        var framed = Convert.FromBase64String(
-            body.RootElement.GetProperty("kit").GetProperty("machine").GetString()!);
-        var text = body.RootElement.GetProperty("kit").GetProperty("text").GetString()!;
-
-        // Recover the derivation the service was sent, and check the kit
-        // against every private thing it produced.
-        var sent = harness.Clients.Client.Received.OfType<ProvisionInstallationCommand>().Single();
-        var (credential, salt, parameters) = WriteOnlyProvisioning.OpenProvision(
-            recipientScalar, Convert.FromHexString(sent.Envelope));
-        using (credential)
-        {
-            using var passphrase = Passphrase.Create(StrongPassphrase);
-            using var authority = WriteOnlyDerivation.Derive(
-                passphrase, parameters, salt, KdfValidationMode.OpenRepository);
-
-            Assert.IsFalse(
-                framed.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes(StrongPassphrase)) >= 0,
-                "the passphrase must not be in the kit");
-            Assert.IsFalse(
-                framed.AsSpan().IndexOf(authority.SealingPrivateKey) >= 0,
-                "the sealing private key must not be in the kit");
-            Assert.DoesNotContain(StrongPassphrase, text, StringComparison.Ordinal);
-
-            Assert.IsTrue(
-                framed.AsSpan().IndexOf(authority.Credential.SealingPublicKey) >= 0,
-                "the public verifier belongs here — and its presence proves the scan is not vacuous");
-        }
-    }
-
-    [TestMethod]
-    public async Task Setup_TheKitAndTheEnvelope_ComeFromOneDerivation()
-    {
-        // Argon2id is deliberately expensive. Producing the two artefacts
-        // from one root is the reason they are built together.
-        var recipientScalar = RandomNumberGenerator.GetBytes(32);
-        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(recipientScalar));
-        await using var harness = await ConsoleHarness.StartAsync();
-        Describes(harness, recipient, "setup_required");
-
-        using var body = await SetupAsync(harness,
-            $$"""{"passphrase":"{{StrongPassphrase}}","confirmation":"{{StrongPassphrase}}","acknowledged":true}""");
-
-        var kit = RecoveryKitCodec.Parse(Convert.FromBase64String(
-            body.RootElement.GetProperty("kit").GetProperty("machine").GetString()!));
-
-        var sent = harness.Clients.Client.Received.OfType<ProvisionInstallationCommand>().Single();
-        var (credential, salt, _) = WriteOnlyProvisioning.OpenProvision(
-            recipientScalar, Convert.FromHexString(sent.Envelope));
-        using (credential)
-        {
-            SequenceAssert.AreEqual(salt, kit.KdfSalt.ToArray());
-            SequenceAssert.AreEqual(
-                credential.SealingPublicKey.ToArray(), kit.SealingPublicKey.ToArray());
-        }
-    }
-
-    [TestMethod]
-    public async Task Setup_ARefusedPassphrase_HandsBackNoKitAtAll()
-    {
-        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
-        await using var harness = await ConsoleHarness.StartAsync();
-        Describes(harness, recipient, "setup_required");
-
-        using var body = await SetupAsync(harness,
-            """{"passphrase":"abcabcabcabc","confirmation":"abcabcabcabc","acknowledged":true}""");
-
-        Assert.AreEqual("weak", body.RootElement.GetProperty("outcome").GetString());
+        // And hands nothing back to keep: the passphrase is the whole
+        // recovery credential (ADR-0060), so the answer carries no kit.
         Assert.IsFalse(
-            body.RootElement.TryGetProperty("kit", out var kit) && kit.ValueKind != JsonValueKind.Null,
-            "a refused ceremony produces nothing to save");
-    }
-
-    [TestMethod]
-    public async Task RecoveryKit_WithoutAnArchiveToRecoverTheSaltFrom_SaysSoRatherThanMintingASecondRoot()
-    {
-        // Minting a fresh salt here would produce a kit that opens nothing —
-        // the worst possible outcome for an artefact whose entire job is to
-        // still work in ten years.
-        var recipient = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(RandomNumberGenerator.GetBytes(32)));
-        await using var harness = await ConsoleHarness.StartAsync();
-        Describes(harness, recipient, "kit_required");
-
-        using var response = await harness.Http.SendAsync(Post(
-            harness, "/api/recovery-kit", $$"""{"passphrase":"{{StrongPassphrase}}"}"""));
-        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-
-        Assert.AreEqual("unavailable", body.RootElement.GetProperty("outcome").GetString());
-        Assert.Contains(
-            "cannot be recovered", body.RootElement.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+            harness.Clients.Client.Received.Any(command => command.GetType().Name.Contains("Kit", StringComparison.Ordinal)),
+            "no verb about a kit exists to be spoken");
     }
 
     [TestMethod]
@@ -336,7 +284,7 @@ public sealed class FirstRunSetupTests
     {
         await using var harness = await ConsoleHarness.StartAsync();
 
-        foreach (var path in new[] { "/api/setup", "/api/passphrase-strength", "/api/recovery-kit" })
+        foreach (var path in new[] { "/api/setup", "/api/passphrase-strength" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(path, UriKind.Relative))
             {

@@ -47,6 +47,7 @@ public class PipelineBenchmarks
 
     private static CapturePolicy BasePolicy { get; } = CapturePolicy.Default with
     {
+        DedupTrustDomain = DedupTrustDomain.Device,
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
             TargetSizeBytes = 8 * 1024 * 1024,
@@ -67,7 +68,7 @@ public class PipelineBenchmarks
     {
         _data = new byte[DataLength];
         new Random(42).NextBytes(_data);
-        _keys = RepositoryKeySet.FromMasterKey([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        _keys = RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
         _spool = Path.Combine(Path.GetTempPath(), "fbp-bench-spool", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(_spool);
     }
@@ -93,7 +94,8 @@ public class PipelineBenchmarks
         var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, _keys, store,
-            new MonotonicBlobCounterAllocator(_counter), _spool);
+            new MonotonicBlobCounterAllocator(_counter), _spool,
+            FormatVersions.SealedDataPlane);
         _counter += 1_000;
 
         using var source = new MemoryStream(_data);

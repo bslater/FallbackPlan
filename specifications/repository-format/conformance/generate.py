@@ -384,19 +384,18 @@ def _x25519_self_test() -> None:
 # byte-identical output.
 # --------------------------------------------------------------------------
 
-MASTER_KEY = bytes(range(32))                      # 00 01 02 ... 1f
+# The root is Argon2id output and is PINNED here, exactly as argon2id.json
+# pins the KDF (no independent implementation exists in this generator).
+# Everything below it -- every group in this suite that needs a key -- derives
+# from this one root, so the files cannot drift from each other.
+ROOT = bytes(range(0xC0, 0xE0))                    # c0 c1 c2 ... df
 REPOSITORY_ID = bytes.fromhex("0102030405060708090a0b0c0d0e0f10")
 WRITER_ID = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
 BLOB_SALT = bytes([0x5A]) * 32
 BLOB_COUNTER = 42
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
-INFO_CONTENT_ID = b"fbp/content-id/v1"
-INFO_KEY_ID = b"fbp/key-id/v1"
-INFO_DATA = b"fbp/data/v1"
-INFO_METADATA = b"fbp/metadata/v1"
-INFO_SIGNING = b"fbp/signing/v1"
-INFO_BLOB = b"fbp/blob/v1"
+INFO_BLOB = b"fbp/blob/v1"      # the per-blob construction did not change between formats (03 section 5)
 
 OBJECT_TYPE_SEGMENT = 0x01
 OBJECT_TYPE_FILE_VERSION = 0x02
@@ -416,87 +415,77 @@ def u16(n: int) -> bytes:
     return n.to_bytes(2, "big")
 
 
+def write_only_tree() -> dict:
+    """The derivation tree off the root (specification 03 section 9.1): the
+    sealing keypair, the repository-scoped keys, and the generational keys
+    under their sub-roots. One derivation, every file -- no drift."""
+    sealing_scalar = hkdf_expand(ROOT, b"fbp/seal/v2", 32)
+    structure_root = hkdf_expand(ROOT, b"fbp/metadata/v2", 32)
+    content_id_key = hkdf_expand(ROOT, b"fbp/content-id/v2", 32)
+    key_id_key = hkdf_expand(ROOT, b"fbp/key-id/v2", 32)
+    signing_root = hkdf_expand(ROOT, b"fbp/signing/v2", 32)
+    return {
+        "sealing_scalar": sealing_scalar,
+        "sealing_public_key": x25519_public(sealing_scalar),
+        "structure_root": structure_root,
+        "content_id_key": content_id_key,
+        "key_id_key": key_id_key,
+        "signing_root": signing_root,
+        "metadata_key_generation_0": hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(0), 32),
+        "metadata_key_generation_1": hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(1), 32),
+        "signing_seed_generation_0": hkdf_expand(signing_root, b"fbp/signing-generation/v2" + u32(0), 32),
+    }
+
+
+def signing_seed(generation: int) -> bytes:
+    """The Ed25519 seed for a key generation (03 section 9.1, ADR-0020)."""
+    return hkdf_expand(write_only_tree()["signing_root"], b"fbp/signing-generation/v2" + u32(generation), 32)
+
+
 # --------------------------------------------------------------------------
 # Vector groups
 # --------------------------------------------------------------------------
 
 
-def keys_vectors() -> dict:
-    """Specification 03 -- key derivation."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
-    key_id_key = hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
-    data_key_0 = hkdf_expand(MASTER_KEY, INFO_DATA + u32(0), 32)
-    data_key_1 = hkdf_expand(MASTER_KEY, INFO_DATA + u32(1), 32)
-    metadata_key_0 = hkdf_expand(MASTER_KEY, INFO_METADATA + u32(0), 32)
-    signing_key_0 = hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32)
+def write_only_vectors() -> dict:
+    """Specification 03 -- the derivation tree, the per-blob key, and the
+    sealed-content-key key agreement."""
+    _x25519_self_test()
 
+    root = ROOT
+    tree = write_only_tree()
+    sealing_scalar = tree["sealing_scalar"]
+    structure_root = tree["structure_root"]
+    content_id_key = tree["content_id_key"]
+    key_id_key = tree["key_id_key"]
+    signing_root = tree["signing_root"]
+
+    metadata_key_0 = tree["metadata_key_generation_0"]
+    metadata_key_1 = tree["metadata_key_generation_1"]
+    signing_seed_0 = tree["signing_seed_generation_0"]
+
+    sealing_public = tree["sealing_public_key"]
+
+    # The per-blob key (03 section 5): the class key of the blob's
+    # generation expanded over the salt, writer and counter the envelope
+    # carries. For a metadata blob, and for a sealed data blob's footer,
+    # the class key is the metadata key; a sealed data blob's records derive
+    # the same way from the content key its sealed share opens to.
     blob_info = INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER)
-    blob_key = hkdf_expand(data_key_0, blob_info, 32)
+    blob_key = hkdf_expand(metadata_key_0, blob_info, 32)
 
     # Same salt, different writer -- must differ. This is the property that
     # makes key separation independent of CSPRNG quality (PT-13).
     other_writer = bytes([0xB0]) * 16
     blob_key_other_writer = hkdf_expand(
-        data_key_0, INFO_BLOB + BLOB_SALT + other_writer + u64(BLOB_COUNTER), 32
+        metadata_key_0, INFO_BLOB + BLOB_SALT + other_writer + u64(BLOB_COUNTER), 32
     )
     # Same salt and writer, different counter -- must also differ.
     blob_key_other_counter = hkdf_expand(
-        data_key_0, INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER + 1), 32
+        metadata_key_0, INFO_BLOB + BLOB_SALT + WRITER_ID + u64(BLOB_COUNTER + 1), 32
     )
-
     assert blob_key != blob_key_other_writer
     assert blob_key != blob_key_other_counter
-
-    return {
-        "description": "HKDF-Expand key derivation (specification 03).",
-        "independently_derived": True,
-        "inputs": {
-            "master_key": MASTER_KEY.hex(),
-            "writer_id": WRITER_ID.hex(),
-            "blob_salt": BLOB_SALT.hex(),
-            "blob_counter": BLOB_COUNTER,
-        },
-        "derived": {
-            "content_id_key": content_id_key.hex(),
-            "key_id_key": key_id_key.hex(),
-            "data_key_generation_0": data_key_0.hex(),
-            "data_key_generation_1": data_key_1.hex(),
-            "metadata_key_generation_0": metadata_key_0.hex(),
-            "signing_key_generation_0": signing_key_0.hex(),
-            "blob_key": blob_key.hex(),
-        },
-        "separation_checks": {
-            "comment": (
-                "Same blob_salt with a different writer_id or blob_counter must "
-                "produce a different blob key. This is what makes key separation "
-                "survive a cloned VM replaying CSPRNG state."
-            ),
-            "blob_key_other_writer": blob_key_other_writer.hex(),
-            "blob_key_other_counter": blob_key_other_counter.hex(),
-        },
-    }
-
-
-def write_only_vectors() -> dict:
-    """Specification 03 section 9 -- the write-only (format v2) derivation tree."""
-    _x25519_self_test()
-
-    # The root is Argon2id output and is PINNED here, exactly as
-    # argon2id.json pins the KDF (no independent implementation exists in
-    # this generator). Everything below it derives independently.
-    root = bytes(range(0xC0, 0xE0))
-
-    sealing_scalar = hkdf_expand(root, b"fbp/seal/v2", 32)
-    structure_root = hkdf_expand(root, b"fbp/metadata/v2", 32)
-    content_id_key = hkdf_expand(root, b"fbp/content-id/v2", 32)
-    key_id_key = hkdf_expand(root, b"fbp/key-id/v2", 32)
-    signing_root = hkdf_expand(root, b"fbp/signing/v2", 32)
-
-    metadata_key_0 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(0), 32)
-    metadata_key_1 = hkdf_expand(structure_root, b"fbp/metadata-generation/v2" + u32(1), 32)
-    signing_seed_0 = hkdf_expand(signing_root, b"fbp/signing-generation/v2" + u32(0), 32)
-
-    sealing_public = x25519_public(sealing_scalar)
 
     # The content-key sealing's key agreement (05 section 2.1): a pinned
     # ephemeral scalar stands in for the CSPRNG draw; the AEAD key is
@@ -525,9 +514,9 @@ def write_only_vectors() -> dict:
 
     return {
         "description": (
-            "Write-only repository derivation (specification 03 section 9, "
-            "ADR-0042): the root's one-way expansion into the sealing keypair "
-            "and the write bundle, and the sealed-content-key key agreement."
+            "Repository key derivation (specification 03, ADR-0042): the root's "
+            "one-way expansion into the sealing keypair and the write bundle, "
+            "the per-blob key, and the sealed-content-key key agreement."
         ),
         "independently_derived": True,
         "inputs": {
@@ -549,6 +538,34 @@ def write_only_vectors() -> dict:
             "metadata_key_generation_1": metadata_key_1.hex(),
             "signing_seed_generation_0": signing_seed_0.hex(),
         },
+        "blob_key": {
+            "comment": (
+                "blob_key = HKDF-Expand(class_key, 'fbp/blob/v1' || blob_salt || "
+                "writer_id || u64(blob_counter), 32) (specification 03 section 5). "
+                "The class key here is metadata_key_generation_0 -- what a "
+                "metadata blob, and a sealed data blob's footer, derive under; "
+                "a sealed data blob's records derive the same way from the "
+                "content key its sealed share opens to. The label keeps its v1 "
+                "spelling: the construction did not change between formats."
+            ),
+            "inputs": {
+                "class_key": metadata_key_0.hex(),
+                "class_key_is": "metadata_key_generation_0",
+                "writer_id": WRITER_ID.hex(),
+                "blob_salt": BLOB_SALT.hex(),
+                "blob_counter": BLOB_COUNTER,
+            },
+            "blob_key": blob_key.hex(),
+            "separation_checks": {
+                "comment": (
+                    "Same blob_salt with a different writer_id or blob_counter must "
+                    "produce a different blob key. This is what makes key separation "
+                    "survive a cloned VM replaying CSPRNG state."
+                ),
+                "blob_key_other_writer": blob_key_other_writer.hex(),
+                "blob_key_other_counter": blob_key_other_counter.hex(),
+            },
+        },
         "content_key_sealing": {
             "ephemeral_scalar": ephemeral_scalar.hex(),
             "ephemeral_public_key": ephemeral_public.hex(),
@@ -566,164 +583,11 @@ def write_only_vectors() -> dict:
     }
 
 
-def disaster_recovery_vectors() -> dict:
-    """Specification 11 section 5 and peer-protocol 07 section 5 -- the two
-    disaster-recovery keys."""
-    _x25519_self_test()
-    _ed25519_self_test()
-
-    # --- The recovery recipient (specification 03 section 4, format v1).
-    # Derived from the master key, so a v1 writer holds both halves and a
-    # recovering device rebuilds them from the passphrase. A v2 repository
-    # derives nothing here: it seals to the sealing public key its descriptor
-    # already carries (see write-only.json).
-    recovery_scalar = hkdf_expand(MASTER_KEY, b"fbp/recovery/v1", 32)
-    recovery_public = x25519_public(recovery_scalar)
-
-    # The envelope agreement of ADR-0042 section 4, which the set-configuration
-    # object reuses verbatim: a pinned ephemeral scalar stands in for the
-    # CSPRNG draw, and the AEAD key is extract-then-expand over the shared
-    # secret salted by both public shares. The AES-256-GCM step itself is not
-    # vectored here -- the generator cannot compute it (the aes-gcm.json
-    # posture) -- but its AAD is pinned, because that is what separates a
-    # configuration envelope from a provisioning or restore-grant one.
-    envelope_ephemeral = bytes(range(0x60, 0x80))
-    envelope_ephemeral_public = x25519_public(envelope_ephemeral)
-    envelope_shared = x25519(envelope_ephemeral, recovery_public)
-    envelope_key = hkdf_expand(
-        hkdf_extract(envelope_ephemeral_public + recovery_public, envelope_shared),
-        b"fbp/envelope/v2",
-        32,
-    )
-    assert x25519(recovery_scalar, envelope_ephemeral_public) == envelope_shared
-
-    # The recovery recipient must not collide with any other domain of the
-    # same root. This is the property that keeps a configuration envelope
-    # unreadable to a holder of any other derived key.
-    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
-    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
-    assert recovery_scalar != hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32)
-
-    # --- The claim key (peer-protocol 07 section 5.2).
-    # The root is Argon2id output and is PINNED, exactly as write-only.json
-    # pins its own: no independent Argon2id exists in this generator. Both
-    # repository formats reach this same root from the passphrase, which is
-    # why the label carries no format suffix.
-    claim_root = bytes(range(0x80, 0xA0))
-    claim_token = bytes.fromhex("d0d1d2d3d4d5d6d7d8d9dadbdcdddedf")
-
-    claim_seed = hkdf_expand(claim_root, b"fbp/peer-claim/v1" + claim_token, 32)
-    claim_public = ed25519_public_key(claim_seed)
-
-    # A claim proof binds the repository, the destination's token, a fresh
-    # nonce, the session transcript and the claimant's own fingerprint, so it
-    # is inseparable from the connection that carried it.
-    repository_id = bytes.fromhex("11121314151617181920212223242526")
-    nonce = bytes([0x77]) * 32
-    transcript_hash = hashlib.sha256(b"peer-protocol 02 section 3.2 context").digest()
-    claimant_identity = bytes([0x33]) * 32
-
-    proof_message = (
-        b"fbp-peer-v1:replica-claim"
-        + repository_id
-        + claim_token
-        + nonce
-        + transcript_hash
-        + claimant_identity
-    )
-    claim_signature = ed25519_sign(claim_seed, proof_message)
-
-    # THE property the token exists for: another destination mints another
-    # token, so the same passphrase yields a different keypair there and a
-    # proof captured at one destination is inert at the other.
-    other_token = bytes.fromhex("e0e1e2e3e4e5e6e7e8e9eaebecedeeef")
-    other_seed = hkdf_expand(claim_root, b"fbp/peer-claim/v1" + other_token, 32)
-    other_public = ed25519_public_key(other_seed)
-    assert other_public != claim_public
-
-    return {
-        "description": (
-            "Disaster-recovery keys: the recovery recipient that seals a "
-            "set-configuration object (specification 11 section 5) and the "
-            "claim keypair that re-points a replica's attribution "
-            "(peer-protocol 07 section 5)."
-        ),
-        "independently_derived": True,
-        "recovery_recipient": {
-            "inputs": {
-                "master_key": MASTER_KEY.hex(),
-                "info": "fbp/recovery/v1",
-            },
-            "derived": {
-                "recovery_scalar": recovery_scalar.hex(),
-                "recovery_public_key": recovery_public.hex(),
-            },
-            "envelope_agreement": {
-                "ephemeral_scalar": envelope_ephemeral.hex(),
-                "ephemeral_public_key": envelope_ephemeral_public.hex(),
-                "shared_secret": envelope_shared.hex(),
-                "hkdf_salt": (envelope_ephemeral_public + recovery_public).hex(),
-                "hkdf_info": "fbp/envelope/v2",
-                "aead_key": envelope_key.hex(),
-                "aead_associated_data": "fbp/config/v1",
-                "comment": (
-                    "The AES-256-GCM seal (zero nonce) is deliberately not "
-                    "vectored; see aes-gcm.json. The associated data is pinned "
-                    "because it is what stops a configuration envelope opening "
-                    "as a provisioning or restore-grant one."
-                ),
-            },
-            "v2_note": (
-                "A format-v2 repository derives no recovery recipient. It seals "
-                "to the sealing public key of write-only.json, which its "
-                "descriptor already carries, so one construction serves both."
-            ),
-        },
-        "claim_key": {
-            "inputs": {
-                "claim_root": claim_root.hex(),
-                "claim_root_note": (
-                    "claim_root = Argon2id(passphrase, kdf_salt, kdf_parameters); "
-                    "pinned here because Argon2id has no independent "
-                    "implementation in this generator (see argon2id.json)."
-                ),
-                "claim_token": claim_token.hex(),
-                "info": "fbp/peer-claim/v1 || claim_token",
-            },
-            "derived": {
-                "claim_seed": claim_seed.hex(),
-                "claim_public_key": claim_public.hex(),
-            },
-            "proof": {
-                "repository_id": repository_id.hex(),
-                "nonce": nonce.hex(),
-                "transcript_hash": transcript_hash.hex(),
-                "claimant_identity": claimant_identity.hex(),
-                "message": proof_message.hex(),
-                "signature": claim_signature.hex(),
-                "comment": (
-                    "message = 'fbp-peer-v1:replica-claim' || repository_id || "
-                    "claim_token || nonce || sha256(session context) || "
-                    "claimant_identity."
-                ),
-            },
-            "separation_checks": {
-                "comment": (
-                    "A second destination mints a second token, so the same "
-                    "passphrase produces a different keypair there. This is what "
-                    "makes a proof captured at one destination inert at another."
-                ),
-                "other_claim_token": other_token.hex(),
-                "other_claim_public_key": other_public.hex(),
-            },
-        },
-    }
-
-
 def identifier_vectors() -> dict:
     """Specification 02 -- content and object identifiers."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
-    key_id_key = hkdf_expand(MASTER_KEY, INFO_KEY_ID, 32)
+    tree = write_only_tree()
+    content_id_key = tree["content_id_key"]
+    key_id_key = tree["key_id_key"]
 
     cases = []
     for name, plaintext in [
@@ -785,7 +649,7 @@ def identifier_vectors() -> dict:
 
 def aad_vectors() -> dict:
     """Specification 04 section 4 -- associated data construction."""
-    content_id_key = hkdf_expand(MASTER_KEY, INFO_CONTENT_ID, 32)
+    content_id_key = write_only_tree()["content_id_key"]
     content_id = hashlib.sha256(b"hello world").digest()
     object_id = hmac.new(
         content_id_key, bytes([OBJECT_TYPE_SEGMENT]) + content_id, hashlib.sha256
@@ -839,6 +703,225 @@ def aad_vectors() -> dict:
             "record_count": footer_record_count,
             "aad": footer_aad.hex(),
             "aad_length": len(footer_aad),
+        },
+    }
+
+
+def records_v3_vectors() -> dict:
+    """Format-3 records (specification 04 sections 2-4, 03 section 5.4;
+    ADR-0052 Amendment 1): the key is the record's, derived from the class
+    key and the record's own type and identifier; the nonce is carried; the
+    AAD omits the ordinal. Everything here is HKDF and concatenation, so it
+    is derived, not pinned -- the same root and object as records.json, so
+    the two files describe one record under two formats."""
+    tree = write_only_tree()
+    content_id = hashlib.sha256(b"hello world").digest()
+    object_id = hmac.new(
+        tree["content_id_key"], bytes([OBJECT_TYPE_SEGMENT]) + content_id, hashlib.sha256
+    ).digest()
+    class_key = tree["metadata_key_generation_0"]
+    format_version = 3
+
+    def record_key(object_type: int, oid: bytes) -> bytes:
+        return hkdf_expand(class_key, b"fbp/record/v3" + bytes([object_type]) + oid, 32)
+
+    aad = REPOSITORY_ID + u16(format_version) + bytes([OBJECT_TYPE_SEGMENT]) + object_id
+    assert len(aad) == 51, f"format-3 AAD must be 51 bytes, got {len(aad)}"
+
+    other_object_id = hmac.new(
+        tree["content_id_key"], bytes([OBJECT_TYPE_SEGMENT]) + hashlib.sha256(b"goodbye world").digest(),
+        hashlib.sha256,
+    ).digest()
+
+    # The writer's per-blob seed and the content key it derives for a data
+    # record before sealing it (03 section 5.4). Any 32 bytes stand in for a
+    # CSPRNG draw; what the vector pins is the derivation.
+    seed = bytes([0x33] * 32)
+    seed_key = hkdf_expand(seed, b"fbp/record-seed/v3" + object_id, 32)
+
+    return {
+        "description": (
+            "Format-3 record key derivation, carried nonce and associated data "
+            "(specification 04 sections 2-4, 03 section 5.4)."
+        ),
+        "independently_derived": True,
+        "inputs": {
+            "repository_id": REPOSITORY_ID.hex(),
+            "format_version": format_version,
+            "object_type": OBJECT_TYPE_SEGMENT,
+            "object_id": object_id.hex(),
+            "class_key": class_key.hex(),
+            "class_key_provenance": "write-only.json derived.metadata_key_generation_0",
+        },
+        "record_key": {
+            "info": "fbp/record/v3 || u8(object_type) || object_id",
+            "record_key": record_key(OBJECT_TYPE_SEGMENT, object_id).hex(),
+            "separation_checks": {
+                "record_key_other_object": record_key(OBJECT_TYPE_SEGMENT, other_object_id).hex(),
+                "record_key_other_type": record_key(0x02, object_id).hex(),
+            },
+        },
+        "prefix": {
+            "nonce": RECORD_V3_VECTOR_NONCE.hex(),
+            "nonce_comment": "Carried in the record's prefix; a real record draws twelve random bytes.",
+            "metadata_prefix_length": 12,
+            "sealed_data_prefix_length": 12 + 80,
+        },
+        "aad": aad.hex(),
+        "aad_length": len(aad),
+        "seed_derivation": {
+            "info": "fbp/record-seed/v3 || object_id",
+            "seed": seed.hex(),
+            "record_content_key": seed_key.hex(),
+        },
+    }
+
+
+def merkle_vectors() -> dict:
+    """The Merkle commitment over a sealed blob's bytes (specification 05
+    section 5; ADR-0052 open question 4). RFC 6962's tree over one-mebibyte
+    leaves of the digest's own preimage, with the preimage's length hashed
+    into the published root under a prefix of its own -- without that binding
+    a four-leaf tree's first path verifies under a claimed size of three, and
+    a destination could understate its length to exempt its last leaf from
+    ever being drawn. Everything here is SHA-256 and concatenation, so it is
+    derived, not pinned."""
+    leaf_size = 1024 * 1024
+
+    def leaf(chunk: bytes) -> bytes:
+        return hashlib.sha256(b"\x00" + chunk).digest()
+
+    def node(left: bytes, right: bytes) -> bytes:
+        return hashlib.sha256(b"\x01" + left + right).digest()
+
+    def split(count: int) -> int:
+        k = 1
+        while k * 2 < count:
+            k *= 2
+        return k
+
+    def mth(leaves: list) -> bytes:
+        if not leaves:
+            return hashlib.sha256(b"").digest()
+        if len(leaves) == 1:
+            return leaves[0]
+        k = split(len(leaves))
+        return node(mth(leaves[:k]), mth(leaves[k:]))
+
+    def bind(length: int, head: bytes) -> bytes:
+        return hashlib.sha256(b"\x02" + u64(length) + head).digest()
+
+    def path(leaves: list, index: int) -> list:
+        if len(leaves) <= 1:
+            return []
+        k = split(len(leaves))
+        if index < k:
+            return path(leaves[:k], index) + [mth(leaves[k:])]
+        return path(leaves[k:], index - k) + [mth(leaves[:k])]
+
+    def stream(length: int) -> bytes:
+        out = bytearray()
+        counter = 0
+        while len(out) < length:
+            out += hashlib.sha256(u64(counter)).digest()
+            counter += 1
+        return bytes(out[:length])
+
+    # Synthetic leaf hashes, so the tree arithmetic can be pinned for shapes
+    # whose real preimages would be megabytes. They stand in for chunk
+    # hashes; what these cases fix is the split and the folding.
+    synthetic = [hashlib.sha256(b"\x00" + bytes([i])).digest() for i in range(8)]
+    shapes = []
+    for count in range(1, 9):
+        length = ((count - 1) * leaf_size) + 1
+        leaves = synthetic[:count]
+        shapes.append(
+            {
+                "leaf_count": count,
+                "preimage_length": length,
+                "split_point": split(count) if count > 1 else 0,
+                "mth": mth(leaves).hex(),
+                "root": bind(length, mth(leaves)).hex(),
+            }
+        )
+
+    # Paths are pinned over a real preimage, not over the synthetic hashes:
+    # a verifier hashes the chunk it is handed and checks its length against
+    # the tree the root names, so a path case has to carry chunks that could
+    # actually sit at those offsets.
+    five_length = (4 * leaf_size) + 4096
+    five_preimage = stream(five_length)
+    five = [
+        leaf(five_preimage[offset:offset + leaf_size])
+        for offset in range(0, five_length, leaf_size)
+    ]
+    paths = [
+        {
+            "leaf_index": index,
+            "chunk_offset": index * leaf_size,
+            "chunk_length": min(leaf_size, five_length - (index * leaf_size)),
+            "path": [step.hex() for step in path(five, index)],
+        }
+        for index in range(len(five))
+    ]
+
+    # Two whole preimages the reader can rebuild byte for byte: the stream is
+    # concatenated SHA-256(BE64(counter)), the same shape the committed
+    # fixtures' file content uses.
+    wholes = []
+    for name, length in [
+        ("under_one_leaf", 3), ("exactly_one_leaf", leaf_size),
+        ("one_byte_over_one_leaf", leaf_size + 1), ("two_leaves_and_a_tail", (2 * leaf_size) + 12_345),
+    ]:
+        preimage = stream(length)
+        leaves = [
+            leaf(preimage[offset:offset + leaf_size]) for offset in range(0, max(length, 1), leaf_size)
+        ]
+        wholes.append(
+            {
+                "name": name,
+                "preimage_length": length,
+                "leaf_count": len(leaves),
+                "root": bind(length, mth(leaves)).hex(),
+            }
+        )
+
+    return {
+        "description": (
+            "Merkle commitment over a sealed blob's bytes: RFC 6962 leaves and nodes, "
+            "one-mebibyte chunks, and a root bound to the preimage's length "
+            "(specification 05 section 5)."
+        ),
+        "independently_derived": True,
+        "parameters": {
+            "leaf_size": leaf_size,
+            "leaf_prefix": "00",
+            "node_prefix": "01",
+            "root_prefix": "02",
+            "root_construction": "SHA-256(0x02 || u64_be(preimage_length) || MTH(leaf_hashes))",
+            "preimage": "bytes [0, blob_length - 16) -- the flat digest's preimage, 05 section 5",
+        },
+        "primitives": {
+            "leaf_of_empty_chunk": leaf(b"").hex(),
+            "leaf_of_abc": leaf(b"abc").hex(),
+            "node_of_two_leaves": node(leaf(b"abc"), leaf(b"def")).hex(),
+            "leaf_and_node_differ_comment": (
+                "SHA-256('abc') is not leaf('abc'): without the prefix a one-leaf tree's head "
+                "would be the chunk's bare digest."
+            ),
+            "sha256_of_abc": hashlib.sha256(b"abc").hexdigest(),
+        },
+        "synthetic_leaf_hashes": [value.hex() for value in synthetic],
+        "shapes": shapes,
+        "authentication_paths": {
+            "leaf_count": len(five),
+            "preimage_length": five_length,
+            "root": bind(five_length, mth(five)).hex(),
+            "paths": paths,
+        },
+        "whole_preimages": {
+            "stream": "concatenated SHA-256(BE64(counter)) from counter 0, truncated to preimage_length",
+            "cases": wholes,
         },
     }
 
@@ -1071,6 +1154,31 @@ def compression_vectors() -> dict:
     }
 
 
+# Computed ONCE with System.Security.Cryptography.AesGcm over the inputs
+# case 2 below assembles from the other groups, and pinned. If those inputs
+# change, CryptographicPrimitiveTests fails until these are recomputed --
+# by running the platform over the new inputs, never from memory.
+AES_GCM_CASE_2_CIPHERTEXT = (
+    "b41f78c1c843a7769ad72605805380febf0ec1116454f7165986026e9461eacc"
+    "ceedb95d926f6d10d9ad38296aa326af54"
+)
+AES_GCM_CASE_2_TAG = "412ae7ebd757a4d4836bf14210248da1"
+
+# Case 3: the format-3 record construction (04 sections 2-4, 03 section 5.4).
+# Computed ONCE with an independent AES-256-GCM (Node's crypto, OpenSSL
+# underneath) over the key, nonce and AAD records-v3.json derives, and
+# pinned. A regression vector, not conformance evidence, exactly as case 2.
+AES_GCM_CASE_3_CIPHERTEXT = (
+    "5b864b6faf5d1f5b185a6f32413cc12d0e6679f218d8309516abef99bd097d5a"
+    "fc59e75862e94a86108f883dbd0c3e"
+)
+AES_GCM_CASE_3_TAG = "f52db06ac1176245e4fe7a4c77ffc32c"
+
+# The nonce the format-3 vector case carries. A real record draws twelve
+# random bytes; a vector needs a fixed one, and this is any twelve.
+RECORD_V3_VECTOR_NONCE = bytes(range(0x30, 0x3C))
+
+
 def aes_gcm_vectors() -> dict:
     """
     AES-256-GCM known-answer tests.
@@ -1095,7 +1203,7 @@ def aes_gcm_vectors() -> dict:
 
     Case 2 exists because case 1 proves nothing about AAD absorption -- the
     one property the record format leans on (specification 04 section 4). It
-    uses the format's REAL construction: the blob key pinned in keys.json,
+    uses the format's REAL construction: the blob key pinned in write-only.json,
     ordinal 47's nonce, and ordinal 47's 55-byte AAD from records.json. It was
     computed ONCE with the platform implementation
     (System.Security.Cryptography.AesGcm) and pinned. It is a regression
@@ -1133,25 +1241,41 @@ def aes_gcm_vectors() -> dict:
                 "provenance": (
                     "platform-derived: computed once with "
                     "System.Security.Cryptography.AesGcm and pinned. Regression "
-                    "vector, not conformance evidence. Key is keys.json blob_key; "
-                    "nonce and AAD are records.json ordinal 47."
+                    "vector, not conformance evidence. Key is write-only.json "
+                    "blob_key; nonce and AAD are records.json ordinal 47."
                 ),
                 "provenance_reverified": False,
-                "key": "d35875180e8f91a5044f4786c560624cd62ab51f82897b771b5bfbccd9ee313d",
+                "key": write_only_vectors()["blob_key"]["blob_key"],
                 "iv": "00000000000000000000002f",
                 "plaintext": (
                     "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a"
                     "207265636f7264206f7264696e616c203437"
                 ),
-                "aad": (
-                    "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfe"
-                    "ca501904d9a70aa87b2dd5857e15be14738fdde00000002f"
+                "aad": next(
+                    case["aad"] for case in aad_vectors()["cases"] if case["ordinal"] == 47
                 ),
-                "ciphertext": (
-                    "bb9690d382d7f70b6f00d12e22c54208a8c069455a621f254665e8c1f92ebd"
-                    "e56c53f9ea31fca86794953ff5f01cdf3fa6"
+                "ciphertext": AES_GCM_CASE_2_CIPHERTEXT,
+                "tag": AES_GCM_CASE_2_TAG,
+            },
+            {
+                "name": "record_v3_real_construction",
+                "provenance": (
+                    "platform-derived: computed once with an independent "
+                    "AES-256-GCM (Node crypto over OpenSSL) and pinned. "
+                    "Regression vector, not conformance evidence. Key is "
+                    "records-v3.json record_key; nonce and 51-byte AAD are "
+                    "records-v3.json prefix.nonce and aad (format 3, no ordinal)."
                 ),
-                "tag": "d5649651bd6452be41bd0b23f5fff22f",
+                "provenance_reverified": False,
+                "key": records_v3_vectors()["record_key"]["record_key"],
+                "iv": RECORD_V3_VECTOR_NONCE.hex(),
+                "plaintext": (
+                    "46616c6c6261636b506c616e20636f6e666f726d616e63652073756974653a"
+                    "20666f726d61742d33207265636f7264"
+                ),
+                "aad": records_v3_vectors()["aad"],
+                "ciphertext": AES_GCM_CASE_3_CIPHERTEXT,
+                "tag": AES_GCM_CASE_3_TAG,
             },
         ],
     }
@@ -1203,7 +1327,7 @@ def ed25519_vectors() -> dict:
     above, which is itself gated by the RFC's published test vectors 1-3 on
     every run -- the same pattern as the HKDF RFC 5869 self-test. The
     format-real cases sign with seeds derived exactly as specification 03
-    section 4 derives them, proving the seed interpretation end to end: the
+    section 9.1 derives them, proving the seed interpretation end to end: the
     32 HKDF bytes are an RFC 8032 section 5.1.5 seed, never a pre-clamped
     scalar, and the public key is computed from it rather than distributed.
     """
@@ -1239,7 +1363,7 @@ def ed25519_vectors() -> dict:
             "deterministic CBOR map {1: repository_id (bytes 16), 2: 1, 3: \"fbp\"}",
         ),
     ]:
-        seed = hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(generation), 32)
+        seed = signing_seed(generation)
         public = ed25519_public_key(seed)
         signature = ed25519_sign(seed, message)
 
@@ -1247,7 +1371,10 @@ def ed25519_vectors() -> dict:
             {
                 "name": f"format_signing_seed_generation_{generation}",
                 "generation": generation,
-                "seed_derivation": "HKDF-Expand(master_key, 'fbp/signing/v1' || u32(generation), 32)",
+                "seed_derivation": (
+                    "HKDF-Expand(signing_root, 'fbp/signing-generation/v2' || u32(generation), 32), "
+                    "signing_root = HKDF-Expand(root, 'fbp/signing/v2', 32)"
+                ),
                 "seed": seed.hex(),
                 "public_key": public.hex(),
                 "message": message.hex(),
@@ -1256,9 +1383,9 @@ def ed25519_vectors() -> dict:
             }
         )
 
-    # Generation 0's seed must equal keys.json's signing_key_generation_0 --
-    # one derivation, two files, no drift.
-    assert format_cases[0]["seed"] == hkdf_expand(MASTER_KEY, INFO_SIGNING + u32(0), 32).hex()
+    # Generation 0's seed must equal write-only.json's
+    # signing_seed_generation_0 -- one derivation, two files, no drift.
+    assert format_cases[0]["seed"] == write_only_tree()["signing_seed_generation_0"].hex()
 
     return {
         "description": "Ed25519 signatures over RFC 8032 vectors and the format's real signing seeds.",
@@ -1639,270 +1766,21 @@ def path_rules_vectors() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Recovery kit (specifications/recovery-kit, sections 2-4)
-# --------------------------------------------------------------------------
-
-
-def _cbor_uint(value: int) -> bytes:
-    """Minimal-length unsigned integer, major type 0 (deterministic CBOR)."""
-    if value < 24:
-        return bytes([value])
-    if value < 0x100:
-        return bytes([0x18, value])
-    if value < 0x10000:
-        return b"\x19" + value.to_bytes(2, "big")
-    if value < 0x100000000:
-        return b"\x1a" + value.to_bytes(4, "big")
-    return b"\x1b" + value.to_bytes(8, "big")
-
-
-def _cbor_head(major: int, argument: int) -> bytes:
-    head = _cbor_uint(argument)
-    return bytes([head[0] | (major << 5)]) + head[1:]
-
-
-def _cbor_bytes(value: bytes) -> bytes:
-    return _cbor_head(2, len(value)) + value
-
-
-def _cbor_text(value: str) -> bytes:
-    raw = value.encode("utf-8")
-    return _cbor_head(3, len(raw)) + raw
-
-
-def _cbor_map(entries: list) -> bytes:
-    """Definite-length map of (uint key, encoded value) pairs, key-sorted."""
-    body = b"".join(_cbor_uint(k) + v for k, v in sorted(entries))
-    return _cbor_head(5, len(entries)) + body
-
-
-def _cbor_array(items: list) -> bytes:
-    return _cbor_head(4, len(items)) + b"".join(items)
-
-
-def _kit_body(overrides: dict | None = None) -> bytes:
-    """The synthetic v1 kit body: all ten keys, a placeholder key object
-    (framing-level parsers treat key 5 as opaque past its magic).
-    """
-    fields = {
-        1: _cbor_uint(1),
-        2: _cbor_text("0.1.0"),
-        3: _cbor_bytes(bytes.fromhex("0102030405060708090a0b0c0d0e0f10")),
-        4: _cbor_uint(1),
-        5: _cbor_bytes(b"FBPKKEYS" + bytes(88)),
-        6: _cbor_map([
-            (1, _cbor_uint(8192)),
-            (2, _cbor_uint(1)),
-            (3, _cbor_uint(1)),
-            (4, _cbor_bytes(bytes(range(0x10, 0x20)))),
-        ]),
-        7: _cbor_array([
-            _cbor_map([
-                (1, _cbor_text("local-path")),
-                (2, _cbor_text("file:///backups/fallbackplan")),
-                (3, _cbor_text("")),
-                (4, _cbor_text("")),
-            ]),
-        ]),
-        8: _cbor_bytes(bytes([0x22]) * 16),
-        9: _cbor_uint(1_722_600_000_000),
-        10: _cbor_text("Install the recovery tool, then: recover --kit this-file."),
-    }
-    if overrides:
-        fields.update(overrides)
-    return _cbor_map(sorted(fields.items()))
-
-
-def _kit_body_v2() -> bytes:
-    """The synthetic write-only (repository format 2) kit body: eleven keys,
-    key 5 deliberately EMPTY -- the kit carries no key material at all
-    (ADR-0042, recovery-kit section 2.1) -- and key 11 the 32-byte sealing
-    public key the restore ceremony compares against.
-    """
-    return _kit_body({
-        4: _cbor_uint(2),
-        5: _cbor_bytes(b""),
-        11: _cbor_bytes(bytes([0x9C]) * 32),
-    })
-
-
-def _kit_frame(body: bytes, version: int = 1, declared_length: int | None = None,
-               corrupt_checksum: bool = False) -> bytes:
-    header = b"FBPKRKIT" + u16(version) + u16(0) + u32(
-        len(body) if declared_length is None else declared_length)
-    checksum = hashlib.sha256(header + body).digest()
-    if corrupt_checksum:
-        checksum = bytes([checksum[0] ^ 0x01]) + checksum[1:]
-    return header + body + checksum
-
-
-def _kit_line_check(number: str, payload: str) -> str:
-    digest = hashlib.sha256((number + ":" + payload.lower()).encode("utf-8")).digest()
-    return b32(digest)[:4]
-
-
-def _kit_text(framed: bytes) -> str:
-    """The canonical section 4 layout: 12 groups of 4, per-line checks."""
-    encoded = b32(framed)
-    per_line = 48
-    lines = [encoded[i : i + per_line] for i in range(0, len(encoded), per_line)]
-    width = 3 if len(lines) >= 100 else 2
-    rendered = ["FALLBACKPLAN RECOVERY KIT v1", ""]
-    for index, payload in enumerate(lines):
-        number = str(index + 1).zfill(width)
-        groups = " ".join(payload[i : i + 4] for i in range(0, len(payload), 4))
-        rendered.append(f"{number}: {groups} {_kit_line_check(number, payload)}")
-    rendered.append("END FALLBACKPLAN RECOVERY KIT")
-    return "\n".join(rendered) + "\n"
-
-
-def recovery_kit_vectors() -> dict:
-    """Specifications/recovery-kit sections 2-4 -- framing and text form."""
-    body = _kit_body()
-    framed = _kit_frame(body)
-    body_v2 = _kit_body_v2()
-    framed_v2 = _kit_frame(body_v2)
-
-    refusals = [
-        {
-            "name": "checksum_flip",
-            "framed_hex": _kit_frame(body, corrupt_checksum=True).hex(),
-            "reason": "checksum does not verify (transcription or storage damage)",
-        },
-        {
-            "name": "unknown_body_key",
-            "framed_hex": _kit_frame(_cbor_map(
-                sorted(({**{k: v for k, v in [
-                    (1, _cbor_uint(1))]}, 11: _cbor_uint(0)}).items()))).hex(),
-            "reason": "a v1 kit body assigns keys 1-10 only",
-        },
-        {
-            "name": "version_mismatch",
-            "framed_hex": _kit_frame(_kit_body({1: _cbor_uint(2)})).hex(),
-            "reason": "framed version and body key 1 disagree",
-        },
-        {
-            "name": "oversize_declared_body",
-            "framed_hex": _kit_frame(body, declared_length=65 * 1024 + 1).hex(),
-            "reason": "declared body exceeds the 64 KiB bound",
-        },
-        {
-            "name": "truncated",
-            "framed_hex": framed[:-8].hex(),
-            "reason": "length does not match the framing declaration",
-        },
-        {
-            "name": "wrong_magic",
-            "framed_hex": (b"NOTAKIT!" + framed[8:]).hex(),
-            "reason": "not a recovery kit",
-        },
-        {
-            "name": "write_only_with_key_object",
-            "framed_hex": _kit_frame(_kit_body({
-                4: _cbor_uint(2),
-                11: _cbor_bytes(bytes([0x9C]) * 32),
-            })).hex(),
-            "reason": (
-                "a format-2 kit must carry an EMPTY key 5 -- a write-only "
-                "kit holds no key material (ADR-0042, section 2.1)"
-            ),
-        },
-        {
-            "name": "write_only_without_sealing_key",
-            "framed_hex": _kit_frame(_kit_body({
-                4: _cbor_uint(2),
-                5: _cbor_bytes(b""),
-            })).hex(),
-            "reason": (
-                "a ten-key body claiming repository format 2 has nothing "
-                "for the restore ceremony to verify against -- key 11 is "
-                "required"
-            ),
-        },
-    ]
-
-    text = _kit_text(framed)
-
-    # A single-character transcription error must be caught by that LINE's
-    # check, before the whole-kit checksum is even reachable.
-    damaged_lines = text.split("\n")
-    target = next(i for i, line in enumerate(damaged_lines) if line.startswith("02: "))
-    damaged_lines[target] = damaged_lines[target].replace(" ", "  ", 1)
-    line = damaged_lines[target]
-    payload_start = line.index(":") + 1
-    body_chars = line[payload_start:].replace(" ", "")
-    flip = "a" if body_chars[0] != "a" else "b"
-    damaged_lines[target] = line.replace(body_chars[0], flip, 1)
-    damaged_text = "\n".join(damaged_lines)
-
-    # Inline self-checks, the same discipline as every other builder.
-    assert len(framed) == 16 + len(body) + 32
-    assert hashlib.sha256(framed[:-32]).digest() == framed[-32:]
-    assert _kit_line_check("01", b32(framed)[:48]) in text
-    assert hashlib.sha256(framed_v2[:-32]).digest() == framed_v2[-32:]
-    assert bytes([0x9C]) * 32 in body_v2 and b"FBPKKEYS" not in body_v2
-
-    return {
-        "description": "Recovery-kit framing and text form (specifications/recovery-kit sections 2-4).",
-        "independently_derived": True,
-        "comment": (
-            "The kit body is synthetic: key 5 carries a placeholder FBPKKEYS "
-            "prefix because framing-level conformance treats it as opaque "
-            "bytes; unwrap-level conformance is exercised by the committed "
-            "fixture kit, whose key object is real. Text-form cases pin the "
-            "canonical layout exactly: base32 of the framed binary, 12 "
-            "groups of 4 per line, per-line check = first 4 base32 chars of "
-            "SHA-256(line_number ':' payload)."
-        ),
-        "kit": {
-            "body_hex": body.hex(),
-            "framed_hex": framed.hex(),
-            "checksum_hex": framed[-32:].hex(),
-            "text_form": text,
-            "damaged_text_form": damaged_text,
-            "fields": {
-                "kit_format_version": 1,
-                "minimum_tool_version": "0.1.0",
-                "repository_id": "0102030405060708090a0b0c0d0e0f10",
-                "repository_format_version": 1,
-                "kdf": {"memory_kib": 8192, "iterations": 1, "parallelism": 1,
-                        "salt": bytes(range(0x10, 0x20)).hex()},
-                "issued_at": 1_722_600_000_000,
-                "destination_count": 1,
-            },
-        },
-        "write_only_kit": {
-            "body_hex": body_v2.hex(),
-            "framed_hex": framed_v2.hex(),
-            "checksum_hex": framed_v2[-32:].hex(),
-            "fields": {
-                "repository_format_version": 2,
-                "key_object_length": 0,
-                "sealing_public_key": (bytes([0x9C]) * 32).hex(),
-            },
-        },
-        "refusal_cases": refusals,
-    }
-
-
-
-# --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
 
 GROUPS = {
-    "keys.json": keys_vectors,
     "write-only.json": write_only_vectors,
-    "disaster-recovery.json": disaster_recovery_vectors,
     "identifiers.json": identifier_vectors,
     "records.json": aad_vectors,
+    "records-v3.json": records_v3_vectors,
+    "merkle.json": merkle_vectors,
     "segmentation.json": segmentation_vectors,
     "compression.json": compression_vectors,
     "aes-gcm.json": aes_gcm_vectors,
     "argon2id.json": argon2id_vectors,
     "ed25519.json": ed25519_vectors,
     "path-rules.json": path_rules_vectors,
-    "recovery-kit.json": recovery_kit_vectors,
 }
 
 

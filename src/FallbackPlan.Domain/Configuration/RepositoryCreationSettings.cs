@@ -26,12 +26,28 @@ public sealed record RepositoryCreationSettings
     /// <summary>The client identification written to the descriptor's created_by field.</summary>
     public required string CreatedBy { get; init; }
 
+    /// <summary>
+    /// The repository format to create: <see cref="FormatLimits.FormatVersion"/>
+    /// unless a caller asks for a newer one, up to
+    /// <see cref="FormatLimits.LatestFormatVersion"/>. Fixed at creation;
+    /// nothing upgrades in place (specification 00 §5).
+    /// </summary>
+    public ushort FormatVersion { get; init; } = FormatLimits.FormatVersion;
+
     /// <summary>Validates the settings in creation mode, aggregating every named defect.</summary>
     public ConfigurationValidationResult Validate()
     {
         var kdf = KdfParameters.ValidateCreationMinimums();
 
         List<ConfigurationDefect>? defects = kdf.IsValid ? null : [.. kdf.Defects];
+
+        if (!FormatVersions.IsReadable(FormatVersion))
+        {
+            (defects ??= []).Add(new ConfigurationDefect(
+                "format_version_unwritable",
+                $"Format {FormatVersion} cannot be created; formats {FormatVersions.SealedDataPlane} to "
+                + $"{FormatLimits.LatestFormatVersion} can (specification 00 §5)."));
+        }
 
         if (string.IsNullOrWhiteSpace(CreatedBy))
         {

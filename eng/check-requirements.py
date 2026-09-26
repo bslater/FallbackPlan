@@ -85,7 +85,12 @@ ROW_PATTERN = re.compile(
 CLASS_PATTERN = re.compile(
     r"\b(?:public|internal)\s+(?:sealed\s+|abstract\s+|static\s+|partial\s+)*class\s+(\w+)"
 )
-UNTESTED_PATTERN = re.compile(r"\((?:untested|not a test|unmet);")
+# "unbuilt" is admitted beside "untested" because they are different
+# states and conflating them is how a row lies quietly. Untested means
+# nobody wrote the test; unbuilt means there is nothing a test could
+# hold, and a row that says untested about a requirement nothing
+# implements reads as a backlog item when it is an open decision.
+UNTESTED_PATTERN = re.compile(r"\((?:untested|unbuilt|not a test|unmet);")
 
 # A test file may need to NAME a requirement in order to say it does not
 # establish it - which is the most useful thing a doc comment can say when a

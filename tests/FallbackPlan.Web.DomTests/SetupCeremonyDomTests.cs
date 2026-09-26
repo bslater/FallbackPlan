@@ -8,7 +8,7 @@ using static Microsoft.Playwright.Assertions;
 namespace FallbackPlan.Web.DomTests;
 
 /// <summary>
-/// The console page in a real browser (ADR-0049). Wire names stay pinned in
+/// The console page in a real browser (ADR-0073). Wire names stay pinned in
 /// <c>Web.Tests</c>; this suite owns the behaviour that only exists against a
 /// real DOM — <c>showModal()</c> inertness, CSP enforcement, focus, real
 /// downloads — which is exactly the class of defect that shipped invisibly
@@ -16,6 +16,15 @@ namespace FallbackPlan.Web.DomTests;
 /// rebuild button typing could never enable, and a modal that froze two
 /// screens while painting nothing.
 /// </summary>
+/// <remarks>
+/// Re-homed onto the three-step ceremony when this line merged. The recovery
+/// kit those first two defects lived on was withdrawn (ADR-0060): the
+/// passphrase is the whole credential, nothing else is produced or saved, and
+/// the confirmation shares step 2 with the passphrase instead of standing as a
+/// step of its own. The defects are not: the field the strength verdict used
+/// to replace mid-typing is still there, and the dialog that froze two screens
+/// now stands over the account step. Both are asserted where they now live.
+/// </remarks>
 [TestClass]
 [BrowserCondition]
 public sealed class SetupCeremonyDomTests
@@ -48,8 +57,6 @@ public sealed class SetupCeremonyDomTests
                 case ProvisionInstallationCommand:
                     provisioned = true;
                     return new ConfigurationChangeResult(["This installation is set up."]);
-                case ConfirmRecoveryKitCommand:
-                    return new ConfigurationChangeResult(["Recovery kit saved."]);
                 default:
                     return new AcknowledgedResult();
             }
@@ -63,56 +70,42 @@ public sealed class SetupCeremonyDomTests
         await page.CheckAsync("#setup-ack");
         await page.ClickAsync("[data-action=\"setup-begin\"]");
 
-        // Step 2: the strength meter (a real round trip) enables Continue.
+        // Step 2: the passphrase and its confirmation are one screen, and the
+        // finish arms only on the service's strength verdict (a real round
+        // trip) plus a confirmation that matches. The click runs a real Argon2
+        // derivation in the console before the fake acknowledges.
         await page.FillAsync("#setup-pass", StrongPassphrase);
-        await page.ClickAsync("[data-action=\"setup-to-confirm\"]");
-
-        // Step 3: the confirmation enables the finish, and the finish runs a
-        // real Argon2 derivation in the console before the fake acknowledges.
         await page.FillAsync("#setup-confirm", StrongPassphrase);
-        await page.ClickAsync("[data-action=\"setup-finish\"]");
+        var finish = page.Locator("[data-action=\"setup-finish\"]");
+        await Expect(finish).ToBeEnabledAsync();
+        await finish.ClickAsync();
 
-        // The kit page. The confirmation is inline and NO modal is open —
-        // an open dialog here made every button on this page swallow clicks
-        // while looking enabled, which is how a person got stranded.
-        await Expect(page.Locator("[data-action=\"setup-kit-file\"]")).ToBeVisibleAsync();
-        await Expect(page.GetByText("Passphrase accepted.")).ToBeVisibleAsync();
+        // Step 3, the first account — and it must arrive with NO modal over
+        // it. An open dialog makes the whole document inert: nested under the
+        // hidden app shell it painted nothing while freezing the two screens
+        // behind it, and that is how a person got stranded on a page whose
+        // every control looked enabled and ate clicks. The ceremony's rule is
+        // now absolute — while it owns the screen, nothing sits over it.
+        await Expect(page.GetByText("Create the first account")).ToBeVisibleAsync();
         Assert.IsFalse(
             await page.EvaluateAsync<bool>("document.getElementById('dialog').open"),
             "the ceremony must never sit under a modal");
 
-        // Download is a real browser download, and taking it arms the chain.
-        var download = await page.RunAndWaitForDownloadAsync(
-            () => page.ClickAsync("[data-action=\"setup-kit-file\"]"));
-        Assert.AreEqual("fallbackplan-recovery-kit.fbpkrkit", download.SuggestedFilename);
-
-        await page.CheckAsync("#setup-kit-ack");
-        await page.ClickAsync("[data-action=\"setup-kit-done\"]");
-
-        // The end-of-ceremony dialog is an ordinary app dialog again — and it
-        // must be SEEN, not merely open: nested under the hidden app panel it
-        // painted nothing while freezing the whole document.
-        var dialog = page.Locator("#dialog");
-        await Expect(dialog).ToBeVisibleAsync();
-        Assert.IsNotNull(await dialog.BoundingBoxAsync(), "an open dialog nobody can see is an inertness trap");
-
-        Assert.IsTrue(
-            harness.Clients.Client.Received.Any(received => received is ConfirmRecoveryKitCommand),
-            "Finish must have sent confirm_recovery_kit");
-
-        // Closing it hands the screen to sign-in, whose fields must accept
-        // input — the second screen this trap froze.
-        await page.ClickAsync("#dialog [data-action=\"close-dialog\"]");
-        await page.FillAsync("#signin-user", "owner");
-        Assert.AreEqual("owner", await page.InputValueAsync("#signin-user"));
+        // The proof that it is not inert: the fields take real input.
+        await page.FillAsync("#setup-user", "owner");
+        Assert.AreEqual("owner", await page.InputValueAsync("#setup-user"));
     }
 
     [TestMethod]
-    public async Task RebuildPage_TypingThePassphrase_EnablesBuildWithoutStealingFocus()
+    public async Task UnfinishedCeremony_TypingThePassphrase_ArmsTheFinishWithoutStealingFocus()
     {
         await using var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = command => command switch
         {
+            // A service on contracts 1.14–1.28 reports kit_required between
+            // setup_required and ready. The kit it names is gone (ADR-0060),
+            // but the state still says the ceremony never finished, so the
+            // console puts the ceremony up rather than the console.
             DescribeServiceCommand => Describe("kit_required"),
             _ => new AcknowledgedResult(),
         };
@@ -121,22 +114,28 @@ public sealed class SetupCeremonyDomTests
         var page = await context.NewPageAsync();
         await page.GotoAsync(harness.TokenedUrl);
 
-        await Expect(page.GetByText("Your recovery kit is still unsaved")).ToBeVisibleAsync();
-        var build = page.Locator("[data-action=\"setup-rebuild-kit\"]");
-        await Expect(build).ToBeDisabledAsync();
+        await page.CheckAsync("#setup-ack");
+        await page.ClickAsync("[data-action=\"setup-begin\"]");
 
-        // Real keystrokes: the defect was an input handler that only ever
-        // enabled step 2's button, leaving this one dead until a stray
-        // re-render — which also replaced the field mid-typing and stole its
-        // focus, so the page read as one where every control was inert.
+        var finish = page.Locator("[data-action=\"setup-finish\"]");
+        await Expect(finish).ToBeDisabledAsync();
+
+        // Real keystrokes: the defect was a strength answer that re-rendered
+        // the step, replacing the very field being typed in — focus landed on
+        // a fresh element with the caret wherever the browser put it, so the
+        // cursor jumped on every debounced answer and in-flight keystrokes
+        // died. The verdict must patch the meter and the button in place.
         await page.FocusAsync("#setup-pass");
         await page.Keyboard.TypeAsync(StrongPassphrase);
+        await page.Keyboard.PressAsync("Tab");
+        await page.Keyboard.TypeAsync(StrongPassphrase);
 
-        await Expect(build).ToBeEnabledAsync();
+        await Expect(finish).ToBeEnabledAsync();
         Assert.AreEqual(
-            "setup-pass", await page.EvaluateAsync<string>("document.activeElement?.id"),
+            "setup-confirm", await page.EvaluateAsync<string>("document.activeElement?.id"),
             "typing must not lose the field");
         Assert.AreEqual(StrongPassphrase, await page.InputValueAsync("#setup-pass"));
+        Assert.AreEqual(StrongPassphrase, await page.InputValueAsync("#setup-confirm"));
     }
 
     [TestMethod]

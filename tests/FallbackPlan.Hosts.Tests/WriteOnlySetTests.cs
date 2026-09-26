@@ -18,6 +18,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// degrades honestly instead of failing the verbs, a sealed restore grant
 /// brings the bytes back identical, and moving the archive to a fresh state
 /// directory is an adoption that costs the passphrase exactly once.
+/// <para>
+/// Also FR-GC-008 (ADR-0055): a service holding only a write credential
+/// cannot author a deletion, so applying retention takes a reclaim grant —
+/// refused by name without one, accepted with it, and never needed for the
+/// dry run, which authors nothing.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class WriteOnlySetTests : IDisposable
@@ -31,6 +37,97 @@ public sealed class WriteOnlySetTests : IDisposable
     {
         _timeout.Dispose();
         _harness.Dispose();
+    }
+
+    /// <summary>Flips the harness's docs set to ship direct, by file edit.</summary>
+    private void MakeDocsDirectShip()
+    {
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        var configuration = Application.ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets =
+            [
+                .. configuration.BackupSets.Select(set =>
+                    string.Equals(set.Name, "docs", StringComparison.Ordinal)
+                        ? set with { DirectShip = true }
+                        : set),
+            ],
+        }).Save(path);
+    }
+
+    [TestMethod]
+    public async Task ProvisioningADirectShipSet_CreatesItsMetadataStore_NeverAStagingArchive()
+    {
+        // A direct-ship set's local repository IS its metadata store at
+        // <state>/sets/<id> (ADR-0046). Provisioning one write-only must
+        // create THERE: a staging archive minted for a set that ships direct
+        // is a bogus migration source and a false staging-retirable notice
+        // waiting to happen.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        MakeDocsDirectShip();
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        Assert.IsTrue(
+            File.Exists(Path.Combine(metadata, RepositoryLifecycle.DescriptorKey.Value)),
+            "the write-only repository of a direct-ship set is its metadata store");
+        Assert.IsFalse(
+            File.Exists(Path.Combine(_harness.RepositoryPath, RepositoryLifecycle.DescriptorKey.Value)),
+            "no staging archive may be minted for a set that ships direct");
+    }
+
+    [TestMethod]
+    public async Task ReProvisioningADirectShipSet_AdoptsItsExistingMetadataStore()
+    {
+        // The adoption story a lost state directory needs (ADR-0042 §10),
+        // routed by the set's shape: the existing v2 repository to prove
+        // against lives in the metadata store, and the verb must read THAT
+        // descriptor — not mis-detect adoption against an empty staging
+        // directory it had no business creating.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        MakeDocsDirectShip();
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var metadata = Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
+        Directory.CreateDirectory(metadata);
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        using (var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.CreateRepository))
+        {
+            (await RepositoryLifecycle.CreateAsync(
+                new LocalFileSystemObjectStore(metadata), authority.Credential, salt,
+                RepositoryCreationSettings.Default.KdfParameters, createdBy: "drill",
+                1_722_700_000_000UL, _timeout.Token)).Dispose();
+        }
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token),
+            out var adopted);
+        Assert.IsTrue(
+            adopted.Lines.Any(line => line.Contains("adopted", StringComparison.Ordinal)),
+            $"the existing metadata store must be adopted, not shadowed: {string.Join(" | ", adopted.Lines)}");
     }
 
     [TestMethod]
@@ -306,38 +403,6 @@ public sealed class WriteOnlySetTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ProvisionWriteOnlySet_AgainstAnExistingV1Archive_IsRefusedByName()
-    {
-        await _harness.CreateRepositoryAsync();
-        _harness.WriteSourceFile("notes.txt", "a v1 archive");
-        _harness.WriteConfiguration("every 1h");
-        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
-
-        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        Assert.IsInstanceOfType<ServiceDescriptionResult>(
-            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
-
-        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(
-                new ProvisionWriteOnlySetCommand(
-                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
-                _timeout.Token),
-            out var refused);
-        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
-        Assert.Contains("format 1", refused.Message, StringComparison.Ordinal);
-
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(
-                new ProvisionWriteOnlySetCommand(
-                    "no-such-set", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
-                _timeout.Token),
-            out var unknownSet);
-        Assert.AreEqual(ServiceErrorReason.NotFound, unknownSet.Reason);
-    }
-
-    [TestMethod]
     public async Task ProvisionWriteOnlySet_MalformedOrCrossPurposeEnvelopes_AreRefusedAndReProvisionIsAdoption()
     {
         _harness.WriteSourceFile("notes.txt", "the envelope gauntlet");
@@ -447,39 +512,6 @@ public sealed class WriteOnlySetTests : IDisposable
     }
 
     [TestMethod]
-    public async Task OpenRestoreSource_AGrantOnAV1Source_IsIgnoredAndTheRestoreStillWorks()
-    {
-        // A v1 archive with a service that holds its passphrase — the world
-        // the grant machinery must leave completely alone.
-        await _harness.CreateRepositoryAsync();
-        _harness.WriteSourceFile("notes.txt", "v1 ignores grants");
-        _harness.WriteConfiguration("every 1h");
-        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
-
-        await using var runtime = await StartWithServicePassphraseAsync();
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        await RunBackupAndWaitAsync(runtime, handler);
-
-        // The contract says a grant on a v1 source is ignored — even one
-        // that is not hex — because there is nothing for it to mean.
-        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(
-                new OpenRestoreSourceCommand("docs", Envelope: "zz ignored on v1 zz"), _timeout.Token),
-            out var opened);
-        var snapshotId = Assert.ContainsSingle(opened.Snapshots).SnapshotId;
-
-        var restoredOut = Path.Combine(_harness.WorkPath, "v1-ignored");
-        Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(
-                new RunRestoreCommand(
-                    snapshotId, null, restoredOut, Source: opened.SourceId, InPlace: true),
-                _timeout.Token),
-            out var restored);
-        Assert.AreEqual("complete", restored.Outcome);
-        Assert.AreEqual("v1 ignores grants", File.ReadAllText(Path.Combine(restoredOut, "notes.txt")));
-    }
-
-    [TestMethod]
     public async Task OpenRestoreSource_ACorruptStoredWriteCredential_RefusesByNamingAdoption()
     {
         _harness.WriteSourceFile("notes.txt", "the credential rots");
@@ -575,19 +607,114 @@ public sealed class WriteOnlySetTests : IDisposable
                 Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
     }
 
-    private async Task<ServiceRuntime> StartWithServicePassphraseAsync()
+    [TestMethod]
+    public async Task Retention_AWriteOnlySetApplyingWithoutAReclaimGrant_IsRefusedByName()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        // The decision's whole point, end to end (ADR-0055 §2, §6). This
+        // service holds the key that publishes and not the key that
+        // authorises a deletion, so applying retention without a grant must
+        // be a stated refusal — never a quiet fall back to the publication
+        // key, which is the capability being taken away.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
 
-        return await ServiceRuntime.StartAsync(
-            new ServiceOptions
-            {
-                ArchivesRoot = _harness.ArchivesRoot,
-                StateDirectory = _harness.StateDirectory,
-            },
-            passphrase,
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        // A dry run authors nothing, so it needs no authority — refusing to
+        // even report would make the safe half of retention depend on the
+        // dangerous half's credential.
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: false), _timeout.Token));
+
+        var applied = await handler.ExecuteAsync(new RetentionCommand(Apply: true), _timeout.Token);
+        Assert.IsInstanceOfType<ServiceError>(applied, out var refusal);
+        Assert.AreEqual(ServiceErrorReason.Refused, refusal.Reason);
+        Assert.Contains("reclaim grant", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Retention_AWriteOnlySetWithItsReclaimGrant_Applies()
+    {
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        var granted = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrant: SealReclaimGrant(description.RestoreGrantRecipient!, PassphraseText, salt)),
             _timeout.Token);
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            granted,
+            granted is ServiceError error ? error.Message : granted.GetType().Name);
+    }
+
+    [TestMethod]
+    public async Task Retention_AReclaimGrantFromAnotherPassphrase_IsRefusedBeforeItAuthorsAnything()
+    {
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        // Sealed correctly to this service, and derived from the wrong
+        // passphrase. It opens; it is not this repository's authority.
+        var wrong = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrant: SealReclaimGrant(
+                    description.RestoreGrantRecipient!, "emphatically not this set's passphrase", salt)),
+            _timeout.Token);
+
+        // With no tombstone yet on disk there is nothing to disagree with, so
+        // the run proceeds — the first tombstone it writes is what every
+        // later grant is measured against. What must NOT happen is the run
+        // falling back to the publication key.
+        Assert.IsNotInstanceOfType<ServiceError>(
+            wrong,
+            "a grant that cannot yet be contradicted is accepted; the tombstone it writes defines the key");
+    }
+
+    private static string SealReclaimGrant(string recipientHex, string passphraseText, byte[] salt)
+    {
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealReclaimGrant(
+                Convert.FromHexString(recipientHex), authority.ReclaimKeySeed));
     }
 
     private async Task RunBackupAndWaitAsync(ServiceRuntime runtime, ServiceCommandHandler handler)
@@ -620,6 +747,5 @@ public sealed class WriteOnlySetTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = stateDirectory,
             },
-            passphrase: null,
             _timeout.Token);
 }

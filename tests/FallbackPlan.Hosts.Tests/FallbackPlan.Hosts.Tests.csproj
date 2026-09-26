@@ -4,6 +4,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- The LibraryImport marshalling for JobDrilldownTests' raw-name file
+         (a non-UTF-8 filename only the libc calls can create). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,7 +32,6 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Agent\FallbackPlan.Agent.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Api\FallbackPlan.Api.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Cli\FallbackPlan.Cli.csproj" />
-    <ProjectReference Include="..\..\src\FallbackPlan.Keystore\FallbackPlan.Keystore.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Protocol\FallbackPlan.Protocol.csproj" />
     <ProjectReference Include="..\FallbackPlan.TestSupport\FallbackPlan.TestSupport.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Recovery\FallbackPlan.Recovery.csproj" />

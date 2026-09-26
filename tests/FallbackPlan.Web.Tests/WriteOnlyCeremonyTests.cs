@@ -22,16 +22,22 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
 {
     private const string PassphraseText = "the console ceremony passphrase";
 
-    private readonly string _archives =
+    private readonly string _scratch =
         Path.Combine(Path.GetTempPath(), "fbp-wo-web", Guid.NewGuid().ToString("n")[..12]);
 
     private readonly string _setId = new('a', 32);
+
+    /// <summary>The staging shape's root: one archive per set.</summary>
+    private string _archives => Path.Combine(_scratch, "archives");
+
+    /// <summary>The state directory, whose <c>sets</c> child holds direct-ship metadata stores.</summary>
+    private string _state => Path.Combine(_scratch, "state");
 
     public void Dispose()
     {
         try
         {
-            Directory.Delete(_archives, recursive: true);
+            Directory.Delete(_scratch, recursive: true);
         }
         catch (Exception cleanup) when (cleanup is IOException or DirectoryNotFoundException)
         {
@@ -120,7 +126,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -176,7 +182,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -188,14 +194,14 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         foreach (var unusable in new[] { "this is not hex", "abcd" })
         {
             var answer = await ConsoleRestoreGate.VerifyAsync(
-                _archives, PassphraseText, unusable, CancellationToken.None);
+                _archives, stateDirectory: null, PassphraseText, unusable, CancellationToken.None);
             Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, answer.Outcome, unusable);
             Assert.Contains("grant-recipient", answer.Detail!, StringComparison.Ordinal);
         }
 
         // No recipient at all still verifies — it just mints no grant.
         var verified = await ConsoleRestoreGate.VerifyAsync(
-            _archives, PassphraseText, grantRecipientHex: null, CancellationToken.None);
+            _archives, stateDirectory: null, PassphraseText, grantRecipientHex: null, CancellationToken.None);
         Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Verified, verified.Outcome);
         Assert.IsNull(verified.GrantEnvelope);
     }
@@ -209,7 +215,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         // A bad recipient never starts an Argon2 derivation — pre-fix this
         // was an unguarded FormatException out of the ceremony endpoint.
         var badRecipient = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
-            _archives, _setId, PassphraseText, "definitely-not-hex", CancellationToken.None);
+            _archives, _state, _setId, PassphraseText, "definitely-not-hex", CancellationToken.None);
         Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, badRecipient.Outcome);
         Assert.Contains("grant-recipient", badRecipient.Detail!, StringComparison.Ordinal);
 
@@ -220,7 +226,7 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         var store = new LocalFileSystemObjectStore(archive);
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
-            var (repository, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
                 store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
             repository.Dispose();
             authority.Dispose();
@@ -232,8 +238,51 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
         await File.WriteAllBytesAsync(descriptorPath, bytes);
 
         var damaged = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
-            _archives, _setId, PassphraseText, recipientHex, CancellationToken.None);
+            _archives, _state, _setId, PassphraseText, recipientHex, CancellationToken.None);
         Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, damaged.Outcome);
         Assert.Contains("does not read", damaged.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task BuildProvisionEnvelope_ForADirectShipSet_AdoptsItsMetadataStore_RatherThanMintingASecondSalt()
+    {
+        // The quiet half of the direct-ship blind spot, and the dangerous
+        // one. This ceremony branches on finding a descriptor: found means
+        // ADOPT — derive with the salt the repository already carries —
+        // and absent means CREATE, with a brand new salt. A direct-ship set
+        // keeps its descriptor in the metadata store (ADR-0046), so probing
+        // only the archives root turned every adoption into a creation, and
+        // a creation's keys cannot open what that set has already written.
+        // A refusal would have been loud; this was silent.
+        var metadata = Path.Combine(_state, "sets", _setId);
+        Directory.CreateDirectory(metadata);
+        var store = new LocalFileSystemObjectStore(metadata);
+        using (var passphrase = Passphrase.Create(PassphraseText))
+        {
+            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
+            repository.Dispose();
+            authority.Dispose();
+        }
+
+        var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
+        var recipientScalar = RandomNumberGenerator.GetBytes(32);
+        var recipientHex = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(recipientScalar));
+
+        var answer = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
+            _archives, _state, _setId, PassphraseText, recipientHex, CancellationToken.None);
+
+        Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Verified, answer.Outcome, answer.Detail);
+        var (credential, salt, _) = WriteOnlyProvisioning.OpenProvision(
+            recipientScalar, Convert.FromHexString(answer.Envelope!));
+        using (credential)
+        {
+            Assert.IsTrue(
+                descriptor.KdfSalt.Span.SequenceEqual(salt),
+                "adoption must re-derive with the store's own salt; a fresh one would strand the set's data");
+            Assert.IsTrue(
+                descriptor.SealingPublicKey.Span.SequenceEqual(credential.SealingPublicKey),
+                "and the adopted credential must be the one this repository already answers to");
+        }
     }
 }

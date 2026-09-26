@@ -248,11 +248,12 @@ For traceability, the intended consumption once the package exists
 - The existing machine-timezone regression test
   (`Daily_schedule_answers_do_not_depend_on_the_machine_timezone`) stays in
   FallbackPlan and must pass unchanged across the swap.
-- Adoption mechanics on the FallbackPlan side: nupkg committed to
-  `external/packages`, lockfile identity added deliberately, an architecture
-  canary test pinning which project may reference the package (the pattern
-  used for `Bodu.Security.Cryptography` and `Bodu.Core`), and an ADR
-  amending ADR-0027 §1's grammar.
+- Adoption mechanics on the FallbackPlan side: the package pinned in
+  `Directory.Packages.props` and source-mapped to nuget.org, lockfile
+  identity added deliberately, an architecture canary test pinning which
+  project may reference the package (the pattern used for
+  `Bodu.Security.Cryptography` and `Bodu.Core`), and an ADR amending
+  ADR-0027 §1's grammar.
 
 ## 6. Out of scope
 
@@ -344,7 +345,7 @@ single boolean, never a backlog.
 ### Adoption (done)
 
 Nothing further is asked of Bodu, and FallbackPlan has adopted the package:
-the nupkg is committed to `external/packages`, the identity is pinned in
+the package comes from nuget.org, the identity is pinned in
 `Directory.Packages.props` and the lockfiles, `Schedule` delegates to
 `AnchoredInterval` and `CronExpression`, `DependencyRuleTests` pins the
 reference to the Application project with a canary that it exists, and
@@ -352,9 +353,10 @@ reference to the Application project with a canary that it exists, and
 amendment. The schedule tests — including the machine-timezone regression
 — pass unchanged, which is the proof that the swap preserved behaviour.
 
-The consumed version is **0.2.0**, taken from upstream's own feed along with
-the other three Bodu packages, which are versioned in lock-step
-([`external/packages/README.md`](../external/packages/README.md)). An interim
-build packed from source bridged the short gap between `AnchoredInterval`
-landing on master and upstream publishing a release containing it; it has
-been replaced and should not reappear.
+The consumed version is **0.7.0**, from nuget.org along with the other five
+Bodu packages, which are versioned in lock-step and taken together
+([ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)
+Amendment 2). Two arrangements that bridged earlier gaps are gone and should
+not reappear: an interim build packed from source, from before upstream
+published a release containing `AnchoredInterval`; and the committed
+`external/packages` feed, from before upstream published at all.

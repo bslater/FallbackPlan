@@ -1,15 +1,17 @@
 namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
-/// Thrown when the key object fails to unwrap. A failed unwrap means the
-/// passphrase is wrong <em>or</em> the object has been tampered with, and the
-/// two are deliberately indistinguishable — a reader must not tell an attacker
-/// which (specification 03 §3).
+/// Thrown when a passphrase does not reproduce a repository's keys: the
+/// derived sealing public key differs from the descriptor's copy
+/// (specification 03 §9.3). Equality is the whole verifier — nothing is
+/// decrypted to find out — so a wrong passphrase and a descriptor altered to
+/// carry another key are reported identically, and a reader must not tell an
+/// attacker which.
 /// </summary>
 public sealed class KeyUnwrapFailedException : Exception
 {
     private const string IndistinguishableMessage =
-        "The key object could not be unwrapped. Either the passphrase is wrong or the object has been altered; the two are deliberately indistinguishable (specification 03 §3).";
+        "The passphrase does not reproduce this repository's keys. Either the passphrase is wrong or the descriptor has been altered; the two are deliberately indistinguishable (specification 03 §9.3).";
 
     /// <summary>Creates the exception with the single indistinguishable message.</summary>
     public KeyUnwrapFailedException()

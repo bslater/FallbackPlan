@@ -10,6 +10,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
+/// Establishes FR-SVC-008.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -80,6 +81,167 @@ public sealed class ClientModeTests : IDisposable
             "--state", _harness.StateDirectory);
 
         Assert.AreEqual(0, result.ExitCode);
+    }
+
+    [TestMethod]
+    public async Task RepoLessVerbs_AreAnsweredByTheServiceAlone()
+    {
+        // FR-SVC-016's client half: a command that names no repository is
+        // service-only — the same connection the web console makes, no
+        // passphrase involved — so `status` and `snapshots` against a
+        // running installation need nothing but the state (and not even
+        // that, when it is the shared default).
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        foreach (var verb in new[] { "status", "snapshots" })
+        {
+            var result = await HostHarness.RunAsync(
+                (a, o, e, c) => Cli.CliApplication.RunAsync(
+                    a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+                verb, "--state", _harness.StateDirectory);
+
+            Assert.AreEqual(0, result.ExitCode, $"{verb}: {result.All}");
+            Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task Status_WithABackgroundWindow_SaysWhetherItIsShut()
+    {
+        // The window governs every row the matrix prints, so a person asking
+        // `status` gets the answer to "why is this due set not running"
+        // without a second verb (contract 1.37, ADR-0069). The configuration
+        // is rewritten with a window that is shut right now, against the real
+        // clock rather than a fixed hour, so the case says what it means
+        // wherever it runs.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        var opens = DateTimeOffset.Now.AddHours(3);
+        var shut = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{opens:HH\\:mm}-{opens.AddHours(1):HH\\:mm}");
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        (ClientConfiguration.Load(configuration) with { BackgroundWindow = shut }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains($"background window {shut}", result.All, StringComparison.Ordinal);
+        Assert.Contains("SHUT", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Status_WithNoBackgroundWindow_PrintsNoLineAtAll()
+    {
+        // Every installation written before schema 6 has no window, so a
+        // line that appeared anyway — or printed "undefined" — would be a
+        // regression visible everywhere at once.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.DoesNotContain("background window", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Backup_ASetNamedWithAServiceRunning_IsRunByTheService()
+    {
+        // ADR-0028 §3 is unconditional: "the CLI connects to the service when
+        // one is running. Every command that reads or mutates repository or
+        // job state is served by the service." A backup does both, and this
+        // is the one shape of it an operator most often wants from a terminal
+        // — run my configured set, now.
+        //
+        // It used to be the one shape with no route at all. `--repo` means
+        // direct mode, which this very service would refuse because it holds
+        // the writer role, and `--connect` means a REMOTE service; so asking
+        // your own running service to back up your own configured set
+        // answered "--repo is required", naming the argument that could not
+        // have helped. The read verbs above already took the service-only
+        // path; backup simply never got the same branch.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "the words worth keeping");
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "backup", "--set", "docs", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+
+        // The service ran it, so the service's own journal is where it shows
+        // up — the proof that this was not direct mode wearing a label.
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false, Limit: null), _timeout.Token), out var jobs);
+        Assert.IsNotEmpty(jobs.Jobs, "the service's journal records nothing, so the CLI did the work itself");
+    }
+
+    [TestMethod]
+    public async Task Backup_ASetNamedWithNothingListening_RefusesWithBothWaysForward()
+    {
+        // The same refusal the read verbs give, and for the same reason:
+        // direct mode is never a silent fallback (ADR-0028 §3), so a missing
+        // service is stated rather than worked around — and the message names
+        // the argument that WOULD help, which the old one did not.
+        _harness.WriteConfiguration("every 1h");
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "backup", "--set", "docs", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("no service is listening", result.All, StringComparison.Ordinal);
+        Assert.Contains("--repo", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ARepoLessVerb_NothingListening_RefusesWithDirections()
+    {
+        // Without --repo there is no direct fallback to guess at: the only
+        // honest answer is a stated refusal that names both ways forward.
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("no service is listening", result.All, StringComparison.Ordinal);
+        Assert.Contains("--repo", result.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -228,6 +390,10 @@ public sealed class ClientModeTests : IDisposable
     [TestMethod]
     public async Task Restore_RoutedThroughTheService_WritesTheFiles()
     {
+        // A set-up installation holds no content key (ADR-0042 §7): the CLI
+        // derives the restore grant from the passphrase it was given — the
+        // console's ceremony, at the shell — and the service restores under
+        // it. A routed restore that sent no grant would write nothing.
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
         await _harness.BackUpAsync();
@@ -243,7 +409,7 @@ public sealed class ClientModeTests : IDisposable
         var result = await RunCliAsync(
             "restore", snapshots.Snapshots[0].SnapshotId, "--output", destination);
 
-        Assert.AreEqual(0, result.ExitCode);
+        Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
 
         // The service wrote them, on its own machine (ADR-0028 §6) — which on
@@ -299,8 +465,7 @@ public sealed class ClientModeTests : IDisposable
 
     private async Task<ServiceRuntime> StartServiceAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -308,7 +473,6 @@ public sealed class ClientModeTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 }

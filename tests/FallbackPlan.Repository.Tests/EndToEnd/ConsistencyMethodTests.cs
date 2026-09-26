@@ -3,6 +3,7 @@ using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Catalogue.Forensic;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format;
 using FallbackPlan.Repository.Index;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 
@@ -29,12 +30,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// that quietly disappears the first time somebody needs a rebuild — which is
 /// exactly the moment they are least able to notice.
 /// </para>
+/// <para>
+/// Re-homed onto the write credential when this line merged: the key
+/// hierarchy this suite derived from a master key was withdrawn with format 1,
+/// and the publication path and the forensic rebuilder both take the
+/// credential now. What is asserted is unchanged.
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class ConsistencyMethodTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private static readonly byte[] SnapshotId = [.. Enumerable.Repeat((byte)0x91, 16)];
 
     [TestMethod]
@@ -42,10 +47,10 @@ public sealed class ConsistencyMethodTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "projected.db"), Repo);
 
-        await PublishAsync(store, keys, hierarchy, catalogue);
+        await PublishAsync(store, keys, credential, catalogue);
 
         var row = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
 
@@ -60,16 +65,16 @@ public sealed class ConsistencyMethodTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         using (var original = CatalogueDb.Open(Path.Combine(SpoolDirectory, "original.db"), Repo))
         {
-            await PublishAsync(store, keys, hierarchy, original);
+            await PublishAsync(store, keys, credential, original);
         }
 
         // A catalogue that never saw the publication, rebuilt from the store's
         // own objects — the path a person takes after losing the cache.
-        using var rebuilder = new ForensicRebuilder(store, Repo, hierarchy);
+        using var rebuilder = new ForensicRebuilder(store, Repo, credential);
         using var rebuilt = CatalogueDb.Open(Path.Combine(SpoolDirectory, "rebuilt.db"), Repo);
         var report = await rebuilder.RebuildAsync(
             rebuilt, new ForensicTarget.Everything(), CancellationToken.None);
@@ -84,16 +89,16 @@ public sealed class ConsistencyMethodTests : ArchiveTestHarness
     private async Task PublishAsync(
         Storage.Local.LocalFileSystemObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         CatalogueDb catalogue)
     {
         var source = new FakeFileSystemSource();
         source.AddFile("ledger.bin", BuildTestFile(regions: 4));
 
         await new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue)
+            SpoolDirectory, FormatVersions.RelocatableRecords, observer: null, catalogue: catalogue)
             .PublishAsync(
                 new SnapshotJob
                 {

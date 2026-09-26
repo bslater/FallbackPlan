@@ -14,7 +14,7 @@ namespace FallbackPlan.Repository.Format.Configuration;
 /// Where that label pointed on the machine that wrote this. A recovery
 /// <em>hint</em> and never an instruction: the rebuilt machine's layout may
 /// legitimately differ, so it is presented for confirmation rather than
-/// captured from (FR-DR-009).
+/// captured from (ADR-0071).
 /// </param>
 public sealed record SetRoot(string Label, string Path);
 
@@ -47,7 +47,7 @@ public sealed record SetRetention
 /// <summary>
 /// What a backup set was configured to do (specification 11 §5.3): the
 /// payload sealed inside a set-configuration object, so a machine rebuilt
-/// from nothing can resume doing it (ADR-0047; FR-DR-006).
+/// from nothing can resume doing it (ADR-0071; ADR-0071).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -57,7 +57,7 @@ public sealed record SetRetention
 /// </para>
 /// <para>
 /// It carries no destination in any form, and that is normative rather than an
-/// omission (specification 11 §5.4, FR-DEST-006, FR-DR-007). The repository is
+/// omission (specification 11 §5.4, FR-DEST-006, ADR-0071). The repository is
 /// held <em>by</em> the destinations; naming them here would put the
 /// household's network of peers into bytes those peers hold. Destinations come
 /// from the recovery kit, which the user holds and no peer does.

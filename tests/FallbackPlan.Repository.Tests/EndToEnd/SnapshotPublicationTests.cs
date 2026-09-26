@@ -1,7 +1,9 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Filesystem;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
@@ -10,11 +12,12 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Multi-file publication end to end (phase-1 wave T1; FR-MAN-004): the scanner event
+/// Multi-file publication end to end (phase-1 wave T1; FR-MAN-004, FR-MAN-018): the scanner event
 /// stream becomes a full manifest graph — bottom-up trees, per-kind file
 /// versions with the ADR-0026 shapes, populated policy and error manifests,
 /// the probed source filesystem — and everything restores from a cold
@@ -23,21 +26,25 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class SnapshotPublicationTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
     private static readonly byte[] DeviceId = [.. Enumerable.Repeat((byte)0x22, 16)];
 
-    private PublicationOrchestrator CreateOrchestrator(IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy) =>
+    private PublicationOrchestrator CreateOrchestrator(
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, ILogger? logger = null,
+        IJobProgressReporter? progress = null) =>
         new(
             SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
-            observer: null);
+            FormatVersions.SealedDataPlane,
+            observer: null,
+            progress: progress,
+            logger: logger);
 
     private static SnapshotJob Job(FakeFileSystemSource source) => new()
     {
@@ -102,16 +109,16 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(3, published.Files.Count);
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
 
         // Cold reader: footers only, no index, no catalogue.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (rootHead, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
@@ -153,14 +160,14 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         // Retention is the one wall-clock consumer and it reads capture
         // times (00-conventions §7), so a multi-hour capture stamped as
         // zero-duration misstates the very field retention decides on. The
         // engine takes no clock of its own; the job carries one.
         var job = Job(source) with { Clock = () => 1_722_600_005_000 };
-        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         var snapshotKeys = new List<ObjectKey>();
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
@@ -193,10 +200,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["**/*.bin"], ExcludeRules = ["skip"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         // The discoverable snapshot, verified and decoded.
         var snapshotKeys = new List<ObjectKey>();
@@ -218,7 +225,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plain));
         var decoded = SnapshotManifestCodec.Decode(plain);
 
-        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
         {
             Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
         }
@@ -240,13 +247,50 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         SequenceAssert.AreEqual(Enumerable.Repeat((byte)0x44, 16).ToArray(), parent.ToArray());
 
         // The policy manifest carries the rule strings verbatim (06 §7.1).
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
         var policy = PolicyManifestCodec.Decode(policyRead.Plaintext!);
         SequenceAssert.AreEqual(["**/*.bin"], policy.IncludeRules);
         SequenceAssert.AreEqual(["skip"], policy.ExcludeRules);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_RecordsTheSetsShapeInThePolicyManifest()
+    {
+        // ADR-0061: the roots as configured (path and label), the set's name
+        // and its schedule ride in the policy manifest, so an archive can
+        // re-declare the set that wrote it after the configuration is gone.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/a.bin", Deterministic(4_000, 3));
+        source.AddFile("pics/b.bin", Deterministic(4_000, 5));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        var job = Job(source) with
+        {
+            Roots = [new ScanRoot("/docs", "Documents"), new ScanRoot("/pics", "Pictures")],
+            SetName = "home",
+            Schedule = "every 6h",
+        };
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
+        var policy = PolicyManifestCodec.Decode(policyRead.Plaintext!);
+
+        Assert.AreEqual("home", policy.SetName);
+        Assert.AreEqual("every 6h", policy.Schedule);
+        Assert.HasCount(2, policy.Roots);
+        Assert.AreEqual("/docs", policy.Roots[0].Path);
+        Assert.AreEqual("Documents", policy.Roots[0].Label);
+        Assert.AreEqual("/pics", policy.Roots[1].Path);
+        Assert.AreEqual("Pictures", policy.Roots[1].Label);
     }
 
     [TestMethod]
@@ -264,10 +308,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["photos/**"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         SequenceAssert.AreEqual(
             ["photos/a.bin", "photos/deep/b.bin"],
@@ -276,7 +320,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         // The tree graph carries no skeleton for what was not captured: the
         // root names photos alone — no docs directory, no d.bin.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, rootEntries) = await ReadTreeAsync(reader, published.RootTreeObjectId);
         var rootNames = rootEntries.Select(entry => Encoding.UTF8.GetString(entry.Name.Span)).ToList();
@@ -302,10 +346,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var job = Job(source) with { IncludeRules = ["work/**"], ExcludeRules = ["work/secret.bin"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         var file = Assert.ContainsSingle(published.Files);
         Assert.AreEqual("work/keep.bin", file.RelativePath);
@@ -321,15 +365,15 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(2, published.Failures.Count);
         Assert.IsNotNull(published.ErrorManifestObjectId);
         Assert.ContainsSingle(published.Files); // good.bin captured
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var errorRead = await reader.ReadSegmentAsync(published.ErrorManifestObjectId!.Value, CancellationToken.None);
@@ -362,10 +406,10 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var job = Job(source) with { ExcludeRules = ["skip"] };
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
 
         Assert.ContainsSingle(published.Files);
         Assert.IsEmpty(published.Failures);
@@ -380,12 +424,12 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         source.AddFile("a.bin", [1, 2, 3]);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var job = Job(source) with { ExcludeRules = ["a**b"] };
 
         await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(job, CancellationToken.None));
+            await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None));
 
         var blobs = 0;
         await foreach (var _ in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
@@ -406,11 +450,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -452,13 +496,13 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -491,11 +535,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var manifest = await ReadFileVersionAsync(
@@ -530,11 +574,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -569,11 +613,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -616,11 +660,11 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var byPath = published.Files.ToDictionary(file => file.RelativePath);
@@ -649,9 +693,9 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         Assert.AreEqual(40, published.Files.Count);
         Assert.IsTrue(published.ContentBlobs.Count <= 2,
@@ -666,14 +710,15 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        using var credential = CreateCredential();
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         // Drive the chain writer directly at a tiny shard budget: the same
         // code path publication uses, forced to shard.
         var sequence = new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence2.txt")));
         var builder = new ManifestBuilder(
-            Repo, Writer, KeyGeneration.Zero, keys, store, sequence, SpoolDirectory, SmallBlobPolicy.BlobWriteProfile);
+            Repo, Writer, KeyGeneration.Zero, keys, store, sequence, SpoolDirectory, SmallBlobPolicy.BlobWriteProfile,
+            FormatVersions.SealedDataPlane);
 
         var fileVersionId = published.Files[0].ObjectId;
         var entries = Enumerable.Range(0, 100)
@@ -689,7 +734,7 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
             await builder.FlushAsync(CancellationToken.None);
         }
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var chain = new List<TreeManifest>();
@@ -747,5 +792,244 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.IsNull(legacyDecoded.SourceFilesystem.MaxPathBytes);
         Assert.IsNull(legacyDecoded.SourceFilesystem.MaxComponentBytes);
         Assert.IsNull(legacyDecoded.SourceFilesystem.ReservedNames);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFailureBeforeTheWriteIntent_ReportsNoCompletedStep()
+    {
+        // The failure log names the last COMPLETED step, and it is what a
+        // person debugs from — a crash in the pre-intent window (the spool
+        // hygiene sweep, the probe, the rule check) must not be reported as
+        // "after step PublishIntent" when no intent was ever published.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/alpha.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var logger = new RecordingLogger();
+
+        var orchestrator = CreateOrchestrator(store, keys, credential, logger);
+        var job = Job(source) with
+        {
+            Source = new FaultInjectingSource(source, probeFailure: new IOException("the volume vanished before the probe")),
+        };
+        await Assert.ThrowsExactlyAsync<IOException>(
+            async () => await orchestrator.PublishAsync(job, CancellationToken.None));
+
+        var failure = Assert.ContainsSingle(logger.Records.Where(record => record.EventId == 2003).ToList());
+        Assert.AreEqual(PublicationStep.Preparing, failure.Value("Step"));
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFailureDuringTheCapture_ReportsTheIntentAsTheLastCompletedStep()
+    {
+        // Steps 2–4 interleave by design, so a mid-capture failure's last
+        // completed step is the intent — and the tree path must actually
+        // record it: before this pin it never did, and every capture failure
+        // wore the initializer's label whether the intent had happened or not.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/alpha.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var logger = new RecordingLogger();
+
+        var orchestrator = CreateOrchestrator(store, keys, credential, logger);
+        var job = Job(source) with
+        {
+            Source = new FaultInjectingSource(source, midScanFailure: new IOException("the disk died mid-walk")),
+        };
+        await Assert.ThrowsExactlyAsync<IOException>(
+            async () => await orchestrator.PublishAsync(job, CancellationToken.None));
+
+        var failure = Assert.ContainsSingle(logger.Records.Where(record => record.EventId == 2003).ToList());
+        Assert.AreEqual(PublicationStep.PublishIntent, failure.Value("Step"));
+    }
+
+    [TestMethod]
+    public async Task TreePublication_TheCountingPass_FixesThePlanBeforeArchivingBegins()
+    {
+        // FR-SVC-006's determinate half: a run first counts what it will
+        // process, so every later report carries a fixed denominator a
+        // client can honestly divide by. 300 files crosses the counting
+        // pass's report interval, so the feed also shows the count growing
+        // while the plan is still open.
+        var source = new FakeFileSystemSource();
+        for (var i = 0; i < 300; i++)
+        {
+            source.AddFile($"docs/file-{i:d3}.bin", Deterministic(10, (byte)i));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var reporter = new RecordingReporter();
+
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
+            .PublishAsync(Job(source), CancellationToken.None);
+        Assert.HasCount(300, published.Files);
+
+        var reports = reporter.Reports;
+        Assert.Contains(
+            report => report.TotalFiles is null && report.State == JobState.Scanning && report.FilesSeen > 0,
+            reports,
+            "the counting pass must report its running tally before the plan is fixed");
+
+        var final = reports[^1];
+        Assert.AreEqual(300L, final.TotalFiles);
+        Assert.AreEqual(3_000L, final.TotalBytes);
+        Assert.AreEqual(300L, final.FilesDone);
+
+        // Once fixed, the plan never wavers: every report after the first
+        // carrying totals carries the same totals.
+        var planned = reports.SkipWhile(report => report.TotalFiles is null).ToList();
+        Assert.IsNotEmpty(planned);
+        Assert.IsTrue(
+            planned.All(report => report.TotalFiles == 300L && report.TotalBytes == 3_000L),
+            "the counted plan must be identical on every report that carries it");
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AnIncludeRule_NarrowsThePlanLikeTheCapture()
+    {
+        // The plan must apply the run's WHOLE rule set. The counting walk
+        // used to apply exclusions only — inclusion is enforced in the
+        // publisher — so a set with include rules over-counted its plan and
+        // the meter finished early at a fraction of 100%.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/keep.bin", Deterministic(100, 5));
+        source.AddFile("music/skip.bin", Deterministic(50, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var reporter = new RecordingReporter();
+
+        var job = Job(source) with { IncludeRules = ["docs/**"] };
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
+            .PublishAsync(job, CancellationToken.None);
+
+        Assert.ContainsSingle(published.Files);
+        var final = reporter.Reports[^1];
+        Assert.AreEqual(1L, final.TotalFiles);
+        Assert.AreEqual(100L, final.TotalBytes);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_TheFeed_NamesTheFileCurrentlyBeingProcessed()
+    {
+        // The path on the wire (contract 1.22): an operator staring at a
+        // seventeen-hour meter wants to know WHAT is slow, and progress
+        // travels only to authenticated watchers. 300 files cross the
+        // coalescing interval, so mid-run reports exist to carry it.
+        var source = new FakeFileSystemSource();
+        for (var i = 0; i < 300; i++)
+        {
+            source.AddFile($"docs/file-{i:d3}.bin", Deterministic(10, (byte)i));
+        }
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var reporter = new RecordingReporter();
+
+        await CreateOrchestrator(store, keys, credential, progress: reporter)
+            .PublishAsync(Job(source), CancellationToken.None);
+
+        Assert.Contains(
+            report => report.CurrentFile is not null
+                && report.CurrentFile.StartsWith("docs/file-", StringComparison.Ordinal),
+            reporter.Reports,
+            "no report named the file being processed — the feed carries counts alone");
+    }
+
+    [TestMethod]
+    public async Task TreePublication_ARuleExcludedFile_IsAbsentFromThePlan()
+    {
+        // The count applies the run's own rules — a plan that counted files
+        // the capture then skips would leave the meter finishing at 60%.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/keep.bin", Deterministic(100, 5));
+        source.AddFile("docs/skip.tmp", Deterministic(50, 7));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var reporter = new RecordingReporter();
+
+        var job = Job(source) with { ExcludeRules = ["*.tmp"] };
+        var published = await CreateOrchestrator(store, keys, credential, progress: reporter)
+            .PublishAsync(job, CancellationToken.None);
+
+        Assert.ContainsSingle(published.Files);
+        var final = reporter.Reports[^1];
+        Assert.AreEqual(1L, final.TotalFiles);
+        Assert.AreEqual(100L, final.TotalBytes);
+    }
+
+    /// <summary>Keeps every report, in order — the feed the console would see.</summary>
+    private sealed class RecordingReporter : IJobProgressReporter
+    {
+        private readonly List<JobProgress> _reports = [];
+
+        public IReadOnlyList<JobProgress> Reports
+        {
+            get
+            {
+                lock (_reports)
+                {
+                    return [.. _reports];
+                }
+            }
+        }
+
+        public void Report(JobProgress progress)
+        {
+            lock (_reports)
+            {
+                _reports.Add(progress);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Delegates to a real source and throws where told: from the probe
+    /// (before anything is durable) or from the capture's scan after its
+    /// last event (mid-capture, the intent already published). The counting
+    /// pass walks first and is allowed to finish — the mid-capture case
+    /// needs a plan to exist and the intent to be durable before the fault.
+    /// </summary>
+    private sealed class FaultInjectingSource(
+        IFileSystemSource inner, Exception? probeFailure = null, Exception? midScanFailure = null) : IFileSystemSource
+    {
+        private int _scans;
+
+        public SourceFilesystemInfo Probe(string rootPath) =>
+            probeFailure is null ? inner.Probe(rootPath) : throw probeFailure;
+
+        public ulong? DeviceOf(string path) => inner.DeviceOf(path);
+
+        public RevalidationProbe? Revalidate(ScanEntry entry) => inner.Revalidate(entry);
+
+        public async IAsyncEnumerable<ScanEvent> ScanAsync(
+            string rootPath, ScanOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var walk = Interlocked.Increment(ref _scans);
+            await foreach (var scanEvent in inner.ScanAsync(rootPath, options, cancellationToken).ConfigureAwait(false))
+            {
+                yield return scanEvent;
+            }
+
+            if (midScanFailure is not null && walk > 1)
+            {
+                throw midScanFailure;
+            }
+        }
+
+        public Stream OpenRead(ScanEntry entry) => inner.OpenRead(entry);
+
+        public Stream OpenAlternateStream(ScanEntry entry, string streamName) => inner.OpenAlternateStream(entry, streamName);
     }
 }

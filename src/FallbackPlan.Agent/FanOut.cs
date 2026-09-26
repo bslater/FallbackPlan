@@ -1,12 +1,16 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Replication;
+using FallbackPlan.Repository.Index;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Agent;
 
 /// <summary>
-/// Fans one backup set's staging archive out to its declared destinations
-/// (ADR-0034 §3): the copy runs on the transfer lane, at most one queued or
+/// Converges one backup set's declared destinations from its archive
+/// (ADR-0034 §3) — the staging archive, or, for a direct-ship set, the
+/// catch-up pass behind bytes the ship sink already sent (ADR-0046): the
+/// copy runs on the transfer lane, at most one queued or
 /// running sync per <c>(set, destination)</c>, and every outcome — success,
 /// unreachable, refused, not-yet-served — lands in the sync ledger the status
 /// surface reads (FR-DEST-002/003/004).
@@ -28,6 +32,14 @@ public static class FanOut
     /// </remarks>
     internal static readonly string[] VerificationRequirement =
         [Protocol.PeerSessionNegotiation.DestinationVerificationFeature];
+
+    /// <summary>
+    /// Blobs one read-back opens at a peer. A property rather than a
+    /// constant so the test that watches the rotation's cursor move can
+    /// narrow it below the handful of blobs a fixture ships; the service
+    /// never sets it.
+    /// </summary>
+    internal static int ReadBackBudget { get; set; } = VerificationSampler.DefaultBudget;
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -79,6 +91,14 @@ public static class FanOut
         ThrowHelper.ThrowIfNull(set);
         ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
 
+        // The destination's declared priority, overridable per set
+        // (ADR-0047): among waiting transfers, the higher-priority
+        // destination ships first.
+        var priority = SetDestinationReference.EffectivePriority(
+            set.Destinations.FirstOrDefault(reference =>
+                string.Equals(reference.Ref, destinationName, StringComparison.Ordinal)),
+            runtime.Configuration.FindDestination(destinationName));
+
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var accepted = runtime.Queue.Enqueue(new QueuedJob(
             JobIdFor(set.Id, destinationName),
@@ -98,9 +118,169 @@ public static class FanOut
                     completion.SetException(exception);
                     throw;
                 }
-            }));
+            },
+            Priority: priority));
 
         return accepted ? completion.Task : null;
+    }
+
+    /// <summary>
+    /// Proves a sample of the peer's blobs by reading them back through the
+    /// retrieval session and authenticating a record in each
+    /// ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md) §8).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a set with a second copy the wire challenge is cheaper and is what
+    /// runs; this is for the set that has none, where the alternative is no
+    /// proof at all. It costs a second dialled session and a few ranged reads
+    /// per sampled blob, paid on the verification cadence rather than per
+    /// pass.
+    /// </para>
+    /// <para>
+    /// The sample is drawn from the keys the spoke itself declared, which is
+    /// not the examined party choosing the questions: the declaration is also
+    /// the push's diff, so a key omitted to avoid being asked about is a key
+    /// this same session has already re-shipped.
+    /// </para>
+    /// <para>
+    /// A dial that fails is not a finding. The peer proved nothing and is
+    /// accused of nothing; the pass falls through to recording an unproven
+    /// sync, exactly as it would for a peer that offers no retrieval at all.
+    /// </para>
+    /// </remarks>
+    /// <param name="runtime">The service, for the ledger and the dial.</param>
+    /// <param name="set">The set being verified.</param>
+    /// <param name="destination">The peer destination.</param>
+    /// <param name="archive">The set's archive, for the repository keys.</param>
+    /// <param name="outcome">The push that just finished, for what the spoke declared holding.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Cancels the read-back.</param>
+    /// <returns>Whether this recorded the pair's outcome.</returns>
+    private static async ValueTask<bool> ReadBackAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        DestinationConfiguration destination,
+        ArchiveHandle archive,
+        ReplicationInitiator.PushOutcome outcome,
+        ulong nowMs,
+        CancellationToken cancellationToken)
+    {
+        if (outcome.HeldKeys is not { Count: > 0 } held)
+        {
+            return false;
+        }
+
+        var blobs = held
+            .Where(key => key.StartsWith("blobs/", StringComparison.Ordinal))
+            .ToList();
+        if (blobs.Count == 0)
+        {
+            return false;
+        }
+
+        // The same rotation the local path walks, over the keys the peer
+        // declared: a cursor carried on the ledger so successive passes reach
+        // every blob and a blob the byte budget left comes round again, with
+        // a peer's reservoir share so the peer cannot predict every question.
+        var ledger = runtime.DestinationSync;
+        var plan = VerificationSampler.Rotate(
+            blobs, ledger.Find(set.Id, destination.Name)?.SampleCursor, ReadBackBudget,
+            VerificationSampler.PeerReservoirShare);
+        var sample = plan.Samples.Select(chosen => chosen.Key).ToList();
+
+        var log = runtime.LoggerFor(typeof(FanOut));
+        Replication.VerificationOutcome verification;
+        try
+        {
+            await using var client = await PeerRetrievalClient.DialAsync(
+                runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
+                .ConfigureAwait(false);
+
+            // The catalogue's signed digests feed the digest tier, which is
+            // what proves a write-only set's sealed data plane at a peer: the
+            // whole blob read back over retrieval and hashed here, under the
+            // peer budget. The bytes crossing the wire are the proof — a
+            // digest the peer computed of its own copy would be a claim
+            // (ADR-0058 §8).
+            // And, where both ends can, the chunk tier ahead of it: the
+            // peer hashes its own copy to build a path but sends back one
+            // leaf's bytes, so a mebibyte crosses the link instead of a
+            // blob. The path is not the proof — the bytes are, checked
+            // against the root the writer signed (07 §2.3) — which is what
+            // makes this a proof rather than the self-report ADR-0058
+            // refuses. A peer that does not offer the feature falls to the
+            // whole-blob read, which costs it more and proves no less.
+            verification = await Replication.ReplicaVerifier.ProveSealedAsync(
+                new PeerRetrievalObjectStore(client), sample, archive.Repository, cancellationToken,
+                archive.Catalogue.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget,
+                archive.Catalogue.SignedMerkleRootOf,
+                client.SupportsChunkPossession ? ChunkProverFor(client) : null)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or Protocol.PeerProtocolException or UnauthorizedAccessException)
+        {
+            // The replica could not be read back at all. That is this pass
+            // failing to prove, not the destination failing a proof.
+            Log.ReadBackUnavailable(log, destination.Name, exception.Message);
+            return false;
+        }
+
+        if (verification.Failed.Count > 0)
+        {
+            RecordVerificationFailure(runtime, set, destination.Name, verification, sample.Count, nowMs);
+            return true;
+        }
+
+        if (!verification.ProvedSomething)
+        {
+            // Every sampled blob was a sealed data plane this service cannot
+            // open and had no signed digest on record to check it against —
+            // a write-only set (FR-WOR-003) whose deltas carried none. The
+            // containers held; the payloads were not examined, and claiming
+            // them would be a claim nobody checked.
+            return false;
+        }
+
+        var (syncedSequence, _) = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            .ConfigureAwait(false);
+        ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
+        ledger.RecordVerification(
+            set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, plan.NextCursor, nowMs,
+            verification.Sealed, verification.Digest, verification.Chunk);
+        return true;
+    }
+
+    /// <summary>
+    /// The wire half of the chunk tier: one challenge, one proof, over the
+    /// retrieval session the read-back already holds.
+    /// </summary>
+    private static Replication.SealedChunkProver ChunkProverFor(PeerRetrievalClient client) =>
+        async (storeKey, leafIndex, token) =>
+        {
+            var proof = await client.ChallengeChunkAsync(storeKey, leafIndex, token).ConfigureAwait(false);
+            return new Replication.ChunkAnswer(proof.Held, proof.Leaf, proof.Path);
+        };
+
+    /// <summary>Whether the store can answer for anything under a prefix.</summary>
+    /// <param name="store">The store to ask.</param>
+    /// <param name="prefix">The namespace prefix.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    private static async ValueTask<bool> HoldsAnyAsync(
+        Storage.Abstractions.IObjectStore store, string prefix, CancellationToken cancellationToken)
+    {
+        await foreach (var _ in store
+            .ListAsync(
+                Storage.Abstractions.ObjectPrefix.Parse(prefix),
+                Storage.Abstractions.ListOptions.Default,
+                cancellationToken)
+            .ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Runs one (set, destination) sync and records what happened.</summary>
@@ -183,7 +363,8 @@ public static class FanOut
     /// </summary>
     private static async ValueTask PushToPeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken)
+        ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
+        Func<byte[], byte[]>? grantedSigner = null, ReceiptFate? receiptFate = null)
     {
         var ledger = runtime.DestinationSync;
 
@@ -248,15 +429,39 @@ public static class FanOut
             var effective = set.Destinations
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
+
+            // The commander signs each retention page under the reclaim key
+            // (ADR-0055 §5) so the spoke can tell an authorised deletion from
+            // one sent by whoever merely holds this session. A service cannot
+            // derive that key, and holds it only as the grant of a collection
+            // run (ADR-0055 §6) — so a pass without one instructs nothing
+            // rather than sending a page the spoke will refuse whole, and
+            // says why.
+            var reclaimSigner = grantedSigner;
+            var awaitsGrantKey = $"convergence-awaits-grant:{set.Id}:{destination.Name}";
+
             Func<string, bool>? keeps = null;
             if (Retention.DestinationConvergence.HasRules(effective)
                 && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature))
             {
-                var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
-                    archive.Store, archive.Repository, effective!,
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
-                keeps = convergence.Keeps;
-                ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                if (reclaimSigner is null)
+                {
+                    runtime.Notices.Raise(
+                        awaitsGrantKey,
+                        $"destination '{destination.Name}' of set '{set.Name}' received a whole copy instead of its "
+                        + "retention keep-set: a deletion instruction needs the reclaim grant a retention run "
+                        + "carries (ADR-0055 §6). It converges on the next `retention --apply`.",
+                        nowMs);
+                }
+                else
+                {
+                    var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
+                        archive.Store, archive.Repository, effective!,
+                        DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                    keeps = convergence.Keeps;
+                    ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                    runtime.Notices.Resolve(awaitsGrantKey, nowMs);
+                }
             }
 
             // Samples are drawn from the pre-push listing under the set gate:
@@ -271,7 +476,27 @@ public static class FanOut
             // predictable rotation would tell it exactly which objects it can
             // afford to lose.
             var previous = ledger.Find(set.Id, destination.Name);
-            var plan = session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
+
+            // A challenge is answered by the peer and judged against bytes this
+            // side reads for itself, so a source with no content plane of its
+            // own can only ever challenge metadata — and a stamp drawn from
+            // that population would report a verified replica while the part a
+            // restore actually needs went unexamined. That is the emptiness
+            // slice 3.3 found in the local-path path, arriving here by a new
+            // road: a direct-ship set (ADR-0046) whose only destination is this
+            // peer holds no blob anywhere else, so the sink can offer none
+            // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)).
+            //
+            // The pass therefore challenges nothing rather than challenging the
+            // part that is cheap to hold, and says so where a human will see
+            // it. A set with a local sibling is unaffected: the sink answers
+            // blob reads from the sibling, which is a genuinely independent
+            // copy.
+            var contentSampleable = await HoldsAnyAsync(archive.Store, "blobs/", cancellationToken)
+                .ConfigureAwait(false);
+
+            var plan = contentSampleable
+                && session.Supports(Protocol.PeerSessionNegotiation.DestinationVerificationFeature)
                 ? await VerificationSampler.SampleAsync(
                     archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
                     VerificationSampler.DefaultBudget, VerificationSampler.PeerReservoirShare,
@@ -280,18 +505,96 @@ public static class FanOut
                 : new VerificationSampler.SamplePlan([], 0, previous?.SampleCursor);
 
             var priorSuccess = previous?.LastSuccessAt is not null;
+            // The reclaim public key travels with every offer and is kept by
+            // the destination at first attribution (ADR-0055 §5): read off
+            // the write credential, so a set whose service cannot derive the
+            // private half at all still tells its peers which key to check
+            // deletion instructions against.
+            var reclaimPublicKey = archive.Repository.Credential.ReclaimPublicKey.ToArray();
 
-            // Arming the claim (03 §3.2.1): only if the destination asks, which
-            // it does exactly once per replica and only while it holds no
-            // credential — so the Argon2id pass this may cost is paid once per
-            // destination, never once per sync. A set this service opened from
-            // a stored write credential declines, and the delegate is what says
-            // so rather than a flag read at the far end of the push.
+            // The claim public key rides the same offer (ADR-0053 §1) and
+            // takes no generation: the destination records it once and never
+            // replaces it, so a key that turned over would go stale with no
+            // way to say so.
+            var claimPublicKey = archive.Repository.Credential.ClaimPublicKey.ToArray();
+
+            // The binding rides only to a spoke that says it verifies over one
+            // (peer-protocol 02 §6): a current commander talking to an older
+            // spoke signs the encoding that spoke can check, rather than having
+            // every page refused. The reverse has no such accommodation and
+            // must not — a spoke that accepted both encodings would be
+            // accepting the replayable one.
+            var sessionBinding =
+                session.Supports(Protocol.PeerSessionNegotiation.SessionBoundRetentionFeature)
+                    ? session.Binding
+                    : default;
+
+            // The peer as the rollback witness (ADR-0062 Amendment 1). The
+            // inventory the peer declares at the start of the push names
+            // every journal key it holds, so the question the local-path
+            // pass asks with a listing is answered here from strings already
+            // in hand: the allocator is offered the peer's head for this
+            // writer and only ever rises. A rollback is the one case the
+            // filter must be set aside — computed from rolled-back metadata
+            // it would condemn the history the peer is keeping — and the
+            // hook's answer is what sets it aside for the session.
+            var attested = 0UL;
+            SequenceAdoption.Adopted? ahead = null;
+            bool OnInventory(IReadOnlyCollection<string> held)
+            {
+                attested = ObservedHead.JournalHeadOf(held, runtime.Writer);
+                ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
+                return ahead is null;
+            }
+
             var outcome = await ReplicationInitiator.PushAndConvergeAsync(
-                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps,
-                token => ClaimArming.PublicKeyFor(archive, runtime.ArchivePassphrase, token),
-                cancellationToken)
+                archive.Store, archive.Repository.RepositoryId.ToArray(), session.Stream, keeps, cancellationToken,
+                reclaimPublicKey, reclaimSigner,
+                session.Supports(Protocol.PeerSessionNegotiation.PartialObjectResumeFeature),
+                runtime.LoggerFor(typeof(ReplicationInitiator)),
+                sessionBinding,
+                claimPublicKey,
+                OnInventory,
+                new ReplicationInitiator.ReceiptExpectation(
+                    grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()))
                 .ConfigureAwait(false);
+
+            // The receipt is dealt with before anything else is judged: the
+            // deletion it attests has already happened, whatever the rest of
+            // this pass concludes (ADR-0063).
+            RecordReceipt(runtime, set, destination, outcome, receiptFate, nowMs);
+            RecordReplicationReceipt(runtime, set, destination, outcome, ledger, nowMs);
+
+            // The heal, for a set whose archive is behind the peer: over the
+            // retrieval session, dialled only for this, and keyed on the
+            // metadata plane so a heal that failed is retried on every pass
+            // until it succeeds. A staging set gets its content back too —
+            // the closure of the history it lacks, one chunk in memory at a
+            // time — because the peer keeps what staging no longer lists
+            // (ADR-0034 §6), and a heal is exactly reading it back.
+            ServiceRuntime.HealOutcome? heal = null;
+            if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                heal = await HealFromPeerAsync(runtime, set, destination, archive, cancellationToken)
+                    .ConfigureAwait(false);
+                LogHeal(runtime, set, destination, archive, heal);
+            }
+
+            if (ahead is not null)
+            {
+                ReportDestinationAhead(
+                    runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
+                    peer: true);
+            }
+
+            if (heal?.Failure is { } peerHealFailure)
+            {
+                ledger.RecordFailure(
+                    set.Id, destination.Name, DestinationSyncState.Failed,
+                    HealFailureForLedger(archive, peerHealFailure), nowMs);
+                return;
+            }
 
             ReportShortfall(
                 runtime, set, destination.Name, priorSuccess, replicaRootMissing: false,
@@ -317,7 +620,7 @@ public static class FanOut
                 {
                     ledger.RecordVerification(
                         set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs);
+                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
                 }
 
                 // Else: every sample was skipped because staging could not read
@@ -326,6 +629,35 @@ public static class FanOut
                 // proof either, so no stamp is written and the trim gate stays
                 // shut until one is.
                 return;
+            }
+
+            // No ground truth to challenge against, but the replica can be
+            // opened where it sits (ADR-0058 §8): a record read back through
+            // the retrieval session authenticates under the repository's own
+            // key, which this peer has never held, so nothing here needs a
+            // second copy. This is the whole of a peer-only direct-ship set's
+            // proof, and without it such a set is never checked at all.
+            if (!contentSampleable)
+            {
+                if (session.Supports(Protocol.PeerSessionNegotiation.RetrievalFeature)
+                    && await ReadBackAsync(runtime, set, destination, archive, outcome, nowMs, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                // The read-back is this set's only route to a proof, so a peer
+                // that will not serve it — or that could not be reached to try
+                // — leaves the content unexamined. Said where a human will see
+                // it, because the alternative is a set that is quietly never
+                // checked and looks no different from one that is.
+                runtime.Notices.Raise(
+                    $"content-unverifiable:{set.Id}:{destination.Name}",
+                    $"Set '{set.Name}' keeps its file content only at peer '{destination.Name}', and that "
+                    + "peer would not serve the read-back this installation uses to prove it — so the "
+                    + "content is unchecked. The replica is whole and restores; what is missing is the "
+                    + "proof. Upgrade that peer, or add a second destination.",
+                    nowMs);
             }
 
             // Excused from proving (04 §1's acknowledged opt-out), or nothing
@@ -397,24 +729,51 @@ public static class FanOut
     }
 
     /// <summary>
-    /// The staging archive's highest snapshot publication sequence — the
+    /// The archive's highest snapshot publication sequence — the
     /// replication gate's currency (FR-GC-009) — and the store key of the
     /// snapshot carrying it, which every verification sample includes so the
     /// newest recovery point is the best-verified one (FR-VER-002). Read
     /// from the standalone snapshot records' cleartext counters: the one
-    /// per-publication monotonic a single-writer staging archive has,
-    /// needing no keys and no catalogue.
+    /// per-publication monotonic a single-writer archive has — staging or
+    /// direct-ship — needing no keys and no catalogue.
     /// </summary>
+    /// <summary>
+    /// The keep-set rendering of a destination whose policy keeps everything.
+    /// </summary>
+    /// <remarks>
+    /// A value rather than null, because the ledger reads null as "this pass
+    /// computed none" and carries the last one forward (ADR-0056). Keeping
+    /// everything is a keep-set, and a destination whose policy is removed has
+    /// to be able to say so.
+    /// </remarks>
+    private const string KeepsEverything = "keeps-all";
+
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
+        var survey = await PublicationSurveyAsync(archive.Store, cancellationToken).ConfigureAwait(false);
+        return (survey.Sequence, survey.NewestSnapshotKey);
+    }
+
+    /// <summary>
+    /// What a repository's snapshot objects say about its publication head,
+    /// read from the standalone record framing alone — no key involved: the
+    /// highest counter, which object carries it, and how many there are.
+    /// The ledger's synced watermark is seeded from it, and archive
+    /// discovery (ADR-0061) reports it.
+    /// </summary>
+    internal static async ValueTask<(ulong Sequence, string? NewestSnapshotKey, int SnapshotObjects)> PublicationSurveyAsync(
+        Storage.Abstractions.IObjectStore store, CancellationToken cancellationToken)
+    {
         var highest = 0UL;
         string? newestKey = null;
-        await foreach (var entry in archive.Store.ListAsync(
+        var objects = 0;
+        await foreach (var entry in store.ListAsync(
             Storage.Abstractions.ObjectPrefix.Parse("snapshots/"),
             Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
         {
-            using var read = await archive.Store.OpenReadAsync(entry.Key, range: null, cancellationToken)
+            objects++;
+            using var read = await store.OpenReadAsync(entry.Key, range: null, cancellationToken)
                 .ConfigureAwait(false);
             if (read.Outcome != Storage.Abstractions.OpenReadOutcome.Found)
             {
@@ -439,7 +798,7 @@ public static class FanOut
             }
         }
 
-        return (highest, newestKey);
+        return (highest, newestKey, objects);
     }
 
     private static async ValueTask CopyToLocalPathAsync(
@@ -447,6 +806,18 @@ public static class FanOut
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken)
     {
         var ledger = runtime.DestinationSync;
+
+        // A declaration the product itself calls defective (a relative path,
+        // hand-edited into the file) must not reach Directory.Exists and
+        // Path.Combine below — those resolve against the process working
+        // directory, which is how a replica tree once appeared beside the
+        // logs. Failed rather than Unavailable: this needs a person to fix
+        // the declaration, not a retry.
+        if (destination.AddressDefect is { } addressDefect)
+        {
+            ledger.RecordFailure(set.Id, destination.Name, DestinationSyncState.Failed, addressDefect, nowMs);
+            return;
+        }
 
         if (!Directory.Exists(destination.Path))
         {
@@ -480,14 +851,76 @@ public static class FanOut
             var previous = ledger.Find(set.Id, destination.Name);
             var priorSuccess = previous?.LastSuccessAt is not null;
 
-            // The sequence is read BEFORE the copy starts: a success then
-            // proves the destination holds everything published at or before
-            // it, which is what the replication gate compares snapshots to
-            // (FR-GC-009). A snapshot publishing mid-copy may or may not have
-            // crossed, so the claim stops at the pre-copy sequence.
+            var replica = new LocalFileSystemObjectStore(replicaRoot);
+
+            // The destination as the rollback witness (ADR-0062). A state
+            // directory restored from an older copy rolls the catalogue, the
+            // sequence file, this ledger and a direct-ship set's metadata
+            // store back together, so nothing local can notice — but the
+            // destination still holds what was published, and its journal
+            // keys carry this writer's sequence in the clear. The allocator
+            // is the detector: numbers are handed out before anything is
+            // written, so a destination attesting a number the writer has
+            // not yet allocated is a rollback of the allocation state and
+            // nothing else. Per writer, so a second device writing the same
+            // repository never reads as this one's rollback. Asked before
+            // the gate below, which reads a ledger that rolled back too.
+            var rolledBack = false;
+            if (!replicaRootMissing)
+            {
+                var attested = await ObservedHead.JournalHeadAsync(replica, runtime.Writer, cancellationToken)
+                    .ConfigureAwait(false);
+                var ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
+                rolledBack = ahead is not null;
+
+                // The heal: the destination's metadata copied back — and,
+                // for a staging set, the content the newer history needs,
+                // blobs before the manifests that reference them — the
+                // catalogue rebuilt in place, the writer moved past what the
+                // healed archive attests. Triggered by the metadata plane
+                // rather than by the allocator, so a heal that failed is
+                // retried on every pass until it succeeds — the sequence
+                // moved durably the first time and would never ask again.
+                // It runs before the keep-set is computed, which is what
+                // keeps a converging pass from trimming the destination to a
+                // history the archive has not yet got back (ADR-0062
+                // Amendment 2).
+                ServiceRuntime.HealOutcome? heal = null;
+                if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    heal = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
+                        .ConfigureAwait(false);
+                    LogHeal(runtime, set, destination, archive, heal);
+                }
+
+                if (ahead is not null)
+                {
+                    ReportDestinationAhead(
+                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
+                        peer: false);
+                }
+
+                if (heal?.Failure is { } healFailure)
+                {
+                    // Nothing at the destination is touched and the ledger is
+                    // not advanced: the next pass finds the archive still
+                    // behind and heals again.
+                    ledger.RecordFailure(
+                        set.Id, destination.Name, DestinationSyncState.Failed,
+                        HealFailureForLedger(archive, healFailure), nowMs);
+                    return;
+                }
+            }
+
+            // The sequence is read BEFORE the copy starts — and after the
+            // heal, so it is the healed archive's: a success then proves the
+            // destination holds everything published at or before it, which
+            // is what the replication gate compares snapshots to (FR-GC-009).
+            // A snapshot publishing mid-copy may or may not have crossed, so
+            // the claim stops at the pre-copy sequence.
             var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
                 .ConfigureAwait(false);
-            var replica = StoreComposition.OpenLocal(replicaRoot);
 
             // Filling a destination volume to zero is a harm to the machine,
             // not just to this backup: logs stop, temp files fail, and on the
@@ -514,14 +947,50 @@ public static class FanOut
                 .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
                 ?.Retention ?? set.Retention;
             Func<string, bool>? keeps = null;
-            if (Retention.DestinationConvergence.HasRules(effective))
+
+            // "Keeps everything" is a keep-set and has a rendering of its own:
+            // null would mean "nobody computed one", which is what the ledger
+            // carries forward rather than compares (ADR-0056).
+            // A keep-set computed from rolled-back metadata would converge
+            // the destination down to the history the rollback can see,
+            // deleting the newest backup from the only place that holds it.
+            // The detecting pass therefore keeps everything: CopyAsync never
+            // deletes, only ConvergeAsync does, and no keeps means no
+            // converge (and no spares, which only a keep-set needs).
+            var keepFingerprint = KeepsEverything;
+            if (!rolledBack && Retention.DestinationConvergence.HasRules(effective))
             {
                 var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
                     DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
                 keeps = convergence.Keeps;
+                keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
                 ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
             }
+
+            // What this pass has to do, decided before it reads anything
+            // (ADR-0056). A pair the last pass left level, with nothing
+            // published since and its keep-set unmoved, is one this pass can
+            // answer from what that pass wrote down — and the reading-through
+            // it wrote down expires, so the answer cannot go stale for ever.
+            // A migrating direct-ship set keeps its staging archive until
+            // retirement, and the ledger cannot speak for the history only
+            // that archive holds: its runs record success for what they
+            // shipped (ADR-0046 §3). Until the archive is gone, every pass
+            // reads through — which is what seeds the destination and what
+            // lets retirement establish that nothing would be lost.
+            var stagingRemains = archive.ShipSink is not null
+                && File.Exists(Path.Combine(
+                    runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
+
+            // The gate's ledger rolled back with everything else, so its
+            // "nothing to look at" would be the rollback's own opinion of
+            // itself: a detecting pass reads through.
+            var scope = rolledBack
+                ? SyncScope.Reconcile
+                : ReconciliationGate.Decide(
+                    previous, syncedSequence, keepFingerprint, nowMs,
+                    ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
 
             // Samples come from the pre-copy listing, filtered like the copy
             // itself: everything sampled is carried by the copy below, so a
@@ -539,27 +1008,96 @@ public static class FanOut
                 Protocol.VerificationChallenge.MaximumLength, cancellationToken)
                 .ConfigureAwait(false);
 
-            long copied;
-            long alreadyHeld;
-            if (keeps is not null)
+            // The converge spare (FR-GC-009's direct-ship shape): under
+            // direct-ship the replicas are the only holders, so before this
+            // destination's policy may drop anything, the closure of every
+            // snapshot a sibling is still owed is set aside — a narrow
+            // override must not delete the last copy of history a wide
+            // sibling has not received yet. A staging set needs none of
+            // this: the gate holds the staging copy until every entitled
+            // destination provably has its own (FR-GC-009), so a trimmed
+            // replica is re-seedable from staging.
+            Func<string, bool>? spares = null;
+            if (keeps is not null && archive.ShipSink is not null)
             {
-                var converged = await StoreToStoreCopier.ConvergeAsync(
-                    archive.Store, replica, keeps, cancellationToken,
-                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
-                copied = converged.Copied;
-                alreadyHeld = converged.AlreadyHeld;
+                var sparePlan = await Retention.DestinationConvergence.ComputeSparesAsync(
+                    archive.Store, archive.Repository, set.Destinations, set.Retention,
+                    name => ledger.Find(set.Id, name), nowMs, cancellationToken).ConfigureAwait(false);
+                spares = sparePlan.Spares;
+
+                // Folded into the fingerprint the gate compares, because a
+                // spare set moves when a sibling catches up and nothing about
+                // that is published: a pass that skipped over it would keep
+                // holding copies whose only reason to exist had been
+                // delivered (ADR-0056).
+                keepFingerprint = $"{keepFingerprint}/{sparePlan.Fingerprint}";
+            }
+
+            // Held against owed, in bytes, as the copy discovers it. Kept
+            // here rather than returned by the copier because the figure
+            // matters most when the pass does NOT finish: a drive pulled
+            // halfway leaves a destination genuinely part-full, and a number
+            // that only survived success could never say so. Recorded below
+            // on every exit, which is why it is captured and not written as
+            // it arrives — a ledger write per object would be thousands.
+            CopyProgress? completeness = null;
+            var counting = new Progress<CopyProgress>(latest => completeness = latest);
+
+            long copied = 0;
+            long alreadyHeld = 0;
+            if (scope == SyncScope.Skip)
+            {
+                // Nothing published since this pair was last read through, its
+                // keep-set has not moved, and the reading-through is still
+                // good: there is nothing a listing could discover, so the pass
+                // costs the sequence read that established it. The completeness
+                // figures and the shortfall check both belong to a pass that
+                // counted something, and this one counted nothing.
+                var skipLog = runtime.LoggerFor(typeof(FanOut));
+                Log.SyncSkipped(skipLog, set.Name, destination.Name, syncedSequence);
+                alreadyHeld = previous?.Objects ?? 0;
             }
             else
             {
-                var outcome = await StoreToStoreCopier.CopyAsync(
-                    archive.Store, replica, cancellationToken,
-                    destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier))).ConfigureAwait(false);
-                copied = outcome.Copied;
-                alreadyHeld = outcome.AlreadyHeld;
+                var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
+                try
+                {
+                    if (keeps is not null)
+                    {
+                        var converged = await StoreToStoreCopier.ConvergeAsync(
+                            archive.Store, replica, keeps, cancellationToken,
+                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                            spares, counting, copyScope).ConfigureAwait(false);
+                        copied = converged.Copied;
+                        alreadyHeld = converged.AlreadyHeld;
+                    }
+                    else
+                    {
+                        var outcome = await StoreToStoreCopier.CopyAsync(
+                            archive.Store, replica, cancellationToken,
+                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                            counting, copyScope).ConfigureAwait(false);
+                        copied = outcome.Copied;
+                        alreadyHeld = outcome.AlreadyHeld;
+                    }
+                }
+                finally
+                {
+                    if (completeness is { } counted)
+                    {
+                        ledger.RecordCompleteness(
+                            set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
+                    }
+                }
+
+                ReportShortfall(
+                    runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
             }
 
-            ReportShortfall(
-                runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
+            // Only a pass that read both inventories through may say so: the
+            // stamp is what a later pass skips on, and an incremental pass has
+            // not looked at the parts it did not walk.
+            var reconciled = scope == SyncScope.Reconcile;
 
             if (plan.Samples.Count > 0)
             {
@@ -567,26 +1105,42 @@ public static class FanOut
                 // both destination kinds earn "verified" from bytes read back
                 // off the destination's own disk, never from a copy having
                 // reported success (FR-VER-001).
+                // The repository is handed in so the blob half can be proved
+                // at the replica by its own AEAD tags. Without it the only
+                // proof is a comparison, and a direct-ship set has nothing
+                // independent to compare against — archive.Store reads blobs
+                // back from the destinations themselves (ADR-0046), so the
+                // comparison would put this replica against itself.
+                // The catalogue's signed digests feed the digest tier: a
+                // write-only set's data records are sealed to a key this
+                // service does not hold, so the whole-blob digest the writer
+                // signed into the index is what proves them at the replica.
                 var verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    archive.Store, replica, plan.Samples, cancellationToken).ConfigureAwait(false);
+                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
+                    archive.Catalogue.SignedDigestOf)
+                    .ConfigureAwait(false);
                 if (verification.Failed.Count > 0)
                 {
                     RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
                     return;
                 }
 
-                ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
+                ledger.RecordSuccess(
+                    set.Id, destination.Name, copied, nowMs, syncedSequence,
+                    keepFingerprint, reconciled, newestSnapshot);
                 if (verification.ProvedSomething)
                 {
                     ledger.RecordVerification(
                         set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs);
+                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
                 }
 
                 return;
             }
 
-            ledger.RecordSuccess(set.Id, destination.Name, copied, nowMs, syncedSequence);
+            ledger.RecordSuccess(
+                set.Id, destination.Name, copied, nowMs, syncedSequence,
+                keepFingerprint, reconciled, newestSnapshot);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -610,7 +1164,12 @@ public static class FanOut
     {
         try
         {
-            return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(replicaRoot))!).AvailableFreeSpace;
+            // ProbeRootFor, not Path.GetPathRoot: on Unix the latter answers
+            // "/" for every absolute path, so the floor was measured on the
+            // OS volume — precisely wrong for a destination on a different
+            // volume, which is a destination's whole job.
+            return new DriveInfo(DestinationCapacity.ProbeRootFor(Path.GetFullPath(replicaRoot)))
+                .AvailableFreeSpace;
         }
         catch (Exception exception) when (exception is ArgumentException or IOException
             or UnauthorizedAccessException or NotSupportedException)
@@ -728,6 +1287,249 @@ public static class FanOut
     }
 
     /// <summary>
+    /// Says that a destination attests writer history this machine's state
+    /// has never heard of (ADR-0062): the state directory was restored from
+    /// an older copy or rolled back wholesale. Never auto-resolved, on the
+    /// shortfall notice's posture — the next pass is quiet because the
+    /// writer moved, not because the rollback did not happen.
+    /// </summary>
+    /// <summary>
+    /// Heals a direct-ship set from a peer's replica over the retrieval
+    /// session (ADR-0062 Amendment 1): one dial, the copy-back and the
+    /// catalogue rebuild the local-path heal performs, and the session
+    /// closed. A peer that will not serve the session, or drops it, is a
+    /// heal failure the next pass retries — never a finding.
+    /// </summary>
+    private static async ValueTask<ServiceRuntime.HealOutcome> HealFromPeerAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var client = await PeerRetrievalClient.DialAsync(
+                runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
+                .ConfigureAwait(false);
+            return await runtime.HealFromDestinationAsync(
+                set.Id, archive, new PeerRetrievalObjectStore(client), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or Protocol.PeerProtocolException)
+        {
+            return new ServiceRuntime.HealOutcome(exception.Message, 0, 0);
+        }
+    }
+
+    private static void LogHeal(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, ServiceRuntime.HealOutcome heal)
+    {
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (heal.Failure is { } failure)
+        {
+            Log.MetadataHealFailed(log, set.Name, failure);
+        }
+        else if (archive.ShipSink is null)
+        {
+            Log.ContentHealedFromDestination(log, set.Name, destination.Name, heal.CopiedObjects, heal.CopiedBytes);
+        }
+        else
+        {
+            Log.MetadataHealedFromDestination(log, set.Name, destination.Name);
+        }
+    }
+
+    private static string HealFailureForLedger(ArchiveHandle archive, string failure) =>
+        archive.ShipSink is null
+            ? $"the set's staging archive is behind this destination and could not be copied back: {failure}"
+            : $"the set's metadata is behind this destination and could not be copied back: {failure}";
+
+    /// <summary>
+    /// What became of the deletion receipt a peer push brought back, for the
+    /// granted run's report: a pass that instructed nothing has none to
+    /// expect, a peer older than receipts sends none, and a receipt that
+    /// arrived was filed, rejected, or verified but could not be kept.
+    /// </summary>
+    private sealed class ReceiptFate
+    {
+        public bool Instructed { get; set; }
+
+        public long Deleted { get; set; }
+
+        public string? FiledPath { get; set; }
+
+        public string? Rejected { get; set; }
+
+        public string? FilingFailure { get; set; }
+
+        public override string ToString() =>
+            !Instructed ? "nothing to delete, no receipt"
+            : FiledPath is { } path ? $"{Deleted} object(s) deleted, receipt {path}"
+            : Rejected is { } rejected ? $"{Deleted} object(s) deleted, receipt rejected: {rejected}"
+            : FilingFailure is { } failure ? $"{Deleted} object(s) deleted, receipt verified but not filed: {failure}"
+            : $"{Deleted} object(s) deleted, no receipt (the peer predates receipts)";
+    }
+
+    /// <summary>
+    /// Files a verified deletion receipt under this installation's state
+    /// directory, or says why the one that arrived was not believed
+    /// ([ADR-0063](../../docs/adr/0063-deletion-receipts.md)). A rejected
+    /// receipt is a notice and never a refusal: the peer has already deleted
+    /// what it acknowledged, and what is missing is a statement of it that
+    /// verifies — which is exactly the kind of thing a human should hear
+    /// about once and not have withdrawn by the next clean pass.
+    /// </summary>
+    private static void RecordReceipt(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ReplicationInitiator.PushOutcome outcome, ReceiptFate? fate, ulong nowMs)
+    {
+        if (fate is not null)
+        {
+            fate.Instructed = outcome.Instructed;
+            fate.Deleted = outcome.Deleted;
+        }
+
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (outcome.ReceiptProblem is { } problem)
+        {
+            Log.DeletionReceiptRejected(log, destination.Name, set.Name, problem);
+            runtime.Notices.Raise(
+                $"deletion-receipt-invalid:{set.Id}:{destination.Name}",
+                $"peer '{destination.Name}' answered set '{set.Name}'s deletion instruction with a receipt this "
+                + $"installation will not file: {problem}. The peer acknowledged deleting {outcome.Deleted} "
+                + "object(s) and that deletion stands; what is missing is a statement of it under the peer's own "
+                + "signature that holds up. A peer that misattests once deserves a look.",
+                nowMs);
+            if (fate is not null)
+            {
+                fate.Rejected = problem;
+            }
+
+            return;
+        }
+
+        if (outcome.Receipt is not { } receipt)
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Protocol.DeletionReceiptStore.Open(runtime.Options.StateDirectory).File(
+                Protocol.DeletionReceiptRole.Commander, receipt.SignedBytes.Span, receipt.Signature.Span,
+                receipt.Signer, set.Name, destination.Name);
+            if (fate is not null)
+            {
+                fate.FiledPath = path;
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Log.DeletionReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+            if (fate is not null)
+            {
+                fate.FilingFailure = exception.Message;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Files a verified replication receipt under this installation's state
+    /// directory and counts the peer on its strength, or says why the one
+    /// that arrived was not believed
+    /// ([ADR-0064](../../docs/adr/0064-replication-receipts.md)). The ledger's
+    /// completeness figures are written for a peer here and nowhere else:
+    /// a source cannot cheaply list a peer's replica, so what it records is
+    /// what the peer signed for — everything it was owed, after a push in
+    /// which it acknowledged committing everything it lacked. A peer that
+    /// sends no receipt stays uncounted, as every peer was before receipts;
+    /// a rejected receipt is a notice and never a refusal, because the
+    /// objects have already been committed and what is missing is a
+    /// statement of it that holds up.
+    /// </summary>
+    private static void RecordReplicationReceipt(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ReplicationInitiator.PushOutcome outcome, DestinationSyncStore ledger, ulong nowMs)
+    {
+        var log = runtime.LoggerFor(typeof(FanOut));
+        if (outcome.ReplicationReceiptProblem is { } problem)
+        {
+            Log.ReplicationReceiptRejected(log, destination.Name, set.Name, problem);
+            runtime.Notices.Raise(
+                $"replication-receipt-invalid:{set.Id}:{destination.Name}",
+                $"peer '{destination.Name}' acknowledged set '{set.Name}'s push with a receipt this installation "
+                + $"will not file: {problem}. The peer acknowledged committing {outcome.Committed} object(s) and "
+                + "that stands; what is missing is a statement of what it holds under its own signature that "
+                + "holds up, so this peer is not counted complete on this pass. A peer that misattests once "
+                + "deserves a look.",
+                nowMs);
+            return;
+        }
+
+        if (outcome.ReplicationReceipt is not { } receipt)
+        {
+            return;
+        }
+
+        try
+        {
+            Protocol.ReplicationReceiptStore.Open(runtime.Options.StateDirectory).File(
+                Protocol.DeletionReceiptRole.Commander, receipt.SignedBytes.Span, receipt.Signature.Span,
+                receipt.Signer, set.Name, destination.Name);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Log.ReplicationReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+        }
+
+        // Verified is what counts, filed or not: the attestation was made and
+        // checked, and a copy this side could not keep changes nothing about
+        // what the peer holds.
+        ledger.RecordCompleteness(set.Id, destination.Name, outcome.OwedBytes, outcome.OwedBytes, nowMs);
+    }
+
+    private static void ReportDestinationAhead(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        SequenceAdoption.Adopted ahead, bool staging, ServiceRuntime.HealOutcome? heal, ulong nowMs, bool peer)
+    {
+        var attested = ahead.To - 1;
+        Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
+
+        string consequence;
+        if (heal?.Failure is { } failure)
+        {
+            consequence = staging
+                ? $"This is a staging set, and its archive is behind the destination as well. The destination's "
+                  + $"newer history could not be copied back into the staging archive ({failure}); nothing at the "
+                  + "destination was changed, this destination was not recorded as synced, and the next pass "
+                  + "tries again."
+                : $"The destination's metadata could not be copied back ({failure}); nothing at the "
+                  + "destination was changed, this destination was not recorded as synced, and the next pass "
+                  + "tries again.";
+        }
+        else
+        {
+            consequence = staging
+                ? "This is a staging set, and its archive was behind the destination as well. The destination's "
+                  + $"newer history — {heal?.CopiedObjects ?? 0} object(s), {heal?.CopiedBytes ?? 0} bytes of content "
+                  + "and metadata, blobs before the manifests that need them — was copied back into the staging "
+                  + "archive and the catalogue rebuilt from it, so the set is current again and the next converging "
+                  + "pass keeps what it keeps everywhere. Anything else kept beside the state directory deserves "
+                  + "the same suspicion."
+                : "The destination's metadata was copied back into the set's metadata store and the catalogue "
+                  + "was rebuilt from it, so the set is current again and the next backup is incremental. "
+                  + "Anything else kept beside the state directory deserves the same suspicion.";
+        }
+
+        runtime.Notices.Raise(
+            $"destination-ahead:{set.Id}:{destinationName}",
+            $"destination '{destinationName}' of set '{set.Name}' attests writer sequence {attested}; this machine's "
+            + $"state said {ahead.From}. The state directory was restored from an older copy or rolled back "
+            + "wholesale, and the destination holds history the local state has never heard of. The writer has "
+            + $"moved past {attested}, so the next backup will not collide with it; nothing at the destination was "
+            + $"deleted on this pass and its retention policy was not applied. {consequence}",
+            nowMs);
+    }
+
+    /// <summary>
     /// Says whether this destination's convergence filter could be computed,
     /// and withdraws the notice once it can be again.
     /// </summary>
@@ -750,6 +1552,71 @@ public static class FanOut
     /// condition that is true now, not one that once was (Z0c's rule).
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Converges a write-only set's peer destinations under the reclaim grant
+    /// of a collection run (ADR-0055 §6): each peer under retention rules is
+    /// pushed and instructed with pages signed by <paramref name="reclaim"/>,
+    /// inside the run, so the authority to delete outlives it by nothing. The
+    /// caller holds the set gate. Returns one report line per peer.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose peers converge.</param>
+    /// <param name="archive">The set's open archive.</param>
+    /// <param name="reclaim">The run's reclaim authority.</param>
+    /// <param name="nowMs">The clock, in Unix milliseconds.</param>
+    /// <param name="cancellationToken">Cancels the convergence.</param>
+    /// <returns>What happened at each peer, from the sync ledger.</returns>
+    public static async ValueTask<IReadOnlyList<string>> ConvergePeersAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive,
+        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(set);
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(reclaim);
+
+        byte[] Sign(byte[] signed)
+        {
+            var generation = archive.Repository.CurrentMetadataGeneration;
+            var seed = reclaim.SeedFor(generation);
+            try
+            {
+                using var signer = Repository.Crypto.RepositorySigner.FromSeed(seed, generation);
+                return signer.Sign(signed);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+            }
+        }
+
+        var lines = new List<string>();
+        foreach (var reference in set.Destinations)
+        {
+            var destination = runtime.Configuration.FindDestination(reference.Ref);
+            if (destination is not { Kind: DestinationKind.Peer })
+            {
+                continue;
+            }
+
+            if (!Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
+            {
+                continue;
+            }
+
+            var receipt = new ReceiptFate();
+            await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt)
+                .ConfigureAwait(false);
+
+            var row = runtime.DestinationSync.Find(set.Id, destination.Name);
+            lines.Add(row is { State: DestinationSyncState.InSync }
+                ? $"peer '{destination.Name}' converged under the grant: {receipt}"
+                : $"peer '{destination.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}");
+        }
+
+        return lines;
+    }
+
     private static void ReportConvergence(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
         Retention.ConvergenceRefusal? refusal, ulong nowMs)
@@ -761,9 +1628,15 @@ public static class FanOut
             return;
         }
 
-        var cause = reason == Retention.ConvergenceRefusal.UndecodableSnapshots
-            ? "the staging archive holds snapshots it cannot decode"
-            : "the keep-set's closure would not walk cleanly in the staging archive";
+        var cause = reason switch
+        {
+            Retention.ConvergenceRefusal.UndecodableSnapshots =>
+                "the staging archive holds snapshots it cannot decode",
+            Retention.ConvergenceRefusal.LaggingListing =>
+                "the archive's store cannot promise that a listing shows everything it holds, so a keep-set "
+                + "built from one could trim away a snapshot this machine simply has not seen yet",
+            _ => "the keep-set's closure would not walk cleanly in the staging archive",
+        };
         runtime.Notices.Raise(
             key,
             $"destination '{destinationName}' of set '{set.Name}' received a whole copy instead of its "

@@ -63,6 +63,7 @@ public sealed class SpoolCheckpointTests : IDisposable
             EncryptionProfile.Aes256GcmV1,
             BlobWriteProfile.LocalDefault,
             directory,
+            FormatVersions.Symmetric,
             Salt,
             pinned);
 
@@ -91,6 +92,42 @@ public sealed class SpoolCheckpointTests : IDisposable
         var (id, payload) = Record(seed);
         await writer.AppendRecordAsync(
             ObjectType.SegmentRecord, id, CompressionProfile.None, (ulong)payload.Length, payload, CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task SpoolResume_TheMerkleCommitment_IsRebuiltByTheWalkAndNotByARereadOfTheSpool()
+    {
+        // The tree rides the resume hand-over exactly as the digest does
+        // (05 §5): a writer that resumed must seal to the same root as one
+        // that never stopped, or the commitment a delta publishes would
+        // depend on whether the machine happened to crash.
+        var directory = SpoolDirectory("merkle-resume");
+        var writer = CreateWriter(directory, Pinned);
+        await AppendAsync(writer, 11);
+        await AppendAsync(writer, 12);
+        await writer.AbandonAsync();
+
+        var result = Resume(directory, Pinned);
+        Assert.IsInstanceOfType<ResumeResult.Resumed>(result, out var resumed);
+        await AppendAsync(resumed.Writer, 13);
+
+        byte[] resumedRoot;
+        long resumedLength;
+        string spoolPath;
+        await using (var sealedBlob = await resumed.Writer.SealAsync(CancellationToken.None))
+        {
+            resumedRoot = [.. sealedBlob.MerkleRoot];
+            resumedLength = sealedBlob.Length;
+            spoolPath = Path.Combine(directory, $"blob-{sealedBlob.BlobId}.spool");
+            Assert.HasCount(BlobMerkle.RootLength, resumedRoot);
+
+            // The published root is the tree over exactly the digest's
+            // preimage — everything before the sixteen-byte locator.
+            var bytes = await File.ReadAllBytesAsync(spoolPath, CancellationToken.None);
+            Assert.AreEqual(resumedLength, bytes.LongLength);
+            CollectionAssert.AreEqual(
+                BlobMerkle.Root(bytes.AsSpan(0, bytes.Length - FooterLocator.Length)), resumedRoot);
+        }
     }
 
     [TestMethod]
@@ -200,6 +237,67 @@ public sealed class SpoolCheckpointTests : IDisposable
 
         Assert.IsInstanceOfType<ResumeResult.MustRestart>(result, out var restart);
         Assert.AreEqual(expectedReason, restart.Reason);
+    }
+
+    [TestMethod]
+    public async Task SpoolResume_ALargeSpool_IsWalkedWithoutBufferingIt()
+    {
+        // NFR-PERF-001 and FR-ARCH-002 say memory is bounded by configured
+        // concurrency, segment size and blob-buffer limits — "not by file
+        // size, file count, version count, or repository size". Resume used
+        // to read the whole spool into one array, so the bound it actually
+        // honoured was FormatLimits.MaxBlobSize: 512 MiB against an agent
+        // budget of 256, reached by nothing more exotic than a crash during
+        // a large blob. The walk is sequential and authenticates one record
+        // at a time, so it never needed the whole file at once.
+        //
+        // The assertion is about the SPOOL's size, which is why the records
+        // are small and numerous: what must not scale is the bytes, and a
+        // bound of one record plus the reader's own buffers is the point.
+        const int RecordSize = 64 * 1024;
+        const int RecordCount = 64;
+
+        var directory = SpoolDirectory("bounded");
+        var writer = CreateWriter(directory, Pinned);
+        var payload = new byte[RecordSize];
+        for (var seed = 0; seed < RecordCount; seed++)
+        {
+            new Random(seed).NextBytes(payload);
+            await writer.AppendRecordAsync(
+                ObjectType.SegmentRecord,
+                ObjectId.FromBytes(SHA256.HashData(payload)),
+                CompressionProfile.None,
+                (ulong)payload.Length,
+                payload,
+                CancellationToken.None);
+        }
+
+        await writer.AbandonAsync();
+
+        var spoolPath = Directory.GetFiles(directory, "*.spool").Single();
+        var spoolLength = new FileInfo(spoolPath).Length;
+        Assert.IsGreaterThanOrEqualTo(RecordSize * RecordCount, spoolLength);
+
+        // Thread-local allocation, measured across the synchronous resume
+        // alone. A buffering walk allocates the spool exactly once, so the
+        // failure this catches is unambiguous rather than a tolerance.
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = Resume(directory, Pinned);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.IsInstanceOfType<ResumeResult.Resumed>(result, out var resumed);
+        Assert.AreEqual(RecordCount, resumed.Writer.RecordCount);
+        await resumed.Writer.AbandonAsync();
+
+        // Generous by an order of magnitude against what a buffering walk
+        // costs, and still far under it: the honest bound is one record's
+        // ciphertext plus its plaintext plus the reader's buffer, and the
+        // slack absorbs the record table and the harness around it.
+        var ceiling = spoolLength / 4;
+        Assert.IsTrue(
+            allocated < ceiling,
+            $"resume allocated {allocated} bytes walking a {spoolLength}-byte spool, "
+            + $"which is not bounded independently of its length (ceiling {ceiling})");
     }
 
     [TestMethod]
@@ -340,7 +438,7 @@ public sealed class SpoolCheckpointTests : IDisposable
         var writer = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Data, ClassKey, blobCounter: 7,
             EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory(name),
-            blobSalt: default, pinned: Pinned);
+            FormatVersions.Symmetric, blobSalt: default, pinned: Pinned);
         await writer.AbandonAsync();
 
         var spoolPath = Directory.GetFiles(SpoolDirectory(name), "*.spool").Single();

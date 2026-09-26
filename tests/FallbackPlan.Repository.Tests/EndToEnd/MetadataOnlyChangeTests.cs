@@ -40,17 +40,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue() =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte snapshotSeed, ulong now = 1_722_600_000_000) => new()
     {
@@ -87,10 +86,10 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // The only thing that changes. The content is untouched, so identity,
@@ -99,7 +98,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         // at says "nothing happened".
         node.Metadata = mutate(node.Metadata);
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -110,7 +109,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var file = Assert.ContainsSingle(second.Files);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         return (file, await ReadFileVersionAsync(reader, file.ObjectId));
     }
@@ -162,16 +161,16 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         node.Metadata = node.Metadata with { PosixMode = 0x180 };
         source.OpenedPaths.Clear();
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -188,7 +187,7 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
         var file = Assert.ContainsSingle(second.Files);
         Assert.AreNotEqual(Assert.ContainsSingle(first.Files).ObjectId, file.ObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var manifest = await ReadFileVersionAsync(reader, file.ObjectId);
 
@@ -214,16 +213,16 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         // What the previous backup's own read did to the file.
         node.Metadata = node.Metadata with { AccessedAt = 1_722_600_000_000 };
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {
@@ -249,14 +248,14 @@ public sealed class MetadataOnlyChangeTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var first = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
         source.OpenedPaths.Clear();
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        var second = await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(
                 Job(source, 0xB2, now: 1_722_700_000_001) with
                 {

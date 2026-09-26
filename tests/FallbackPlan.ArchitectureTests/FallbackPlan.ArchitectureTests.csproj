@@ -48,8 +48,15 @@
     <ProjectReference Include="..\..\src\FallbackPlan.Web\FallbackPlan.Web.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Api\FallbackPlan.Api.csproj" />
-    <ProjectReference Include="..\..\src\FallbackPlan.Keystore\FallbackPlan.Keystore.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Application\FallbackPlan.Application.csproj" />
+    <!-- Diagnostics, Replication and Retention have no AssemblyMarker, so they
+         are loaded by name like the executables. They are referenced here so
+         they reach the test output directory: without these lines the
+         containment rules cannot see them, which is how they stayed outside
+         AllSourceAssemblies. -->
+    <ProjectReference Include="..\..\src\FallbackPlan.Diagnostics\FallbackPlan.Diagnostics.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Replication\FallbackPlan.Replication.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Retention\FallbackPlan.Retention.csproj" />
   </ItemGroup>
 
   <ItemGroup>

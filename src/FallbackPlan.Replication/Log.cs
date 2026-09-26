@@ -15,10 +15,15 @@ namespace FallbackPlan.Replication;
 /// </remarks>
 internal static partial class Log
 {
+    // The opening inventory count this used to carry is gone, and its absence
+    // is the point: it was a listing of the destination's whole namespace,
+    // taken before any work, purely so the first line could say a number
+    // (ADR-0056). The same figure arrives in ReplicationComplete's
+    // {AlreadyHeld}, after the fact and at no cost.
     [LoggerMessage(
         EventId = 3000, Level = LogLevel.Information,
-        Message = "Replicating to {Destination}: the destination already holds {Held} object(s)")]
-    internal static partial void ReplicationStarting(ILogger logger, string destination, int held);
+        Message = "Replicating to {Destination}: {Pass} pass starting")]
+    internal static partial void ReplicationStarting(ILogger logger, string destination, string pass);
 
     [LoggerMessage(
         EventId = 3001, Level = LogLevel.Trace,
@@ -44,4 +49,14 @@ internal static partial class Log
             + "{AlreadyHeld} already present, {Deleted} deleted")]
     internal static partial void ReplicationComplete(
         ILogger logger, string destination, string pass, long copied, long alreadyHeld, long deleted);
+
+    // Information, not warning: the spare is retention working as specified
+    // (FR-GC-009's direct-ship shape), and the count is how an operator sees
+    // an offline sibling costing this replica disk before wondering why the
+    // destination holds more than its policy keeps.
+    [LoggerMessage(
+        EventId = 3004, Level = LogLevel.Information,
+        Message = "Converging {Destination} spared {Spared} object(s) its policy dropped: "
+            + "a sibling destination has not yet received the snapshots they belong to")]
+    internal static partial void ConvergeSpared(ILogger logger, string destination, long spared);
 }

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
@@ -41,7 +42,8 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         counter,
         EncryptionProfile.Aes256GcmV1,
         profile ?? BlobWriteProfile.LocalDefault,
-        SpoolDirectory);
+        SpoolDirectory,
+        FormatVersions.Symmetric);
 
     private static ObjectId IdFor(byte[] plaintext, ObjectIdDeriver deriver) =>
         deriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext));
@@ -269,7 +271,8 @@ public sealed class BlobWriterAndReaderTests : IDisposable
         await using var first = CreateWriter(counter: 7);
         await using var second = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Data, ClassKey, 7,
-            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory + "-second");
+            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory + "-second",
+            FormatVersions.Symmetric);
 
         using var deriver = new ObjectIdDeriver(ContentIdKey);
         var payload = "identical payload"u8.ToArray();
@@ -283,6 +286,98 @@ public sealed class BlobWriterAndReaderTests : IDisposable
 
         // Same key inputs except the CSPRNG salt: the sealed bytes must differ.
         Assert.AreNotEqual(sealedFirst.Digest, sealedSecond.Digest);
+    }
+
+    [TestMethod]
+    public async Task SealedBlob_ItsMerkleCommitment_IsTheTreeOverTheDigestsOwnPreimage()
+    {
+        // Two commitments, one preimage (05 §5). The flat digest is what a
+        // whole-blob read-back compares against; the root is what lets a
+        // party holding neither the blob nor a key check one leaf of it. If
+        // they named different bytes, a blob could satisfy one and not the
+        // other and nobody could say which was right.
+        using var deriver = new ObjectIdDeriver(ContentIdKey);
+        await using var writer = CreateWriter();
+        for (var i = 0; i < 4; i++)
+        {
+            var payload = new byte[600_000];
+            new Random(i).NextBytes(payload);
+            await writer.AppendRecordAsync(
+                ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
+                (ulong)payload.Length, payload, CancellationToken.None);
+        }
+
+        await using var sealedBlob = await writer.SealAsync(CancellationToken.None);
+        var bytes = new byte[sealedBlob.Length];
+        await using (var content = await sealedBlob.OpenContentAsync(CancellationToken.None))
+        {
+            await content.ReadExactlyAsync(bytes, CancellationToken.None);
+        }
+
+        var preimage = bytes.AsSpan(0, bytes.Length - FooterLocator.Length);
+        CollectionAssert.AreEqual(SHA256.HashData(preimage), sealedBlob.Digest.ToArray());
+        CollectionAssert.AreEqual(BlobMerkle.Root(preimage), sealedBlob.MerkleRoot.ToArray());
+
+        // More than one leaf, or the tree case is untested by construction.
+        Assert.IsGreaterThan(1, BlobMerkle.LeafCount(preimage.Length));
+    }
+
+    [TestMethod]
+    public async Task BlobWriter_AbandonWhoseDurableFlushFails_StillReleasesTheSpoolHandle()
+    {
+        // Abandon is the unwind path — it runs while a failure is already
+        // propagating, and its own doc promises it never replaces that
+        // failure. A flush that throws (disk full, device gone) must not
+        // leave the FileShare.None spool handle open for the life of the
+        // process: the next run's resume walk reads this very file, and on
+        // Windows a leaked handle turns every later backup into "the process
+        // cannot access the file because it is being used by another process".
+        Directory.CreateDirectory(SpoolDirectory);
+        var spoolPath = Path.Combine(SpoolDirectory, "blob-abandon-flush-fault.spool");
+        var spool = new FlushFaultingFileStream(spoolPath);
+        var salt = new byte[BlobKeyDeriver.BlobSaltLength];
+        var writer = new BlobWriter(
+            new BlobEnvelope(
+                FormatLimits.SymmetricFormatVersion, BlobClass.Data, KeyGeneration.Zero,
+                BlobId.FromWriterCounter(Writer, 42), salt, 42, Writer),
+            BlobWriteProfile.LocalDefault,
+            EncryptionProfile.Aes256GcmV1,
+            Repo,
+            ClassKey.ToArray(),
+            spoolPath,
+            spool,
+            pinned: null);
+
+        await writer.AbandonAsync();
+
+        Assert.IsTrue(spool.DisposedCleanly, "the spool handle must be released even when the durable flush fails");
+        Assert.IsTrue(File.Exists(spoolPath), "abandon leaves the spool on disk for the next session's resume walk");
+    }
+
+    /// <summary>
+    /// A spool stream whose durable flush fails — the fault a full disk or a
+    /// yanked volume injects exactly when a session is already unwinding.
+    /// </summary>
+    private sealed class FlushFaultingFileStream(string path)
+        : FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)
+    {
+        public bool DisposedCleanly { get; private set; }
+
+        public override void Flush(bool flushToDisk)
+        {
+            if (flushToDisk)
+            {
+                throw new IOException("simulated durable-flush failure");
+            }
+
+            base.Flush(flushToDisk);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            DisposedCleanly = true;
+            await base.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc />

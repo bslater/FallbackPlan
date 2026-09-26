@@ -78,7 +78,7 @@ public sealed class CliHarness : IDisposable
     /// <summary>Creates a repository, asserting that it succeeded.</summary>
     public async Task<Invocation> InitAsync()
     {
-        var result = await RunWithoutStateAsync("init");
+        var result = await RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.IsTrue(result.ExitCode == 0, $"init failed: {result.All}");
         return result;
     }

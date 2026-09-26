@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using FallbackPlan.Domain;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Manifests;
@@ -71,7 +72,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // The descriptor names format 2, demands the sealed-data-plane
         // feature, and its public key is the derive-and-compare verifier.
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
-        Assert.IsTrue(RepositoryLifecycle.IsWriteOnly(descriptor));
+        Assert.AreEqual(FormatVersions.SealedDataPlane, descriptor.FormatVersion);
         Assert.Contains(
             Format.Descriptor.RepositoryDescriptorCodec.FeatureSealedDataPlane, descriptor.RequiredFeatures);
 
@@ -86,7 +87,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // and refuses content honestly.
         using (var authority = FixtureRepositoryV2.DeriveAuthority())
         {
-            using var writeOnly = await RepositoryLifecycle.OpenWriteOnlyAsync(
+            using var writeOnly = await RepositoryLifecycle.OpenAsync(
                 store, authority.Credential, CancellationToken.None);
             using var structural = new RepositoryReader(writeOnly.RepositoryId, writeOnly.Keys, store);
             await structural.LoadBlobsAsync(CancellationToken.None);
@@ -107,13 +108,13 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
             // journal — the hub's bookkeeping never needed content.
             using var catalogue = Catalogue.Catalogue.Open(
                 Path.Combine(_scratch, "catalogue.db"), writeOnly.RepositoryId);
-            var report = await new CatalogueRebuilder(new IndexLoader(store, writeOnly.RepositoryId, writeOnly.Hierarchy))
+            var report = await new CatalogueRebuilder(new IndexLoader(store, writeOnly.RepositoryId, writeOnly.Credential))
                 .RebuildAsync(catalogue, currentGeneration: 0, gapPatienceGenerations: 2,
                     isSequenceAccountedAsync: null, CancellationToken.None);
             Assert.AreEqual(1, report.DeltasApplied);
             Assert.IsEmpty(report.Findings);
 
-            using var journalReader = new JournalReader(store, writeOnly.RepositoryId, writeOnly.Hierarchy);
+            using var journalReader = new JournalReader(store, writeOnly.RepositoryId, writeOnly.Credential);
             var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
             Assert.AreEqual(0, unparseable);
             Assert.AreEqual(2, records.Count);
@@ -123,7 +124,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         // byte-identically — the whole promise of the format.
         using (var passphrase = FixtureRepositoryV2.CreatePassphrase())
         {
-            var (repository, authority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(
                 store, passphrase, CancellationToken.None);
             using (repository)
             using (authority)
@@ -143,9 +144,33 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
                 using var restored = new MemoryStream();
                 var restore = await new RestoreEngine(reader).RestoreFileAsync(manifest, restored, CancellationToken.None);
                 Assert.IsTrue(restore.Success, restore.FailureDetail);
-                SequenceAssert.AreEqual(FixtureRepository.FileContent(), restored.ToArray());
+                SequenceAssert.AreEqual(FixtureRepositoryV2.FileContent(), restored.ToArray());
             }
         }
+    }
+
+    [TestMethod]
+    public async Task FixtureRepositoryV2_ItsIndexDelta_CarriesNoMerkleCommitment()
+    {
+        // The other half of the format-version gate (07 §2.3). A delta is
+        // refused outright by a reader that does not know one of its keys,
+        // so a format-2 repository — which an older build is entitled to
+        // read — must never contain key 11. The digest it does carry is
+        // unaffected.
+        var committed = CommittedFixturePath();
+        Assert.IsTrue(Directory.Exists(committed), "the committed v2 fixture must exist");
+
+        var store = new LocalFileSystemObjectStore(committed);
+        using var authority = FixtureRepositoryV2.DeriveAuthority();
+
+        using var loader = new IndexLoader(store, FixtureRepositoryV2.Repo, authority.Credential);
+        var state = await loader.LoadAsync(currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, blobState: null, CancellationToken.None);
+        Assert.IsEmpty(state.Findings);
+
+        var delta = Assert.ContainsSingle(state.Deltas).Delta;
+        Assert.IsNotEmpty(delta.CoveredBlobIds);
+        Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
+        Assert.IsEmpty(delta.CoveredBlobMerkleRoots);
     }
 
     /// <inheritdoc />

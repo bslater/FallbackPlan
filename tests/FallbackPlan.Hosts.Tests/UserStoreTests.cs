@@ -64,7 +64,7 @@ public sealed class UserStoreTests : IDisposable
         // rests on.
         var store = Open();
 
-        var created = store.Create("ben", "a-good-password", UserRole.Operator, Fast);
+        var created = store.Create("ben", "A-good-passw0rd9", UserRole.Operator, Fast);
 
         Assert.IsTrue(created.IsOk);
         Assert.AreEqual(UserRole.Owner, created.User!.Role);
@@ -74,9 +74,9 @@ public sealed class UserStoreTests : IDisposable
     public void Create_ASecondAccount_TakesTheRoleAsked()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        var second = store.Create("sam", "another-password", UserRole.Operator, Fast);
+        var second = store.Create("sam", "Another-passw0rd9", UserRole.Operator, Fast);
 
         Assert.IsTrue(second.IsOk);
         Assert.AreEqual(UserRole.Operator, second.User!.Role);
@@ -89,9 +89,9 @@ public sealed class UserStoreTests : IDisposable
         // Case-insensitive, because "Ben" and "ben" reading as two people is a
         // way to be impersonated by typing.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        Assert.AreEqual(UserStoreOutcome.NameTaken, store.Create("BEN", "different-one", parameters: Fast).Outcome);
+        Assert.AreEqual(UserStoreOutcome.NameTaken, store.Create("BEN", "Different-0ne9!", parameters: Fast).Outcome);
         Assert.HasCount(1, store.List());
     }
 
@@ -118,7 +118,7 @@ public sealed class UserStoreTests : IDisposable
         {
             Assert.AreEqual(
                 UserStoreOutcome.NameRefused,
-                store.Create(name, "a-good-password", parameters: Fast).Outcome,
+                store.Create(name, "A-good-passw0rd9", parameters: Fast).Outcome,
                 $"a name of length {name.Length} was accepted");
         }
 
@@ -132,16 +132,47 @@ public sealed class UserStoreTests : IDisposable
 
         Assert.AreEqual(UserStoreOutcome.PasswordRefused, store.Create("ben", "short", parameters: Fast).Outcome);
         Assert.AreEqual(UserStoreOutcome.PasswordRefused, store.Create("ben", string.Empty, parameters: Fast).Outcome);
+        Assert.AreEqual(UserStoreOutcome.PasswordRefused, store.Create("ben", "Aa19-mode", parameters: Fast).Outcome);
         Assert.IsFalse(store.HasAccounts);
+    }
+
+    [TestMethod]
+    [DataRow("long-enough-42!")]     // no uppercase
+    [DataRow("Long-Enough-Here!")]   // fewer than two digits
+    [DataRow("Long-Enough-4-Us!")]   // one digit only
+    [DataRow("LongEnough42x9")]      // no special character
+    public void Create_APasswordMissingACompositionRule_IsRefused(string password)
+    {
+        // The policy (FR-USR-001 as amended) is enforced at the store, so the
+        // console's bootstrap create_user and the setup verb cannot diverge:
+        // both arrive here.
+        var store = Open();
+
+        Assert.AreEqual(
+            UserStoreOutcome.PasswordRefused, store.Create("ben", password, parameters: Fast).Outcome);
+        Assert.IsFalse(store.HasAccounts);
+    }
+
+    [TestMethod]
+    public async Task ChangePassword_ANewPasswordMissingARule_IsRefusedAndTheOldOneStands()
+    {
+        var store = Open();
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
+
+        var refused = await store.ChangePasswordAsync(
+            "ben", "A-good-passw0rd9", "all-lowercase-new", CancellationToken.None);
+
+        Assert.AreEqual(UserStoreOutcome.PasswordRefused, refused.Outcome);
+        Assert.IsTrue((await store.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None)).IsOk);
     }
 
     [TestMethod]
     public async Task Verify_TheRightPassword_Accepts()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        var verified = await store.VerifyAsync("ben", "a-good-password", CancellationToken.None);
+        var verified = await store.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None);
 
         Assert.IsTrue(verified.IsOk);
         Assert.AreEqual("ben", verified.User!.Name);
@@ -153,9 +184,9 @@ public sealed class UserStoreTests : IDisposable
         // Not "no such user": a login that answers that instantly is a name
         // oracle, and telling an attacker which names exist is half the work.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        var unknown = await store.VerifyAsync("nobody", "a-good-password", CancellationToken.None);
+        var unknown = await store.VerifyAsync("nobody", "A-good-passw0rd9", CancellationToken.None);
 
         Assert.AreEqual(UserStoreOutcome.WrongPassword, unknown.Outcome);
         Assert.IsNull(unknown.User);
@@ -168,7 +199,7 @@ public sealed class UserStoreTests : IDisposable
         // correct password still works immediately afterwards. Nothing here
         // can put an account beyond its owner's reach.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
         Assert.AreEqual(TimeSpan.Zero, store.PendingDelayFor("ben"), "nothing has failed yet");
 
@@ -189,7 +220,7 @@ public sealed class UserStoreTests : IDisposable
         Assert.IsLessThanOrEqualTo(Brisk.Maximum, delayAfterFive, "and stops growing at the cap");
 
         // The one that matters: after a run of failures the owner still gets in.
-        var recovered = await store.VerifyAsync("ben", "a-good-password", CancellationToken.None);
+        var recovered = await store.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None);
         Assert.IsTrue(recovered.IsOk, "no sequence of failures may deny an account its own backups");
         Assert.AreEqual(TimeSpan.Zero, store.PendingDelayFor("ben"), "a success clears the count");
 
@@ -203,7 +234,7 @@ public sealed class UserStoreTests : IDisposable
     public async Task Verify_TheDelayIsCapped_SoAnAccountIsNeverEffectivelyLocked()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
         for (var attempt = 0; attempt < 12; attempt++)
         {
@@ -219,8 +250,8 @@ public sealed class UserStoreTests : IDisposable
     public void Delete_TheOwner_IsRefused()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
-        store.Create("sam", "another-password", UserRole.Operator, Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
+        store.Create("sam", "Another-passw0rd9", UserRole.Operator, Fast);
 
         Assert.AreEqual(UserStoreOutcome.OwnerIsPermanent, store.Delete("ben").Outcome);
         Assert.IsTrue(store.Delete("sam").IsOk);
@@ -231,7 +262,7 @@ public sealed class UserStoreTests : IDisposable
     public void Delete_AnUnknownAccount_SaysSo()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
         Assert.AreEqual(UserStoreOutcome.NoSuchUser, store.Delete("nobody").Outcome);
     }
@@ -240,8 +271,8 @@ public sealed class UserStoreTests : IDisposable
     public void MayManageAccounts_OnlyTheOwner_Answers()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
-        store.Create("sam", "another-password", UserRole.Operator, Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
+        store.Create("sam", "Another-passw0rd9", UserRole.Operator, Fast);
 
         Assert.IsTrue(store.MayManageAccounts("ben"));
         Assert.IsFalse(store.MayManageAccounts("sam"));
@@ -252,29 +283,29 @@ public sealed class UserStoreTests : IDisposable
     public async Task ChangePassword_ProvesTheCurrentOneFirst()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        var refused = await store.ChangePasswordAsync("ben", "not-it-at-all", "a-newer-password", CancellationToken.None);
+        var refused = await store.ChangePasswordAsync("ben", "not-it-at-all", "A-newer-passw0rd9", CancellationToken.None);
         Assert.IsFalse(refused.IsOk);
 
         var changed = await store.ChangePasswordAsync(
-            "ben", "a-good-password", "a-newer-password", CancellationToken.None);
+            "ben", "A-good-passw0rd9", "A-newer-passw0rd9", CancellationToken.None);
         Assert.IsTrue(changed.IsOk);
 
-        Assert.IsTrue((await store.VerifyAsync("ben", "a-newer-password", CancellationToken.None)).IsOk);
-        Assert.IsFalse((await store.VerifyAsync("ben", "a-good-password", CancellationToken.None)).IsOk);
+        Assert.IsTrue((await store.VerifyAsync("ben", "A-newer-passw0rd9", CancellationToken.None)).IsOk);
+        Assert.IsFalse((await store.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None)).IsOk);
     }
 
     [TestMethod]
     public async Task ChangePassword_ToOneBelowTheFloor_IsRefusedAndKeepsTheOld()
     {
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
 
-        var refused = await store.ChangePasswordAsync("ben", "a-good-password", "short", CancellationToken.None);
+        var refused = await store.ChangePasswordAsync("ben", "A-good-passw0rd9", "short", CancellationToken.None);
 
         Assert.AreEqual(UserStoreOutcome.PasswordRefused, refused.Outcome);
-        Assert.IsTrue((await store.VerifyAsync("ben", "a-good-password", CancellationToken.None)).IsOk);
+        Assert.IsTrue((await store.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None)).IsOk);
     }
 
     [TestMethod]
@@ -285,7 +316,7 @@ public sealed class UserStoreTests : IDisposable
         // would let an attacker's failures outlive the process and become a
         // way to slow the account's owner down tomorrow.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
         await store.VerifyAsync("ben", "wrong", CancellationToken.None);
         Assert.IsGreaterThan(TimeSpan.Zero, store.PendingDelayFor("ben"));
 
@@ -293,7 +324,7 @@ public sealed class UserStoreTests : IDisposable
 
         Assert.IsTrue(reopened.HasAccounts);
         Assert.AreEqual(UserRole.Owner, reopened.List().Single().Role);
-        Assert.IsTrue((await reopened.VerifyAsync("ben", "a-good-password", CancellationToken.None)).IsOk);
+        Assert.IsTrue((await reopened.VerifyAsync("ben", "A-good-passw0rd9", CancellationToken.None)).IsOk);
         Assert.AreEqual(TimeSpan.Zero, reopened.PendingDelayFor("ben"));
     }
 
@@ -302,7 +333,7 @@ public sealed class UserStoreTests : IDisposable
     {
         // NFR-SEC-012, asserted against the bytes rather than against intent.
         var store = Open();
-        store.Create("ben", "Sup3rSecretPhrase", parameters: Fast);
+        store.Create("ben", "Sup3r-Secr3tPhrase", parameters: Fast);
 
         var path = Path.Combine(_root, "users.json");
         var text = File.ReadAllText(path);
@@ -324,7 +355,7 @@ public sealed class UserStoreTests : IDisposable
         // Starting fresh would present an installation that has accounts as one
         // that has none — and the next caller to arrive would become its owner.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
         File.WriteAllText(Path.Combine(_root, "users.json"), "{ not json");
 
         var refusal = Assert.ThrowsExactly<InvalidDataException>(Open);
@@ -339,8 +370,8 @@ public sealed class UserStoreTests : IDisposable
         // A file written by a later version that knows roles this one does not
         // must not be read as granting more than it says.
         var store = Open();
-        store.Create("ben", "a-good-password", parameters: Fast);
-        store.Create("sam", "another-password", UserRole.Operator, Fast);
+        store.Create("ben", "A-good-passw0rd9", parameters: Fast);
+        store.Create("sam", "Another-passw0rd9", UserRole.Operator, Fast);
 
         var path = Path.Combine(_root, "users.json");
         File.WriteAllText(path, File.ReadAllText(path).Replace("\"Operator\"", "\"Auditor\"", StringComparison.Ordinal));

@@ -58,7 +58,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         // Restore through footers alone: a fresh reader with no state from
         // the archive run beyond the logical references a manifest will
         // eventually carry.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         Assert.AreEqual(result.Blobs.Count, await reader.LoadBlobsAsync(CancellationToken.None));
 
         // The threshold decision went both ways across the mixed regions.
@@ -90,7 +90,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         Assert.IsEmpty(result.Blobs);
         Assert.AreEqual(0, result.LogicalLength);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         Assert.AreEqual(0, await reader.LoadBlobsAsync(CancellationToken.None));
 
         using var restored = new MemoryStream();
@@ -123,7 +123,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         Assert.IsTrue(result.Blobs.Count >= 100,
             $"expected a file spanning at least 100 blobs; got {result.Blobs.Count}");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         Assert.AreEqual(result.Blobs.Count, await reader.LoadBlobsAsync(CancellationToken.None));
 
         using var restored = new MemoryStream();
@@ -145,7 +145,7 @@ public sealed partial class ArchiveRoundTripTests : ArchiveTestHarness
         using var source = new MemoryStream(original);
         var result = await archiver.ArchiveAsync(source, CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Single-segment reads — the targetable-recovery shape E2 will need.

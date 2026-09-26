@@ -1,8 +1,8 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
-using FallbackPlan.Domain;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -18,7 +18,7 @@ namespace FallbackPlan.Agent;
 /// <summary>How a service is configured at start-up.</summary>
 public sealed record ServiceOptions
 {
-    /// <summary>The directory holding one staging archive per backup set, each under its set id (ADR-0034).</summary>
+    /// <summary>The directory holding a staging archive per staging-mode backup set, each under its set id (ADR-0034); a direct-ship set keeps nothing here (ADR-0046).</summary>
     public required string ArchivesRoot { get; init; }
 
     /// <summary>The state directory whose writer role the service holds.</summary>
@@ -26,6 +26,56 @@ public sealed record ServiceOptions
 
     /// <summary>How often the scheduler evaluates due-ness.</summary>
     public int PollSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// An explicit backup-pool width (1..5), taking precedence over the
+    /// configuration's <c>max_concurrent_backups</c> — a host's or a test
+    /// harness's knob for a deterministic pool. Null reads the configuration.
+    /// </summary>
+    public int? MaxConcurrentBackupsOverride { get; init; }
+
+    /// <summary>
+    /// How long a preempted run may stay suspended before it self-cancels to
+    /// the interruption-safe re-run path (ADR-0047 Amendment 1 rule 5). An
+    /// hour when null — a host's or a test harness's knob, deliberately not
+    /// configuration: the bound guards the service's own memory and intents.
+    /// </summary>
+    public TimeSpan? MaxPauseOverride { get; init; }
+
+    /// <summary>
+    /// Wraps the store a ship-sink opens per destination — the fault-injection
+    /// seam the 04 §5.1 kill sweep runs through the direct-ship path
+    /// (destination name, real store) → store the run writes. Null, the
+    /// production value, writes the replica directly.
+    /// </summary>
+    internal Func<string, Storage.Abstractions.IObjectStore, Storage.Abstractions.IObjectStore>?
+        ReplicaStoreDecorator { get; init; }
+
+    /// <summary>
+    /// Overrides the free-space probe behind the ship-sink's capacity floor
+    /// (FR-DEST-010): destination root → available bytes, null meaning "the
+    /// platform will not say", which is answered as room. Null, the
+    /// production value, asks <see cref="DriveInfo"/>.
+    /// </summary>
+    internal Func<string, long?>? AvailableBytesProbe { get; init; }
+
+    /// <summary>
+    /// Overrides the volume-identity probe behind destination placement
+    /// (ADR-0051, FR-DEST-017) and the failure-domain comparison
+    /// (ADR-0018): path → volume id, null meaning "the platform will not
+    /// say". A test harness's knob — a fixture's every path shares one real
+    /// volume, which would refuse every fixture set. Null, the production
+    /// value, asks the filesystem via the nearest existing ancestor.
+    /// </summary>
+    internal Func<string, ulong?>? VolumeIdentityOverride { get; init; }
+
+    /// <summary>
+    /// Overrides the physical-drive probe behind destination placement
+    /// (ADR-0051's "different physical hdd where possible"): path → drive
+    /// name, null meaning it cannot be named. Null, the production value,
+    /// asks <see cref="Filesystem.Local.PhysicalDisk"/>.
+    /// </summary>
+    internal Func<string, string?>? PhysicalDiskOverride { get; init; }
 
     /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
@@ -44,8 +94,9 @@ public sealed record ServiceOptions
 
 /// <summary>
 /// The long-lived service (ADR-0028 §2): sole holder of the state directory
-/// and, per backup set, of that set's staging archive — its writer sequence,
-/// its catalogue, its spool (ADR-0034, ADR-0028 amendment).
+/// and, per backup set, of that set's archive — its staging archive, or a
+/// direct-ship set's local metadata store (ADR-0046) — with its writer
+/// sequence, its catalogue, its spool (ADR-0034, ADR-0028 amendment).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -64,32 +115,47 @@ public sealed record ServiceOptions
 /// </remarks>
 public sealed class ServiceRuntime : IAsyncDisposable
 {
+    /// <summary>
+    /// The repository format version a set's archive is created at:
+    /// <see cref="Domain.FormatLimits.FormatVersion"/>, the latest this build
+    /// can read. It is a property rather than the constant so a suite can
+    /// stand an archive up at an older format through the real pipeline —
+    /// which is what the digest tier and the upgrade record both need, since
+    /// neither has anything to say about a repository already at the latest.
+    /// The service never sets it.
+    /// </summary>
+    internal static ushort ArchiveFormatVersion { get; set; } = Domain.FormatLimits.FormatVersion;
+
     private readonly StateDirectoryLock _writerRole;
-    private readonly Passphrase? _passphrase;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _archivesGate = new(1, 1);
     private bool _disposed;
+
+    /// <summary>Guards <see cref="_configurationFingerprint"/>.</summary>
+    private readonly Lock _configurationAnnounced = new();
+
+    /// <summary>The canonical-content hash of the last configuration announced (event 3742).</summary>
+    private byte[]? _configurationFingerprint;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _setGates =
         new(StringComparer.Ordinal);
 
     private ServiceRuntime(
         ServiceOptions options,
         StateDirectoryLock writerRole,
-        Passphrase? passphrase,
         LocalState state,
         JobStateStore jobs)
     {
         Options = options;
         _writerRole = writerRole;
-        _passphrase = passphrase;
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
-        Queue = new JobScheduler(Logger(options, typeof(JobScheduler)));
+        Queue = new JobScheduler(
+            Logger(options, typeof(JobScheduler)), ConfiguredBackupPoolWidth(options), options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
-        KitConfirmation = new RecoveryKitConfirmation(options.StateDirectory);
+        ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
     }
 
     /// <summary>How this service was started.</summary>
@@ -98,6 +164,36 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>A logger for <paramref name="category"/>, or a silent one.</summary>
     private static ILogger Logger(ServiceOptions options, Type category) =>
         options.Logging?.Factory.CreateLogger(category.FullName!) ?? NullLogger.Instance;
+
+    /// <summary>
+    /// The backup pool's width (ADR-0047), read once when the service starts
+    /// — the workers spawn here, so a configuration change applies at the
+    /// next start. A configuration that will not load answers the default:
+    /// the pool's width must never be the reason a service refuses to start,
+    /// and the load path re-validates loudly everywhere else.
+    /// </summary>
+    // Internal, not private: the host's startup configuration record
+    // (ADR-0049) reports the same width the queue was built with.
+    internal static int ConfiguredBackupPoolWidth(ServiceOptions options)
+    {
+        if (options.MaxConcurrentBackupsOverride is { } width)
+        {
+            return Math.Clamp(width, 1, 5);
+        }
+
+        try
+        {
+            return Math.Clamp(
+                ClientConfiguration.Load(Path.Combine(options.StateDirectory, "config.json"))
+                    .EffectiveMaxConcurrentBackups,
+                1,
+                5);
+        }
+        catch (ClientStateException)
+        {
+            return 2;
+        }
+    }
 
     /// <summary>A logger for <typeparamref name="T"/>, or a silent one.</summary>
     internal ILogger LoggerFor<T>() => LoggerFor(typeof(T));
@@ -128,18 +224,18 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>What is running and what is waiting.</summary>
     public JobScheduler Queue { get; }
 
+    /// <summary>
+    /// Serialises backup enqueues (ADR-0027 §1 via ADR-0047 Amendment 3):
+    /// the already-running check, the journal begin and the queue insert
+    /// must be one atomic step, or two triggers arriving together — a
+    /// manual click racing the upsert's first backup, two clicks, a click
+    /// racing the pass — both pass the check and the set runs twice over
+    /// one spool directory.
+    /// </summary>
+    internal object BackupEnqueueGate { get; } = new();
+
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
-
-    /// <summary>
-    /// The passphrase the runtime unlocks v1 archives with — the ADR-0028 §9
-    /// posture. Handed to the restore-source opens so a replica or peer
-    /// repository unlocks with the same secret its staging archive did;
-    /// never exposed on any contract surface (NFR-SEC-009). Null when the
-    /// service started passphrase-free — the ADR-0042 posture, where every
-    /// provisioned set opens with its write credential instead.
-    /// </summary>
-    internal Passphrase? ArchivePassphrase => _passphrase;
 
     /// <summary>The service's envelope recipient keypair (ADR-0042 §4).</summary>
     internal GrantRecipient GrantRecipient { get; }
@@ -148,16 +244,25 @@ public sealed class ServiceRuntime : IAsyncDisposable
     internal WriteCredentialStore WriteCredentials { get; }
 
     /// <summary>
-    /// What first-run setup provisioned, from which every set's staging
-    /// archive is created (ADR-0044 §2).
+    /// Which peer each replica stored here belongs to (peer-protocol 05 §2).
     /// </summary>
-    internal InstallationCredentialStore InstallationCredential { get; }
+    /// <remarks>
+    /// The runtime's, and the one instance in the process: the remote
+    /// binding borrows it rather than opening its own, because the
+    /// attribution the retrieval gate consults and the attribution the
+    /// operator re-points (ADR-0053 §3) must be the same object. Two stores
+    /// over one file would each write the whole file from its own picture,
+    /// and the override would be undone by the next offer the listener
+    /// recorded.
+    /// </remarks>
+    public ReplicaOwnerStore ReplicaOwners { get; }
 
     /// <summary>
-    /// Whether the operator confirmed saving this installation's recovery
-    /// kit (FR-KIT-004).
+    /// What first-run setup provisioned, from which every set's archive —
+    /// staging, or a direct-ship set's metadata store — is created
+    /// (ADR-0044 §2).
     /// </summary>
-    internal RecoveryKitConfirmation KitConfirmation { get; }
+    internal InstallationCredentialStore InstallationCredential { get; }
 
     /// <summary>
     /// Whether this installation has a passphrase behind it — the state
@@ -204,29 +309,43 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// How far first-run setup has got: <c>setup_required</c>,
-    /// <c>kit_required</c>, or <c>ready</c> (FR-SVC-011, FR-KIT-004).
+    /// How far first-run setup has got: <c>setup_required</c> or
+    /// <c>ready</c> (FR-SVC-011).
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Three states rather than two, because "has a passphrase" and "is
-    /// finished" stopped being the same thing once the ceremony had to end
-    /// with a saved kit. The middle state is what makes the confirmation
-    /// real: a closed tab between provisioning and confirming resumes at the
-    /// kit step instead of leaving an installation that looks finished and
-    /// has no kit.
-    /// </para>
-    /// <para>
-    /// An installation provisioned the older per-set way is <c>ready</c>
-    /// whatever the kit says. It predates this ceremony, it works, and
-    /// demanding a kit for an installation credential it does not have would
-    /// be offering a step that cannot complete.
-    /// </para>
+    /// Two states, because "has a passphrase" and "is finished" are the same
+    /// thing: the passphrase is the whole recovery credential (ADR-0060),
+    /// and nothing else has to be produced or saved for the ceremony to be
+    /// complete. There was a third, <c>kit_required</c>, while the ceremony
+    /// ended with a saved recovery kit; it went with the kit.
     /// </remarks>
-    public string SetupState =>
-        !InstallationCredential.Holds
-            ? IsSetUp ? "ready" : "setup_required"
-            : KitConfirmation.Holds ? "ready" : "kit_required";
+    public string SetupState => IsSetUp ? "ready" : "setup_required";
+
+    /// <summary>
+    /// The volume a path sits on, or null when the platform will not say —
+    /// consulted via the nearest existing ancestor, so a destination
+    /// directory that is not created yet still answers for where it would
+    /// land. One probe for the failure-domain comparison (ADR-0018) and the
+    /// placement condition (ADR-0051), so status and choosing cannot
+    /// disagree about what shares a drive.
+    /// </summary>
+    internal Func<string, ulong?> VolumeIdOf => Options.VolumeIdentityOverride ?? DefaultVolumeIdOf;
+
+    /// <summary>The physical drive behind a path, or null where it cannot be named (ADR-0051).</summary>
+    internal Func<string, string?> DiskIdOf => Options.PhysicalDiskOverride ?? Filesystem.Local.PhysicalDisk.Identify;
+
+    private static ulong? DefaultVolumeIdOf(string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (current is not null && !Directory.Exists(current) && !File.Exists(current))
+        {
+            current = Path.GetDirectoryName(current);
+        }
+
+        return current is not null && Filesystem.Local.LocalFileSystemSource.TryStat(current, out var stat)
+            ? stat.Device
+            : null;
+    }
 
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
@@ -252,12 +371,45 @@ public sealed class ServiceRuntime : IAsyncDisposable
     public ClientConfiguration Configuration => ClientConfiguration.Load(ConfigurationPath);
 
     /// <summary>
-    /// Reads the configuration as an event worth recording — the service
-    /// starting, or an edit taking effect.
+    /// Reads the configuration through the logged path: every read leaves its
+    /// Debug record, and the first read — or one whose content differs from
+    /// the last — is announced at Information (event 3742).
     /// </summary>
+    /// <remarks>
+    /// The scheduler reads through here every pass, so the announcement has
+    /// to be change-detected rather than unconditional: unconditional, the
+    /// one message was 98% of a real installation's Information tier, saying
+    /// each time that nothing had happened. The runtime is the right holder
+    /// of the memory because <see cref="ClientConfiguration.Load"/> is a pure
+    /// function of the file and must stay one. The fingerprint is of the
+    /// canonical export rather than the raw bytes, so reformatting the file
+    /// is not an event but changing what it says is.
+    /// </remarks>
     /// <exception cref="ClientStateException">The file is invalid — the message names the defect.</exception>
-    public ClientConfiguration LoadConfiguration() =>
-        ClientConfiguration.Load(ConfigurationPath, LoggerFor<ClientConfiguration>());
+    public ClientConfiguration LoadConfiguration()
+    {
+        var configuration = ClientConfiguration.Load(ConfigurationPath, LoggerFor<ClientConfiguration>());
+
+        var fingerprint = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(configuration.ExportJson()));
+        lock (_configurationAnnounced)
+        {
+            if (_configurationFingerprint is { } seen && fingerprint.AsSpan().SequenceEqual(seen))
+            {
+                return configuration;
+            }
+
+            _configurationFingerprint = fingerprint;
+        }
+
+        var announce = LoggerFor<ServiceRuntime>();
+        Log.ConfigurationChanged(
+            announce,
+            configuration.SchemaVersion,
+            configuration.BackupSets.Count,
+            configuration.Destinations.Count);
+        return configuration;
+    }
 
     /// <summary>
     /// The per-set exclusion between a destructive retention apply and a
@@ -281,23 +433,45 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <param name="setId">The set's 32-hex identity.</param>
     public string ArchivePath(string setId) => Path.Combine(Options.ArchivesRoot, setId);
 
-    /// <summary>Whether a set's staging archive exists on disk yet.</summary>
+    /// <summary>
+    /// The directory holding a direct-ship set's metadata store (ADR-0046):
+    /// descriptor, keys, journal, index, snapshots — never blob content.
+    /// </summary>
     /// <param name="setId">The set's 32-hex identity.</param>
-    public bool ArchiveExists(string setId) =>
-        File.Exists(Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value));
+    public string SetMetadataPath(string setId) => Path.Combine(Options.StateDirectory, "sets", setId);
 
     /// <summary>
-    /// Takes the writer role. No archive opens here: each set's staging
-    /// archive opens — or is created — on first use, so start-up cost does
+    /// The directory a set's repository is actually read and written at: its
+    /// metadata store when it publishes directly, its staging archive
+    /// otherwise (ADR-0046). One name for the mapping, because a caller that
+    /// spelled it a second time and got it wrong would write into a
+    /// repository nothing opens.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    public string SetStorePath(string setId) =>
+        FindConfiguredSet(setId)?.DirectShip == true ? SetMetadataPath(setId) : ArchivePath(setId);
+
+    /// <summary>
+    /// Whether a set's archive exists on disk yet — its staging archive, or
+    /// a direct-ship set's metadata store (ADR-0046); which of the two also
+    /// decides which mode <see cref="ArchiveForAsync(BackupSetConfiguration, CancellationToken)"/> opens.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    public bool ArchiveExists(string setId) =>
+        File.Exists(Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value))
+        || File.Exists(Path.Combine(SetMetadataPath(setId), RepositoryLifecycle.DescriptorKey.Value));
+
+    /// <summary>
+    /// Takes the writer role. No archive opens here: each set's archive —
+    /// its staging archive, or a direct-ship set's metadata store — opens,
+    /// or is created, on first use, so start-up cost does
     /// not scale with sets configured. Failure to take the role is refused
     /// with the holder named — never worked around (FR-SVC-002).
     /// </summary>
     /// <param name="options">How to start.</param>
-    /// <param name="passphrase">Unlocks and creates archives. The runtime keeps its own copy for its lifetime.</param>
     /// <param name="cancellationToken">Cancels start-up.</param>
     /// <returns>The running service.</returns>
-    public static ValueTask<ServiceRuntime> StartAsync(
-        ServiceOptions options, Passphrase? passphrase, CancellationToken cancellationToken)
+    public static ValueTask<ServiceRuntime> StartAsync(ServiceOptions options, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -307,6 +481,24 @@ public sealed class ServiceRuntime : IAsyncDisposable
         {
             var state = LocalState.LoadOrCreate(options.StateDirectory);
             var jobs = JobStateStore.Open(options.StateDirectory);
+            var notices = NoticeStore.Open(options.StateDirectory, Logger(options, typeof(NoticeStore)));
+
+            // The journal's own crash leftovers (ADR-0049): rows a previous
+            // process left mid-run would otherwise claim to be running for
+            // ever — the queue that owned them died with that process. Safe
+            // exactly here, because the writer role acquired above means no
+            // other live process owns any of them. Not silent: somebody's
+            // 3 a.m. run was interrupted, and that is a notice at breakfast.
+            var nowMs = (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            var settled = jobs.SettleUnfinished(
+                nowMs, "interrupted — the service stopped while this run was live; it retries on the next pass");
+            if (settled.Count > 0)
+            {
+                notices.Raise(
+                    "jobs-interrupted",
+                    $"{settled.Count} backup run(s) were interrupted by a service stop and will retry on the next pass.",
+                    nowMs);
+            }
 
             // Crash leftovers: per-source catalogue caches are worthless
             // without their (gone) handles, and a failed purge is only noise.
@@ -322,12 +514,32 @@ public sealed class ServiceRuntime : IAsyncDisposable
             {
             }
 
+            // Peer receipts are filed one per exchange at both ends and bound
+            // themselves as they are written (NFR-OPS-008). This is what
+            // reaches a pair that has stopped filing — a set deleted, a
+            // pairing ended, a peer gone — and a pile a build without a bound
+            // left behind. Names only, so it costs a listing; a failure is
+            // housekeeping's, never a reason a service will not start.
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                var deletions = Protocol.DeletionReceiptStore.Open(options.StateDirectory).Sweep(now);
+                var replications = Protocol.ReplicationReceiptStore.Open(options.StateDirectory).Sweep(now);
+                if (deletions + replications > 0)
+                {
+                    var log = Logger(options, typeof(ServiceRuntime));
+                    Log.ReceiptsSwept(log, deletions, replications);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+
             return ValueTask.FromResult(
-                new ServiceRuntime(options, writerRole, passphrase?.Clone(), state, jobs)
+                new ServiceRuntime(options, writerRole, state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
-                    Notices = NoticeStore.Open(
-                        options.StateDirectory, Logger(options, typeof(NoticeStore))),
+                    Notices = notices,
                 });
         }
         catch
@@ -338,15 +550,15 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// The set's staging archive, opened on first use — and created on first
-    /// backup, because staging is internal and nobody runs `init` for it
-    /// (ADR-0034 §1).
+    /// The set's archive, opened on first use — its staging archive, or a
+    /// direct-ship set's metadata store fronted by the ship sink (ADR-0046)
+    /// — and created on first backup, because neither is something anybody
+    /// runs `init` for (ADR-0034 §1).
     /// </summary>
     /// <param name="set">The set whose archive to resolve.</param>
     /// <param name="cancellationToken">Cancels an open or create.</param>
     /// <returns>The archive, held open by the runtime until disposal.</returns>
-    /// <exception cref="RepositoryOpenException">The archive on disk refused to open.</exception>
-    /// <exception cref="KeyUnwrapFailedException">The passphrase is wrong for an existing archive.</exception>
+    /// <exception cref="RepositoryOpenException">The archive on disk refused to open, or no credential this service holds opens it.</exception>
     public async ValueTask<ArchiveHandle> ArchiveForAsync(
         BackupSetConfiguration set, CancellationToken cancellationToken)
     {
@@ -355,8 +567,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// A set's staging archive when it already exists on disk; null when the
-    /// set has never been backed up. Read paths use this so that listing
+    /// A set's archive — staging or direct-ship metadata store — when it
+    /// already exists on disk; null when the set has never been backed up. Read paths use this so that listing
     /// snapshots never mints an empty archive as a side effect.
     /// </summary>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -371,8 +583,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// Every configured set whose staging archive exists, with the archive
-    /// open — the enumeration behind snapshots, status, verify and check.
+    /// Every configured set whose archive exists on disk — staging or
+    /// direct-ship — with the archive open — the enumeration behind snapshots, status, verify and check.
     /// </summary>
     /// <param name="cancellationToken">Cancels the opens.</param>
     /// <returns>Pairs of set and open archive, in configuration order.</returns>
@@ -392,7 +604,150 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// Opens — or creates — a set's staging archive from the installation
+    /// Copies a staging archive's metadata — everything except blob content
+    /// and the lifecycle objects that never leave staging — into a
+    /// direct-ship set's metadata store, once, at the first open after the
+    /// flip (ADR-0046). Idempotent: every put is if-absent.
+    /// </summary>
+    private ValueTask MigrateStagingMetadataAsync(
+        string setId, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken) =>
+        CopyMetadataAsync(
+            new LocalFileSystemObjectStore(ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>()),
+            metadata, cancellationToken);
+
+    /// <summary>
+    /// Copies a repository's metadata — everything except blob content and
+    /// the lifecycle objects that never leave the writer's side — from one
+    /// store into a direct-ship set's metadata store. The staging migration
+    /// (ADR-0046) and archive adoption (ADR-0061) are the same copy from
+    /// different sources. Idempotent: every put is if-absent.
+    /// </summary>
+    internal static async ValueTask CopyMetadataAsync(
+        Storage.Abstractions.IObjectStore from, LocalFileSystemObjectStore metadata, CancellationToken cancellationToken) =>
+        _ = await CopyBackAsync(from, metadata, admitBlob: null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>What a copy-back moved: objects and bytes, for the notice and the log.</summary>
+    internal readonly record struct CopiedBack(long Objects, long Bytes);
+
+    /// <summary>
+    /// Copies what <paramref name="from"/> holds and <paramref name="to"/>
+    /// lacks, if-absent, in publication order: the descriptor, the blobs
+    /// admitted, the journal and index, everything else, and the snapshot
+    /// manifests last — so an interrupted copy never leaves a manifest in
+    /// place without the blobs it references, and an archive never lists
+    /// history it cannot restore (FR-GC-009,
+    /// [ADR-0062 Amendment 2](../../docs/adr/0062-the-destination-is-the-rollback-witness.md)).
+    /// Tombstones and leases are the writer's own and never travel.
+    /// </summary>
+    /// <param name="from">The destination's copy, the newer one.</param>
+    /// <param name="to">The set's own store — a metadata store or a staging archive.</param>
+    /// <param name="admitBlob">Which blob keys travel; null admits none, which is the metadata-only copy.</param>
+    /// <param name="cancellationToken">Cancels the copy.</param>
+    /// <returns>What was copied.</returns>
+    internal static async ValueTask<CopiedBack> CopyBackAsync(
+        Storage.Abstractions.IObjectStore from, Storage.Abstractions.IObjectStore to,
+        Func<string, bool>? admitBlob, CancellationToken cancellationToken)
+    {
+        // Listed once and bucketed, because a store lists in its own order
+        // and the order here is a correctness property, not a preference.
+        var phases = new List<Storage.Abstractions.ObjectEntry>[CopyBackPhases.Length + 1];
+        for (var index = 0; index < phases.Length; index++)
+        {
+            phases[index] = [];
+        }
+
+        await foreach (var entry in from.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var key = entry.Key.Value;
+            if (key.StartsWith("tombstones/", StringComparison.Ordinal)
+                || key.StartsWith("leases/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (key.StartsWith("blobs/", StringComparison.Ordinal) && (admitBlob is null || !admitBlob(key)))
+            {
+                continue;
+            }
+
+            phases[CopyBackPhaseOf(key)].Add(entry);
+        }
+
+        var objects = 0L;
+        var bytes = 0L;
+        foreach (var phase in phases)
+        {
+            foreach (var entry in phase)
+            {
+                var put = await to.PutAsync(
+                    entry.Key,
+                    async token =>
+                    {
+                        var read = await from.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
+                        return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
+                            ? read.Content
+                            : throw new IOException($"Object {entry.Key.Value} listed but could not be read to copy.");
+                    },
+                    Storage.Abstractions.PutConditions.IfNotExists,
+                    cancellationToken).ConfigureAwait(false);
+                if (put.Outcome == Storage.Abstractions.PutOutcome.Created)
+                {
+                    objects++;
+                    bytes += entry.Length;
+                }
+            }
+        }
+
+        return new CopiedBack(objects, bytes);
+    }
+
+    /// <summary>Publication order for a copy-back; the catch-all phase sits between the named prefixes and the manifests.</summary>
+    private static readonly string[] CopyBackPhases =
+        ["repository-format", "blobs/", "journal/", "index/", "hints/", "audit/", "snapshots/"];
+
+    private static int CopyBackPhaseOf(string key)
+    {
+        if (key is "repository-format")
+        {
+            return 0;
+        }
+
+        if (key.StartsWith("snapshots/", StringComparison.Ordinal))
+        {
+            return CopyBackPhases.Length;
+        }
+
+        for (var index = 1; index < CopyBackPhases.Length - 1; index++)
+        {
+            if (key.StartsWith(CopyBackPhases[index], StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        // Anything unnamed lands after the named prefixes and before the
+        // manifests, which is where the copier's own catch-all phase sits.
+        return CopyBackPhases.Length - 1;
+    }
+
+    /// <summary>The set as configured, or null when the id names none — or the file will not load.</summary>
+    private BackupSetConfiguration? FindConfiguredSet(string setId)
+    {
+        try
+        {
+            return Configuration.BackupSets.FirstOrDefault(set =>
+                string.Equals(set.Id, setId, StringComparison.Ordinal));
+        }
+        catch (ClientStateException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Opens — or creates — a set's archive from the installation
     /// credential first-run setup provisioned (ADR-0044 §2), or returns null
     /// when this installation has none or this set is not its business.
     /// </summary>
@@ -409,8 +764,29 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// (ADR-0042).
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The write credential a set opens with, for a caller that needs the
+    /// credential itself rather than an open archive: the set's own where it
+    /// was provisioned per set (ADR-0042 §5), otherwise the installation's
+    /// (ADR-0044 §2), which is what every set created after setup was
+    /// written under. Null when the service holds neither. The caller owns
+    /// and disposes what it gets; the installation's is a copy, so the
+    /// stored provisioning is never handed out.
+    /// </summary>
+    internal RepositoryWriteCredential? TryLoadCredentialFor(string setId)
+    {
+        if (WriteCredentials.TryLoad(setId) is { } perSet)
+        {
+            return perSet;
+        }
+
+        using var provisioning = InstallationCredential.TryLoad();
+        return provisioning is null ? null : RepositoryWriteCredential.FromBytes(provisioning.Credential.ToBytes());
+    }
+
     private async ValueTask<OpenedRepository?> OpenFromInstallationAsync(
-        string setId, IObjectStore store, bool createIfMissing, CancellationToken cancellationToken)
+        string setId, LocalFileSystemObjectStore store, bool descriptorExists, bool createIfMissing,
+        CancellationToken cancellationToken)
     {
         using var provisioning = InstallationCredential.TryLoad();
         if (provisioning is null)
@@ -418,32 +794,29 @@ public sealed class ServiceRuntime : IAsyncDisposable
             return null;
         }
 
-        if (!ArchiveExists(setId))
+        if (!descriptorExists)
         {
             if (!createIfMissing)
             {
                 return null;
             }
 
-            // The first backup of a set on a set-up installation. This is
-            // what replaces the silent format-1 CreateAsync below: a set
-            // created after setup is write-only because the installation is,
-            // not because anybody remembered a dialog.
-            return await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            // The first backup of a set on a set-up installation: the set is
+            // created from the installation credential, under the
+            // installation's salt, because the installation is what holds a
+            // passphrase's authority — not because anybody remembered a
+            // dialog (ADR-0044).
+            return await RepositoryLifecycle.CreateAsync(
                     store, provisioning.Credential, provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
                     createdBy: Environment.MachineName,
                     (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
-                    LoggerFor(typeof(RepositoryLifecycle)))
+                    LoggerFor(typeof(RepositoryLifecycle)),
+                    ArchiveFormatVersion)
                 .ConfigureAwait(false);
         }
 
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
             .ConfigureAwait(false);
-
-        if (!RepositoryLifecycle.IsWriteOnly(descriptor))
-        {
-            return null;
-        }
 
         if (!provisioning.Credential.SealingPublicKey.SequenceEqual(descriptor.SealingPublicKey.Span))
         {
@@ -457,7 +830,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 + "this installation's — adopt the set with that passphrase (ADR-0042 §10).");
         }
 
-        return await RepositoryLifecycle.OpenWriteOnlyAsync(
+        return await RepositoryLifecycle.OpenAsync(
                 store, provisioning.Credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
             .ConfigureAwait(false);
     }
@@ -473,9 +846,33 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 return open;
             }
 
-            var path = ArchivePath(setId);
+            // Which mode: the configuration's direct_ship flag decides, and a
+            // direct-ship set's local store holds metadata only (ADR-0046). A
+            // flagged set that still has a staging archive is mid-migration:
+            // its metadata is copied into the metadata store at this first
+            // open, and the staging archive stays on disk — a read-only seed
+            // source the sink falls back to — until the explicit
+            // retire_staging verb proves nothing would be lost and deletes it.
+            var stagingExists = File.Exists(
+                Path.Combine(ArchivePath(setId), RepositoryLifecycle.DescriptorKey.Value));
+            var directShip = FindConfiguredSet(setId)?.DirectShip == true;
+
+            var path = directShip ? SetMetadataPath(setId) : ArchivePath(setId);
             Directory.CreateDirectory(path);
-            var store = StoreComposition.OpenLocal(path, LoggerFor<LocalFileSystemObjectStore>());
+            var store = new LocalFileSystemObjectStore(path, LoggerFor<LocalFileSystemObjectStore>());
+            var descriptorExists = File.Exists(Path.Combine(path, RepositoryLifecycle.DescriptorKey.Value));
+
+            if (directShip && stagingExists && !descriptorExists)
+            {
+                await MigrateStagingMetadataAsync(setId, store, cancellationToken).ConfigureAwait(false);
+                descriptorExists = true;
+                Notices.Raise(
+                    $"staging-retirable:{setId}",
+                    $"Set '{setId}' now publishes straight to its destinations; its staging archive remains as "
+                    + "a seed source. Once a scheduler pass has finished seeding, retire it with the "
+                    + "retire_staging verb to reclaim the space (ADR-0046).",
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
 
             OpenedRepository repository;
             var openedWithPassphrase = false;
@@ -487,8 +884,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 // damage to name, never something to quietly re-create.
                 using (credential)
                 {
-                    repository = ArchiveExists(setId)
-                        ? await RepositoryLifecycle.OpenWriteOnlyAsync(
+                    repository = descriptorExists
+                        ? await RepositoryLifecycle.OpenAsync(
                                 store, credential, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
                             .ConfigureAwait(false)
                         : throw new RepositoryOpenException(
@@ -496,41 +893,37 @@ public sealed class ServiceRuntime : IAsyncDisposable
                             + "adopt it again with the passphrase (ADR-0042 §10).");
                 }
             }
-            else if (await OpenFromInstallationAsync(setId, store, createIfMissing, cancellationToken)
+            else if (await OpenFromInstallationAsync(setId, store, descriptorExists, createIfMissing, cancellationToken)
                 .ConfigureAwait(false) is { } fromInstallation)
             {
                 repository = fromInstallation;
             }
-            else if (_passphrase is null)
-            {
-                throw new RepositoryOpenException(
-                    $"Set '{setId}' is not provisioned write-only and this service started without a "
-                    + "passphrase; run first-run setup to give this installation one, start the service "
-                    + "with a passphrase, or provision the set (ADR-0044, ADR-0042).");
-            }
-            else if (ArchiveExists(setId))
-            {
-                repository = await RepositoryLifecycle.OpenAsync(
-                        store, _passphrase, cancellationToken, LoggerFor(typeof(RepositoryLifecycle)))
-                    .ConfigureAwait(false);
-
-                // The one shape that still has the root behind the archive:
-                // the passphrase in hand is demonstrably this archive's,
-                // because it is what just opened it (03 §3.2.1).
-                openedWithPassphrase = true;
-            }
-            else if (createIfMissing)
-            {
-                repository = await RepositoryLifecycle.CreateAsync(
-                        store, _passphrase, RepositoryCreationSettings.Default,
-                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken,
-                        LoggerFor(typeof(RepositoryLifecycle)))
-                    .ConfigureAwait(false);
-                openedWithPassphrase = true;
-            }
             else
             {
-                throw new RepositoryOpenException($"No staging archive exists for set '{setId}'.");
+                // No per-set credential and no installation credential: the
+                // service holds nothing that opens or creates an archive.
+                // A service never holds a passphrase (ADR-0042 §5), so the
+                // remedies are the two ceremonies that leave a credential
+                // behind, named here rather than guessed at.
+                throw new RepositoryOpenException(
+                    $"Set '{setId}' is not provisioned and this installation has not run first-run setup; run "
+                    + "setup to give this installation its passphrase, or provision the set (ADR-0044, ADR-0042 §10).");
+            }
+
+            // A repository below the latest format this build writes can be
+            // upgraded in place (ADR-0066), and a person only learns that
+            // from a notice. Raised at open and resolved by the verb, so an
+            // upgrade that did not take asks again at the next open rather
+            // than going quiet.
+            if (repository.EffectiveFormatVersion < FormatLimits.FormatVersion)
+            {
+                Notices.Raise(
+                    $"format-upgradable:{setId}",
+                    $"Set '{setId}' writes repository format {repository.EffectiveFormatVersion}; this build "
+                    + $"writes {FormatLimits.FormatVersion}. Upgrading appends a signed record and takes effect "
+                    + "at the set's next backup: blobs already sealed are left exactly as they are, and nothing "
+                    + "undoes it — a build older than this one would read the newer blobs as damage (ADR-0066).",
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             }
 
             ArchiveHandle archive;
@@ -543,9 +936,25 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 var repositoryIdHex = repository.RepositoryId.ToString();
                 var cataloguePath = Path.Combine(Options.StateDirectory, $"catalogue-{repositoryIdHex}.db");
                 var catalogueLogger = LoggerFor<CatalogueDb>();
+
+                // A direct-ship set's working store is the sink: blobs to the
+                // destinations, metadata locally AND to the destinations
+                // (ADR-0046). The repository was opened/created against the
+                // metadata store above, so its descriptor and keys are the
+                // planning copy the sink seeds outward from.
+                var sink = directShip
+                    ? new DestinationShipSink(
+                        this, store, setId, repositoryIdHex, LoggerFor<DestinationShipSink>(),
+                        stagingFallback: stagingExists
+                            ? new LocalFileSystemObjectStore(
+                                ArchivePath(setId), LoggerFor<LocalFileSystemObjectStore>())
+                            : null)
+                    : null;
+
                 archive = new ArchiveHandle
                 {
-                    Store = store,
+                    Store = (Storage.Abstractions.IObjectStore?)sink ?? store,
+                    ShipSink = sink,
                     Repository = repository,
                     Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId, catalogueLogger),
                     CatalogueLogger = catalogueLogger,
@@ -562,8 +971,281 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 throw;
             }
 
+            await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
+
             _archives.Add(setId, archive);
             return archive;
+        }
+        finally
+        {
+            _archivesGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Heals a direct-ship set whose local metadata has fallen behind a
+    /// destination (ADR-0062): copies the destination's metadata into the
+    /// set's metadata store, rebuilds the catalogue in place from it, and
+    /// moves the writer past whatever the healed archive now attests.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The three steps are each idempotent and each safe to repeat after a
+    /// failure: the copy is if-absent, the rebuild upserts, and the sequence
+    /// only ever rises. So a heal that fails halfway leaves a state
+    /// directory the next pass heals again, and the caller decides that by
+    /// the same test that decided this one — the destination's journal head
+    /// still exceeds the local one.
+    /// </para>
+    /// <para>
+    /// Runs inside the fan-out pass, under the set gate, over the runtime's
+    /// live catalogue handle: the rebuild adds what is missing and disturbs
+    /// nothing, which is what lets it run without evicting the archive
+    /// under a read path.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    /// <param name="archive">The set's open archive — a direct-ship one, whose store is the sink, or a staging one.</param>
+    /// <param name="replica">The destination's replica, the newer copy.</param>
+    /// <param name="cancellationToken">Cancels the heal.</param>
+    /// <returns>What was copied back, or why the heal did not happen, in a sentence for the notice.</returns>
+    internal async ValueTask<HealOutcome> HealFromDestinationAsync(
+        string setId, ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(replica);
+
+        try
+        {
+            CopiedBack copied;
+            Storage.Abstractions.IObjectStore rebuildFrom;
+            if (archive.ShipSink is null)
+            {
+                // A staging set lacks content as well as metadata, and the
+                // content it is owed is exactly the closure of the snapshots
+                // it does not list — never everything the destination holds,
+                // because staging retirement sheds historic data blobs on
+                // purpose and a heal must not bring history back. Metadata
+                // blobs all travel: retirement keeps every one, and the
+                // rebuild needs them.
+                var needed = await ClosureOfMissingSnapshotsAsync(archive, replica, cancellationToken)
+                    .ConfigureAwait(false);
+                copied = await CopyBackAsync(
+                    replica, archive.Store,
+                    key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) || needed.Contains(key),
+                    cancellationToken).ConfigureAwait(false);
+                rebuildFrom = archive.Store;
+            }
+            else
+            {
+                var metadata = new LocalFileSystemObjectStore(SetMetadataPath(setId), LoggerFor<LocalFileSystemObjectStore>());
+                copied = await CopyBackAsync(replica, metadata, admitBlob: null, cancellationToken).ConfigureAwait(false);
+                rebuildFrom = replica;
+            }
+
+            var warnings = new List<string>();
+            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(rebuildFrom, archive.Repository, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await CatalogueRebuild.RebuildIntoAsync(
+                    this, archive.Catalogue, rebuildFrom, archive.Repository, reader, warnings, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            var log = LoggerFor<ServiceRuntime>();
+            foreach (var warning in warnings)
+            {
+                Log.HealRebuildFinding(log, setId, warning);
+            }
+
+            // Over the healed sink now, so the index plane's watermarks count
+            // too: the pass moved the writer past the destination's journal
+            // head before calling this, and this only ever raises further.
+            await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
+            return new HealOutcome(null, copied.Objects, copied.Bytes);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return new HealOutcome(exception.Message, 0, 0);
+        }
+    }
+
+    /// <summary>How a heal from a destination ended.</summary>
+    /// <param name="Failure">Why it did not happen, or null when it did.</param>
+    /// <param name="CopiedObjects">Objects brought back.</param>
+    /// <param name="CopiedBytes">Bytes brought back.</param>
+    internal sealed record HealOutcome(string? Failure, long CopiedObjects, long CopiedBytes);
+
+    /// <summary>
+    /// The blob keys a staging archive is owed: the closure, walked at the
+    /// destination under the metadata key, of every snapshot the destination
+    /// lists and the archive does not. A destination snapshot that will not
+    /// decode, or a closure that will not walk, fails the heal rather than
+    /// narrowing it: the pass then converges nothing, which is the protection,
+    /// and the damage is the verifier's to name.
+    /// </summary>
+    private static async ValueTask<HashSet<string>> ClosureOfMissingSnapshotsAsync(
+        ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+    {
+        var listed = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in archive.Store.ListAsync(
+            Storage.Abstractions.ObjectPrefix.Parse("snapshots/"), Storage.Abstractions.ListOptions.Default,
+            cancellationToken).ConfigureAwait(false))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        var survey = await Retention.StagingMark.SurveyAsync(replica, archive.Repository, cancellationToken)
+            .ConfigureAwait(false);
+        if (survey.Undecodable.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"the destination holds a snapshot that will not decode ({survey.Undecodable[0]}), so what its history needs cannot be told");
+        }
+
+        var missing = survey.Snapshots.Where(snapshot => !listed.Contains(snapshot.StoreKey.Value)).ToList();
+        var needed = new HashSet<string>(StringComparer.Ordinal);
+        if (missing.Count == 0)
+        {
+            return needed;
+        }
+
+        using var reader = new Repository.RepositoryReader(archive.Repository.RepositoryId, archive.Repository.Keys, replica);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        var (reachable, unwalkable) = await Retention.StagingMark.MarkAsync(reader, missing, cancellationToken)
+            .ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"the destination's newer history would not walk ({unwalkable[0]}), so what it needs cannot be told");
+        }
+
+        foreach (var blob in reader.Blobs)
+        {
+            if (blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+            {
+                needed.Add(blob.StoreKey.Value);
+            }
+        }
+
+        return needed;
+    }
+
+    /// <summary>
+    /// Asks the repository how far this writer had got, and moves the local
+    /// sequence past it when local state turns out to be behind (NFR-SEC-005).
+    /// </summary>
+    /// <remarks>
+    /// The sequence file is allocation state and lives in the state directory;
+    /// the repository's own signed index and its journal keys carry the same
+    /// fact and live at every destination. Consulting them at open is what
+    /// turns a state directory that was lost, restored from an older copy, or
+    /// replaced by a rebuilt machine into a recovery rather than an I/O error
+    /// halfway through the next backup. It never lowers the sequence: a writer
+    /// ahead of the published head is the ordinary case.
+    /// </remarks>
+    internal async ValueTask AdoptObservedHeadAsync(
+        string setId, ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        SequenceAdoption adoption;
+        try
+        {
+            var loader = new IndexLoader(
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Credential,
+                LoggerFor<IndexLoader>());
+            var index = await loader.LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null,
+                blobState: null, cancellationToken).ConfigureAwait(false);
+
+            adoption = archive.Sequence.AdoptObservedHead(
+                await ObservedHead.OfAsync(archive.Store, Writer, index, cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException)
+        {
+            // A repository too damaged to read its own index is a problem the
+            // damage surfaces name properly. Refusing the open over it would
+            // deny the restore that is the way out of that state, and the
+            // colliding-put refusal still stands behind this.
+            Log.ObservedHeadUnavailable(LoggerFor<ServiceRuntime>(), setId, exception.Message);
+            return;
+        }
+
+        if (adoption is not SequenceAdoption.Adopted adopted)
+        {
+            return;
+        }
+
+        Log.ObservedHeadAdopted(LoggerFor<ServiceRuntime>(), setId, adopted.From, adopted.To);
+        Notices.Raise(
+            $"sequence-adopted:{setId}",
+            $"Set '{setId}' would have re-used writer sequence numbers its own history already holds: local "
+            + $"state said {adopted.From}, the repository attests {adopted.To - 1}. The writer has moved past "
+            + "it, so backups continue — but the state directory was lost, restored from an older copy, or "
+            + "belongs to a rebuilt machine, and anything else kept beside it deserves the same suspicion.",
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
+
+    /// <summary>
+    /// Appends a set's format-upgrade record and drops the cached handle
+    /// (ADR-0066). The two belong to one method because the effective format
+    /// version is fixed when an archive opens: a write without the eviction
+    /// would leave this service sealing the older format until it restarted,
+    /// having told the person otherwise.
+    /// </summary>
+    /// <remarks>
+    /// The record is written to the set's own store — never through the ship
+    /// sink, which outside a run holds no destinations in scope and would
+    /// throw on a single unreachable one. Propagation is the next
+    /// reconciling pass's business: the record is an ordinary immutable
+    /// object, which is what every copy path already carries.
+    /// </remarks>
+    /// <param name="setId">The set to upgrade.</param>
+    /// <param name="toVersion">The format version to move to.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The version the repository was on before the record was written.</returns>
+    public async ValueTask<ushort> UpgradeSetFormatAsync(
+        string setId, ushort toVersion, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(setId);
+
+        var archive = await ExistingArchiveAsync(setId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RepositoryOpenException($"Set '{setId}' holds no archive to upgrade.");
+        var from = archive.Repository.EffectiveFormatVersion;
+
+        var store = new LocalFileSystemObjectStore(SetStorePath(setId), LoggerFor<LocalFileSystemObjectStore>());
+        await RepositoryLifecycle.WriteFormatUpgradeAsync(
+            store,
+            archive.Repository.Descriptor,
+            archive.Repository.Credential,
+            toVersion,
+            State.WriterId,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            cancellationToken).ConfigureAwait(false);
+
+        await EvictArchiveAsync(setId, cancellationToken).ConfigureAwait(false);
+        return from;
+    }
+
+    /// <summary>
+    /// Closes and forgets a set's open archive handle so the next open reads
+    /// the configuration fresh — the storage-shape flip's seam (ADR-0046,
+    /// contract 1.23): a flagged staging set migrates at that next open, in
+    /// this process, no restart. The caller must have ensured no run holds
+    /// the handle; the command boundary refuses the flip while one is live.
+    /// </summary>
+    /// <param name="setId">The set whose handle to evict; absent is a no-op.</param>
+    /// <param name="cancellationToken">Cancels waiting for the archive gate.</param>
+    /// <returns>A task that completes once the handle is closed and forgotten.</returns>
+    public async ValueTask EvictArchiveAsync(string setId, CancellationToken cancellationToken)
+    {
+        await _archivesGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_archives.Remove(setId, out var open))
+            {
+                open.Dispose();
+            }
         }
         finally
         {
@@ -593,7 +1275,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
 
         _archives.Clear();
-        _passphrase?.Dispose();
         GrantRecipient.Dispose();
         _archivesGate.Dispose();
 

@@ -74,6 +74,7 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     {
         var policy = CapturePolicy.Default with
         {
+            DedupTrustDomain = DedupTrustDomain.Device,
             SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
             CdcParameters = CdcParameters.Default,
         };
@@ -82,7 +83,8 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy, Repo, Writer, KeyGeneration.Zero, keys, store,
-            new MonotonicBlobCounterAllocator(firstCounter), SpoolDirectory);
+            new MonotonicBlobCounterAllocator(firstCounter), SpoolDirectory,
+            FormatVersions.SealedDataPlane);
 
         var baseline = GC.GetTotalMemory(forceFullCollection: true);
         var peak = 0L;

@@ -18,67 +18,45 @@
 ## 2. Key hierarchy
 
 ```text
-User passphrase                          Hardware / OS key store
-       |                                          |
-       +--------> Argon2id (memory-hard) <--------+
-                          |
-                    Key Encryption Key (KEK)
-                          |
-                    wraps
-                          |
-                  Repository Master Key
-                          |
-        +-----------------+------------------+------------------+------------------+
-        |                 |                  |                  |                  |
-  Content-ID key    Data key gen(s)   Metadata key gen(s)   Signing key gen(s)  Key-ID key
-        |                 |                  |                  |                  |
-        |            per-blob keys      per-blob keys      snapshot &         store blob
-        |            (§3.1)             (§3.1)             journal records    keys (02 §4.3)
-        |
-   object identifiers (§4)
-```
-
-Five derived keys, not four — the key-ID key is easy to forget and is what every blob's store key is derived from, so a hierarchy that omits it describes a repository whose objects cannot be named.
-
-Requirements:
-
-- **AEAD suite**: AES-256-GCM where hardware AES is available, XChaCha20-Poly1305 otherwise. Both are permitted profiles; the profile is recorded per record. Unsupported or unsafe combinations are rejected at configuration time, not at write time.
-- **Password KDF**: Argon2id with parameters recorded in `/repository-format` so a future reader can reproduce them.
-- **Key generations** support cryptographic agility: new generations can be introduced without invalidating old records.
-- **Wrapping-key rotation** (changing the passphrase) rewrites only `/keys/*` — no repository data is touched. This is the common operation and it must be cheap.
-- **Data-key rotation** is a separate, explicitly invoked background rewrite. Conflating the two is a lesson from the prior art ([`00-overview.md` §5.4](00-overview.md#54-layered-repositories-over-a-minimal-blob-store)); users routinely believe changing a password re-encrypts their data, and the UI must say plainly that it does not.
-- Unattended agents may protect the KEK with an OS key store.
-
-### 2.1 The write-only hierarchy (format v2)
-
-A write-only repository ([ADR-0042](../adr/0042-write-only-repositories.md);
-format spec [03 §9](../../specifications/repository-format/03-keys.md)) has
-no master key, no KEK, no wrap step and no `/keys/` object. Everything
-derives from the passphrase:
-
-```text
 User passphrase  +  KDF salt & parameters (recorded in /repository-format)
        |
   Argon2id  →  root (never stored, never wrapped)
        |
        +── HKDF "fbp/seal/v2"        → X25519 scalar → sealing PUBLIC key (in the descriptor)
        +── HKDF "fbp/metadata/v2"    ─┐
-       +── HKDF "fbp/signing/v2"      ├─ the WRITE BUNDLE: what the service
+       +── HKDF "fbp/signing/v2"      ├─ the WRITE CREDENTIAL: what the service
        +── HKDF "fbp/content-id/v2"   │  holds — browse, plan, dedup, trim,
        +── HKDF "fbp/key-id/v2"      ─┘  replicate, verify structure, and write
+       +── HKDF "fbp/reclaim/v2"     → the reclaim authority (deletion), withheld; public half in the credential
+       +── HKDF "fbp/claim/v2"       → the claim key (replica ownership), withheld; public half in the credential
+
+  metadata key[g]  = HKDF(metadata sub-root, "fbp/metadata-generation/v2" ‖ g)   → per-blob keys (§3.1), store blob keys (02 §4.3)
+  signing seed[g]  = HKDF(signing  sub-root, "fbp/signing-generation/v2"  ‖ g)   → snapshot, index and journal signatures
+  content-ID key                                                                 → object identifiers (§4)
 ```
+
+Every repository derives its whole key material from one passphrase ([ADR-0042](../adr/0042-write-only-repositories.md); format spec [03](../../specifications/repository-format/03-keys.md)). There is no master key, no key-encryption key, no wrap step and no stored key object: the descriptor's salt, parameters and public key plus the passphrase reproduce everything, and the machine that writes backups holds nothing that opens them. Format 1 — a random master key wrapped under a passphrase-derived key, with a symmetric data-key family beneath it — was withdrawn before any freeze ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)).
 
 Data blobs seal their records under a fresh random per-blob content key,
 wrapped to the sealing public key; their footers — the record tables, the
 structure plane — derive from the **metadata** class key, so the write
-bundle still reads every blob's own structure. The private scalar exists
-only while a passphrase entry is alive: setup, adoption of a moved
-archive, or a restore grant inside a source handle. Each HKDF domain is
-independently one-way (NFR-SEC-010): the whole write bundle in hand yields
-neither the root, the passphrase, the scalar, nor any sibling key. The
-descriptor's public-key copy is the passphrase verifier — derive and
-compare, no decryption — and rule 6 above is load-bearing at setup: a v2
+credential still reads every blob's own structure. The private scalar exists
+only while a passphrase entry is alive: setup, adoption of a moved archive,
+a direct-mode command, or a restore grant inside a source handle. Each HKDF
+domain is independently one-way (NFR-SEC-010): the whole write credential
+in hand yields neither the root, the passphrase, the scalar, nor any sibling
+key. The descriptor's public-key copy is the passphrase verifier — derive
+and compare, no decryption — and rule 6 above is load-bearing at setup: the
 passphrase can never change, and losing it loses the backup.
+
+Requirements:
+
+- **AEAD suite**: AES-256-GCM, the one admitted record profile ([03 §6](../../specifications/repository-format/03-keys.md#6-aead-suites)); the sealed content key uses the same suite over an X25519 agreement. Unsupported or unsafe combinations are rejected at configuration time, not at write time.
+- **Password KDF**: Argon2id with parameters recorded in `/repository-format` so a future reader can reproduce them.
+- **Key generations** support cryptographic agility: new generations can be introduced without invalidating old records.
+- **There is no passphrase change.** The passphrase is the root; changing it would orphan every sealed blob. The UI says so at creation rather than letting a user discover it later.
+- **Full rotation** is a separate, explicitly invoked background rewrite of every blob.
+- Unattended services hold the write credential and nothing else; no OS key store is involved ([ADR-0028 §9](../adr/0028-service-boundary-and-deployment-topologies.md), retired).
 
 ## 3. Nonce and key construction
 
@@ -140,6 +118,8 @@ Restart is the safe failure. The engine always prefers it when there is any doub
 
 Binding `repository_id ‖ format_version ‖ object_type ‖ object_id ‖ ordinal` as AAD means a record cannot be relocated to a different blob position, a different object type, a different repository, or replayed under a different format version without authentication failing. This is what defends against the substitution and splicing attacks in [`../threat-model.md`](../threat-model.md#t-3-object-substitution-and-splicing).
 
+**Format 3 drops the ordinal**, leaving 51 bytes: `repository_id ‖ u16(3) ‖ u8(object_type) ‖ object_id` ([ADR-0052](../adr/0052-relocatable-records-format-v3.md)). Every other binding is unchanged, so the object, the type and the repository are defended exactly as above; what is given up is the in-blob position, deliberately, because a record that cannot be moved cannot be compacted without being opened. Reordering inside one blob is then caught by the footer instead: its record table names each record's ordinal, identifier and lengths, and the header at the offset must agree — a cross-check the reader performs on every read, and `Repository.Tests/RelocatableBlobTests` swaps two records without their table to prove it bites.
+
 ### 3.5 Test obligations
 
 The construction is only as good as its enforcement, so these are requirements on the test suite, not aspirations:
@@ -150,7 +130,8 @@ The construction is only as good as its enforcement, so these are requirements o
 - interruption test: restart-after-kill produces a *different* blob salt in every case;
 - concurrency test: *N* writers against one repository produce pairwise-distinct blob salts;
 - concurrency test: two writers seeded with an *identical* CSPRNG stream still derive distinct blob keys, via `writer_id` and `blob_counter`;
-- negative test: a record moved between blobs, ordinals, or repositories fails authentication.
+- negative test: a **format-2** record moved between blobs, ordinals, or repositories fails authentication — all three discharged by `Repository.Tests/Crypto/RecordCipherTests`, the blob case last and for a different reason from the other two: the AAD does not name the blob, so nothing breaks a tag, and the record is unopenable because its key derives from the blob's own salt, writer and counter ([ADR-0025](../adr/0025-compaction-reseals-records.md) §3).
+- positive test: a **format-3** record moved between blobs *opens* — the property [ADR-0052](../adr/0052-relocatable-records-format-v3.md) exists to create, and the same test file's positive twin. `Repository.Tests/RelocatableBlobTests` copies a sealed record into a blob with another salt, writer, derived blob key and ordinal and reads it back; `Repository.ConformanceTests/FixtureRepositoryV3Tests` does it against bytes frozen in the repository. Moving a format-3 record to another *repository* still fails, because the repository identifier is still in the AAD.
 
 ## 4. Object identifiers
 
@@ -191,6 +172,17 @@ An earlier draft made `device` the default on the grounds that it "costs nothing
 
 `repository-unverified` exists because there are legitimate deployments — a single administrator, uniform managed devices — where every writer really is equally trusted. It is never a default and never silent.
 
+Two set shapes override the default to `device`, for reasons that are not
+mistrust: a **write-only** set ([ADR-0042](../adr/0042-write-only-repositories.md))
+cannot read content back to verify a reuse, and a **direct-ship** set
+([ADR-0046](../adr/0046-direct-to-destination-publication.md) §6) could only
+verify by pulling ranges from a destination — a round trip per reuse to
+re-check bytes the catalogue already vouches for. Both run on catalogue-decided
+reuse guarded by the stale-catalogue check that survives in either shape: a
+**presence probe** against wherever the blob actually lives (the destinations,
+for direct-ship). Since a per-set repository is single-writer, this is the
+degenerate-to-`device`-at-zero-cost cell of the table, made explicit.
+
 #### Both domains need state that outlives the catalogue
 
 `device` must know which segments *this device* wrote; `repository` must remember which shared segments it has already verified, or it pays the cost repeatedly. Both are catalogue state, and the catalogue is disposable ([ADR-0010](../adr/0010-local-store-separation.md)).
@@ -206,7 +198,7 @@ In any domain other than `device`, a member can determine whether another member
 
 - Snapshot manifests and journal records are **signed** by the writing device.
 - Index deltas and checkpoints are authenticated, and carry writer identity and sequence (see [`02-repository-format.md` §7.2](02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing)).
-- Anti-rollback: the catalogue retains the highest generation and per-writer sequence it has observed, anchored in durable local state. A store presenting an older view is detected rather than accepted. Optional external witnesses are a later enhancement.
+- Anti-rollback: the catalogue retains the highest generation and per-writer sequence it has observed, anchored in durable local state. A store presenting an older view is detected rather than accepted. When the local state is what rolled back, the witness is inverted: at archive open the writer adopts the head the repository's signed checkpoints, deltas and journal keys attest ([ADR-0008](../adr/0008-index-generations-and-checkpoints.md)), and when the whole state directory rolled back — a direct-ship set's metadata plane with it — every fan-out pass adopts the head the **destination**'s journal keys attest for this writer, deletes nothing there on that pass, and heals the set from the destination — a direct-ship set's metadata and catalogue, a staging set's content too, bounded by the closure of the history it lacks ([ADR-0062](../adr/0062-the-destination-is-the-rollback-witness.md) and its Amendment 2). Optional external witnesses beyond the destinations are a later enhancement.
 - Conflicting sequence use, identity cloning, and rollback raise a **security alert**, not a warning buried in a log.
 
 ## 7. What this does not protect
@@ -215,7 +207,7 @@ Stated here so it is never implied elsewhere:
 
 - a compromised source reads plaintext before encryption — no backup system can prevent this;
 - ransomware holding source credentials *and* unlocked keys can act with the user's authority (mitigations, not solutions, in [`07-retention-and-gc.md` §5](07-retention-and-gc.md#5-destructive-change-safeguards));
-- loss of all recovery material makes the repository permanently unreadable — by design, and the reason the recovery-kit workflow is mandatory;
+- loss of the passphrase makes the repository permanently unreadable — by design, and the reason recovery is drilled rather than assumed;
 - stored record lengths leak compressed sizes ([`../threat-model.md`](../threat-model.md#t-11-metadata-side-channels)).
 
 One property to note for the external cryptographic review: **AES-GCM is not key-committing**. A ciphertext can be constructed that authenticates under two different keys. Exploitability here is low, because keys derive from the repository master key and an attacker without it cannot choose them — but `repository-unverified` deduplication accepts records from other writers without checking them, which is the closest this design comes to an adversary influencing what gets decrypted under a key the victim holds. The AAD binding in §3.4 should be assessed against this. Not a v1 blocker ([PT-15](../review/2026-08-fix-pressure-test.md#pt-15--aes-gcm-is-not-key-committing)).

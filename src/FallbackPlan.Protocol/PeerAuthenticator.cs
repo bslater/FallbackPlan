@@ -32,7 +32,6 @@ public sealed class PeerAuthenticator
     private readonly PeerIdentity? _expected;
 
     private SessionAuth? _theirs;
-    private byte[]? _transcriptHash;
     private readonly ILogger _log;
 
     /// <summary>Starts authentication for a connection whose TLS has completed.</summary>
@@ -79,16 +78,16 @@ public sealed class PeerAuthenticator
     public PeerGrant? Peer { get; private set; }
 
     /// <summary>
-    /// SHA-256 over this session's bound context (02 §3.2), set once the peer
-    /// has <em>successfully</em> authenticated and null before that.
+    /// What both ends call this connection (02 §3.5), available once the peer
+    /// has proved itself and null before that.
     /// </summary>
     /// <remarks>
-    /// A later payload binds itself to this so it cannot be lifted out of the
-    /// connection that carried it — a replica claim signs it (07 §5.6). It is
-    /// deliberately not recorded on a failed verification: a stranger must
-    /// leave nothing behind that a subsequent frame could reference.
+    /// Set in <see cref="Verify"/> rather than <see cref="Accept"/>, because
+    /// an identifier derived from a claim nobody has proved is a name for a
+    /// session that may not exist. Anything binding a signature to this
+    /// session is therefore unable to do so before there is a session.
     /// </remarks>
-    public ReadOnlyMemory<byte>? TranscriptHash => _transcriptHash;
+    public ReadOnlyMemory<byte> SessionId { get; private set; }
 
     /// <summary>This side's claim, to send at once (02 §3.1).</summary>
     /// <returns>The message.</returns>
@@ -187,7 +186,7 @@ public sealed class PeerAuthenticator
                 $"Peer {_theirs.Identity.Fingerprint} did not prove possession of the identity it presented.");
         }
 
-        _transcriptHash = SessionBinding.ContextHash(initiator, responder);
+        SessionId = SessionBinding.SessionId(initiator, responder);
         State = PeerSessionState.Authenticated;
         return Peer;
     }
@@ -249,14 +248,15 @@ public sealed class PeerAuthenticator
         PeerMessageType.ReplicationOffer or PeerMessageType.ReplicationInventory
             or PeerMessageType.ReplicationObject or PeerMessageType.ReplicationChunk
             or PeerMessageType.ReplicationComplete or PeerMessageType.ReplicationAck
+            or PeerMessageType.ReplicationPartial
+        or PeerMessageType.ReplicationClaim or PeerMessageType.ReplicationClaimAccepted
+            or PeerMessageType.ReplicationClaimOpen or PeerMessageType.ReplicationClaimParameters
             or PeerMessageType.RetentionOffer or PeerMessageType.RetentionAck
             or PeerMessageType.VerificationChallenge or PeerMessageType.VerificationProof
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
             or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
             or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData
-            or PeerMessageType.ClaimRequest or PeerMessageType.ClaimChallenge
-            or PeerMessageType.ClaimProof or PeerMessageType.ClaimResult
-            or PeerMessageType.ClaimRegister =>
+            or PeerMessageType.MerkleChallenge or PeerMessageType.MerkleProof =>
             state == PeerSessionState.Open,
 
         _ => false,

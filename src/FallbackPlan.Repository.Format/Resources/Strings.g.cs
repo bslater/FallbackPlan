@@ -342,117 +342,24 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, FooterAad_FooterAADExactlyBytesGot, arg0, arg1);
 
     /// <summary>
-    /// Key bundle is {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    private static string KeyBundleCodec_KeyBundleBytesLimit => Get(nameof(KeyBundleCodec_KeyBundleBytesLimit));
-
-    /// <summary>
-    /// Key bundle is {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    internal static string FormatKeyBundleCodec_KeyBundleBytesLimit(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, KeyBundleCodec_KeyBundleBytesLimit, arg0, arg1);
-
-    /// <summary>
-    /// Key bundle is missing a required field (specification 03 §3.1).
-    /// </summary>
-    internal static string KeyBundleCodec_KeyBundleMissingRequiredField => Get(nameof(KeyBundleCodec_KeyBundleMissingRequiredField));
-
-    /// <summary>
-    /// The master key is exactly 32 bytes (specification 03 §3.1).
-    /// </summary>
-    internal static string KeyBundle_MasterKeyExactlyBytes => Get(nameof(KeyBundle_MasterKeyExactlyBytes));
-
-    /// <summary>
-    /// Key object is {0} bytes; the declared bundle length implies exactly {1}.
-    /// </summary>
-    private static string KeyObjectFraming_KeyObjectBytesDeclaredBundle => Get(nameof(KeyObjectFraming_KeyObjectBytesDeclaredBundle));
-
-    /// <summary>
-    /// Key object is {0} bytes; the declared bundle length implies exactly {1}.
-    /// </summary>
-    internal static string FormatKeyObjectFraming_KeyObjectBytesDeclaredBundle(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_KeyObjectBytesDeclaredBundle, arg0, arg1);
-
-    /// <summary>
-    /// Key object is {0} bytes; the framing alone requires {1}.
-    /// </summary>
-    private static string KeyObjectFraming_KeyObjectBytesFramingAlone => Get(nameof(KeyObjectFraming_KeyObjectBytesFramingAlone));
-
-    /// <summary>
-    /// Key object is {0} bytes; the framing alone requires {1}.
-    /// </summary>
-    internal static string FormatKeyObjectFraming_KeyObjectBytesFramingAlone(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_KeyObjectBytesFramingAlone, arg0, arg1);
-
-    /// <summary>
-    /// Not a key object: the FBPKKEYS magic is absent.
-    /// </summary>
-    internal static string KeyObjectFraming_NotKeyObjectFBPKKEYSMagic => Get(nameof(KeyObjectFraming_NotKeyObjectFBPKKEYSMagic));
-
-    /// <summary>
-    /// The wrap nonce is exactly {0} bytes.
-    /// </summary>
-    private static string KeyObjectFraming_WrapNonceExactlyBytes => Get(nameof(KeyObjectFraming_WrapNonceExactlyBytes));
-
-    /// <summary>
-    /// The wrap nonce is exactly {0} bytes.
-    /// </summary>
-    internal static string FormatKeyObjectFraming_WrapNonceExactlyBytes(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_WrapNonceExactlyBytes, arg0);
-
-    /// <summary>
-    /// Wrap profile 0x{0:x4} is not permitted: format v1 requires aes-256-gcm-v1 (0x0001) (specification 03 §3).
-    /// </summary>
-    private static string KeyObjectFraming_WrapProfileXNotPermitted => Get(nameof(KeyObjectFraming_WrapProfileXNotPermitted));
-
-    /// <summary>
-    /// Wrap profile 0x{0:x4} is not permitted: format v1 requires aes-256-gcm-v1 (0x0001) (specification 03 §3).
-    /// </summary>
-    internal static string FormatKeyObjectFraming_WrapProfileXNotPermitted(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_WrapProfileXNotPermitted, arg0);
-
-    /// <summary>
-    /// The wrap tag is exactly {0} bytes.
-    /// </summary>
-    private static string KeyObjectFraming_WrapTagExactlyBytes => Get(nameof(KeyObjectFraming_WrapTagExactlyBytes));
-
-    /// <summary>
-    /// The wrap tag is exactly {0} bytes.
-    /// </summary>
-    internal static string FormatKeyObjectFraming_WrapTagExactlyBytes(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_WrapTagExactlyBytes, arg0);
-
-    /// <summary>
-    /// The wrapped bundle is {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    private static string KeyObjectFraming_WrappedBundleBytesLimit => Get(nameof(KeyObjectFraming_WrappedBundleBytesLimit));
-
-    /// <summary>
-    /// The wrapped bundle is {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    internal static string FormatKeyObjectFraming_WrappedBundleBytesLimit(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_WrappedBundleBytesLimit, arg0, arg1);
-
-    /// <summary>
-    /// Wrapped bundle declares {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    private static string KeyObjectFraming_WrappedBundleDeclaresBytesLimit => Get(nameof(KeyObjectFraming_WrappedBundleDeclaresBytesLimit));
-
-    /// <summary>
-    /// Wrapped bundle declares {0} bytes; the limit is {1} (specification 00 §8).
-    /// </summary>
-    internal static string FormatKeyObjectFraming_WrappedBundleDeclaresBytesLimit(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, KeyObjectFraming_WrappedBundleDeclaresBytesLimit, arg0, arg1);
-
-    /// <summary>
     /// blob_write_profile carries an unknown key (ADR-0022 §Decision 6).
     /// </summary>
     internal static string PolicyManifestCodec_BlobWriteProfileCarriesUnknown => Get(nameof(PolicyManifestCodec_BlobWriteProfileCarriesUnknown));
 
     /// <summary>
-    /// The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-9 only.
+    /// The policy manifest carries an unknown key; specification 06 §7 assigns keys 1-12 only.
     /// </summary>
     internal static string PolicyManifestCodec_PolicyManifestCarriesUnknownKey => Get(nameof(PolicyManifestCodec_PolicyManifestCarriesUnknownKey));
+
+    /// <summary>
+    /// A recorded root carries an unknown key; specification 06 §7 assigns a root keys 1 (label) and 2 (path) only.
+    /// </summary>
+    internal static string PolicyManifestCodec_RecordedRootCarriesUnknownKey => Get(nameof(PolicyManifestCodec_RecordedRootCarriesUnknownKey));
+
+    /// <summary>
+    /// A recorded root omits its path (specification 06 §7 key 10).
+    /// </summary>
+    internal static string PolicyManifestCodec_RecordedRootOmitsPath => Get(nameof(PolicyManifestCodec_RecordedRootOmitsPath));
 
     /// <summary>
     /// The policy manifest is not canonical CBOR: {0}
@@ -609,159 +516,6 @@ internal static class Strings
     /// </summary>
     internal static string FormatRecordNonce_RecordNonceBytesGot(object? arg0, object? arg1, object? arg2) =>
         string.Format(CultureInfo.CurrentCulture, RecordNonce_RecordNonceBytesGot, arg0, arg1, arg2);
-
-    /// <summary>
-    /// A destination carries exactly 4 keys (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_DestinationCarriesExactlyKeys => Get(nameof(RecoveryKitCodec_DestinationCarriesExactlyKeys));
-
-    /// <summary>
-    /// A destination carries an unknown key (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_DestinationCarriesUnknownKey => Get(nameof(RecoveryKitCodec_DestinationCarriesUnknownKey));
-
-    /// <summary>
-    /// The framed version ({0}) and body key 1 ({1}) disagree.
-    /// </summary>
-    private static string RecoveryKitCodec_FramedVersionBodyKeyDisagree => Get(nameof(RecoveryKitCodec_FramedVersionBodyKeyDisagree));
-
-    /// <summary>
-    /// The framed version ({0}) and body key 1 ({1}) disagree.
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_FramedVersionBodyKeyDisagree(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_FramedVersionBodyKeyDisagree, arg0, arg1);
-
-    /// <summary>
-    /// kdf_parameters carries exactly 4 keys (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KdfParametersCarriesExactlyKeys => Get(nameof(RecoveryKitCodec_KdfParametersCarriesExactlyKeys));
-
-    /// <summary>
-    /// kdf_parameters carries an unknown key (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KdfParametersCarriesUnknownKey => Get(nameof(RecoveryKitCodec_KdfParametersCarriesUnknownKey));
-
-    /// <summary>
-    /// kdf salt and issuing device id are 16 bytes each (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KdfSaltIssuingDeviceId => Get(nameof(RecoveryKitCodec_KdfSaltIssuingDeviceId));
-
-    /// <summary>
-    /// Key 5 must be a verbatim FBPKKEYS key object (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey => Get(nameof(RecoveryKitCodec_KeyMustVerbatimFBPKKEYSKey));
-
-    /// <summary>
-    /// The kit body carries an unknown key; a v1 kit assigns keys 1-10 only (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KitBodyCarriesUnknownKey => Get(nameof(RecoveryKitCodec_KitBodyCarriesUnknownKey));
-
-    /// <summary>
-    /// The kit body omits a mandatory key (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string RecoveryKitCodec_KitBodyOmitsMandatoryKey => Get(nameof(RecoveryKitCodec_KitBodyOmitsMandatoryKey));
-
-    /// <summary>
-    /// The kit is {0} bytes; the framing declares {1}.
-    /// </summary>
-    private static string RecoveryKitCodec_KitBytesFramingDeclares => Get(nameof(RecoveryKitCodec_KitBytesFramingDeclares));
-
-    /// <summary>
-    /// The kit is {0} bytes; the framing declares {1}.
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_KitBytesFramingDeclares(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_KitBytesFramingDeclares, arg0, arg1);
-
-    /// <summary>
-    /// The kit checksum does not verify — transcription or storage damage (specifications/recovery-kit §3).
-    /// </summary>
-    internal static string RecoveryKitCodec_KitChecksumDoesNotVerify => Get(nameof(RecoveryKitCodec_KitChecksumDoesNotVerify));
-
-    /// <summary>
-    /// The kit declares a {0}-byte body; the bound is {1} (specifications/recovery-kit §3).
-    /// </summary>
-    private static string RecoveryKitCodec_KitDeclaresByteBodyBound => Get(nameof(RecoveryKitCodec_KitDeclaresByteBodyBound));
-
-    /// <summary>
-    /// The kit declares a {0}-byte body; the bound is {1} (specifications/recovery-kit §3).
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_KitDeclaresByteBodyBound(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_KitDeclaresByteBodyBound, arg0, arg1);
-
-    /// <summary>
-    /// Kit format version {0} is not supported by this implementation (v1 only).
-    /// </summary>
-    private static string RecoveryKitCodec_KitFormatVersionNotSupported => Get(nameof(RecoveryKitCodec_KitFormatVersionNotSupported));
-
-    /// <summary>
-    /// Kit format version {0} is not supported by this implementation (v1 only).
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_KitFormatVersionNotSupported(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_KitFormatVersionNotSupported, arg0);
-
-    /// <summary>
-    /// A kit is at least {0} bytes; got {1}.
-    /// </summary>
-    private static string RecoveryKitCodec_KitLeastBytesGot => Get(nameof(RecoveryKitCodec_KitLeastBytesGot));
-
-    /// <summary>
-    /// A kit is at least {0} bytes; got {1}.
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_KitLeastBytesGot(object? arg0, object? arg1) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_KitLeastBytesGot, arg0, arg1);
-
-    /// <summary>
-    /// Not a FallbackPlan recovery kit: the FBPKRKIT magic is absent.
-    /// </summary>
-    internal static string RecoveryKitCodec_NotFallbackPlanRecoveryKitFBPKRKIT => Get(nameof(RecoveryKitCodec_NotFallbackPlanRecoveryKitFBPKRKIT));
-
-    /// <summary>
-    /// repository_id, kdf salt, and issuing device id are 16 bytes each.
-    /// </summary>
-    internal static string RecoveryKitCodec_RepositoryIdKdfSaltIssuing => Get(nameof(RecoveryKitCodec_RepositoryIdKdfSaltIssuing));
-
-    /// <summary>
-    /// A v1 kit body carries exactly 10 keys; got {0} (specifications/recovery-kit §2).
-    /// </summary>
-    private static string RecoveryKitCodec_VKitBodyCarriesExactly => Get(nameof(RecoveryKitCodec_VKitBodyCarriesExactly));
-
-    /// <summary>
-    /// A v1 kit body carries exactly 10 keys; got {0} (specifications/recovery-kit §2).
-    /// </summary>
-    internal static string FormatRecoveryKitCodec_VKitBodyCarriesExactly(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitCodec_VKitBodyCarriesExactly, arg0);
-
-    /// <summary>
-    /// Line {0}: the line check does not verify — a transcription error on this line (specifications/recovery-kit §4).
-    /// </summary>
-    private static string RecoveryKitText_LineLineCheckDoesNot => Get(nameof(RecoveryKitText_LineLineCheckDoesNot));
-
-    /// <summary>
-    /// Line {0}: the line check does not verify — a transcription error on this line (specifications/recovery-kit §4).
-    /// </summary>
-    internal static string FormatRecoveryKitText_LineLineCheckDoesNot(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitText_LineLineCheckDoesNot, arg0);
-
-    /// <summary>
-    /// Line {0}: too short to carry payload and check.
-    /// </summary>
-    private static string RecoveryKitText_LineTooShortCarryPayload => Get(nameof(RecoveryKitText_LineTooShortCarryPayload));
-
-    /// <summary>
-    /// Line {0}: too short to carry payload and check.
-    /// </summary>
-    internal static string FormatRecoveryKitText_LineTooShortCarryPayload(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, RecoveryKitText_LineTooShortCarryPayload, arg0);
-
-    /// <summary>
-    /// No payload lines found — not a recovery-kit text form.
-    /// </summary>
-    internal static string RecoveryKitText_NoPayloadLinesFound => Get(nameof(RecoveryKitText_NoPayloadLinesFound));
-
-    /// <summary>
-    /// The payload does not decode as base32 (specifications/recovery-kit §4).
-    /// </summary>
-    internal static string RecoveryKitText_PayloadDoesNotDecodeAs => Get(nameof(RecoveryKitText_PayloadDoesNotDecodeAs));
 
     /// <summary>
     /// The descriptor body is {0} bytes; the limit is {1} (specification 01 §3.1).
@@ -1183,19 +937,64 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequiredKeyMissing, arg0);
 
     /// <summary>
-    /// A write-only (format v2) kit carries the 32-byte sealing public key and no key object; every actual key re-derives from the passphrase (ADR-0042).
+    /// A format-upgrade signature is exactly 64 bytes.
     /// </summary>
-    internal static string RecoveryKitCodec_WriteOnlyKitShape => Get(nameof(RecoveryKitCodec_WriteOnlyKitShape));
+    internal static string FormatUpgradeRecordCodec_SignatureExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_SignatureExactlyBytes));
 
     /// <summary>
-    /// An installation kit names no repository, carries no key object and lists no destination, and must carry a 32-byte sealing public key.
+    /// A format-upgrade record is not canonical CBOR: {0}
     /// </summary>
-    internal static string RecoveryKitCodec_InstallationKitShape => Get(nameof(RecoveryKitCodec_InstallationKitShape));
+    private static string FormatUpgradeRecordCodec_NotCanonicalCbor => Get(nameof(FormatUpgradeRecordCodec_NotCanonicalCbor));
 
     /// <summary>
-    /// A repository kit must name the repository it opens.
+    /// A format-upgrade record is not canonical CBOR: {0}
     /// </summary>
-    internal static string RecoveryKitCodec_RepositoryKitOmitsRepositoryId => Get(nameof(RecoveryKitCodec_RepositoryKitOmitsRepositoryId));
+    internal static string FormatFormatUpgradeRecordCodec_NotCanonicalCbor(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_NotCanonicalCbor, arg0);
+
+    /// <summary>
+    /// Format-upgrade schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_SchemaVersionUnsupported => Get(nameof(FormatUpgradeRecordCodec_SchemaVersionUnsupported));
+
+    /// <summary>
+    /// Format-upgrade schema version {0} is not supported; this build reads version 1.
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_SchemaVersionUnsupported(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_SchemaVersionUnsupported, arg0);
+
+    /// <summary>
+    /// A format-upgrade record omits required key {0} (11 §5).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_RequiredKeyMissing => Get(nameof(FormatUpgradeRecordCodec_RequiredKeyMissing));
+
+    /// <summary>
+    /// A format-upgrade record omits required key {0} (11 §5).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_RequiredKeyMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_RequiredKeyMissing, arg0);
+
+    /// <summary>
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §5).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_NotAnUpgrade => Get(nameof(FormatUpgradeRecordCodec_NotAnUpgrade));
+
+    /// <summary>
+    /// A format-upgrade record from version {0} to version {1} moves nothing forward; an upgrade names a higher version (11 §5).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_NotAnUpgrade(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_NotAnUpgrade, arg0, arg1);
+
+    /// <summary>
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §5).
+    /// </summary>
+    private static string FormatUpgradeRecordCodec_WriterIdentityExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_WriterIdentityExactlyBytes));
+
+    /// <summary>
+    /// A format-upgrade record carries a {0}-byte writer identity; 16 bytes are required (11 §5).
+    /// </summary>
+    internal static string FormatFormatUpgradeRecordCodec_WriterIdentityExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, FormatUpgradeRecordCodec_WriterIdentityExactlyBytes, arg0);
 
     /// <summary>
     /// The backup set identifier is exactly 16 bytes.

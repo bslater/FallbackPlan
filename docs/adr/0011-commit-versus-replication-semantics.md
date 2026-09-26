@@ -68,11 +68,34 @@ archive, so the snapshot's identity is never ambiguous. The only lawful
 divergence is a lagging replica or a hub-planned retention trim
 (ADR-0034 §2, §4).
 
+### Amendment 4 (2026-08) — commit re-unifies with the destinations for direct-ship sets
+
+[ADR-0046](0046-direct-to-destination-publication.md) removes the staging
+archive for a set flagged `direct_ship`, and with it Amendment 3's central
+clause: for such a set there is no local archive to commit against, so
+**commit is per destination**, through the ship sink — the snapshot commits
+at each destination that completed the run, and a capture with **no**
+reachable destination refuses as a stated recoverable failure rather than
+committing anywhere (ADR-0046 §4, FR-DEST-015). "Never blocked by a
+destination" — this record's founding property, and the Consequences bullet
+below — is thereby consciously given up for direct-ship sets: the owner
+traded the staging copy's durability guarantee for a machine that holds no
+local copy of its backups. The per-`(snapshot, destination)` state table is
+untouched and matters more, not less.
+
+The lawful-divergence list gains a third entry for direct-ship: a destination
+**dropped mid-run** (or skipped for want of a baseline) holds a
+lagging-but-valid replica — a journal intent nothing retired, exactly an
+interrupted copy's state — healed by the next catch-up, never a divergent
+archive. Everything else here, the separation of replication state from
+commit above all, carries over unchanged; staging sets keep Amendment 3's
+shape until the flag flips.
+
 ## Consequences
 
 **Positive**
 
-- Local protection is never withheld because a remote destination is offline.
+- Local protection is never withheld because a remote destination is offline *(staging sets; Amendment 4 trades this away for direct-ship sets)*.
 - Incremental comparison keeps working during a destination outage, so catch-up stays cheap.
 - The status model can say "protected locally, waiting on the offsite copy" — a true statement the original could not express.
 - Each replica remains independently restorable, which is the property that made the invariant worth having.
@@ -101,3 +124,4 @@ divergence is a lagging replica or a hub-planned retention trim
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Commit/replication split unchanged. `protected` now requires a replica outside the source's failure domain (PT-8); retention may not outrun replication (PT-9). |
 | 2026-08 | Accepted (amended) | Amendment 3: commit is against the set's staging archive and no state treats the local copy as privileged ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-08 | Accepted (amended) | Amendment 4: for direct-ship sets ([ADR-0046](0046-direct-to-destination-publication.md)) commit is per destination through the ship sink, a capture with no reachable destination refuses rather than committing anywhere, and a mid-run drop is the third lawful divergence. Staging sets are unchanged. |

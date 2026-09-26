@@ -34,6 +34,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RecoveryHost_EnvironmentVariableUnset, arg0);
 
     /// <summary>
+    /// the recovery kit is withdrawn (ADR-0060): the passphrase and the archive are all a recovery needs. Drop --kit and run again.
+    /// </summary>
+    internal static string RecoveryHost_KitWithdrawn => Get(nameof(RecoveryHost_KitWithdrawn));
+
+    /// <summary>
     /// Missing required option {0}.
     /// </summary>
     private static string RecoveryHost_MissingRequiredOption => Get(nameof(RecoveryHost_MissingRequiredOption));
@@ -72,11 +77,6 @@ internal static class Strings
     internal static string RecoverySession_PassphraseDoesNotReproduce => Get(nameof(RecoverySession_PassphraseDoesNotReproduce));
 
     /// <summary>
-    /// An installation kit does not name a repository; the archive supplies its own identity, so open it with the asynchronous overload that reads the descriptor.
-    /// </summary>
-    internal static string RecoverySession_InstallationKitNeedsTheArchive => Get(nameof(RecoverySession_InstallationKitNeedsTheArchive));
-
-    /// <summary>
     /// This archive's repository-format descriptor does not read as a descriptor.
     /// </summary>
     internal static string RecoverySession_ArchiveDescriptorDoesNotRead => Get(nameof(RecoverySession_ArchiveDescriptorDoesNotRead));
@@ -85,9 +85,4 @@ internal static class Strings
     /// This folder holds no repository-format descriptor, so it is not a FallbackPlan archive.
     /// </summary>
     internal static string RecoverySession_ArchiveHasNoDescriptor => Get(nameof(RecoverySession_ArchiveHasNoDescriptor));
-
-    /// <summary>
-    /// The passphrase and kit agree with each other but not with this archive: this kit belongs to a different FallbackPlan installation.
-    /// </summary>
-    internal static string RecoverySession_KitBelongsToAnotherInstallation => Get(nameof(RecoverySession_KitBelongsToAnotherInstallation));
 }

@@ -14,13 +14,24 @@ Two things ADR-0028 already settled make this a small piece of work rather than 
 
 ## Decision
 
-**Translate every manager's stop onto the existing cancellation, and add nothing else to the run loop.** `ServiceProcessHost` is the one entry the process calls. On a console or under systemd/launchd it registers `Console.CancelKeyPress` (SIGINT, as before) *and* `PosixSignalRegistration` for `SIGTERM` — the signal systemd and launchd send — both routed to the same `CancellationTokenSource.Cancel()`. There is no new shutdown path: the manager's stop and an operator's Ctrl+C converge on the code that already unwinds cleanly.
+**Translate every manager's stop onto the existing cancellation, and add nothing else to the run loop.**
+
+> **Amended 2026-08 ([ADR-0049](0049-service-lifecycle-hygiene.md)):** the
+> run loop gained exactly one thing since: an outer recycle iteration for
+> the Owner's `restart_service`, which tears the runtime down and starts it
+> again **in the same process** — chosen precisely because the units this
+> record generates give a process exit three different restart behaviours
+> on three platforms, and this record forbids the agent realigning them.
+
+ `ServiceProcessHost` is the one entry the process calls. On a console or under systemd/launchd it registers `Console.CancelKeyPress` (SIGINT, as before) *and* `PosixSignalRegistration` for `SIGTERM` — the signal systemd and launchd send — both routed to the same `CancellationTokenSource.Cancel()`. There is no new shutdown path: the manager's stop and an operator's Ctrl+C converge on the code that already unwinds cleanly.
 
 **On Windows, bridge the Service Control Manager with `ServiceBase`, not the Generic Host.** `WindowsServiceHost` is a `System.ServiceProcess.ServiceBase` subclass: the SCM starts the process, `OnStart` launches the agent on the cancellation token, and the SCM's stop cancels it and waits for the writer lock to release before the process exits. The process detects that the SCM (rather than a console) started it and hands off; otherwise it takes the signal path above. We did **not** adopt `Microsoft.Extensions.Hosting` and its `UseWindowsService()`/`UseSystemd()`. The agent is a hand-rolled console app by consistent choice across this solution, and pulling in the Generic Host to attach one lifetime would be a large architectural change to gain machinery — readiness, restart, logging — that this service either does not need or already has by another means.
 
 **Generate the registration; never perform it.** The `install` verb prints the artifact that would register the agent — a systemd unit, a launchd LaunchDaemon plist, or the Windows `sc.exe` commands — to standard output, so it can be redirected to a file, with the apply steps and the unlock reminder on standard error. It opens no repository and no keystore and changes nothing on the machine. The alternative, shelling out to `systemctl`/`launchctl`/`sc.exe` to register the service directly, was rejected: it would run privileged, mutate the system in ways an operator cannot inspect first, and — because it is an OS mutation — could not be tested on CI at all. A printed definition is inspectable before it is applied, and its generation is pure text that is verified on every platform.
 
 **Provisioning stays an explicit, out-of-band step.** The generated artifact names the account the service runs as, and the printed guidance states the rule ADR-0028 §9 already implies: run `unlock` once *as that same account* before the service starts, or the boot-started process exits 1 with no passphrase. The keystore is scoped to the account, so the operator seeding it and the service reading it must be the same identity.
+
+> **Amended 2026-09.** The step is `setup`, not `unlock` ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md) retired; format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). The rule is the same shape: run first-run setup once *as the account the service runs as*, so the write credential it stores is readable at boot with nobody present. `install`'s printed guidance says so.
 
 The generated unit uses `Type=simple` (systemd) / a plain LaunchDaemon (launchd) / `start= auto` (Windows). There is no `sd_notify` readiness protocol and no shutdown deadline: the run loop has no readiness handshake to report, and the writer lock is released by the OS on death, so a manager that kills a slow stop loses nothing it needs a heuristic to recover.
 
@@ -43,3 +54,4 @@ The generated unit uses `Type=simple` (systemd) / a plain LaunchDaemon (launchd)
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | The agent hosts under systemd, launchd and the Windows SCM over the existing cancellation token; `install` generates the registration artifact for each. ADR-0028 stopped at the boundary; this carries the process across it. |
+| 2026-09 | Amended | The out-of-band provisioning step is `setup`, not `unlock`; the printed guidance names it |

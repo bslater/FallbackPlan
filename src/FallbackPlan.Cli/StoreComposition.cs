@@ -12,6 +12,6 @@ namespace FallbackPlan.Cli;
 internal static class StoreComposition
 {
     /// <summary>Opens the store rooted at a local path.</summary>
-    internal static IObjectStore OpenLocal(string rootPath, ILogger? logger = null) =>
+    internal static LocalFileSystemObjectStore OpenLocal(string rootPath, ILogger? logger = null) =>
         new LocalFileSystemObjectStore(rootPath, logger);
 }

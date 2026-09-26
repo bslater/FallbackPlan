@@ -51,8 +51,6 @@ public sealed class IndexSizeTests : IDisposable
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-index-size-tests", Guid.NewGuid().ToString("n"));
 
@@ -105,7 +103,7 @@ public sealed class IndexSizeTests : IDisposable
     {
         var label = objects.ToString(CultureInfo.InvariantCulture);
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "store", label));
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = new WriterSequence(
             new FileSequenceStateStore(Path.Combine(_root, "state", label, "sequence.txt")));
 
@@ -120,7 +118,7 @@ public sealed class IndexSizeTests : IDisposable
         Assert.AreEqual(objects, entries.Select(entry => entry.ObjectId).Distinct().Count());
 
         CheckpointId checkpointId;
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             var delta = await publisher.PublishDeltaAsync(generation, [], entries, CancellationToken.None);
             checkpointId = await publisher.PublishCheckpointAsync(

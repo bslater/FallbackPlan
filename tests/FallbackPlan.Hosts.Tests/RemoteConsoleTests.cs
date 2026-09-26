@@ -18,6 +18,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// criterion — a restore commanded from a console writes on the service's
 /// machine — reached through the real command surface rather than the client
 /// directly, and the refusal paths a human would hit.
+/// Establishes FR-SVC-005.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -86,6 +87,10 @@ public sealed class RemoteConsoleTests : IDisposable
     [TestMethod]
     public async Task Restore_CommandedByAPairedConsoleOverConnect_WritesOnTheServiceMachine()
     {
+        // A set-up installation holds no content key (ADR-0042 §7): the
+        // paired console derives the restore grant from the passphrase it
+        // holds, against the parameters the service publishes, and the
+        // service restores under it — on its own machine, as before.
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello from the service");
         await _harness.BackUpAsync();
@@ -104,10 +109,19 @@ public sealed class RemoteConsoleTests : IDisposable
         var snapshotId = listed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Split(' ')[0];
         Assert.AreEqual(32, snapshotId.Length, $"expected a hex snapshot id, saw '{snapshotId}'");
 
+        // Without the passphrase there is no grant to derive, and the CLI
+        // says so by the flag's name rather than restoring nothing.
         var destination = Path.Combine(_harness.WorkPath, "service-side-restore");
-        var restored = await RunCliAsync(
+        var withoutPassphrase = await RunCliAsync(
             "restore", snapshotId, "--output", destination,
             "--connect", address, "--state", consoleState, "--fingerprint", fingerprint);
+        Assert.AreEqual(1, withoutPassphrase.ExitCode, withoutPassphrase.Output);
+        Assert.Contains("--passphrase-env", withoutPassphrase.Error, StringComparison.Ordinal);
+
+        var restored = await RunCliAsync(
+            "restore", snapshotId, "--output", destination,
+            "--connect", address, "--state", consoleState, "--fingerprint", fingerprint,
+            "--passphrase-env", _harness.PassphraseVariable);
 
         Assert.AreEqual(0, restored.ExitCode, restored.Error);
         Assert.Contains("restored", restored.Output, StringComparison.Ordinal);
@@ -197,8 +211,7 @@ public sealed class RemoteConsoleTests : IDisposable
 
     private async Task<ServiceRuntime> StartRuntimeAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -206,7 +219,6 @@ public sealed class RemoteConsoleTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 

@@ -33,14 +33,14 @@ public sealed class CatalogueProjector
         IObjectStore store,
         RepositoryId repositoryId,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(target);
         ThrowHelper.ThrowIfNull(reader);
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(keys);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         using var objectIdDeriver = new ObjectIdDeriver(keys.ContentIdKey);
         var snapshots = 0;
@@ -84,7 +84,7 @@ public sealed class CatalogueProjector
 
             int signatureState;
             using (var signer = RepositorySigner.Create(
-                hierarchy, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
+                credential, new KeyGeneration((uint)decoded.Manifest.PublicationGeneration)))
             {
                 signatureState = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? 1 : 2;
             }

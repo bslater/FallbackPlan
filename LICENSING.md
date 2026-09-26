@@ -33,6 +33,6 @@ licence rights to the code are not rights to the name.
 
 ## Third-party components
 
-Bodu packages (`external/packages/`, ADR-0021) are MIT-licensed upstream.
+Bodu packages (from nuget.org, ADR-0021) are MIT-licensed upstream.
 All other dependencies are consumed from nuget.org under their own
 licences; the lockfiles enumerate them exactly.

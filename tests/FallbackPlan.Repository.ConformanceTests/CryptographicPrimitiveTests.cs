@@ -31,7 +31,12 @@ public sealed class CryptographicPrimitiveTests
     private const int OrdinalSegment = 0x01;
     private const int OrdinalBlobKey = 0x07;
 
-    private static readonly byte[] MasterKey = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+    /// <summary>The pinned root every vector group derives from (write-only.json).</summary>
+    private static byte[] Root()
+    {
+        using var document = Load("write-only.json");
+        return Hex(document.RootElement.GetProperty("inputs").GetProperty("root").GetString()!);
+    }
 
     private static JsonDocument Load(string name) =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "vectors", name)));
@@ -96,54 +101,55 @@ public sealed class CryptographicPrimitiveTests
     [TestMethod]
     public void DerivedKeys_TheCommittedVectors_Match()
     {
-        using var document = Load("keys.json");
+        using var document = Load("write-only.json");
+        var root = Hex(document.RootElement.GetProperty("inputs").GetProperty("root").GetString()!);
         var derived = document.RootElement.GetProperty("derived");
 
-        SequenceAssert.AreEqual(
-            derived.GetProperty("content_id_key").GetString(),
-            Hex(Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/content-id/v1"), 32)));
+        var structureRoot = Expand(root, Encoding.ASCII.GetBytes("fbp/metadata/v2"), 32);
+        var signingRoot = Expand(root, Encoding.ASCII.GetBytes("fbp/signing/v2"), 32);
 
-        SequenceAssert.AreEqual(
-            derived.GetProperty("key_id_key").GetString(),
-            Hex(Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/key-id/v1"), 32)));
-
-        Assert.AreEqual(
-            derived.GetProperty("data_key_generation_0").GetString(),
-            Hex(Expand(MasterKey, Info("fbp/data/v1", BigEndian(0u)), 32)));
-
-        Assert.AreEqual(
-            derived.GetProperty("data_key_generation_1").GetString(),
-            Hex(Expand(MasterKey, Info("fbp/data/v1", BigEndian(1u)), 32)));
+        Assert.AreEqual(derived.GetProperty("sealing_scalar").GetString(), Hex(Expand(root, Encoding.ASCII.GetBytes("fbp/seal/v2"), 32)));
+        Assert.AreEqual(derived.GetProperty("structure_root").GetString(), Hex(structureRoot));
+        Assert.AreEqual(derived.GetProperty("content_id_key").GetString(), Hex(Expand(root, Encoding.ASCII.GetBytes("fbp/content-id/v2"), 32)));
+        Assert.AreEqual(derived.GetProperty("key_id_key").GetString(), Hex(Expand(root, Encoding.ASCII.GetBytes("fbp/key-id/v2"), 32)));
+        Assert.AreEqual(derived.GetProperty("signing_root").GetString(), Hex(signingRoot));
 
         Assert.AreEqual(
             derived.GetProperty("metadata_key_generation_0").GetString(),
-            Hex(Expand(MasterKey, Info("fbp/metadata/v1", BigEndian(0u)), 32)));
-
+            Hex(Expand(structureRoot, Info("fbp/metadata-generation/v2", BigEndian(0u)), 32)));
         Assert.AreEqual(
-            derived.GetProperty("signing_key_generation_0").GetString(),
-            Hex(Expand(MasterKey, Info("fbp/signing/v1", BigEndian(0u)), 32)));
+            derived.GetProperty("metadata_key_generation_1").GetString(),
+            Hex(Expand(structureRoot, Info("fbp/metadata-generation/v2", BigEndian(1u)), 32)));
+        Assert.AreEqual(
+            derived.GetProperty("signing_seed_generation_0").GetString(),
+            Hex(Expand(signingRoot, Info("fbp/signing-generation/v2", BigEndian(0u)), 32)));
     }
 
     /// <summary>
     /// The per-blob key derivation from specification 03 section 5 — the construction
-    /// the format's confidentiality rests on.
+    /// the format's confidentiality rests on — over the metadata class key a
+    /// metadata blob, and a sealed data blob's footer, derive under.
     /// </summary>
     [TestMethod]
     public void BlobKeyDerivation_TheCommittedVector_Matches()
     {
-        using var document = Load("keys.json");
-        var inputs = document.RootElement.GetProperty("inputs");
+        using var document = Load("write-only.json");
+        var group = document.RootElement.GetProperty("blob_key");
+        var inputs = group.GetProperty("inputs");
 
+        var classKey = Hex(inputs.GetProperty("class_key").GetString()!);
         var salt = Hex(inputs.GetProperty("blob_salt").GetString()!);
         var writerId = Hex(inputs.GetProperty("writer_id").GetString()!);
         var counter = inputs.GetProperty("blob_counter").GetUInt64();
 
-        var dataKey = Expand(MasterKey, Info("fbp/data/v1", BigEndian(0u)), 32);
-        var blobKey = Expand(dataKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter)), 32);
-
         Assert.AreEqual(
-            document.RootElement.GetProperty("derived").GetProperty("blob_key").GetString(),
-            Hex(blobKey));
+            document.RootElement.GetProperty("derived").GetProperty("metadata_key_generation_0").GetString(),
+            Hex(classKey),
+            "the vector's class key is the metadata key of generation 0");
+
+        var blobKey = Expand(classKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter)), 32);
+
+        Assert.AreEqual(group.GetProperty("blob_key").GetString(), Hex(blobKey));
     }
 
     /// <summary>
@@ -155,18 +161,19 @@ public sealed class CryptographicPrimitiveTests
     [TestMethod]
     public void BlobKeyDerivation_SameSaltDifferentWriterOrCounter_YieldsADifferentKey()
     {
-        using var document = Load("keys.json");
-        var inputs = document.RootElement.GetProperty("inputs");
-        var checks = document.RootElement.GetProperty("separation_checks");
+        using var document = Load("write-only.json");
+        var group = document.RootElement.GetProperty("blob_key");
+        var inputs = group.GetProperty("inputs");
+        var checks = group.GetProperty("separation_checks");
 
+        var classKey = Hex(inputs.GetProperty("class_key").GetString()!);
         var salt = Hex(inputs.GetProperty("blob_salt").GetString()!);
         var writerId = Hex(inputs.GetProperty("writer_id").GetString()!);
         var counter = inputs.GetProperty("blob_counter").GetUInt64();
-        var dataKey = Expand(MasterKey, Info("fbp/data/v1", BigEndian(0u)), 32);
 
-        var baseline = Expand(dataKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter)), 32);
-        var otherWriter = Expand(dataKey, Info("fbp/blob/v1", salt, Enumerable.Repeat((byte)0xB0, 16).ToArray(), BigEndian(counter)), 32);
-        var otherCounter = Expand(dataKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter + 1)), 32);
+        var baseline = Expand(classKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter)), 32);
+        var otherWriter = Expand(classKey, Info("fbp/blob/v1", salt, Enumerable.Repeat((byte)0xB0, 16).ToArray(), BigEndian(counter)), 32);
+        var otherCounter = Expand(classKey, Info("fbp/blob/v1", salt, writerId, BigEndian(counter + 1)), 32);
 
         Assert.AreEqual(checks.GetProperty("blob_key_other_writer").GetString(), Hex(otherWriter));
         Assert.AreEqual(checks.GetProperty("blob_key_other_counter").GetString(), Hex(otherCounter));
@@ -199,7 +206,7 @@ public sealed class CryptographicPrimitiveTests
     public void ObjectIdentifiers_TheCommittedVectors_Match()
     {
         using var document = Load("identifiers.json");
-        var contentIdKey = Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/content-id/v1"), 32);
+        var contentIdKey = Expand(Root(), Encoding.ASCII.GetBytes("fbp/content-id/v2"), 32);
 
         foreach (var testCase in document.RootElement.GetProperty("cases").EnumerateArray())
         {
@@ -222,7 +229,7 @@ public sealed class CryptographicPrimitiveTests
     {
         using var document = Load("identifiers.json");
         var blob = document.RootElement.GetProperty("blob_identifier");
-        var keyIdKey = Expand(MasterKey, Encoding.ASCII.GetBytes("fbp/key-id/v1"), 32);
+        var keyIdKey = Expand(Root(), Encoding.ASCII.GetBytes("fbp/key-id/v2"), 32);
 
         var blobId = Hex(blob.GetProperty("blob_id").GetString()!);
         var message = new byte[1 + blobId.Length];
@@ -310,7 +317,7 @@ public sealed class CryptographicPrimitiveTests
     /// case 1's NIST CAVP provenance is believed but could not be re-fetched
     /// to confirm, and case 2 was computed once with this very primitive and
     /// pinned as a regression vector over the format's real construction
-    /// (keys.json blob key, ordinal 47's nonce and 55-byte AAD). Case 2 is
+    /// (write-only.json blob key, ordinal 47's nonce and 55-byte AAD). Case 2 is
     /// the one that exercises AAD absorption at all: case 1 is
     /// empty-plaintext, empty-AAD, so alone it proves nothing about the
     /// property the record format leans on.

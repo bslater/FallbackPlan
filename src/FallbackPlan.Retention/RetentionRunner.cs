@@ -1,6 +1,7 @@
 using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Domain.Identifiers;
@@ -14,11 +15,19 @@ namespace FallbackPlan.Retention;
 /// <param name="Held">The gate's holds, for the caller to raise deferral warnings from.</param>
 /// <param name="TombstonesWritten">Tombstones written this pass — 0 on a dry run.</param>
 /// <param name="Swept">The sweep outcome — null on a dry run.</param>
+/// <param name="CompactionCandidates">
+/// The blobs this pass would rewrite (ADR-0067), chosen here rather than by
+/// the caller so that the dry run and the act cannot be computed twice and
+/// disagree. This runner takes a store and a repository and deliberately
+/// cannot write a blob, so performing them is the caller's — but deciding
+/// which they are is planning, and planning is this runner's.
+/// </param>
 public sealed record RetentionReport(
     IReadOnlyList<string> Lines,
     IReadOnlyList<HeldSnapshot> Held,
     int TombstonesWritten,
-    SweepOutcome? Swept);
+    SweepOutcome? Swept,
+    IReadOnlyList<CompactableBlob> CompactionCandidates);
 
 /// <summary>
 /// One set's retention pass, whole (architecture 07): survey the store,
@@ -43,6 +52,13 @@ public static class RetentionRunner
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <param name="setName">The set's name, for the log alone — the runner is handed a store, not a set.</param>
     /// <param name="logger">Where the pass reports what it kept and what it took.</param>
+    /// <param name="reclaim">
+    /// This run's authority to author deletions (ADR-0055 §6). A set
+    /// declaring <c>reclaim-authority</c> needs one; null is for a dry run,
+    /// and for a repository written before the feature.
+    /// </param>
+    /// <param name="resolveLocation">Where the index says an object now lives — what lets this pass condemn a blob compaction drained (ADR-0067). Null plans as it did before compaction existed.</param>
+    /// <param name="compactionPolicy">Which of the compaction backlog a pass would rewrite; <see cref="CompactionPolicy.Default"/> when omitted.</param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -56,7 +72,10 @@ public static class RetentionRunner
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken,
         string? setName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ReclaimAuthority? reclaim = null,
+        Func<ObjectId, BlobId?>? resolveLocation = null,
+        CompactionPolicy? compactionPolicy = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -79,24 +98,11 @@ public static class RetentionRunner
         // Per-destination keep-awareness (FR-GC-010): a destination whose own
         // policy drops a snapshot never holds it, so it never holds up its
         // expiry from staging either. Each override's keep-set is computed
-        // over the same facts the set-level selection used.
+        // over the same facts the set-level selection used — through the
+        // shared helper, so the gate and the converge spare cannot disagree.
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
-
-        // Indexer assignment, not ToDictionary: a duplicated reference —
-        // impossible through validated configuration, but this method is
-        // callable directly — must not escape the command surface as a raw
-        // ArgumentException (NFR-PORT-004).
-        var keptByDestination = new Dictionary<string, HashSet<string>?>(StringComparer.Ordinal);
-        foreach (var reference in destinations)
-        {
-            var effective = reference.Retention ?? policy;
-            keptByDestination[reference.Ref] = !DestinationConvergence.HasRules(effective)
-                ? null
-                : RetentionPlanner
-                    .Select(facts, effective!, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds))
-                    .Keep.Select(keep => keep.Snapshot.SnapshotId)
-                    .ToHashSet(StringComparer.Ordinal);
-        }
+        var keptByDestination = DestinationConvergence.KeepSetsByDestination(
+            facts, destinations, policy, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds));
 
         var gate = ReplicationGate.Apply(
             selection.Expire,
@@ -126,7 +132,7 @@ public static class RetentionRunner
             repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
         IReadOnlyList<JournalRecord> records;
         int unparseable;
-        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Hierarchy))
+        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Credential))
         {
             (records, unparseable, _) = await journal.LoadAsync(sealingGeneration, cancellationToken)
                 .ConfigureAwait(false);
@@ -135,7 +141,9 @@ public static class RetentionRunner
         var intents = IntentSurveyor.Survey(
             records, unparseable, sealingGeneration, nowUnixMilliseconds, skewMarginMs: 300_000);
 
-        var plan = CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents);
+        var plan = CollectionPlanner.Plan(
+            survey, selection, gate, reader, reachable, unwalkable, intents,
+            store.Capabilities.ListingConsistency, resolveLocation);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
         Log.RetentionPlanned(log, set, selection.Keep.Count, selection.Expire.Count);
@@ -151,6 +159,15 @@ public static class RetentionRunner
             Log.RetentionHeld(log, set, vetoes);
         }
 
+        // Compaction is planned either way and never done here: a vetoed
+        // plan selects nothing, because a collector that cannot say what is
+        // garbage cannot say what is worth rewriting either.
+        var compaction = plan.Deletable
+            ? (compactionPolicy ?? CompactionPolicy.Default).Select(
+                repository.EffectiveFormatVersion, plan.PartlyLiveBlobs)
+            : new CompactionSelection([], []);
+        lines.AddRange(compaction.Lines);
+
         // The trim decides either way — the dry run must say what would go
         // (FR-GC-005) — and deletes only under apply, after the sweep.
         var trim = await StagingTrim.PlanAsync(
@@ -161,7 +178,7 @@ public static class RetentionRunner
 
         if (!apply)
         {
-            return new RetentionReport(lines, gate.Held, 0, null);
+            return new RetentionReport(lines, gate.Held, 0, null, compaction.Candidates);
         }
 
         // The grace clock: the single writer's highest published sequence.
@@ -171,7 +188,8 @@ public static class RetentionRunner
         if (plan.Deletable && (plan.DeletableBlobs.Count > 0 || plan.ExpiredSnapshotKeys.Count > 0))
         {
             written = await StagingSweep.TombstoneAsync(
-                store, repository, writerId, plan, survey, publicationSequence, nowUnixMilliseconds, cancellationToken)
+                store, repository, writerId, plan, survey, publicationSequence, nowUnixMilliseconds,
+                cancellationToken, reclaim)
                 .ConfigureAwait(false);
             lines.Add($"tombstoned: {written} object(s), eligible after the next publication");
         }
@@ -180,7 +198,8 @@ public static class RetentionRunner
         // pass's own tombstones never qualify, and earlier passes' are
         // revalidated against the world just computed (11 §3.2 step 3).
         var swept = await StagingSweep.SweepAsync(
-            store, repository, plan, survey, publicationSequence, cancellationToken).ConfigureAwait(false);
+            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim)
+            .ConfigureAwait(false);
         lines.Add(
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "
             + $"{swept.TombstonesCleared} tombstone(s) cleared");
@@ -205,6 +224,6 @@ public static class RetentionRunner
         Log.CollectionComplete(
             log, swept.Deleted, swept.NotYetEligible, swept.TombstonesCleared, trimmedBlobs, trimmedBytes);
 
-        return new RetentionReport(lines, gate.Held, written, swept);
+        return new RetentionReport(lines, gate.Held, written, swept, compaction.Candidates);
     }
 }

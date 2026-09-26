@@ -28,8 +28,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const int BlobSealed = 1610;
     private const int BlobOpened = 1611;
     private const int CatalogueOpened = 1800;
@@ -46,14 +44,15 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(
             Path.Combine(SpoolDirectory, "catalogue.db"), Repo, log);
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue, progress: null, logger: log);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue, progress: null, logger: log);
 
         var snapshotId = Enumerable.Repeat((byte)0xB2, 16).ToArray();
         await orchestrator.PublishAsync(
@@ -71,7 +70,7 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store, log);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority, log);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);
@@ -141,12 +140,13 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         store.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
 
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue: null, progress: null, logger: log);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue: null, progress: null, logger: log);
 
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await orchestrator.PublishAsync(
@@ -179,11 +179,20 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var store = CreateStore();
         using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
 
-        using var created = await RepositoryLifecycle.CreateAsync(
+        var (created, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None, log);
-        using var opened = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None, log);
+        using (created)
+        using (createdAuthority)
+        {
+        }
 
-        Assert.ContainsSingle(log.Records.Where(record => record.EventId == RepositoryOpened));
+        var (opened, authority) = await RepositoryLifecycle.OpenForReadAsync(
+            store, passphrase, CancellationToken.None, log);
+        using (opened)
+        using (authority)
+        {
+            Assert.ContainsSingle(log.Records.Where(record => record.EventId == RepositoryOpened));
+        }
     }
 
     [TestMethod]
@@ -192,16 +201,16 @@ public sealed class EnginePlaneLoggingTests : ArchiveTestHarness
         var log = new RecordingLogger();
         var store = CreateStore();
         using var passphrase = Passphrase.Create("engine-plane-logging-passphrase!!");
-        using (await RepositoryLifecycle.CreateAsync(
-            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None))
-        {
-            // Created without a logger on purpose: the refusal below must be
-            // recorded by the open, not carried over from the create.
-        }
+        // Created without a logger on purpose: the refusal below must be
+        // recorded by the open, not carried over from the create.
+        var (created, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, RepositoryCreationSettings.Default, 1_722_600_000_000, CancellationToken.None);
+        created.Dispose();
+        createdAuthority.Dispose();
 
         using var wrong = Passphrase.Create("not the passphrase at all!!!!");
         await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-            await RepositoryLifecycle.OpenAsync(store, wrong, CancellationToken.None, log));
+            await RepositoryLifecycle.OpenForReadAsync(store, wrong, CancellationToken.None, log));
 
         Assert.ContainsSingle(
             log.Records.Where(record => record.EventId == 2032),

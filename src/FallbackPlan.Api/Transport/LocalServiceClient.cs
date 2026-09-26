@@ -46,6 +46,10 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     private readonly SemaphoreSlim _exchange = new(1, 1);
     private long _nextRequestId;
 
+    // The session the exchange most recently minted (login or resume),
+    // volatile because the watch reads it from whatever thread enumerates.
+    private volatile string? _session;
+
     private LocalServiceClient(Stream stream, string address, ContractVersion serviceVersion)
     {
         _stream = stream;
@@ -121,13 +125,28 @@ public sealed class LocalServiceClient : IFallbackPlanClient
             await FrameCodec.WriteAsync(_stream, new RequestFrame(id, command), cancellationToken).ConfigureAwait(false);
 
             var frame = await FrameCodec.ReadAsync(_stream, cancellationToken).ConfigureAwait(false);
-            return frame switch
+            var result = frame switch
             {
                 ResponseFrame response when response.Id == id => response.Result,
                 ResponseFrame response => throw new ServiceConnectionException(Strings.FormatLocalServiceClient_ServiceAnsweredRequestWhileOutstanding(response.Id, id)),
                 null => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceClosedConnectionWithoutAnswering),
                 _ => throw new ServiceConnectionException(Strings.LocalServiceClient_ServiceSentFrameNotResponse),
             };
+
+            // The session this client holds, remembered for the watch: a
+            // watch takes its own connection, and each connection gets its
+            // own authentication gate, so the exchange's session must ride
+            // the WatchFrame or the watch is anonymous (contract 1.20).
+            if (result is SessionResult session)
+            {
+                _session = session.Token;
+            }
+            else if (command is LogoutCommand)
+            {
+                _session = null;
+            }
+
+            return result;
         }
         finally
         {
@@ -192,7 +211,7 @@ public sealed class LocalServiceClient : IFallbackPlanClient
                 return null;
             }
 
-            await FrameCodec.WriteAsync(stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+            await FrameCodec.WriteAsync(stream, new WatchFrame(_session), cancellationToken).ConfigureAwait(false);
             return stream;
         }
         catch

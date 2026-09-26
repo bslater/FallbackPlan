@@ -5,7 +5,7 @@ namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
 /// The recipient a set-configuration object is sealed to (specification 11
-/// §5.1, 03 §4; ADR-0047): <c>HKDF-Expand(master_key, "fbp/recovery/v1", 32)</c>
+/// §5.1, 03 §4; ADR-0071): <c>HKDF-Expand(master_key, "fbp/recovery/v1", 32)</c>
 /// read as an X25519 scalar, so a v1 writer holds both halves and a machine
 /// rebuilt from nothing reproduces them from the passphrase alone.
 /// </summary>

@@ -16,8 +16,8 @@ internal static partial class Log
 {
     [LoggerMessage(
         EventId = 3100, Level = LogLevel.Information,
-        Message = "Recovery kit read: repository format {FormatVersion}, {Destinations} destination(s)")]
-    internal static partial void KitRead(ILogger logger, int formatVersion, int destinations);
+        Message = "Archive descriptor read: repository {RepositoryId}, format {FormatVersion}")]
+    internal static partial void DescriptorRead(ILogger logger, string repositoryId, int formatVersion);
 
     [LoggerMessage(
         EventId = 3101, Level = LogLevel.Information,

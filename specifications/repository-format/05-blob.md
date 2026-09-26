@@ -40,15 +40,17 @@ offset  size   field
 
 Total: **88 bytes**.
 
+`format_version` is the container's stamp: in a format-2 repository, `2` on a data-class blob, whose envelope continues in §2.1, and `1` on a metadata-class blob, whose symmetric construction format 2 kept from format 1 unchanged ([04 §4](04-record.md#4-associated-data)); in a format-3 repository, `3` on blobs of both classes, whose records are format-3 records ([04 §2](04-record.md#2-framing)) and whose envelope is the 88 bytes above for both classes (§2.2). A reader selects the envelope length by the stamp and the class together.
+
 `writer_id` is carried explicitly because it is an input to the blob-key derivation ([03 §5](03-keys.md#5-per-blob-keys)) and is **not** reliably recoverable from `blob_id`: the structured formation embeds only the first 8 of its 16 bytes, and [02 §4](02-identifiers.md#4-blob-identifier) equally permits a `blob_id` of 16 random bytes, which embeds none. A reader holding only the blob and the repository keys must be able to reproduce the derivation — that is the whole recovery property — so every derivation input lives in the envelope.
 
 The envelope is cleartext because a reader must derive the blob key before it can read anything, and the derivation inputs cannot themselves be encrypted under the key they produce. It carries only key-derivation selectors: no content, no path, no count of records, no timestamp.
 
-`blob_class` selects which key family to derive from — `data_key[generation]` or `metadata_key[generation]` ([03 §4](03-keys.md#4-derived-keys)).
+`blob_class` selects how the blob's records are keyed: a metadata-class blob derives its blob key from `metadata_key[generation]` ([03 §5](03-keys.md#5-per-blob-keys)); a data-class blob's records use the sealed content key of §2.1, and only its footer derives.
 
 ### 2.1 Format-v2 data blobs: the sealed content key
 
-In a write-only repository ([03 §9](03-keys.md#9-write-only-repositories-format-v2)), a **data-class** blob's envelope appends one further field:
+A **data-class** blob's envelope appends one further field ([03 §4](03-keys.md#4-derived-keys)):
 
 ```text
 offset  size   field
@@ -56,11 +58,21 @@ offset  size   field
     88     80  sealed_content_key = ephemeral_public[32] ‖ ciphertext[32] ‖ tag[16]
 ```
 
-Total: **168 bytes**. A v2 metadata-class blob keeps the 88-byte envelope.
+Total: **168 bytes**. A metadata-class blob keeps the 88-byte envelope.
 
 The blob's records encrypt under a fresh random 32-byte **content key** drawn at blob creation — the §3.1 ordinal-nonce construction unchanged, its uniqueness argument satisfied trivially by the random key. The content key is sealed to the repository's `sealing_public_key` ([01 §3.2](01-object-layout.md#32-body) key 9): X25519 with a fresh ephemeral keypair, HKDF-SHA256 over the shared secret with both public shares as salt and info `"fbp/seal-content/v2"`, AES-256-GCM with a zero nonce (the key is single-use by construction) and associated data `repository_id ‖ blob_id` — so a sealed share transplanted between blobs or repositories fails to open.
 
-The **recovery footer of a v2 data blob derives its blob key from `metadata_key[generation]`**, not the data family: the record table is structure, and the write-only holder must open it (rebuild, verification, sweep) while the record payloads stay sealed. A v2 data blob therefore has two keys — the content key for records, the metadata-derived blob key for the footer — and a reader without the sealing private key opens the structure whole and reports each record read as refused-for-want-of-a-grant, never as damage.
+The **recovery footer of a data blob derives its blob key from `metadata_key[generation]`**: the record table is structure, and the write credential must open it (rebuild, verification, sweep) while the record payloads stay sealed. A data blob therefore has two keys — the content key for records, the metadata-derived blob key for the footer — and a reader without the sealing private key opens the structure whole and reports each record read as refused-for-want-of-a-grant, never as damage.
+
+### 2.2 Format-v3 data blobs: the sealed record key
+
+A **format-3** data-class blob keeps the 88-byte envelope: there is no per-blob content key to seal, because each record is sealed under its own ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records); [ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md) Amendment 1). The share moves into the record's prefix ([04 §2](04-record.md#2-framing)):
+
+```text
+sealed_record_key = ephemeral_public[32] ‖ ciphertext[32] ‖ tag[16]      (80 bytes)
+```
+
+sealed exactly as §2.1's content key is — X25519 with a fresh ephemeral keypair, HKDF-SHA256 over the shared secret with both public shares as salt and info `"fbp/seal-content/v2"`, AES-256-GCM with a zero nonce over the single-use key — with associated data **`repository_id ‖ object_id`** in place of `repository_id ‖ blob_id`. A share transplanted onto another object's record, or into another repository, fails to open; a share copied with its record into another blob opens there, which is the point. The footer of a format-3 blob of either class derives its key as §2.1's footer does, from `metadata_key[generation]`, and only the footer does.
 
 ## 3 Recovery footer
 
@@ -85,7 +97,7 @@ nonce = 12-byte big-endian 0xFFFFFFFF_FFFFFFFF_FFFFFFFF
 AAD   = repository_id ‖ u16(format_version) ‖ blob_id ‖ u32(record_count)
 ```
 
-The all-ones nonce is reserved for the footer and MUST NOT be used by any record. Since a blob may hold at most 65 536 records, no record ordinal can reach it.
+The all-ones nonce is reserved for the footer and MUST NOT be used by any record. Since a blob may hold at most 65 536 records, no record ordinal can reach it. In a format-3 blob records never use the blob key at all ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)), so their carried nonces ([04 §3](04-record.md#3-nonce)) cannot collide with this reservation whatever bytes they draw.
 
 The footer's record table duplicates information also held in the index. That duplication is deliberate and is the only redundancy in this format: it is metadata, not payload, so it costs a fraction of a percent of repository size, and it is what allows complete recovery when every index object is gone. Payload is never duplicated for recovery. → NFR-REL-006
 
@@ -104,7 +116,7 @@ CBOR array of `record_count` maps, in ascending ordinal order:
 | 7 | u16 | `encryption_profile` |
 | 8 | u8 | `object_type` |
 
-A reader MUST verify that every `physical_offset` plus its record's total size falls within the blob, and that offsets are strictly increasing. A footer failing either check is a damage finding.
+A reader MUST verify that every `physical_offset` plus its record's total size falls within the blob, and that offsets are strictly increasing. A footer failing either check is a damage finding. A record's total size includes its prefix in a format-3 blob ([04 §2](04-record.md#2-framing)), and the prefix length is a function of the blob's version and class alone.
 
 ## 4 Footer locator
 
@@ -152,19 +164,42 @@ This is a **format invariant**: an identified rule that other documents cite and
 **What it forbids, specifically.**
 
 - Appending records to a blob after sealing. A writer MUST NOT, and a reader that encounters data beyond the footer locator MUST report a damage finding rather than reading it.
-- Rewriting a blob to reclaim the space of records that are no longer live. That is compaction, and it is the operation this invariant is really about: compaction reads live records out of a mostly-dead blob, re-seals each one into a **new** blob under a new key, and republishes the index entries as supersessions. The source blob is then tombstoned and deleted whole ([11 §3](11-lifecycle-objects.md#3-tombstone)). It is never edited in place. → [ADR-0025](../../docs/adr/0025-compaction-reseals-records.md)
+- Rewriting a blob to reclaim the space of records that are no longer live. That is compaction, and it is the operation this invariant is really about: compaction reads the live records out of a mostly-dead blob and writes them into a **new** blob — re-sealing each one under a new key at format 2, or copying each one's sealed bytes verbatim at format 3, where the record's key is its object's and its nonce rides its own prefix — and republishes the index entries as supersessions. The source blob is then tombstoned and deleted whole ([11 §3](11-lifecycle-objects.md#3-tombstone)). It is never edited in place, under either construction. → [ADR-0025](../../docs/adr/0025-compaction-reseals-records.md), [ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md), [ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)
 - Re-encrypting a blob under a rotated key by rewriting it. Key rotation proceeds the same way: new blobs, new index entries, delete the old.
 - Overwriting a blob after a failed or partial upload. A writer that cannot establish that its upload succeeded MUST allocate a new blob identifier rather than re-put under the old one, *unless* it can re-put byte-identical content — an idempotent retry of the same sealed buffer is permitted and expected ([01 §4](01-object-layout.md#4-object-immutability)).
 
 **Why it has to be an invariant rather than a convention.** Three things depend on it and none of them can detect a violation on their own:
 
-1. **Nonce uniqueness.** Every record in a blob draws its nonce from its ordinal under one blob key ([04 §3](04-record.md#3-nonce)). A rewritten blob that reuses the key and re-numbers records reuses a `(key, nonce)` pair, which is the failure AES-GCM does not survive — it is a plaintext-recovery bug, not a corruption bug, and nothing in the repository would report it.
+1. **Nonce uniqueness.** Every record in a format-2 blob draws its nonce from its ordinal under one blob key ([04 §3](04-record.md#3-nonce)). A rewritten blob that reuses the key and re-numbers records reuses a `(key, nonce)` pair, which is the failure AES-GCM does not survive — it is a plaintext-recovery bug, not a corruption bug, and nothing in the repository would report it. A format-3 blob's records carry random nonces under keys of their own, so this reason does not apply to them; the next two do, unchanged.
 2. **The blob digest.** A digest published in an index delta ([07 §2.2](07-index.md#22-covered-blob-digests)) names bytes. If the bytes may change, a mismatch stops meaning "these are not the bytes that were sealed" and starts meaning nothing at all.
 3. **Concurrent readers.** A reader resolving a record through the index holds an offset and a length into a blob. Rewriting under the same key gives that reader a different object at the same coordinates, and range reads make the result arbitrary rather than merely wrong.
 
 **A store cannot enforce this and MUST NOT be relied on to.** Conditional create is unavailable on at least one intended provider, and a store that offers it can still be raced by a participant that is not following the rule. The invariant is a property of every writer, upheld by writers.
 
 > **Erratum (phase 0), resolved in phase 1.** Two defects in the digest sentence above. First, "the complete sealed representation" was circular: the locator carries `digest_prefix`, so the locator cannot be inside its own digest's preimage. The digest is computed over bytes `[0, blob_length − 16)` — everything up to but excluding the 16-byte locator. Second, "recorded in the index" named a field that did not exist. It exists now: `covered_blob_digests`, optional and parallel to `covered_blob_ids` on the index delta ([07 §2.2](07-index.md#22-covered-blob-digests)), inside the signature. The device-local catalogue keeps its copy as a cache. → [Q16](../../docs/open-questions.md#closed)
+
+### 5.2 The Merkle commitment
+
+Beside the flat digest, and never instead of it, a blob's sealed bytes carry a **Merkle commitment** over the same preimage — bytes `[0, blob_length − 16)`.
+
+```text
+leaf_hash(chunk)       = SHA-256(0x00 ‖ chunk)
+node_hash(left, right) = SHA-256(0x01 ‖ left ‖ right)
+MTH(D[n])              = leaf_hash when n = 1
+                       = node_hash(MTH(D[0:k]), MTH(D[k:n])) when n > 1,
+                         k the largest power of two strictly below n
+merkle_root            = SHA-256(0x02 ‖ u64_be(preimage_length) ‖ MTH(leaves))
+```
+
+The tree is [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962)'s, and the leaf and node prefixes are its: without them a one-leaf tree's head would be the chunk's bare digest and an interior node's preimage could be presented as a leaf's.
+
+**The leaf is one mebibyte, fixed by the format.** The chunk at index *i* is `[i × 1 MiB, min((i + 1) × 1 MiB, preimage_length))`, and the last is short whenever the preimage is not a whole number of leaves. The size is stated here rather than recorded per blob so that both parties to a challenge agree on it by construction; a size a reader could be *told* is a size the party being checked could choose.
+
+**The published root binds the preimage's length**, under a third prefix of its own, and that is not ornament. RFC 6962's inclusion check takes the tree size from its caller, and for a four-leaf tree's first leaf the path a three-leaf tree wants has the same length and walks to the same head — so a party that understates its copy's length could exempt its last leaf from ever being asked for and still answer every question correctly. Hashing the length into the root makes the commitment name one tree and no other.
+
+**What it is for.** The flat digest can be checked only by a party that holds the whole blob. The root can be checked against **one leaf**: given the root a writer signed, a leaf's bytes and its authentication path, a party that holds neither the blob nor any key can establish that those bytes sit at that offset of that blob. That is what makes a possession challenge over a peer's replica sound rather than a self-report ([peer-protocol 04 §5.1](../peer-protocol/04-verification.md)), and the bytes of the leaf are the proof: an authentication path is not secret, and a party that kept the paths and discarded the chunks can still produce a path and still cannot answer.
+
+The root's durable home is the index delta, published only by a writer at repository format 3 or above ([07 §2.3](07-index.md#23-covered-blob-merkle-roots)).
 
 ## 6 The spool
 
@@ -184,7 +219,7 @@ No attacker and no unusual configuration is required: a crash, an unattended upd
 
 ### 6.2 Everything that could vary is pinned
 
-The checkpoint MUST record: `blob_salt`, `blob_id`, `blob_counter`, `key_generation`, segmentation profile and parameters, compression profile **and codec version**, and encryption profile. For a format-v2 data blob it MUST additionally record the blob's **content key** (§2.1) — resume authenticates the spooled records, and for a sealed blob only that key can. The checkpoint lives in the writer's owner-only state directory, on the machine that holds the same bytes as plaintext files, and is destroyed at seal (ADR-0042 §3).
+The checkpoint MUST record: `blob_salt`, `blob_id`, `blob_counter`, `key_generation`, segmentation profile and parameters, compression profile **and codec version**, and encryption profile. For a format-2 data blob it MUST additionally record the blob's **content key** (§2.1) — resume authenticates the spooled records, and for a sealed blob only that key can. For a **format-3** data blob it records the blob's **record-key seed** instead ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)): each record's content key is derived from the seed and the record's object identifier, so the resume walk re-derives every key it needs from the sidecar and the headers, and no key per record is ever written down. The checkpoint lives in the writer's owner-only state directory, on the machine that holds the same bytes as plaintext files, and is destroyed at seal (ADR-0042 §3).
 
 On resume, a writer MUST compare each against its current configuration. **Any mismatch forces a restart**, not a resume. A restarted blob draws a fresh `blob_salt` and is therefore a different key, so ordinals beginning again at zero reuse nothing.
 

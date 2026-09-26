@@ -23,8 +23,6 @@ public sealed class IndexPlaneTests : IDisposable
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-index-tests", Guid.NewGuid().ToString("n"));
 
@@ -53,8 +51,8 @@ public sealed class IndexPlaneTests : IDisposable
     [TestMethod]
     public void IndexDelta_CoveredBlobDigests_RoundTripAndAreCoveredByTheSignature()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var digest = Enumerable.Repeat((byte)0x5A, 32).ToArray();
         var delta = new IndexDelta
@@ -84,8 +82,8 @@ public sealed class IndexPlaneTests : IDisposable
     [TestMethod]
     public void IndexDelta_CoveredBlobDigests_AreParallelToTheCoveredBlobsOrAbsent()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var delta = new IndexDelta
         {
@@ -118,10 +116,118 @@ public sealed class IndexPlaneTests : IDisposable
     }
 
     [TestMethod]
+    public void IndexDelta_CoveredBlobMerkleRoots_RoundTripAndAreCoveredByTheSignature()
+    {
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+
+        var digest = Enumerable.Repeat((byte)0x5A, 32).ToArray();
+        var root = Enumerable.Repeat((byte)0x6B, 32).ToArray();
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 21,
+            Generation = 0,
+            CoveredBlobIds = [BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray())],
+            CoveredBlobDigests = [digest],
+            CoveredBlobMerkleRoots = [root],
+            Entries = [Entry(1, 6)],
+        };
+
+        var signedBytes = IndexDeltaCodec.EncodeForSigning(delta);
+        var decoded = IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(signedBytes)));
+
+        SequenceAssert.AreEqual(root, Assert.ContainsSingle(decoded.Delta.CoveredBlobMerkleRoots).ToArray());
+        SequenceAssert.AreEqual(digest, Assert.ContainsSingle(decoded.Delta.CoveredBlobDigests).ToArray());
+        Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
+
+        // Key 11 is the second key to sort after the signature and be signed
+        // by it, on the rule 07 §2 states rather than on a numeric range.
+        var altered = delta with { CoveredBlobMerkleRoots = [Enumerable.Repeat((byte)0x6C, 32).ToArray()] };
+        Assert.AreNotEqual(signedBytes, IndexDeltaCodec.EncodeForSigning(altered));
+    }
+
+    [TestMethod]
+    public void IndexDelta_CoveredBlobMerkleRoots_AreParallelToTheCoveredBlobsAndNeverAloneOrMalformed()
+    {
+        var blobs = new[]
+        {
+            BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray()),
+            BlobId.FromBytes(Enumerable.Repeat((byte)7, 16).ToArray()),
+        };
+
+        var digests = new[] { Enumerable.Repeat((byte)0x5A, 32).ToArray(), Enumerable.Repeat((byte)0x5B, 32).ToArray() };
+
+        IndexDelta Build(IReadOnlyList<ReadOnlyMemory<byte>> roots, IReadOnlyList<ReadOnlyMemory<byte>>? blobDigests = null) =>
+            new()
+            {
+                WriterId = Writer,
+                Sequence = 22,
+                Generation = 0,
+                CoveredBlobIds = blobs,
+                CoveredBlobDigests = blobDigests ?? [.. digests.Select(value => (ReadOnlyMemory<byte>)value)],
+                CoveredBlobMerkleRoots = roots,
+                Entries = [Entry(1, 6)],
+            };
+
+        // One root, two blobs: pairing what can be paired would attach one
+        // blob's commitment to another, and a challenge under it would fail
+        // for a peer that holds exactly what it was sent.
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(Build([Enumerable.Repeat((byte)0x6B, 32).ToArray()])));
+
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(Build([new byte[31], new byte[31]])));
+
+        // Roots without digests: a reader that cannot afford the tree must
+        // still have the flat digest to fall back on, so the stronger
+        // commitment never arrives alone (07 §2.3).
+        Assert.ThrowsExactly<IndexFormatException>(
+            () => IndexDeltaCodec.EncodeForSigning(
+                Build([.. digests.Select(value => (ReadOnlyMemory<byte>)value)], [])));
+    }
+
+    [TestMethod]
+    public void IndexDelta_WithoutMerkleRoots_EncodesTheBytesAnOlderWriterProduced()
+    {
+        // The compatibility pin. A delta carrying no roots must encode
+        // exactly as it did before key 11 existed, because an older reader
+        // refuses an unknown key outright (07 §2.4) and every format-2
+        // repository still on disk depends on that byte for byte.
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
+
+        var delta = new IndexDelta
+        {
+            WriterId = Writer,
+            Sequence = 23,
+            Generation = 0,
+            CoveredBlobIds = [BlobId.FromBytes(Enumerable.Repeat((byte)6, 16).ToArray())],
+            CoveredBlobDigests = [Enumerable.Repeat((byte)0x5A, 32).ToArray()],
+            Entries = [Entry(1, 6)],
+        };
+
+        // Captured from the encoder before key 11 was added.
+        const string Expected =
+            "a60150a0a1a2a3a4a5a6a7a8a9aaabacadaeaf021704000681500606060606060606060606060606060607818658"
+            + "200101010101010101010101010101010101010101010101010101010101010101500606060606060606060606"
+            + "060606060618581910001a00010001010a81582"
+            + "05a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+
+        Assert.AreEqual(
+            Expected,
+            Convert.ToHexStringLower(IndexDeltaCodec.EncodeForSigning(delta)),
+            "a delta with no Merkle roots must not change shape");
+
+        Assert.IsEmpty(IndexDeltaCodec.Decode(IndexDeltaCodec.Encode(delta, signer.Sign(
+            IndexDeltaCodec.EncodeForSigning(delta)))).Delta.CoveredBlobMerkleRoots);
+    }
+
+    [TestMethod]
     public void IndexDelta_SignedInTwoPasses_RoundTripsAndVerifies()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero);
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);
 
         var delta = new IndexDelta
         {
@@ -234,10 +340,10 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_PublishedThenLoaded_RoundTripsWithVerifiedSignatures()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = CreateSequence();
 
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             await publisher.PublishDeltaAsync(
                 0, [Entry(1, 1).BlobId], [Entry(1, 1), Entry(2, 1)], CancellationToken.None);
@@ -245,7 +351,7 @@ public sealed class IndexPlaneTests : IDisposable
                 0, [Entry(3, 2).BlobId], [Entry(3, 2)], CancellationToken.None);
         }
 
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
         var state = await loader.LoadAsync(
             currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null, blobState: null,
             CancellationToken.None);
@@ -261,7 +367,7 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_ACrashSkippedSequence_IsClosedByAVoidDelta()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
 
         // Run 1: allocate a number (a blob counter, say) and crash before
         // anything is published for it.
@@ -273,7 +379,7 @@ public sealed class IndexPlaneTests : IDisposable
         var recovered = CreateSequence();
         SequenceAssert.AreEqual([skipped], recovered.OutstandingObligations);
 
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, recovered))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, recovered))
         {
             foreach (var obligation in recovered.OutstandingObligations)
             {
@@ -283,7 +389,7 @@ public sealed class IndexPlaneTests : IDisposable
             await publisher.PublishDeltaAsync(0, [], [Entry(1, 1)], CancellationToken.None);
         }
 
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
         var state = await loader.LoadAsync(0, 2, null, null, CancellationToken.None);
 
         // The void fills sequence 1; sequence 2 carries the entries. No gap,
@@ -297,10 +403,10 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_AnUnaccountedGap_IsToleratedForAWhileThenReportedAsDamage()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = CreateSequence();
 
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             await publisher.PublishDeltaAsync(0, [], [Entry(1, 1)], CancellationToken.None);
 
@@ -310,7 +416,7 @@ public sealed class IndexPlaneTests : IDisposable
             await publisher.PublishDeltaAsync(0, [], [Entry(2, 1)], CancellationToken.None);
         }
 
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
 
         // Inside patience: unresolved, not damage — a reader MUST NOT block
         // and MUST NOT interpret silence as an empty delta (07 §4).
@@ -336,10 +442,10 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_AnObjectIsTampered_IsExcludedAndReportedAsASecurityFinding()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = CreateSequence();
 
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             await publisher.PublishDeltaAsync(0, [], [Entry(1, 1)], CancellationToken.None);
         }
@@ -352,7 +458,7 @@ public sealed class IndexPlaneTests : IDisposable
 
         var record = FallbackPlan.Repository.Format.Records.StandaloneRecordFraming.Parse(
             await File.ReadAllBytesAsync(deltaPath));
-        var metadataKey = hierarchy.DeriveMetadataKey(KeyGeneration.Zero);
+        var metadataKey = credential.DeriveMetadataKey(KeyGeneration.Zero);
         Assert.IsTrue(FallbackPlan.Repository.Packing.StandaloneRecordCipher.TryOpen(
             record, Repo, metadataKey, out var plaintext));
 
@@ -360,14 +466,14 @@ public sealed class IndexPlaneTests : IDisposable
         var forgedDelta = forged.Delta with { Entries = [Entry(9, 9)] };
         var forgedBytes = IndexDeltaCodec.Encode(forgedDelta, forged.Signature.Span);
 
-        using var deriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        using var deriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
         var forgedObjectId = deriver.Derive(Domain.ObjectType.IndexDelta, ContentHasher.Hash(forgedBytes));
         var resealed = FallbackPlan.Repository.Packing.StandaloneRecordCipher.Seal(
             Repo, metadataKey, KeyGeneration.Zero, Writer, record.Counter,
             Domain.ObjectType.IndexDelta, forgedObjectId, forgedBytes);
         await File.WriteAllBytesAsync(deltaPath, resealed);
 
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
         var state = await loader.LoadAsync(0, 2, (_, _) => ValueTask.FromResult(true), null, CancellationToken.None);
 
         // A bad signature is substitution or forgery, not a bad disk
@@ -380,10 +486,10 @@ public sealed class IndexPlaneTests : IDisposable
     public async Task IndexPlane_ACheckpointSubsumesEarlierDeltas_StillAppliesNewerOnes()
     {
         var store = CreateStore();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
         var sequence = CreateSequence();
 
-        using (var publisher = new IndexPublisher(store, Repo, Writer, hierarchy, sequence))
+        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
         {
             var first = await publisher.PublishDeltaAsync(0, [], [Entry(1, 1)], CancellationToken.None);
             var second = await publisher.PublishDeltaAsync(0, [], [Entry(2, 1)], CancellationToken.None);
@@ -401,7 +507,7 @@ public sealed class IndexPlaneTests : IDisposable
             await publisher.PublishDeltaAsync(1, [], [Entry(3, 2)], CancellationToken.None);
         }
 
-        using var loader = new IndexLoader(store, Repo, hierarchy);
+        using var loader = new IndexLoader(store, Repo, credential);
         var state = await loader.LoadAsync(1, 2, null, null, CancellationToken.None);
 
         Assert.IsEmpty(state.Findings);

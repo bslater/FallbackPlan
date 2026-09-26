@@ -36,6 +36,7 @@ public sealed class DestinationConvergenceTests : IDisposable
     public DestinationConvergenceTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         Directory.CreateDirectory(WidePath);
         Directory.CreateDirectory(NarrowPath);
@@ -115,9 +116,8 @@ public sealed class DestinationConvergenceTests : IDisposable
         // Convergence is idempotent and never re-pushes what the policy
         // dropped: a second pass over the same state moves and removes
         // nothing (the watermark the plan asked for, by construction).
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var staging = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
         var convergence = await DestinationConvergence.ComputeKeepsAsync(
             new LocalFileSystemObjectStore(RepoPath), staging,
             new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
@@ -166,6 +166,132 @@ public sealed class DestinationConvergenceTests : IDisposable
         CollectionAssert.DoesNotContain(held, "blobs/data/bb/dropped");
     }
 
+    [TestMethod]
+    public async Task Converge_ASparedKey_SurvivesTheDropHalfAndIsCounted()
+    {
+        // The spare is the drop half's second veto (FR-GC-009's direct-ship
+        // shape): a key the destination's own policy drops but a sibling is
+        // still owed must stay, because under direct-ship it may be the last
+        // copy anywhere.
+        var source = new LocalFileSystemObjectStore(Path.Combine(_root, "spare-source"));
+        var destination = new LocalFileSystemObjectStore(Path.Combine(_root, "spare-destination"));
+
+        await PlantAsync(source, "repository-format");
+        await PlantAsync(source, "blobs/data/aa/kept");
+        await PlantAsync(source, "blobs/data/bb/spared");
+        await PlantAsync(source, "blobs/data/cc/dropped");
+        await PlantAsync(destination, "repository-format");
+        await PlantAsync(destination, "blobs/data/aa/kept");
+        await PlantAsync(destination, "blobs/data/bb/spared");
+        await PlantAsync(destination, "blobs/data/cc/dropped");
+
+        static bool Keeps(string key) =>
+            !key.StartsWith("blobs/", StringComparison.Ordinal) || key is "blobs/data/aa/kept";
+        static bool Spares(string key) => key is "blobs/data/bb/spared";
+
+        var outcome = await StoreToStoreCopier.ConvergeAsync(
+            source, destination, Keeps, CancellationToken.None, spares: Spares);
+
+        Assert.AreEqual(1, outcome.Deleted);
+        Assert.AreEqual(1, outcome.Spared);
+        var held = await ListAsync(destination, "blobs/");
+        CollectionAssert.Contains(held, "blobs/data/aa/kept");
+        CollectionAssert.Contains(held, "blobs/data/bb/spared");
+        CollectionAssert.DoesNotContain(held, "blobs/data/cc/dropped");
+    }
+
+    [TestMethod]
+    public async Task ComputeSpares_ASiblingOwedSnapshots_SparesTheirClosureAndReleasesTheHeld()
+    {
+        // Three snapshots; the sync ledger proves "wide" received only the
+        // first. Whatever any destination's own keep-set says, the second and
+        // third are still owed to wide — their closure is spared — while the
+        // first, provably delivered, earns no spare.
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+        await BackUpAsync(day1.AddDays(2));
+
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
+        var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
+        var oldestFirst = survey.Snapshots.OrderBy(entry => entry.Fact.PublicationSequence).ToList();
+        Assert.HasCount(3, oldestFirst);
+
+        var spares = await DestinationConvergence.ComputeSparesAsync(
+            store, staging, SpareDestinations(),
+            setPolicy: null,
+            name => SyncedThrough(name, name == "wide"
+                ? oldestFirst[0].Fact.PublicationSequence
+                : oldestFirst[^1].Fact.PublicationSequence),
+            (ulong)day1.AddDays(2).AddHours(1).ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+
+        Assert.IsNotNull(spares.Spares, "an owed sibling must produce a spare filter");
+        Assert.IsFalse(spares.Spares(oldestFirst[0].StoreKey.Value), "a delivered snapshot earns no spare");
+        Assert.IsTrue(spares.Spares(oldestFirst[1].StoreKey.Value));
+        Assert.IsTrue(spares.Spares(oldestFirst[2].StoreKey.Value));
+
+        // The owed snapshots' data travels with them: at least one blob is
+        // under the spare, or the record would survive without its bytes.
+        var blobs = await ListAsync(store, "blobs/");
+        Assert.IsTrue(
+            blobs.Any(key => spares.Spares(key)), "the owed closure must cover blobs, not just snapshot records");
+
+        // And the set has a rendering, because a sibling catching up is how a
+        // spare set changes and no publication sequence records that
+        // (ADR-0056).
+        Assert.AreNotEqual(DestinationConvergence.SparePlanNothingFingerprint, spares.Fingerprint);
+    }
+
+    [TestMethod]
+    public async Task ComputeSpares_EveryDestinationCurrent_SparesNothing()
+    {
+        var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(day1);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(day1.AddDays(1));
+
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
+        var survey = await StagingMark.SurveyAsync(store, staging, CancellationToken.None);
+        var newest = survey.Snapshots.Max(entry => entry.Fact.PublicationSequence);
+
+        var spares = await DestinationConvergence.ComputeSparesAsync(
+            store, staging, SpareDestinations(),
+            setPolicy: null,
+            name => SyncedThrough(name, newest),
+            (ulong)day1.AddDays(1).AddHours(1).ToUnixTimeMilliseconds(),
+            CancellationToken.None);
+
+        Assert.IsNull(spares.Spares, "nothing is owed, so nothing is spared — the steady state stays exact");
+        Assert.AreEqual(DestinationConvergence.SparePlanNothingFingerprint, spares.Fingerprint);
+    }
+
+    private static List<SetDestinationReference> SpareDestinations() =>
+    [
+        new SetDestinationReference { Ref = "wide" },
+        new SetDestinationReference
+        {
+            Ref = "narrow",
+            Retention = new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+        },
+    ];
+
+    private static DestinationSyncRecord SyncedThrough(string name, ulong sequence) => new()
+    {
+        SetId = SetId,
+        Destination = name,
+        State = DestinationSyncState.InSync,
+        LastAttemptAt = 1,
+        LastSuccessAt = 1,
+        SyncedSequence = sequence,
+    };
+
     private static async Task PlantAsync(LocalFileSystemObjectStore store, string key)
     {
         var put = await store.PutAsync(
@@ -178,14 +304,14 @@ public sealed class DestinationConvergenceTests : IDisposable
 
     private static async Task AssertWalksCleanAsync(LocalFileSystemObjectStore replica, int expectedSnapshots)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(replica, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(replica, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(replica, repository, CancellationToken.None);
         Assert.HasCount(expectedSnapshots, survey.Snapshots);
         Assert.IsEmpty(survey.Undecodable);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, unwalkable) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
         Assert.IsEmpty(unwalkable);
@@ -207,9 +333,8 @@ public sealed class DestinationConvergenceTests : IDisposable
             .First();
         await File.WriteAllBytesAsync(snapshot, new byte[64]);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var staging = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var staging = opened.Repository;
 
         var convergence = await DestinationConvergence.ComputeKeepsAsync(
             new LocalFileSystemObjectStore(RepoPath), staging,
@@ -415,7 +540,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+                "--destination", "wide", "--full"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -442,7 +567,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "wide", "--full"],
+                "--destination", "wide", "--full"],
             output, error, CancellationToken.None);
 
         // The agent verb prints the report and returns 0; the damage is in the
@@ -465,7 +590,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "friend"],
+                "--destination", "friend"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -481,7 +606,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", "nowhere"],
+                "--destination", "nowhere"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(2, exit);
@@ -600,7 +725,7 @@ public sealed class DestinationConvergenceTests : IDisposable
         var error = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
         var exit = await AgentHost.RunAsync(
             ["verify-destination", "--archives", ArchivesRoot, "--state", StateDirectory,
-                "--passphrase-env", PassphraseVariable, "--destination", destination, "--probe"],
+                "--destination", destination, "--probe"],
             output, error, CancellationToken.None);
 
         Assert.AreEqual(0, exit, error.ToString());
@@ -665,7 +790,7 @@ public sealed class DestinationConvergenceTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 

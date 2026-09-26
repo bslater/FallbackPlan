@@ -51,7 +51,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string agentVersion,
         ILogger log,
         string? replicationStateDirectory,
-        IReadOnlyList<string>? offeredFeatures)
+        IReadOnlyList<string>? offeredFeatures,
+        FallbackPlan.Application.ReplicaOwnerStore? owners)
     {
         _keypair = keypair;
         _grants = grants;
@@ -67,11 +68,32 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             // (peer-protocol 03 §8).
             _replicasRoot = Path.Combine(replicationStateDirectory, "replicas");
             _spoolRoot = Path.Combine(replicationStateDirectory, "spool", "replication");
-            _owners = FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
+
+            // Staged prefixes outlive the session that made them (ADR-0057),
+            // so something has to be responsible for the ones no session will
+            // ever come back for. Startup is where a process kill — which
+            // leaves a prefix nobody closed — is noticed at all.
+            PartialSpool.Sweep(_spoolRoot, DateTimeOffset.UtcNow);
+            _owners = owners ?? FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
         }
     }
 
     /// <summary>The endpoint this listener is bound to, interface and port.</summary>
+    /// <summary>
+    /// Whether this binding told its peers it verifies a retention signature
+    /// over the session identifier (02 §3.5) — and therefore whether it
+    /// requires one.
+    /// </summary>
+    /// <remarks>
+    /// A spoke that withheld the feature must also verify the unbound
+    /// encoding, or it would be refusing commanders for believing what it said
+    /// about itself. Withholding it is a compatibility test standing an older
+    /// spoke in front of a current source; nothing in production does.
+    /// </remarks>
+    private bool OffersSessionBoundRetention =>
+        (_offeredFeatures ?? PeerSessionNegotiation.SupportedFeatures)
+            .Contains(PeerSessionNegotiation.SessionBoundRetentionFeature, StringComparer.Ordinal);
+
     public IPEndPoint Endpoint => (IPEndPoint)_socket.LocalEndPoint!;
 
     /// <summary>
@@ -103,6 +125,14 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// front of a current source; nothing in production passes anything but
     /// the default.
     /// </param>
+    /// <param name="owners">
+    /// The attribution store to serve from, when the process already holds
+    /// one — the service runtime's (<see cref="ServiceRuntime.ReplicaOwners"/>),
+    /// so an operator's re-attribution (ADR-0053 §3) is what the retrieval
+    /// gate sees. Null opens a store of its own over
+    /// <paramref name="replicationStateDirectory"/>, which is only right for a
+    /// listener with no runtime beside it.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
@@ -110,7 +140,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string agentVersion,
         ILogger? log = null,
         string? replicationStateDirectory = null,
-        IReadOnlyList<string>? offeredFeatures = null)
+        IReadOnlyList<string>? offeredFeatures = null,
+        FallbackPlan.Application.ReplicaOwnerStore? owners = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -123,7 +154,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
                 keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
-                replicationStateDirectory, offeredFeatures);
+                replicationStateDirectory, offeredFeatures, owners);
         }
         catch
         {
@@ -346,18 +377,51 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     return;
                 }
 
-                // A claim is the one payload a peer may send about replicas it
-                // does NOT own here, so it routes before the ownership-gated
-                // retrieval path rather than through it (07 §5).
-                if (payload.Value.Type == PeerMessageType.ClaimRequest
-                    && session.Supports(PeerSessionNegotiation.ReplicaClaimFeature))
+                // A claim comes before retrieval can succeed rather than
+                // instead of it: the claimant asks for the attribution to
+                // follow it to the device identity it now has (03 §6,
+                // ADR-0053), after which the ordinary retrieval gate lets it
+                // read. A rebuilt machine dials, claims, and dials again. The
+                // ceremony opens with an empty frame; the claim itself comes
+                // only after this side has said which derivations to run, so
+                // a claim arriving first is a peer speaking the wrong shape.
+                if (payload.Value.Type == PeerMessageType.ReplicationClaim)
                 {
-                    _ = ClaimRequest.Read(payload.Value.Body);
-                    var moved = await ClaimResponder.ServeAsync(
-                        _replicasRoot, session.Stream, session.Peer, _owners!,
-                        session.TranscriptHash, _stateDirectory!, _stopping.Token)
+                    var wrongShape = new PeerProtocolException(
+                        PeerRefusalReason.Malformed,
+                        "A claim opens with ReplicationClaimOpen and follows the destination's parameters (03 §6); "
+                        + "a claim sent first has nothing to be derived against.");
+                    await ReplicationWire.TryRefuseAsync(session.Stream, wrongShape).ConfigureAwait(false);
+                    throw wrongShape;
+                }
+
+                if (payload.Value.Type == PeerMessageType.ReplicationClaimOpen)
+                {
+                    // Named rather than left to fall through to the offer
+                    // reader, which would refuse with "expected a replication
+                    // offer" — true, and no use at all to somebody whose
+                    // recovery has just stopped. The feature's name is what
+                    // tells them this destination is the half of the pair
+                    // that needs updating.
+                    if (!session.Supports(PeerSessionNegotiation.ReplicaClaimFeature))
+                    {
+                        // Refused on the wire before it is thrown: the catch
+                        // below assumes a responder already answered, and a
+                        // claimant that got silence instead of a reason would
+                        // be left guessing at the worst possible moment.
+                        var unsupported = new PeerProtocolException(
+                            PeerRefusalReason.FeatureUnsupported,
+                            "This destination does not offer the replica-claim feature, so a replica here cannot "
+                            + "be claimed by a rebuilt machine (03 §6). Update it, and the claim will be "
+                            + "accepted — the replica itself is untouched either way.");
+                        await ReplicationWire.TryRefuseAsync(session.Stream, unsupported).ConfigureAwait(false);
+                        throw unsupported;
+                    }
+
+                    var claimed = await ClaimResponder.ServeAsync(
+                        _replicasRoot, session.Stream, session.Peer, _owners!, session.Binding, _stopping.Token)
                         .ConfigureAwait(false);
-                    Log.ReplicasClaimed(_log, peer, moved.Count);
+                    Log.ReplicaClaimed(_log, peer, claimed.Count);
                     return;
                 }
 
@@ -366,7 +430,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 {
                     await RetrievalResponder.ServeAsync(
                         _replicasRoot, session.Stream, session.Peer, _owners!,
-                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token)
+                        RetrieveOpen.Read(payload.Value.Body), _stopping.Token,
+                        session.Supports(PeerSessionNegotiation.ChunkPossessionFeature))
                         .ConfigureAwait(false);
                     Log.RetrievalServed(_log, peer);
                     return;
@@ -376,9 +441,27 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
                     session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
                     session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),
-                    session.Supports(PeerSessionNegotiation.ReplicaClaimFeature), _stopping.Token,
+                    session.Supports(PeerSessionNegotiation.PartialObjectResumeFeature),
+                    // Judged from what THIS binding offers, never from the
+                    // negotiated intersection. A retention signature must
+                    // cover the session for this spoke to act on it, and the
+                    // intersection is half the source's to choose — so reading
+                    // the requirement out of it would let the party being
+                    // checked decide it (02 §6). What this build offers is a
+                    // fact about this build.
+                    OffersSessionBoundRetention ? session.Binding : default,
+                    new ReplicationResponder.ReceiptIssuer(
+                        session.Binding, _keypair,
+                        _stateDirectory is null ? null : DeletionReceiptStore.Open(_stateDirectory),
+                        _stateDirectory is null ? null : ReplicationReceiptStore.Open(_stateDirectory)),
+                    _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);
+
+                if (outcome.ReceiptFilingProblem is { } filingProblem)
+                {
+                    Log.DeletionReceiptNotFiled(_log, peer, filingProblem);
+                }
 
                 if (outcome.Termination is { } termination)
                 {

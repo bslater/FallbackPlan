@@ -76,17 +76,8 @@
   <data name="RepositoryKeySet_BlobClassXNotDefined" xml:space="preserve">
     <value>Blob class 0x{0:x4} is not defined (specification 05 §2).</value>
   </data>
-  <data name="RepositoryLifecycle_DescriptorDoesNotVerify" xml:space="preserve">
-    <value>The descriptor does not verify — nothing is exported from an unverifiable repository.</value>
-  </data>
-  <data name="RepositoryLifecycle_DescriptorPresentButKeysListed" xml:space="preserve">
-    <value>The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).</value>
-  </data>
   <data name="RepositoryLifecycle_DescriptorSDigestDoesNot" xml:space="preserve">
     <value>The descriptor's digest does not verify — accidental corruption (specification 01 §3.1).</value>
-  </data>
-  <data name="RepositoryLifecycle_NoRepositoryDescriptorExistsRepository" xml:space="preserve">
-    <value>No repository descriptor exists at /repository-format.</value>
   </data>
   <data name="RepositoryLifecycle_NoRepositoryFormatObjectExists" xml:space="preserve">
     <value>No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).</value>
@@ -106,13 +97,43 @@
   <data name="RepositoryLifecycle_CredentialNotThisRepository" xml:space="preserve">
     <value>The write credential does not belong to this repository: its sealing public key disagrees with the descriptor's (ADR-0042).</value>
   </data>
-  <data name="RepositoryLifecycle_NotWriteOnlyRepository" xml:space="preserve">
-    <value>This repository is not write-only (format v2); open it with its passphrase through the key-object path.</value>
-  </data>
   <data name="RepositoryLifecycle_PassphraseDoesNotReproduce" xml:space="preserve">
     <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.</value>
   </data>
-  <data name="RepositoryLifecycle_WriteOnlyNeedsDerivedOpen" xml:space="preserve">
-    <value>This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).</value>
+  <data name="RepositoryKeySet_NoDataClassKey" xml:space="preserve">
+    <value>A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.</value>
+  </data>
+  <data name="RepositoryLifecycle_AlreadyAtFormatVersion" xml:space="preserve">
+    <value>This repository already writes format version {0}; there is nothing to upgrade.</value>
+  </data>
+  <data name="RepositoryLifecycle_UpgradeBelowEffectiveVersion" xml:space="preserve">
+    <value>Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.</value>
+  </data>
+  <data name="BlobCompactor_CompactionNeedsFormatThree" xml:space="preserve">
+    <value>Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).</value>
+  </data>
+  <data name="BlobCompactor_SourceBlobMissing" xml:space="preserve">
+    <value>The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.</value>
+  </data>
+  <data name="BlobCompactor_SourceRecordRefused" xml:space="preserve">
+    <value>Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.</value>
+  </data>
+  <data name="CompactionPublication_BlobExceedsDeltaBudget" xml:space="preserve">
+    <value>Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.</value>
+  </data>
+  <data name="CompactionPublication_StoreHeldDifferentBytes" xml:space="preserve">
+    <value>The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.</value>
+  </data>
+  <data name="CompactionPublication_StoreRefusedBlob" xml:space="preserve">
+    <value>The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.</value>
+  </data>
+  <data name="CompactionPass_NeedsFormatThree" xml:space="preserve">
+    <value>This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.</value>
+  </data>
+  <data name="StoreAdmission_NoConditionalCreate" xml:space="preserve">
+    <value>This store declares no conditional create, and every durable step of a publication is an if-absent put — without it a write over a live key answers 'created', which is how a sealed blob would be silently replaced. Refused rather than guessed (ADR-0012).</value>
+  </data>
+  <data name="StoreAdmission_NoRangedReads" xml:space="preserve">
+    <value>This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).</value>
   </data>
 </root>

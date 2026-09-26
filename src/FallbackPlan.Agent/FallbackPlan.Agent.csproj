@@ -1,5 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- The 04 §5.1 kill sweep runs through the ship-sink's fault-injection
+       seams (ServiceOptions.ReplicaStoreDecorator / AvailableBytesProbe),
+       which are internal because a production host has no business wrapping
+       replica stores — same posture as the Cli's gateway internals. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="FallbackPlan.Hosts.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -20,12 +28,11 @@
     <ProjectReference Include="..\FallbackPlan.Restore\FallbackPlan.Restore.csproj" />
     <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
     <ProjectReference Include="..\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
-    <ProjectReference Include="..\FallbackPlan.Keystore\FallbackPlan.Keystore.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Prebuilt package from the committed external/packages feed: parameter
+    <!-- From nuget.org, pinned centrally: parameter
          validation (ADR-0019 section 4 / ADR-0021). Guard clauses are one
          vocabulary across the solution rather than per-project taste. -->
     <PackageReference Include="Bodu.Core" />

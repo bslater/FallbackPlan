@@ -22,8 +22,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class TelemetryPrivacyTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private static readonly Dictionary<string, string[]> AllowedValues =
         new(StringComparer.Ordinal)
         {
@@ -61,13 +59,14 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "catalogue.db"), Repo);
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
         var snapshotId = Enumerable.Repeat((byte)0xA1, 16).ToArray();
         await orchestrator.PublishAsync(
@@ -85,7 +84,7 @@ public sealed class TelemetryPrivacyTests : ArchiveTestHarness
             },
             CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var target = RestoreTargetProfile.ForLocalPlatform();
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);

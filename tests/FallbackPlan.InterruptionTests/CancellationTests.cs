@@ -49,7 +49,7 @@ public sealed class CancellationTests : InterruptionHarness
     private async Task CancelMidUploadAsync(
         Storage.Abstractions.IObjectStore store,
         RepositoryKeySet keys,
-        Repository.Crypto.KeyHierarchy hierarchy,
+        Repository.Crypto.RepositoryWriteCredential credential,
         byte[] content,
         string? spoolDirectory = null)
     {
@@ -57,7 +57,7 @@ public sealed class CancellationTests : InterruptionHarness
         using var cancellation = new CancellationTokenSource();
 
         using var source = new MemoryStream(content);
-        var publication = CreateOrchestrator(gate, keys, hierarchy, concurrency: Outstanding, spoolDirectory: spoolDirectory)
+        var publication = CreateOrchestrator(gate, keys, credential, concurrency: Outstanding, spoolDirectory: spoolDirectory)
             .PublishAsync(Job(source, snapshotSeed: 0xB2), cancellation.Token).AsTask();
 
         Assert.IsTrue(
@@ -86,13 +86,13 @@ public sealed class CancellationTests : InterruptionHarness
     private static async Task AssertUploadInterruptionStateClassAsync(
         LocalFileSystemObjectStore store,
         string storeRoot,
-        Repository.Crypto.KeyHierarchy hierarchy)
+        Repository.Crypto.RepositoryWriteCredential credential)
     {
         Assert.IsTrue(Count(storeRoot, "blobs") > 0);
         Assert.AreEqual(0, Count(storeRoot, "index/delta"));
         Assert.AreEqual(0, Count(storeRoot, "snapshots"));
 
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, currentGeneration: 0, nowMs: 1_722_600_000_000, skewMarginMs: 0);
         Assert.IsNotEmpty(survey.LiveIntents);
@@ -106,14 +106,14 @@ public sealed class CancellationTests : InterruptionHarness
 
         // The strongest oracle: a collector running right now would classify
         // every durable blob as protected, with no heuristics.
-        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000));
+        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000));
     }
 
     [TestMethod]
     public async Task Publish_CancelledMidUpload_LeavesTheSameStateAsAKillAtThatPoint()
     {
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
         var content = BuildFile(seed: 2, regions: 40);
 
         // Twin worlds driven with the same content. World one: a kill at the
@@ -126,16 +126,16 @@ public sealed class CancellationTests : InterruptionHarness
         {
             await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
                 await CreateOrchestrator(
-                        killStore, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs),
+                        killStore, keys, credential, new KillAfter(PublicationStep.UploadBlobs),
                         concurrency: Outstanding, spoolDirectory: killSpool)
                     .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
         }
 
         var (cancelStore, cancelRoot, cancelSpool) = CreateWorld("cancel");
-        await CancelMidUploadAsync(cancelStore, keys, hierarchy, content, cancelSpool);
+        await CancelMidUploadAsync(cancelStore, keys, credential, content, cancelSpool);
 
-        await AssertUploadInterruptionStateClassAsync(killStore, killRoot, hierarchy);
-        await AssertUploadInterruptionStateClassAsync(cancelStore, cancelRoot, hierarchy);
+        await AssertUploadInterruptionStateClassAsync(killStore, killRoot, credential);
+        await AssertUploadInterruptionStateClassAsync(cancelStore, cancelRoot, credential);
 
         // The pinned drain: every upload parked at the cancel still became
         // durable — writes after the request, intent-covered, queue-bounded.
@@ -147,15 +147,15 @@ public sealed class CancellationTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
-        await CancelMidUploadAsync(store, keys, hierarchy, BuildFile(seed: 2, regions: 40));
+        await CancelMidUploadAsync(store, keys, credential, BuildFile(seed: 2, regions: 40));
 
         // The load-bearing claim, identical to the kill matrix's: no cancel
         // at any point makes a committed snapshot unreadable (04 §5.1).
@@ -167,16 +167,16 @@ public sealed class CancellationTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         var blobsBeforeCancel = (await ReadStoredBlobsAsync(store)).Select(blob => blob.Key.ToString()).ToHashSet();
-        await CancelMidUploadAsync(store, keys, hierarchy, BuildFile(seed: 2, regions: 40));
+        await CancelMidUploadAsync(store, keys, credential, BuildFile(seed: 2, regions: 40));
         var cancelledRunBlobs = (await ReadStoredBlobsAsync(store))
             .Select(blob => blob.Key.ToString())
             .Where(key => !blobsBeforeCancel.Contains(key))
@@ -189,7 +189,7 @@ public sealed class CancellationTests : InterruptionHarness
         var retried = BuildFile(seed: 3);
         using (var source = new MemoryStream(retried))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
@@ -208,7 +208,7 @@ public sealed class CancellationTests : InterruptionHarness
         // snapshots instead, exactly the release-timing pinned by
         // ConcurrentCollectionTests — so the claim is scoped to the
         // cancelled run's.
-        var candidates = await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000);
+        var candidates = await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000);
         foreach (var candidate in candidates)
         {
             Assert.IsFalse(
@@ -222,7 +222,7 @@ public sealed class CancellationTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var content = BuildFile(seed: 2);
         var holding = new HoldingObjectStore(store, parkTarget: 1, key => key.StartsWith("snapshots/", StringComparison.Ordinal));
@@ -231,7 +231,7 @@ public sealed class CancellationTests : InterruptionHarness
         Task publication;
         using (var source = new MemoryStream(content))
         {
-            publication = CreateOrchestrator(holding, keys, hierarchy)
+            publication = CreateOrchestrator(holding, keys, credential)
                 .PublishAsync(Job(source, snapshotSeed: 0xB2), cancellation.Token).AsTask();
 
             Assert.IsTrue(

@@ -49,6 +49,16 @@ public sealed record SnapshotJob
     /// <summary>rules-v1 exclude rules.</summary>
     public IReadOnlyList<string> ExcludeRules { get; init; } = [];
 
+    /// <summary>
+    /// The backup set's configured name, recorded in the policy manifest
+    /// (ADR-0061) so an archive can re-declare the set that wrote it; null
+    /// records nothing.
+    /// </summary>
+    public string? SetName { get; init; }
+
+    /// <summary>The set's schedule text, recorded beside the name; null records nothing.</summary>
+    public string? Schedule { get; init; }
+
     /// <summary>The claiming device (snapshot key 2), 16 bytes.</summary>
     public required ReadOnlyMemory<byte> DeviceId { get; init; }
 
@@ -92,6 +102,14 @@ public sealed record SnapshotJob
 
     /// <summary>The writing client's version string.</summary>
     public required string ClientVersion { get; init; }
+
+    /// <summary>
+    /// The job's suspension point, when its scheduler preempts (ADR-0047 Amendment 1).
+    /// The publication checks it between scan events — so a paused run parks
+    /// between files, its walker, session and spool held exactly where they
+    /// were, and resumes without re-scanning. Null runs unpausable.
+    /// </summary>
+    public IPauseGate? PauseGate { get; init; }
 }
 
 /// <summary>
@@ -150,11 +168,14 @@ public sealed partial class PublicationOrchestrator
     {
         ThrowHelper.ThrowIfNull(job);
 
-        // The last step to complete, so a throw can name where the publication
-        // got to. Held on the instance rather than threaded through: the writer
-        // lane serialises publications (ADR-0029 §1), so there is only ever one
-        // in flight against one of these.
-        _lastStep = PublicationStep.PublishIntent;
+        // The last step to COMPLETE, so a throw can name where the publication
+        // got to — Preparing until the intent is actually durable, or a
+        // failure in the pre-intent window would wear a step that never
+        // happened. Held on the instance rather than threaded through: one
+        // publication at a time runs against one of these — a set's archive
+        // opens once, and the writer pool never gives two workers the same
+        // set (ADR-0029 §1, ADR-0047).
+        _lastStep = PublicationStep.Preparing;
 
         try
         {
@@ -213,18 +234,63 @@ public sealed partial class PublicationOrchestrator
 
         var options = job.ScanOptions with { Rules = rules };
 
+        var reporter = new PublicationProgress(_progress, job.SnapshotId);
+        reporter.Enter(JobState.Scanning);
+
+        // The plan, before any byte moves (FR-SVC-006): one counting walk
+        // under the same compiled rules the capture judges by, so the total
+        // and the capture cannot disagree about what is in scope. The walk
+        // prunes exclusions; the include half is applied per leaf below,
+        // mirroring the capture loop's own split — counting exclusions only
+        // over-counted a set with include rules, and its meter finished at
+        // a fraction of 100%. Leaves only — a scan failure yields no leaf
+        // here and a failure there, so a client clamps rather than divides
+        // by a lie. The walk reads no content and runs before the write
+        // intent, so the declared job duration covers archiving, not
+        // counting; the pause gate is honoured so a preemptor need not wait
+        // for the count. The metadata matrix is switched off — rules don't
+        // consult it, and every per-entry syscall skipped is counting time
+        // saved.
+        long plannedFiles = 0;
+        long plannedBytes = 0;
+        var countingOptions = options with
+        {
+            CaptureExtendedAttributes = false,
+            CaptureAlternateStreams = false,
+            CaptureSecurityDescriptors = false,
+        };
+        await foreach (var counted in MultiRootScan
+            .ScanAsync(job.Source, job.Roots, countingOptions, cancellationToken).ConfigureAwait(false))
+        {
+            if (job.PauseGate is { } countingGate)
+            {
+                await countingGate.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (counted is ScanEvent.Leaf leaf
+                && (rules is null || rules.IsCaptured(leaf.Entry.RelativePath.Normalize(NormalizationForm.FormC))))
+            {
+                plannedFiles++;
+                plannedBytes += leaf.Entry.Length;
+                reporter.Counting(plannedFiles);
+            }
+        }
+
+        reporter.PlanFixed(plannedFiles, plannedBytes);
+
         // Crash hygiene before any new spool is created: a spool without its
         // sidecar is unreachable by any resume and referenced by nothing
         // (05 §6.3), and this writer owns the directory exclusively.
         BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
-        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _hierarchy, _sequence, _logger);
+        using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
+        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
 
         // A previous run's leftovers — crash or cancellation alike — get
         // their void deltas on this publication, not on a restart
-        // (ADR-0029 §4); the serialised writer lane makes the live pending
-        // set safe to read here.
+        // (ADR-0029 §4); this set's exclusive hold on its own writer
+        // sequence — not the lane, which is now a pool (ADR-0047) — makes
+        // the live pending set safe to read here.
         foreach (var obligation in _sequence.OutstandingObligations)
         {
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
@@ -243,9 +309,14 @@ public sealed partial class PublicationOrchestrator
             journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
+        // Recorded here and not again until after the capture loop: steps
+        // 2–4 interleave below, so the intent stays the last step a
+        // mid-capture failure can truthfully claim completed.
+        RecordStep(PublicationStep.PublishIntent, snapshotForLog);
+
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory, scope,
-            _logger);
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryFormatVersion, scope, _logger);
 
         // One targeted reader serves both things this publication reads back:
         // a renamed file's prior manifest (architecture 06 §4.2) and the
@@ -270,7 +341,7 @@ public sealed partial class PublicationOrchestrator
 
         var builder = new ManifestBuilder(
             _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
-            _policy.BlobWriteProfile, scope, dedup, _logger);
+            _policy.BlobWriteProfile, _repositoryFormatVersion, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
         await using (builder.ConfigureAwait(false))
@@ -303,12 +374,17 @@ public sealed partial class PublicationOrchestrator
             // A pipeline that announces `Scanning` and then says nothing for
             // ten hours is the failure the 10 section 3 state machine exists
             // to prevent.
-            var reporter = new PublicationProgress(_progress, job.SnapshotId);
-            reporter.Enter(JobState.Scanning);
-
             await foreach (var scanEvent in MultiRootScan
                 .ScanAsync(job.Source, job.Roots, options, cancellationToken).ConfigureAwait(false))
             {
+                // The suspension point (ADR-0047 Amendment 1): between events, never
+                // inside one, so a paused run parks at a file boundary with
+                // the walker's whole state held in place.
+                if (job.PauseGate is { } pauseGate)
+                {
+                    await pauseGate.WaitWhilePausedAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 await walker.ConsumeAsync(scanEvent, cancellationToken).ConfigureAwait(false);
                 reporter.Observe(JobState.Packing, walker.Files, walker.Failures.Count);
             }
@@ -353,6 +429,13 @@ public sealed partial class PublicationOrchestrator
                 DedupTrustDomain = (byte)_policy.DedupTrustDomain,
                 IncludeRules = job.IncludeRules,
                 ExcludeRules = job.ExcludeRules,
+                // The shape as configured (ADR-0061): the roots' paths and
+                // labels, the set's name and schedule, so a destination's
+                // archive can re-declare the set after the configuration
+                // that wrote it is gone.
+                Roots = [.. job.Roots.Select(root => new RecordedRoot(root.Path, root.Label))],
+                SetName = job.SetName,
+                Schedule = job.Schedule,
             };
             var policyId = await builder.AppendManifestAsync(
                 ObjectType.PolicyManifest, PolicyManifestCodec.Encode(policy), cancellationToken).ConfigureAwait(false);
@@ -382,7 +465,7 @@ public sealed partial class PublicationOrchestrator
             };
 
             byte[] encodedSnapshot;
-            using (var signer = RepositorySigner.Create(_hierarchy, _generation))
+            using (var signer = RepositorySigner.Create(_credential, _generation))
             {
                 encodedSnapshot = SnapshotManifestCodec.Encode(
                     snapshot, signer.Sign(SnapshotManifestCodec.EncodeForSigning(snapshot)));
@@ -409,10 +492,24 @@ public sealed partial class PublicationOrchestrator
             // something the writer signed rather than against a record kept
             // on the writer's own machine.
             var digests = new List<ReadOnlyMemory<byte>>();
+
+            // And, at format 3 and above, the Merkle commitment over the
+            // same bytes (07 §2.3) — the one a peer can be challenged under
+            // without the blob crossing the wire. Withheld below format 3
+            // because a reader that predates key 11 refuses a delta carrying
+            // it, and such a reader is entitled to read a format-2
+            // repository.
+            var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
+            var merkleRoots = new List<ReadOnlyMemory<byte>>();
             foreach (var blob in session.Blobs.Concat(builder.Blobs))
             {
                 covered.Add(blob.BlobId);
                 digests.Add(blob.Digest.ToArray());
+                if (publishRoots)
+                {
+                    merkleRoots.Add(blob.MerkleRoot.ToArray());
+                }
+
                 foreach (var record in blob.RecordTable)
                 {
                     entries.Add(new IndexEntry(
@@ -427,7 +524,7 @@ public sealed partial class PublicationOrchestrator
             }
 
             var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, digests, cancellationToken).ConfigureAwait(false);
+                _generation.Value, covered, entries, digests, merkleRoots, cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
@@ -1232,48 +1329,103 @@ public sealed partial class PublicationOrchestrator
     /// Turns the publication's own knowledge into progress a client can watch.
     /// </summary>
     /// <remarks>
-    /// Counts only — files and bytes, never a path or a filename. Progress
-    /// travels to an authenticated caller and may carry job identity for that
-    /// reason (ADR-0029 section 5), but nothing here needs to name a file, so
-    /// nothing here does.
+    /// Counts and, since contract 1.22, the one path being processed
+    /// (ADR-0050): progress travels only to authenticated callers — the same
+    /// audience directory listings show every path to — and an operator
+    /// staring at a long meter wants to know WHAT is slow. The path rides
+    /// the coalesced feed, so it is a sample of the walk, not a ledger of it.
     /// </remarks>
     private sealed class PublicationProgress(IJobProgressReporter? reporter, ReadOnlyMemory<byte> snapshotId)
     {
+        // The feed is a courtesy to a UI, not a ledger: reports coalesce to
+        // one per interval — whichever of the two trips first — with state
+        // transitions always emitted, so the terminal numbers a transition
+        // carries are exact even when per-file reports were skipped. The
+        // interval exists because the per-file version of this took the
+        // hub's lock for every scanned file of every run, watched or not.
+        private const int EmitEveryFiles = 64;
+        private static readonly TimeSpan EmitEvery = TimeSpan.FromMilliseconds(100);
+
         private readonly string _jobId = Convert.ToHexString(snapshotId.Span).ToLowerInvariant();
+        private long _folded;
+        private long _reused;
+        private long _seen;
+        private long _stored;
+        private long? _totalFiles;
+        private long? _totalBytes;
+        private long _lastEmittedFiles;
+        private long _lastEmittedAt;
+        private JobState _lastState = (JobState)(-1);
+        private string? _currentFile;
 
-        public void Enter(JobState state) => Emit(state, [], 0);
+        public void Enter(JobState state) => Emit(state, files: 0, failures: 0, force: state != _lastState);
 
-        public void Observe(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures) =>
-            Emit(state, files, failures);
+        /// <summary>The counting pass's running tally, before the plan is fixed.</summary>
+        public void Counting(long counted) => Emit(JobState.Scanning, counted, failures: 0, force: false);
 
-        private void Emit(JobState state, IReadOnlyList<PublishedFileVersion> files, int failures)
+        /// <summary>
+        /// Fixes the plan: every report from here on carries the counted
+        /// totals, and the meters downstream gain their denominator.
+        /// </summary>
+        public void PlanFixed(long totalFiles, long totalBytes)
+        {
+            _totalFiles = totalFiles;
+            _totalBytes = totalBytes;
+            Emit(JobState.Scanning, totalFiles, failures: 0, force: true);
+        }
+
+        public void Observe(JobState state, List<PublishedFileVersion> files, int failures)
+        {
+            // Incremental on purpose: the list is append-only, so folding
+            // only the entries added since the last call keeps a whole run's
+            // aggregation O(n) where re-walking the list per file was O(n²).
+            for (var index = (int)_folded; index < files.Count; index++)
+            {
+                var file = files[index];
+                if (file.Reused)
+                {
+                    _reused++;
+                }
+
+                if (file.Archive is { } archive)
+                {
+                    _seen += archive.LogicalLength;
+                    foreach (var blob in archive.Blobs)
+                    {
+                        _stored += blob.Length;
+                    }
+                }
+            }
+
+            _folded = files.Count;
+            if (files.Count > 0)
+            {
+                _currentFile = files[^1].RelativePath;
+            }
+
+            Emit(state, files.Count, failures, force: state != _lastState);
+        }
+
+        private void Emit(JobState state, long files, int failures, bool force)
         {
             if (reporter is null)
             {
                 return;
             }
 
-            long reused = 0;
-            long seen = 0;
-            long stored = 0;
-            foreach (var file in files)
+            if (!force
+                && files - _lastEmittedFiles < EmitEveryFiles
+                && Stopwatch.GetElapsedTime(_lastEmittedAt) < EmitEvery)
             {
-                if (file.Reused)
-                {
-                    reused++;
-                }
-
-                if (file.Archive is { } archive)
-                {
-                    seen += archive.LogicalLength;
-                    foreach (var blob in archive.Blobs)
-                    {
-                        stored += blob.Length;
-                    }
-                }
+                return;
             }
 
-            reporter.Report(new JobProgress(_jobId, state, files.Count, files.Count, reused, failures, seen, stored));
+            _lastState = state;
+            _lastEmittedFiles = files;
+            _lastEmittedAt = Stopwatch.GetTimestamp();
+            reporter.Report(new JobProgress(
+                _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes,
+                _currentFile));
         }
     }
 }

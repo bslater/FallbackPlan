@@ -98,6 +98,36 @@ public sealed record DestinationSyncRecord
     public int VerifiedPopulation { get; init; }
 
     /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed verification
+    /// proved by opening a record's AEAD tag at the destination (schema 3).
+    /// Zero on a ledger written before the tiers were recorded, which is
+    /// honest: nobody counted them.
+    /// </summary>
+    [JsonPropertyName("verified_sealed")]
+    public int VerifiedSealed { get; init; }
+
+    /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed verification
+    /// proved by hashing the whole sealed blob at the destination against the
+    /// digest the writer signed (schema 3) — a write-only set's data plane's
+    /// proof.
+    /// </summary>
+    [JsonPropertyName("verified_digest")]
+    public int VerifiedDigest { get; init; }
+
+    /// <summary>
+    /// How many of <see cref="VerifiedObjects"/> the last passed
+    /// verification proved by asking the destination for one leaf of the
+    /// blob's Merkle commitment and its authentication path, checked against
+    /// the root the writer signed (schema 4). A <b>sampled</b> proof of the
+    /// blob rather than a whole-blob one, counted apart from
+    /// <see cref="VerifiedDigest"/> so that the cheaper tier cannot be read
+    /// as the stronger one.
+    /// </summary>
+    [JsonPropertyName("verified_chunk")]
+    public int VerifiedChunk { get; init; }
+
+    /// <summary>
     /// Where the sync-time challenge rotation resumes — the highest key the
     /// last passed verification asked about, or null to start at the
     /// beginning of the key space.
@@ -144,6 +174,160 @@ public sealed record DestinationSyncRecord
     /// <summary>Blobs the sweep has read since the current circuit began.</summary>
     [JsonPropertyName("swept_this_circuit")]
     public int SweptThisCircuit { get; init; }
+
+    /// <summary>
+    /// The snapshot whose complete closure first made this destination a full
+    /// replica; null while it holds none. Declared ahead of its writer
+    /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
+    /// the build that starts writing it needs no migration, and every reader
+    /// already treats null as "not recorded".
+    /// </summary>
+    [JsonPropertyName("baseline_snapshot_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BaselineSnapshotId { get; init; }
+
+    /// <summary>
+    /// When this destination first held a full copy, Unix milliseconds; null
+    /// while it never has. This is the field rule "a destination without a
+    /// full backup is skipped by incrementals" reads (ADR-0047), and the
+    /// baseline never moves on later syncs — it records the first full.
+    /// </summary>
+    [JsonPropertyName("baseline_completed_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? BaselineCompletedAt { get; init; }
+
+    /// <summary>
+    /// Whether this pair owes the destination a full backup — set when a set
+    /// gains the destination, cleared by the success that establishes the
+    /// baseline.
+    /// </summary>
+    [JsonPropertyName("needs_full")]
+    public bool NeedsFull { get; init; }
+
+    /// <summary>
+    /// When this row was last rebuilt from the destination's own inventory,
+    /// Unix milliseconds; null when never. The ledger is metadata about the
+    /// destination, and the destination stays the ground truth. Declared ahead
+    /// of its writer by [ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md)
+    /// and written since [ADR-0056](../../docs/adr/0056-incremental-reconciliation.md),
+    /// which is also what reads it: a pass may only skip on the strength of a
+    /// recent reading-through, so this stamp is what gives the skip a shelf
+    /// life.
+    /// </summary>
+    [JsonPropertyName("last_reconciled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? LastReconciledAt { get; init; }
+
+    /// <summary>
+    /// A stable rendering of the keep-set this destination's policy selected
+    /// when the last pass ran; null when its policy keeps everything.
+    /// </summary>
+    /// <remarks>
+    /// The one input to a pass that moves with the clock rather than with
+    /// publication (ADR-0056): a snapshot ages out of a retention window while
+    /// nothing at all is published, and the destination is then owed a
+    /// deletion no publication sequence would ever reveal. Comparing the
+    /// rendering is how a pass tells "nothing has changed" from "nothing has
+    /// been published".
+    /// </remarks>
+    [JsonPropertyName("keep_fingerprint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? KeepFingerprint { get; init; }
+
+    /// <summary>
+    /// Bytes this destination holds of what it is owed, as the last pass
+    /// counted them; zero when nothing has counted.
+    /// </summary>
+    /// <remarks>
+    /// The numerator of a completion figure, recorded by the pass rather than
+    /// measured on demand: converging a destination lists both sides anyway,
+    /// so the bytes are in hand. Asking a status poll for them instead would
+    /// mean listing a whole replica every few seconds.
+    /// </remarks>
+    [JsonPropertyName("held_bytes")]
+    public long HeldBytes { get; init; }
+
+    /// <summary>
+    /// Bytes this destination is owed in total, as the last pass counted
+    /// them; zero when nothing has counted.
+    /// </summary>
+    /// <remarks>
+    /// Owed by <em>this</em> destination's own policy, not by the set: a
+    /// narrow per-destination retention override is complete when it holds
+    /// its own keep-set (FR-GC-010), and measuring it against a wider
+    /// sibling's would leave it permanently short for doing as it was told.
+    /// </remarks>
+    [JsonPropertyName("owed_bytes")]
+    public long OwedBytes { get; init; }
+
+    /// <summary>
+    /// When <see cref="HeldBytes"/> and <see cref="OwedBytes"/> were counted,
+    /// Unix milliseconds; null when they never have been.
+    /// </summary>
+    /// <remarks>
+    /// Null is not zero, and the difference is the whole point: a destination
+    /// no pass has reached holds an unknown amount, and drawing that as an
+    /// empty gauge would claim it holds nothing when nobody has looked.
+    /// </remarks>
+    [JsonPropertyName("measured_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? MeasuredAt { get; init; }
+
+    /// <summary>
+    /// When a restore drill last ran against this destination's replica,
+    /// Unix milliseconds; null when none ever has ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// </summary>
+    /// <remarks>
+    /// Null and a failure are different answers and both are kept. "Nobody
+    /// has tried" is not "we tried and it did not work", and a surface that
+    /// cannot tell them apart turns an unexercised destination into a
+    /// reassuring one.
+    /// </remarks>
+    [JsonPropertyName("drilled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? DrilledAt { get; init; }
+
+    /// <summary>Files the last drill brought back whole; zero when it brought back none.</summary>
+    [JsonPropertyName("drill_files")]
+    public int DrillFiles { get; init; }
+
+    /// <summary>Bytes those files amounted to.</summary>
+    [JsonPropertyName("drill_bytes")]
+    public long DrillBytes { get; init; }
+
+    /// <summary>
+    /// Why the last drill did not come back with a file, in the drill's own
+    /// words; null when it did.
+    /// </summary>
+    /// <remarks>
+    /// Recorded beside <see cref="DrilledAt"/> rather than through
+    /// <see cref="DestinationSyncState.Failed"/>, because a drill answers a
+    /// different question from a copy. A destination can hold every byte it
+    /// was sent, prove possession of them, and still not be restorable — and
+    /// calling that a sync failure would put the fault on the copy that
+    /// worked.
+    /// </remarks>
+    [JsonPropertyName("drill_failure")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DrillFailure { get; init; }
+
+    /// <summary>
+    /// What the last drill could not prove, in its own words, when it passed
+    /// with a stated limit; null when it proved everything it set out to, when
+    /// it failed, and when none has run.
+    /// </summary>
+    /// <remarks>
+    /// A write-only set's replica seals its content to a key the service does
+    /// not hold (ADR-0042 §7), so a drill run by the service proves the road
+    /// back as far as the sealed content and no further — the replica opens,
+    /// its index and catalogue rebuild, the sampled files' manifests and
+    /// segment records are found — and says so here rather than reporting
+    /// the passphrase's absence as damage (ADR-0054 Amendment 2). A pass with
+    /// a limit is still a pass: <see cref="DrillFailure"/> stays null.
+    /// </remarks>
+    [JsonPropertyName("drill_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DrillLimit { get; init; }
 }
 
 /// <summary>
@@ -180,7 +364,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 4;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -228,7 +412,7 @@ public sealed class DestinationSyncStore
             var file = JsonSerializer.Deserialize<LedgerFile>(text, SerializerOptions);
             if (file is not null && file.SchemaVersion <= CurrentSchemaVersion)
             {
-                return new DestinationSyncStore(path, file.Destinations ?? []);
+                return new DestinationSyncStore(path, Migrate(file));
             }
 
             // A file from a newer build. Setting it aside preserves its bytes
@@ -240,11 +424,15 @@ public sealed class DestinationSyncStore
         {
             // Pre-versioning shape: a bare array. Migrate rather than
             // quarantine — the rows are perfectly readable, and discarding
-            // them would silently restart every destination's history.
+            // them would silently restart every destination's history. It
+            // rides the same migration as schema 1: the bare array predates
+            // it, so its rows are owed every rule schema 1's are, baseline
+            // seeding included.
             try
             {
                 var legacy = JsonSerializer.Deserialize<List<DestinationSyncRecord>>(text, SerializerOptions) ?? [];
-                return new DestinationSyncStore(path, legacy);
+                return new DestinationSyncStore(
+                    path, Migrate(new LedgerFile { SchemaVersion = 1, Destinations = legacy }));
             }
             catch (JsonException)
             {
@@ -255,8 +443,45 @@ public sealed class DestinationSyncStore
 
     private static DestinationSyncStore Quarantine(string path)
     {
-        File.Move(path, path + ".corrupt", overwrite: true);
+        try
+        {
+            File.Move(path, path + ".corrupt", overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A .corrupt target something is holding must not turn a
+            // sacrificial ledger into a service that will not start: the
+            // empty store below is the same recovery either way, and the
+            // unreadable bytes stay where they are until the next write
+            // replaces them — strictly worse than the rename, still better
+            // than being down.
+        }
+
         return new DestinationSyncStore(path, []);
+    }
+
+    /// <summary>
+    /// Rows written before schema 2 seed their baselines from their
+    /// successes: on the staging architecture every successful sync copied
+    /// the whole archive, so a pair with a success already IS a full replica
+    /// — this is "replicas seed the ledgers" (ADR-0047), landing at open so
+    /// no install re-ships terabytes to learn what it already holds.
+    /// </summary>
+    private static List<DestinationSyncRecord> Migrate(LedgerFile file)
+    {
+        // Schema 3 added the verification tiers as plain additive columns: a
+        // schema-2 row reads them as zero, which says exactly what is true of
+        // it — the tiers were not counted — so 2 → 3 needs no rewrite. Only
+        // 1 → 2 changes a row, below.
+        var rows = file.Destinations ?? [];
+        if (file.SchemaVersion >= 2)
+        {
+            return rows;
+        }
+
+        return [.. rows.Select(row => row is { LastSuccessAt: not null, BaselineCompletedAt: null }
+            ? row with { BaselineCompletedAt = row.LastSuccessAt }
+            : row)];
     }
 
     /// <summary>The pair's state, or null when it has never been attempted.</summary>
@@ -283,14 +508,37 @@ public sealed class DestinationSyncStore
     /// — the replication gate's input (FR-GC-009). A snapshot published after
     /// the sync started may or may not have crossed, so the claim stops here.
     /// </param>
+    /// <param name="keepFingerprint">
+    /// This destination's keep-set as the pass computed it, or null when the
+    /// caller computed none — a destination that keeps everything has a
+    /// rendering of its own, because "keeps everything" is a keep-set and
+    /// "nobody looked" is not. Compared by the next pass to tell a keep-set
+    /// that moved with the clock from one that did not (ADR-0056).
+    /// </param>
+    /// <param name="reconciled">
+    /// Whether this pass read both inventories through. Only a pass that did
+    /// may stamp <see cref="DestinationSyncRecord.LastReconciledAt"/>, because
+    /// that stamp is what a later pass skips on.
+    /// </param>
+    /// <param name="baselineSnapshotId">
+    /// The newest snapshot this destination held when its baseline completed.
+    /// Recorded once, with the baseline, and never moved after.
+    /// </param>
     public DestinationSyncRecord RecordSuccess(
-        string setId, string destination, long objects, ulong nowUnixMilliseconds, ulong syncedSequence = 0)
+        string setId,
+        string destination,
+        long objects,
+        ulong nowUnixMilliseconds,
+        ulong syncedSequence = 0,
+        string? keepFingerprint = null,
+        bool reconciled = false,
+        string? baselineSnapshotId = null)
     {
         // Everything not named here is carried forward by `with` — including
         // the verification stamps, which outlive the sync that earned them:
         // they say when bytes were last proven, which a newer copy does not
         // undo.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
         {
             State = DestinationSyncState.InSync,
             LastAttemptAt = nowUnixMilliseconds,
@@ -303,6 +551,139 @@ public sealed class DestinationSyncStore
             LastError = null,
             // A later sync never un-holds what an earlier one delivered.
             SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
+            // The first success is the full copy that establishes the
+            // baseline (a staging-model sync converges the whole archive);
+            // later successes never move it — it records the first full.
+            BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
+            BaselineSnapshotId = previous?.BaselineSnapshotId ?? baselineSnapshotId,
+            NeedsFull = false,
+            // Carried forward when the caller computed none: a run recorded by
+            // the ship sink knows nothing about retention, and clearing the
+            // fingerprint there would make the next pass see a keep-set that
+            // had moved when it had not.
+            KeepFingerprint = keepFingerprint ?? previous?.KeepFingerprint,
+            // Carried forward, never cleared: an incremental pass leaves the
+            // last reading-through standing, which is exactly what its own
+            // expiry is measured from.
+            LastReconciledAt = reconciled ? nowUnixMilliseconds : previous?.LastReconciledAt,
+        });
+    }
+
+    /// <summary>
+    /// Records how much of what a destination is owed it holds, and when that
+    /// was counted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="RecordSuccess"/> on purpose, because the two
+    /// answer different questions and a failed pass answers only this one. A
+    /// drive pulled halfway through leaves a destination genuinely part-full;
+    /// folding the count into the success would mean the only destinations
+    /// that could report being behind are the ones that are not.
+    /// </para>
+    /// <para>
+    /// Both halves are written together. Read separately they could be paired
+    /// out of step — a new numerator against an old denominator — which is a
+    /// percentage above a hundred or below zero, and a reader has no way to
+    /// tell that from a real one.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="heldBytes">Bytes it holds of what it is owed.</param>
+    /// <param name="owedBytes">Bytes it is owed in total.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordCompleteness(
+        string setId, string destination, long heldBytes, long owedBytes, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            HeldBytes = heldBytes,
+            OwedBytes = owedBytes,
+            MeasuredAt = nowUnixMilliseconds,
+        });
+    }
+
+    /// <summary>
+    /// Records what a restore drill found: the files it brought back whole
+    /// from this destination's own replica, or why it could not
+    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The stamp moves on a failed drill as well as a passed one, which is
+    /// the opposite of how the verification stamps behave, and deliberately.
+    /// A verification stamp answers "when were bytes last proven", so a
+    /// failure must leave the last true answer standing. A drill stamp
+    /// answers "when did we last try to recover", and a failed attempt IS a
+    /// try — leaving yesterday's success on the row would report a
+    /// destination as recently drilled when the most recent drill said it
+    /// cannot be restored.
+    /// </para>
+    /// <para>
+    /// The sync half of the row is untouched. A destination can hold every
+    /// byte it was sent and still fail to restore; that is not a failure of
+    /// the copy, and recording it as one would back off the transfers as
+    /// though they were at fault.
+    /// </para>
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="files">Files restored whole; zero on a failure.</param>
+    /// <param name="bytes">What those files amounted to.</param>
+    /// <param name="failure">Why it did not work, or null when it did.</param>
+    /// <param name="limit">What a passing drill could not prove, or null when it proved everything.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordDrill(
+        string setId, string destination, int files, long bytes, string? failure, string? limit, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            DrilledAt = nowUnixMilliseconds,
+            DrillFiles = files,
+            DrillBytes = bytes,
+            DrillFailure = failure,
+            DrillLimit = limit,
+        });
+    }
+
+    /// <summary>
+    /// Marks a pair as owing the destination a full backup — a set just
+    /// gained this destination (ADR-0047). Cleared by the success that
+    /// establishes the baseline; a no-op on a pair that already holds one.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordNeedsFull(string setId, string destination, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            NeedsFull = previous?.BaselineCompletedAt is null,
+        });
+    }
+
+    /// <summary>
+    /// Marks a pair as behind without counting it a failure: a run held the
+    /// destination out because it missed a prior run (ADR-0046 §3), which is
+    /// a fact about its history, not a fault of its own — the failure
+    /// counter stays put so the healing catch-up runs immediately instead of
+    /// backing off from a "failure" nothing failed.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="reason">Why the pair was held out, for status.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordBehind(
+        string setId, string destination, string reason, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(reason);
+
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            State = DestinationSyncState.Behind,
+            LastAttemptAt = nowUnixMilliseconds,
+            LastError = reason,
         });
     }
 
@@ -322,9 +703,12 @@ public sealed class DestinationSyncStore
     /// end of the key space and the rotation starts over.
     /// </param>
     /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="sealed">How many of <paramref name="objects"/> were proved by a record's AEAD tag.</param>
+    /// <param name="digest">How many of <paramref name="objects"/> were proved by the signed whole-blob digest.</param>
+    /// <param name="chunk">How many of <paramref name="objects"/> were proved by one leaf of the signed Merkle commitment.</param>
     public DestinationSyncRecord RecordVerification(
         string setId, string destination, int objects, int population, ulong verifiedSequence,
-        string? sampleCursor, ulong nowUnixMilliseconds)
+        string? sampleCursor, ulong nowUnixMilliseconds, int @sealed = 0, int digest = 0, int chunk = 0)
     {
         // A verification touches only the stamps: the sync half of the row —
         // state, attempt, success, the synced sequence — is carried forward
@@ -334,12 +718,15 @@ public sealed class DestinationSyncStore
         // The cursor rides with the stamps rather than with the sync, and only
         // on a pass that passed: advancing it after a failure would walk the
         // rotation past objects nobody proved anything about.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             VerifiedAt = nowUnixMilliseconds,
             VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
             VerifiedObjects = objects,
             VerifiedPopulation = population,
+            VerifiedSealed = @sealed,
+            VerifiedDigest = digest,
+            VerifiedChunk = chunk,
             SampleCursor = sampleCursor,
         });
     }
@@ -368,7 +755,7 @@ public sealed class DestinationSyncStore
         string setId, string destination, string? cursor, int examined, bool completedCircuit,
         ulong nowUnixMilliseconds)
     {
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             SweepCursor = cursor,
             SweptAt = nowUnixMilliseconds,
@@ -389,7 +776,7 @@ public sealed class DestinationSyncStore
         // The last success and every verification stamp survive a failure:
         // they record what WAS true, and a failed attempt does not un-prove
         // bytes that were proven. Only the failure counters move.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds) with
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
         {
             State = state,
             LastAttemptAt = nowUnixMilliseconds,
@@ -406,13 +793,27 @@ public sealed class DestinationSyncStore
     /// three carry-forward sites and silently reset to its default if any one
     /// was missed.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="state"/> is stated by every caller rather than defaulted
+    /// here, and that is the whole point of it. The blank used to be born
+    /// <see cref="DestinationSyncState.InSync"/>, which was invisible only
+    /// while every mutator immediately overwrote the state — and three of them
+    /// do not. <see cref="RecordCompleteness"/> writes from the copy's
+    /// <c>finally</c>, so on a pair's first copy it reaches the ledger before
+    /// any success does, and the row it created announced that a destination
+    /// holding nothing yet was in sync. A caller that is not recording an
+    /// outcome passes <see cref="DestinationSyncState.Behind"/>: a pair with
+    /// no success behind it is behind by definition, which is what the row
+    /// meant before any of these writers existed.
+    /// </remarks>
     private static DestinationSyncRecord Seed(
-        DestinationSyncRecord? previous, string setId, string destination, ulong nowUnixMilliseconds) =>
+        DestinationSyncRecord? previous, string setId, string destination, ulong nowUnixMilliseconds,
+        DestinationSyncState state) =>
         previous ?? new DestinationSyncRecord
         {
             SetId = setId,
             Destination = destination,
-            State = DestinationSyncState.InSync,
+            State = state,
             LastAttemptAt = nowUnixMilliseconds,
         };
 

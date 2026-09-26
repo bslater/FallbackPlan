@@ -1,7 +1,6 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Recovery;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -15,7 +14,7 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// paths that are not plain components, but <see cref="RecoverySession"/>
 /// builds destinations from tree-entry names directly — and the coverage
 /// survey found no test had ever handed it a hostile one. A repository is
-/// exactly as adversarial for the kit drill as for the daily restore; a
+/// exactly as adversarial for the passphrase drill as for the daily restore; a
 /// tree naming <c>..</c> must fail that entry with a stated refusal, not
 /// write beside the chosen output.
 /// </summary>
@@ -35,9 +34,11 @@ public sealed class RecoveryContainmentTests : IDisposable
         var store = new LocalFileSystemObjectStore(Path.Combine(_root, "repo"));
 
         using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.CreateAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Domain.Configuration.RepositoryCreationSettings.Default,
             createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        using var _repository = repository;
+        using var _authority = authority;
 
         // The fake source will happily scan a tree whose first component is
         // '..' — the shape a tampered repository would publish on purpose.
@@ -57,10 +58,11 @@ public sealed class RecoveryContainmentTests : IDisposable
             Domain.Identifiers.WriterId.FromBytes(Enumerable.Repeat((byte)0xA0, 16).ToArray()),
             repository.CurrentDataGeneration,
             repository.Keys,
-            repository.Hierarchy,
+            repository.Credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool);
+            spool,
+            FormatVersions.SealedDataPlane);
 
         await orchestrator.PublishAsync(
             new SnapshotJob
@@ -77,13 +79,8 @@ public sealed class RecoveryContainmentTests : IDisposable
             },
             CancellationToken.None);
 
-        using var exportPassphrase = Passphrase.Create(PassphraseText);
-        var kit = await RecoveryKitFactory.BuildAsync(
-            store, exportPassphrase, Enumerable.Repeat((byte)0x22, 16).ToArray(),
-            issuedAt: 1_722_600_000_002, destinations: [], CancellationToken.None);
-
         using var openPassphrase = Passphrase.Create(PassphraseText);
-        using var session = RecoverySession.Open(kit, openPassphrase, store);
+        using var session = await RecoverySession.OpenAsync(openPassphrase, store, CancellationToken.None);
         await session.LoadBlobsAsync(CancellationToken.None);
         var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
 

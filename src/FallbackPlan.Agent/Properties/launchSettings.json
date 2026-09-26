@@ -1,5 +1,22 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
+    "service (default locations)": {
+      "commandName": "Project",
+      "commandLineArgs": ""
+    },
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "setup (first run)": {
+      "commandName": "Project",
+      "commandLineArgs": "setup --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --acknowledge-loss --user admin --password-env FBP_ADMIN_PASSWORD",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!",
+        "FBP_ADMIN_PASSWORD": "A local dev Admin password 42!"
+      }
+    },
     "run (foreground)": {
       "commandName": "Project",
       "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --log-level trace"
@@ -11,11 +28,6 @@
     "run --once": {
       "commandName": "Project",
       "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --once --log-level trace"
-    },
-    "run (with a passphrase, no keystore)": {
-      "commandName": "Project",
-      "commandLineArgs": "run --archives C:\\fbp\\archives --state C:\\fbp\\state --poll-seconds 10 --passphrase-env FBP_PASSPHRASE --log-level trace",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
     },
     "run (remote binding on)": {
       "commandName": "Project",
@@ -29,14 +41,17 @@
         "FBP_PASSWORD": "a local dev password"
       }
     },
-    "unlock": {
+    "sync (all sets, all destinations)": {
       "commandName": "Project",
-      "commandLineArgs": "unlock --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE",
-      "environmentVariables": { "FBP_PASSPHRASE": "a long local dev passphrase" }
+      "commandLineArgs": "sync --archives C:\\fbp\\archives --state C:\\fbp\\state --log-level debug"
     },
-    "lock": {
+    "verify-destination --probe": {
       "commandName": "Project",
-      "commandLineArgs": "lock --state C:\\fbp\\state"
+      "commandLineArgs": "verify-destination --archives C:\\fbp\\archives --state C:\\fbp\\state --probe"
+    },
+    "retention (dry run)": {
+      "commandName": "Project",
+      "commandLineArgs": "retention --archives C:\\fbp\\archives --state C:\\fbp\\state --log-level debug"
     },
     "notices": {
       "commandName": "Project",
@@ -45,6 +60,13 @@
     "pairings": {
       "commandName": "Project",
       "commandLineArgs": "pairings --state C:\\fbp\\state"
+    },
+    "retention --apply": {
+      "commandName": "Project",
+      "commandLineArgs": "retention --archives C:\\fbp\\archives --state C:\\fbp\\state --passphrase-env FBP_PASSPHRASE --apply --log-level debug",
+      "environmentVariables": {
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
+      }
     }
   }
 }

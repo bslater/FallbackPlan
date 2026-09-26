@@ -42,8 +42,7 @@ public sealed class DiagnosticsCommandTests : IDisposable
             RingCapacity = 64,
         });
 
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -52,7 +51,6 @@ public sealed class DiagnosticsCommandTests : IDisposable
                 StateDirectory = _harness.StateDirectory,
                 Logging = _logging,
             },
-            passphrase,
             _timeout.Token);
     }
 
@@ -278,15 +276,13 @@ public sealed class DiagnosticsCommandTests : IDisposable
     public async Task Diagnostics_OnAServiceComposedWithoutLogging_SaySoRatherThanInventZeroes()
     {
         await _harness.CreateRepositoryAsync();
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
         await using var runtime = await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
 
         var handler = Handler(runtime, CallerScope.Local);

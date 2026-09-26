@@ -15,14 +15,28 @@ namespace FallbackPlan.Agent;
 /// Extracted from <see cref="ServiceRuntime"/>'s flat fields so that "an
 /// archive and its writer-side state" is one value with one lifetime. Under
 /// ADR-0034 the service holds one of these per backup set — each set's
-/// staging archive with its own gapless sequence — and this type is the unit
-/// that multiplies; the runtime keeps everything that stays singular (the
+/// archive, staging or direct-ship (ADR-0046), with its own gapless sequence
+/// — and this type is the unit that multiplies; the runtime keeps everything that stays singular (the
 /// state-directory lock, the job journal, the queue, the progress hub).
 /// </remarks>
 public sealed class ArchiveHandle : IDisposable
 {
-    /// <summary>The archive's object store.</summary>
+    /// <summary>
+    /// The archive's object store: the staging archive's local filesystem
+    /// store, or — for a direct-ship set (ADR-0046) — the
+    /// <see cref="DestinationShipSink"/> that fans writes to the set's
+    /// destinations and keeps only metadata locally.
+    /// </summary>
     public required IObjectStore Store { get; init; }
+
+    /// <summary>
+    /// The ship sink, when this archive direct-ships; null for a staging
+    /// archive. The same object as <see cref="Store"/>, typed for the run
+    /// hooks (<see cref="DestinationShipSink.BeginRunAsync"/> /
+    /// <see cref="DestinationShipSink.CompleteRunAsync"/>) only the backup runner
+    /// calls.
+    /// </summary>
+    public DestinationShipSink? ShipSink { get; init; }
 
     /// <summary>The unlocked repository.</summary>
     public required OpenedRepository Repository { get; init; }

@@ -67,6 +67,39 @@ public enum PeerMessageType : ushort
     /// <summary>The destination's proof of possession, or its honest inability (04 §4.2).</summary>
     VerificationProof = 265,
 
+    /// <summary>
+    /// The destination declares the objects it part holds, so a cut transfer
+    /// can begin where it stopped (03 §5; feature-gated as
+    /// "partial-object-resume").
+    /// </summary>
+    ReplicationPartial = 266,
+
+    /// <summary>
+    /// A rebuilt machine proves a replica is its own and asks for the
+    /// attribution to follow it — one entry per derivation the destination
+    /// served, each a claim public key and a signature (03 §6; feature-gated
+    /// as "replica-claim";
+    /// [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
+    /// </summary>
+    ReplicationClaim = 267,
+
+    /// <summary>What the claim re-attributed (03 §6).</summary>
+    ReplicationClaimAccepted = 268,
+
+    /// <summary>
+    /// A claimant opens the claim ceremony: it holds a passphrase and
+    /// nothing else, and asks the destination which derivations to run
+    /// (03 §6).
+    /// </summary>
+    ReplicationClaimOpen = 269,
+
+    /// <summary>
+    /// The distinct KDF salt-and-parameter pairs behind every replica here
+    /// that carries a claim key — what the claimant derives its keys under
+    /// (03 §6).
+    /// </summary>
+    ReplicationClaimParameters = 270,
+
     /// <summary>An owner asks to read back its replica (07 §3.1; feature-gated as "retrieval").</summary>
     RetrieveOpen = 272,
 
@@ -85,20 +118,17 @@ public enum PeerMessageType : ushort
     /// <summary>The answer to one read (07 §3.4).</summary>
     RetrieveData = 277,
 
-    /// <summary>A peer asks what it could claim here (07 §5.4; feature-gated as "replica-claim").</summary>
-    ClaimRequest = 278,
+    /// <summary>
+    /// A request for one leaf of a blob's Merkle commitment and its
+    /// authentication path (07 §3.6; feature-gated as "chunk-possession").
+    /// </summary>
+    MerkleChallenge = 278,
 
-    /// <summary>The destination's tokens and nonces for the replicas it could serve (07 §5.5).</summary>
-    ClaimChallenge = 279,
-
-    /// <summary>The claimant's signatures over those challenges (07 §5.6).</summary>
-    ClaimProof = 280,
-
-    /// <summary>What the claim moved, and the set ids each replica holds (07 §5.8).</summary>
-    ClaimResult = 281,
-
-    /// <summary>A source registers the public half of its claim credential (03 §3.2.1).</summary>
-    ClaimRegister = 282,
+    /// <summary>
+    /// The leaf's bytes and its path, or the destination's honest inability
+    /// to produce them (07 §3.6).
+    /// </summary>
+    MerkleProof = 279,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

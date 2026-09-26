@@ -73,6 +73,27 @@ public sealed record BackupSetConfiguration
     public RetentionConfiguration? Retention { get; init; }
 
     /// <summary>
+    /// The set's priority (ADR-0047): among waiting backups of the same
+    /// initiation, higher runs first. Absent means 0. It never outranks a
+    /// person — user-initiated work sorts ahead of any priority.
+    /// </summary>
+    [JsonPropertyName("priority")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Priority { get; init; }
+
+    /// <summary>
+    /// Whether this set publishes straight into its destinations with no
+    /// staging archive (ADR-0046): blobs ship to every in-scope destination,
+    /// the agent keeps metadata only. The property default stays false — an
+    /// old file that omits the flag keeps meaning staging — but the command
+    /// boundary births a new local-path set direct-ship, and a file this
+    /// build writes states the flag explicitly rather than leaning on
+    /// omission, so every configuration says what it means.
+    /// </summary>
+    [JsonPropertyName("direct_ship")]
+    public bool DirectShip { get; init; }
+
+    /// <summary>
     /// The destinations this set replicates to, by declared name — at least
     /// one, none of which has to be local (FR-DEST-001, ADR-0034).
     /// </summary>
@@ -221,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 6;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -249,6 +270,51 @@ public sealed record ClientConfiguration
     [JsonPropertyName("logging")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LoggingConfiguration? Logging { get; init; }
+
+    /// <summary>
+    /// How many backups may run at once (ADR-0047), 1..5; absent means 2.
+    /// Read when the service starts — a change applies at the next start,
+    /// which the pool's construction states rather than hides.
+    /// </summary>
+    [JsonPropertyName("max_concurrent_backups")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxConcurrentBackups { get; init; }
+
+    /// <summary>The pool width this configuration means, defaults applied.</summary>
+    [JsonIgnore]
+    public int EffectiveMaxConcurrentBackups => MaxConcurrentBackups ?? 2;
+
+    /// <summary>
+    /// The hours background activity may run in (NFR-PERF-013, ADR-0069) —
+    /// <c>HH:mm-HH:mm</c> in local wall-clock time, and a start after an end
+    /// crosses midnight. **Absent means always**, which is what every file
+    /// written before schema 6 says by not mentioning it, and is the
+    /// behaviour of every installation that does not want one.
+    /// </summary>
+    /// <remarks>
+    /// Installation-wide rather than per set, because the requirement is
+    /// about background activity and not about one set's cadence — a set's
+    /// <c>schedule</c> says how often, and this says when the machine is
+    /// willing. Read afresh by each scheduler pass rather than at service
+    /// start, unlike <see cref="MaxConcurrentBackups"/>: a window whose whole
+    /// point is that it changes during the day would be useless pinned at
+    /// start.
+    /// </remarks>
+    [JsonPropertyName("background_window")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackgroundWindow { get; init; }
+
+    /// <summary>
+    /// The parsed window, or null for "any hour". Validation has already
+    /// refused a defective one, so a null here from a non-null
+    /// <see cref="BackgroundWindow"/> cannot arise on a loaded configuration.
+    /// </summary>
+    [JsonIgnore]
+    public BackgroundWindow? EffectiveBackgroundWindow =>
+        BackgroundWindow is { } text
+            && Application.BackgroundWindow.TryParse(text, out var window, out _)
+            ? window
+            : null;
 
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
@@ -328,7 +394,7 @@ public sealed record ClientConfiguration
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -385,6 +451,26 @@ public sealed record ClientConfiguration
         }
 
         Logging?.Validate();
+
+        // 1..5 (ADR-0047): zero would be a service that never backs up
+        // pretending to be configured, and past a handful the pool's workers
+        // contend for the same disk and mostly make each other slower.
+        if (MaxConcurrentBackups is { } concurrency and (< 1 or > 5))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_ConcurrencyOutOfRange(path, concurrency));
+        }
+
+        // Refused here rather than discovered by the scheduler at two in the
+        // morning — and a defective window is refused rather than ignored,
+        // because a window nobody honours is a machine backing up at the one
+        // time its operator asked it not to.
+        if (BackgroundWindow is { } declared
+            && !Application.BackgroundWindow.TryParse(declared, out _, out var windowDefect))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_BackgroundWindowInvalid(path, windowDefect!));
+        }
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var destination in Destinations)
@@ -617,6 +703,13 @@ public sealed record ClientConfiguration
         // Zero would read as "never" to anyone writing it and as "every pass"
         // to the arithmetic. Refused rather than guessed at.
         if (destination.DeepVerifyIntervalDays is { } interval && interval <= 0)
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+        }
+
+        // Same rule for the drill's cadence, and the same reason (ADR-0054).
+        if (destination.DrillIntervalDays is { } drill && drill <= 0)
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));

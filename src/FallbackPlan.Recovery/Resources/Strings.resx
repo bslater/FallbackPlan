@@ -58,6 +58,9 @@
   <data name="RecoveryHost_EnvironmentVariableUnset" xml:space="preserve">
     <value>Environment variable '{0}' is unset — the passphrase is passed by name, never on the command line.</value>
   </data>
+  <data name="RecoveryHost_KitWithdrawn" xml:space="preserve">
+    <value>the recovery kit is withdrawn (ADR-0060): the passphrase and the archive are all a recovery needs. Drop --kit and run again.</value>
+  </data>
   <data name="RecoveryHost_MissingRequiredOption" xml:space="preserve">
     <value>Missing required option {0}.</value>
   </data>
@@ -70,16 +73,10 @@
   <data name="RecoverySession_PassphraseDoesNotReproduce" xml:space="preserve">
     <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.</value>
   </data>
-  <data name="RecoverySession_InstallationKitNeedsTheArchive" xml:space="preserve">
-    <value>An installation kit does not name a repository; the archive supplies its own identity, so open it with the asynchronous overload that reads the descriptor.</value>
-  </data>
   <data name="RecoverySession_ArchiveDescriptorDoesNotRead" xml:space="preserve">
     <value>This archive's repository-format descriptor does not read as a descriptor.</value>
   </data>
   <data name="RecoverySession_ArchiveHasNoDescriptor" xml:space="preserve">
     <value>This folder holds no repository-format descriptor, so it is not a FallbackPlan archive.</value>
-  </data>
-  <data name="RecoverySession_KitBelongsToAnotherInstallation" xml:space="preserve">
-    <value>The passphrase and kit agree with each other but not with this archive: this kit belongs to a different FallbackPlan installation.</value>
   </data>
 </root>

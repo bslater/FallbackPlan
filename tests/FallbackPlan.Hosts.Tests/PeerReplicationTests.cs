@@ -18,6 +18,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// Phase-2 peer criterion (a source destroyed and recovered from its
 /// destination) in its first concrete form. The role a grant carries decides
 /// whether a peer replicates or commands; the exchange is idempotent on re-run.
+/// Establishes FR-REP-001 and FR-REP-003, and since
+/// [ADR-0064](../../docs/adr/0064-replication-receipts.md) the destination's
+/// signed statement of what a push created (FR-DEST-004).
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -37,10 +40,10 @@ public sealed class PeerReplicationTests : IDisposable
         _source.WriteSourceFile("notes.txt", "hello from the source");
         await _source.BackUpAsync();
 
-        // The recovery kit is how a source destroyed and rebuilt from its
-        // destination opens the replica — the bare store carries the objects,
-        // the kit carries the wrapped keys (architecture 08 §5).
-        var kit = await _source.ExportKitAsync();
+        // The passphrase is how a source destroyed and rebuilt from its
+        // destination opens the replica — the bare store carries the objects
+        // and its own descriptor carries everything the derivation needs
+        // (architecture 08 §5; ADR-0060).
 
         // The backup ran before any destination was declared, so nothing has
         // fanned out yet — the on-demand sync is what closes the gap.
@@ -62,12 +65,46 @@ public sealed class PeerReplicationTests : IDisposable
             Assert.IsTrue(bytes.SequenceEqual(copied!), $"the replica's {key} differs from the source's");
         }
 
+        // And the destination's own signed statement of what this push
+        // created is on file: every key the replica now holds arrived this
+        // session, and the replica is exactly that big (ADR-0064).
+        var filed = Assert.ContainsSingle(ReplicationReceiptStore.Open(_destinationState).List());
+        Assert.AreEqual(DeletionReceiptRole.Destination, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        var receipt = filed.Receipt!;
+        Assert.AreEqual((ulong)replica.Count, receipt.CommittedCount);
+        CollectionAssert.AreEquivalent(replica.Keys.ToList(), receipt.Committed.ToList());
+        Assert.AreEqual((ulong)replica.Count, receipt.HeldObjects);
+        Assert.AreEqual((ulong)replica.Values.Sum(bytes => bytes.LongLength), receipt.HeldBytes);
+
+        // The commander verified it and filed its own copy — the same signed
+        // bytes, named for the set and the destination — and, because the
+        // peer signed for holding everything it was sent, the ledger now
+        // counts the peer where it used to say "not counted yet"
+        // (FR-DEST-004): held equals owed, and a client can read it.
+        var mine = Assert.ContainsSingle(ReplicationReceiptStore.Open(_source.StateDirectory).List());
+        Assert.AreEqual(DeletionReceiptRole.Commander, mine.Role);
+        Assert.IsTrue(mine.Verified, mine.Problem);
+        Assert.AreEqual("docs", mine.Set);
+        Assert.AreEqual("friend", mine.Destination);
+        Assert.AreEqual(receipt, mine.Receipt);
+
+        var counted = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(counted);
+        Assert.IsNotNull(counted.MeasuredAt, "a peer that signed for what it holds must be counted");
+        Assert.IsGreaterThan(0, counted.OwedBytes);
+        Assert.AreEqual(counted.OwedBytes, counted.HeldBytes, "a peer that committed everything holds everything");
+        Assert.IsEmpty(
+            FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged
+                .Where(notice => notice.Key.StartsWith("replication-receipt-invalid:", StringComparison.Ordinal)));
+
         // The headline: the standalone recovery tool restores from the replica —
-        // a repository the destination holds but cannot read — with only the kit
-        // and the passphrase, no catalogue and no state. This is the Phase-2 peer
+        // a repository the destination holds but cannot read — with only the
+        // passphrase, no catalogue and no state. This is the Phase-2 peer
         // criterion: a source destroyed and recovered from its destination.
         var listing = await RunRecoveryAsync(
-            "snapshots", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _source.PassphraseVariable);
+            "snapshots", "--repo", replicaPath, "--passphrase-env", _source.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshot = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]
@@ -75,7 +112,7 @@ public sealed class PeerReplicationTests : IDisposable
 
         var destination = Path.Combine(_source.WorkPath, "recovered");
         var restore = await RunRecoveryAsync(
-            "restore", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _source.PassphraseVariable,
+            "restore", "--repo", replicaPath, "--passphrase-env", _source.PassphraseVariable,
             "--snapshot", snapshot, "--output", destination);
         Assert.AreEqual(0, restore.ExitCode, restore.Error);
 
@@ -172,6 +209,7 @@ public sealed class PeerReplicationTests : IDisposable
     [TestMethod]
     public async Task FanOut_APeerDestination_ConvergesWithoutACommand()
     {
+        await _source.SetupAsync();
         // No sync command anywhere in this test: the set declares a peer
         // destination and the scheduler pass fans out to it (ADR-0034 §3,
         // FR-DEST-002) — the hub doing on schedule what `sync` does on demand.
@@ -207,7 +245,7 @@ public sealed class PeerReplicationTests : IDisposable
 
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         // The peer holds a byte-identical replica of the set's staging
@@ -226,6 +264,48 @@ public sealed class PeerReplicationTests : IDisposable
             .Find(_source.DocsSetId, "friend");
         Assert.IsNotNull(record);
         Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.InSync, record.State);
+        Assert.IsNotNull(record.MeasuredAt, "the pass carried the peer's receipt, so the peer is counted");
+        Assert.AreEqual(record.OwedBytes, record.HeldBytes);
+        Assert.AreEqual(
+            (long)replica.Values.Sum(bytes => bytes.LongLength), record.OwedBytes,
+            "what the peer is owed is the staging archive's replicable bytes");
+    }
+
+    [TestMethod]
+    public async Task Sync_ToAPeerThatPredatesReceipts_StandsAndStaysUncounted()
+    {
+        // A destination older than receipts acknowledges with the count
+        // alone (03 §3.4: keys 2–3 are additive). That is less, not wrong:
+        // the sync stands, nothing is filed, no notice is raised — and the
+        // ledger keeps saying nobody has counted this peer, because nobody
+        // has (FR-DEST-004).
+        await _source.CreateRepositoryAsync();
+        _source.WriteSourceFile("notes.txt", "hello from the source");
+        await _source.BackUpAsync();
+
+        var destinationFingerprint = await StartDestinationAsync(PeerRole.StoresHere, predatesReceipts: true);
+        WritePeerConfiguration(destinationFingerprint);
+
+        var sync = await RunSyncAsync();
+        Assert.AreEqual(0, sync.ExitCode, sync.Error);
+        Assert.Contains("docs -> friend: in sync", sync.Output, StringComparison.Ordinal);
+
+        var replicaPath = Directory.GetDirectories(Path.Combine(_destinationState, "replicas")).Single();
+        var source = await ReadAllAsync(new LocalFileSystemObjectStore(_source.RepositoryPath));
+        var replica = await ReadAllAsync(new LocalFileSystemObjectStore(replicaPath));
+        Assert.AreEqual(source.Count, replica.Count, "the replica holds a different number of objects");
+
+        Assert.IsEmpty(ReplicationReceiptStore.Open(_source.StateDirectory).List());
+        Assert.IsEmpty(ReplicationReceiptStore.Open(_destinationState).List());
+        Assert.IsEmpty(
+            FallbackPlan.Application.NoticeStore.Open(_source.StateDirectory).Unacknowledged
+                .Where(notice => notice.Key.StartsWith("replication-receipt-invalid:", StringComparison.Ordinal)));
+
+        var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
+            .Find(_source.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(FallbackPlan.Application.DestinationSyncState.InSync, record.State);
+        Assert.IsNull(record.MeasuredAt, "a peer that signed for nothing must not be counted on its say-so");
     }
 
     [TestMethod]
@@ -266,6 +346,7 @@ public sealed class PeerReplicationTests : IDisposable
     [TestMethod]
     public async Task FanOut_ThePeerRevokedThisHub_RaisesADurableNoticeFromTheRefusal()
     {
+        await _source.SetupAsync();
         // The other delivery path (FR-DEST-008): the spoke ended the peering
         // while the hub was away, so the hub learns from the Revoked refusal
         // at its next sync — and keeps the fact durably.
@@ -311,7 +392,7 @@ public sealed class PeerReplicationTests : IDisposable
         // ledger's and the notice's to carry.
         var run = await RunAgentAsync(
             "run", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, "--once");
+            "--once");
         Assert.AreEqual(0, run.ExitCode, run.Error);
 
         var record = FallbackPlan.Application.DestinationSyncStore.Open(_source.StateDirectory)
@@ -364,7 +445,7 @@ public sealed class PeerReplicationTests : IDisposable
         RunAgentAsync(
         [
             "sync", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
-            "--passphrase-env", _source.PassphraseVariable, .. extra,
+            .. extra,
         ]);
 
     /// <summary>
@@ -373,7 +454,14 @@ public sealed class PeerReplicationTests : IDisposable
     /// Pins the source into the destination and the destination into the source,
     /// and returns the destination's fingerprint.
     /// </summary>
-    private async Task<string> StartDestinationAsync(PeerRole destinationRoleForSource)
+    /// <param name="destinationRoleForSource">The role the destination grants the source.</param>
+    /// <param name="predatesReceipts">
+    /// Serve replication as a build before ADR-0064 did: the same session,
+    /// the same replica, an acknowledgement carrying the count and nothing
+    /// else — a responder given no issuer, behind an acceptor of this test's
+    /// own, since the real listener always issues.
+    /// </param>
+    private async Task<string> StartDestinationAsync(PeerRole destinationRoleForSource, bool predatesReceipts = false)
     {
         using var sourceKeypair = PeerKeypairStore.Open(_source.StateDirectory);
         using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
@@ -387,18 +475,118 @@ public sealed class PeerReplicationTests : IDisposable
             destinationKeypair.Identity, "destination", PeerRole.StoresForUs, PeerTerms.None, PairedAt));
 
         var listenerKeypair = PeerKeypairStore.Open(_destinationState);
-        var listener = RemoteServiceListener.Start(
-            listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            log: null, replicationStateDirectory: _destinationState);
-        listener.Bind(new UnusedService());
-        _endpoint = listener.Endpoint;
-        _stop = new Stopper(listener, listenerKeypair);
+        if (predatesReceipts)
+        {
+            var old = OldPeer.Start(listenerKeypair, _destinationGrants, _destinationState);
+            _endpoint = old.Endpoint;
+            _stop = old;
+        }
+        else
+        {
+            var listener = RemoteServiceListener.Start(
+                listenerKeypair, _destinationGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
+                log: null, replicationStateDirectory: _destinationState);
+            listener.Bind(new UnusedService());
+            _endpoint = listener.Endpoint;
+            _stop = new Stopper(listener, listenerKeypair);
+        }
 
         await Task.CompletedTask;
         return destinationKeypair.Identity.Fingerprint;
     }
 
-    private Stopper? _stop;
+    /// <summary>
+    /// A destination as every build before receipts served it: the real TLS
+    /// accept, the real session, the real responder — handed no
+    /// <see cref="ReplicationResponder.ReceiptIssuer"/>, so its acknowledgement
+    /// carries the count alone. One connection at a time is all a sync needs.
+    /// </summary>
+    private sealed class OldPeer : IAsyncDisposable
+    {
+        private readonly PeerKeypair _keypair;
+        private readonly PeerGrantStore _grants;
+        private readonly string _state;
+        private readonly System.Net.Sockets.Socket _socket;
+        private readonly CancellationTokenSource _stopping = new();
+        private readonly Task _loop;
+
+        private OldPeer(PeerKeypair keypair, PeerGrantStore grants, string state, System.Net.Sockets.Socket socket)
+        {
+            _keypair = keypair;
+            _grants = grants;
+            _state = state;
+            _socket = socket;
+            _loop = AcceptAsync();
+        }
+
+        public IPEndPoint Endpoint => (IPEndPoint)_socket.LocalEndPoint!;
+
+        public static OldPeer Start(PeerKeypair keypair, PeerGrantStore grants, string state)
+        {
+            var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Tcp);
+            socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            socket.Listen(backlog: 4);
+            return new OldPeer(keypair, grants, state, socket);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _stopping.CancelAsync();
+            _socket.Dispose();
+            try
+            {
+                await _loop;
+            }
+            catch (Exception exception)
+                when (exception is OperationCanceledException or System.Net.Sockets.SocketException or ObjectDisposedException)
+            {
+                // Stopped by disposing the socket, as the real listener is.
+            }
+
+            _stopping.Dispose();
+            _keypair.Dispose();
+        }
+
+        private async Task AcceptAsync()
+        {
+            while (!_stopping.IsCancellationRequested)
+            {
+                var accepted = await _socket.AcceptAsync(_stopping.Token);
+                await using var connection = await PeerTlsConnection.AcceptAsync(
+                    accepted, DateTimeOffset.UtcNow, _stopping.Token);
+                var first = await PeerFrame.ReadAsync(connection.Stream, _stopping.Token);
+                if (first is null)
+                {
+                    continue;
+                }
+
+                var session = await PeerSessionDriver.AcceptAsync(
+                    connection, _keypair, _grants, "fallbackplan-agent/old",
+                    termsForPeer: grant => grant.Role is PeerRole.StoresHere or PeerRole.Both ? grant.Terms : null,
+                    preread: first, cancellationToken: _stopping.Token);
+                var payload = await PeerFrame.ReadAsync(session.Stream, _stopping.Token);
+                if (payload is null)
+                {
+                    continue;
+                }
+
+                await ReplicationResponder.ServeAsync(
+                    Path.Combine(_state, "replicas"), Path.Combine(_state, "spool", "replication"),
+                    session.Stream, session.Peer, ReplicaOwnerStore.Open(_state),
+                    session.Supports(PeerSessionNegotiation.RetentionInstructionFeature),
+                    session.Supports(PeerSessionNegotiation.DestinationVerificationFeature),
+                    session.Supports(PeerSessionNegotiation.PartialObjectResumeFeature),
+                    session.Binding,
+                    receiptIssuer: null,
+                    _stopping.Token,
+                    preread: payload);
+            }
+        }
+    }
+
+    private IAsyncDisposable? _stop;
     private PeerGrantStore? _destinationGrants;
 
     /// <summary>Polls until the condition holds — the listener handles a frame after the sender has already returned.</summary>

@@ -69,12 +69,10 @@ public sealed record WebConsoleOptions
 
                     break;
 
+                // The host reads the level itself, before this parse, so the
+                // flag the usage advertises must not bounce off the parser as
+                // unknown — which it did, making the flag unusable.
                 case "--log-level":
-                    // Consumed here so it is not an unknown argument, and
-                    // resolved nowhere but WebConsoleHost, through
-                    // ConsoleLogging.TryResolveLevel. Two places deciding what
-                    // a level means would be two places to disagree; this one
-                    // only has to know the flag takes a value.
                     if (!TryTakeValue(args, ref i, out _, ref failure))
                     {
                         return false;
@@ -90,8 +88,21 @@ public sealed record WebConsoleOptions
 
         if (state is null)
         {
-            failure = Strings.WebConsoleOptions_StateDirectoryRequired;
-            return false;
+            // The shared installation default (FR-SVC-016): the same state
+            // the service and the CLI resolve, created on first touch so a
+            // console started before the service still comes up and waits.
+            // Only a path somebody TYPED is refused when missing — a typo'd
+            // --state must not silently watch an empty directory.
+            state = Api.InstallationDefaults.StateDirectory;
+            try
+            {
+                Directory.CreateDirectory(state);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                failure = Strings.FormatWebConsoleOptions_StateDirectoryMissing(state);
+                return false;
+            }
         }
 
         // A state directory that is not there yet is NOT a parse failure. The

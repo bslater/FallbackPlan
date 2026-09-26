@@ -123,4 +123,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatWebConsoleOptions_UnknownArgument(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, WebConsoleOptions_UnknownArgument, arg0);
+
+    /// <summary>
+    /// The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.
+    /// </summary>
+    private static string WebConsoleOptions_StateDirectoryMissing => Get(nameof(WebConsoleOptions_StateDirectoryMissing));
+
+    /// <summary>
+    /// The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.
+    /// </summary>
+    internal static string FormatWebConsoleOptions_StateDirectoryMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WebConsoleOptions_StateDirectoryMissing, arg0);
 }

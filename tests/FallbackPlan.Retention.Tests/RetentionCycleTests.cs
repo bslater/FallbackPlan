@@ -17,6 +17,7 @@ namespace FallbackPlan.Retention.Tests;
 /// still deletes nothing, the grace runs only when the writer publishes
 /// again, and the sweep then removes exactly what the plan condemned while
 /// the archive keeps publishing and walking clean.
+/// Establishes FR-GC-002 and FR-GC-003.
 /// </summary>
 [TestClass]
 public sealed class RetentionCycleTests : IDisposable
@@ -35,6 +36,7 @@ public sealed class RetentionCycleTests : IDisposable
     public RetentionCycleTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "retention fodder");
 
@@ -137,9 +139,8 @@ public sealed class RetentionCycleTests : IDisposable
         // --apply. A destination whose policy also drops the snapshot never
         // holds expiry up: pushing it would be futile, since convergence
         // would remove it again on arrival.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var report = await RetentionRunner.RunAsync(
             store, repository,
@@ -154,7 +155,7 @@ public sealed class RetentionCycleTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply: true,
             (ulong)day1.AddDays(1).AddHours(1).ToUnixTimeMilliseconds(),
-            CancellationToken.None);
+            CancellationToken.None, reclaim: opened.Reclaim);
 
         Assert.AreEqual(0, report.TombstonesWritten);
         Assert.ContainsSingle(report.Held);
@@ -210,15 +211,15 @@ public sealed class RetentionCycleTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
     private async Task<RetentionReport> RunAsync(
         LocalFileSystemObjectStore store, bool apply, DateTimeOffset now, ILogger? logger = null)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
@@ -232,7 +233,7 @@ public sealed class RetentionCycleTests : IDisposable
             (ulong)now.ToUnixTimeMilliseconds(),
             CancellationToken.None,
             "docs",
-            logger);
+            logger, reclaim: opened.Reclaim);
     }
 
     [TestMethod]

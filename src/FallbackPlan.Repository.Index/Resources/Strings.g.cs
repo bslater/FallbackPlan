@@ -86,7 +86,28 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, IndexDeltaCodec_CoveredBlobDigestsElementsAgainst, arg0, arg1);
 
     /// <summary>
-    /// The delta carries an unknown key; specification 07 §2 assigns keys 1-10 only.
+    /// A covered blob Merkle root is 32 bytes (specification 07 §2.3).
+    /// </summary>
+    internal static string IndexDeltaCodec_CoveredBlobMerkleRootByte => Get(nameof(IndexDeltaCodec_CoveredBlobMerkleRootByte));
+
+    /// <summary>
+    /// covered_blob_merkle_roots has {0} elements against {1} covered blobs; the arrays are parallel or absent (specification 07 §2.3).
+    /// </summary>
+    private static string IndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst => Get(nameof(IndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst));
+
+    /// <summary>
+    /// covered_blob_merkle_roots has {0} elements against {1} covered blobs; the arrays are parallel or absent (specification 07 §2.3).
+    /// </summary>
+    internal static string FormatIndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, IndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst, arg0, arg1);
+
+    /// <summary>
+    /// A delta carrying covered_blob_merkle_roots carries covered_blob_digests too; the Merkle root is the stronger commitment and never the only one (specification 07 §2.3).
+    /// </summary>
+    internal static string IndexDeltaCodec_MerkleRootsWithoutDigests => Get(nameof(IndexDeltaCodec_MerkleRootsWithoutDigests));
+
+    /// <summary>
+    /// The delta carries an unknown key; specification 07 §2 assigns keys 1-11 only.
     /// </summary>
     internal static string IndexDeltaCodec_DeltaCarriesUnknownKeySpecification => Get(nameof(IndexDeltaCodec_DeltaCarriesUnknownKeySpecification));
 

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using FallbackPlan.Application;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Protocol.Tests;
 
@@ -311,6 +312,35 @@ public sealed class PeerWireTests : IDisposable
         Assert.IsFalse(consoleResult.Approved);
         Assert.IsNull(serviceStore.Find(_console.Identity));
         Assert.IsNull(consoleStore.Find(_service.Identity));
+    }
+
+    [TestMethod]
+    public async Task Session_OverARealConnection_BothEndsNameItTheSame()
+    {
+        // The identifier is derived rather than exchanged, so nothing on the
+        // wire would catch the two ends disagreeing — only this does. The
+        // mistake it is here for is a derivation that is role-SPECIFIC, which
+        // is the natural thing to reach for beside a transcript that
+        // deliberately is: authentication still succeeds and the two ends
+        // quietly name the session differently. (Getting the contribution pair
+        // in the wrong order fails loudly instead, because the transcript is
+        // built from the same pair and the proof stops verifying.)
+        var serviceStore = Store("service");
+        var consoleStore = Store("console");
+        Pin(serviceStore, _console.Identity);
+        Pin(consoleStore, _service.Identity);
+
+        var (service, console) = await OpenSessionAsync(serviceStore, consoleStore, _service.Identity);
+
+        Assert.HasCount(SessionBinding.SessionIdLength, service.Binding.ToArray());
+        SequenceAssert.AreEqual(service.Binding.ToArray(), console.Binding.ToArray());
+
+        // And a second connection between the same two peers is a different
+        // session, which is what makes a signature bound to it expire.
+        var (laterService, _) = await OpenSessionAsync(serviceStore, consoleStore, _service.Identity);
+        Assert.IsFalse(
+            service.Binding.Span.SequenceEqual(laterService.Binding.Span),
+            "two connections between the same peers must not share a name");
     }
 
     [TestMethod]

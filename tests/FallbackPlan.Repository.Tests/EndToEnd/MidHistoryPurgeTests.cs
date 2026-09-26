@@ -1,3 +1,5 @@
+using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Repository.Format;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -57,6 +59,8 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 {
     private const string PassphraseText = "mid-history-purge-passphrase-32b";
 
+    private static readonly byte[] KdfSalt = [.. Enumerable.Repeat((byte)0x4D, 16)];
+
     private const string FilePath = "ledger/book.bin";
 
     /// <summary>64 KiB, matching <see cref="ArchiveTestHarness.SmallBlobPolicy"/>'s fixed segment.</summary>
@@ -91,9 +95,10 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
     {
         var versions = Ladder();
         var store = CreateStore();
-        using var passphrase = Passphrase.Create(PassphraseText);
+        using var credential = CreateCredential();
         using var repository = await RepositoryLifecycle.CreateAsync(
-            store, passphrase, Domain.Configuration.RepositoryCreationSettings.Default,
+            store, credential, KdfSalt,
+            Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters, "mid-history-purge-tests",
             createdAtUnixMilliseconds: (ulong)Day1.ToUnixTimeMilliseconds(),
             CancellationToken.None);
 
@@ -103,7 +108,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
         var snapshotIds = await PublishLadderAsync(store, repository, catalogue, versions, upTo: 3);
 
         // 1. The policy — not the test — picks the middle one.
-        var expired = await SelectAsync(store, passphrase);
+        var expired = await SelectAsync(store, credential);
         var expiredId = Assert.ContainsSingle(expired).SnapshotId;
         Assert.AreEqual(
             Convert.ToHexStringLower(snapshotIds[1]), expiredId,
@@ -111,7 +116,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
         // 2. Condemn it. A pass that found nothing to delete would make every
         // assertion below vacuous, so the plan is checked before it is acted on.
-        var tombstoned = await CondemnAsync(store, passphrase);
+        var tombstoned = await CondemnAsync(store, credential);
         Assert.IsGreaterThan(0, tombstoned, "nothing was tombstoned, so nothing could be reclaimed");
 
         // 3. The writer publishes again — the only thing that moves the grace
@@ -122,7 +127,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
         await PublishLadderAsync(store, repository, catalogue, versions, upTo: 4, from: 3);
 
         var before = StoreBytes();
-        var swept = await SweepAsync(store, passphrase);
+        var swept = await SweepAsync(store, credential);
 
         Assert.IsGreaterThan(0, swept.Deleted, string.Join("; ", swept.Findings));
         Assert.IsEmpty(swept.Findings, string.Join("; ", swept.Findings));
@@ -145,9 +150,10 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
         // blobs holding nothing it reached.
         var versions = Ladder();
         var store = CreateStore();
-        using var passphrase = Passphrase.Create(PassphraseText);
+        using var credential = CreateCredential();
         using var repository = await RepositoryLifecycle.CreateAsync(
-            store, passphrase, Domain.Configuration.RepositoryCreationSettings.Default,
+            store, credential, KdfSalt,
+            Domain.Configuration.RepositoryCreationSettings.Default.KdfParameters, "mid-history-purge-tests",
             createdAtUnixMilliseconds: (ulong)Day1.ToUnixTimeMilliseconds(),
             CancellationToken.None);
 
@@ -156,7 +162,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
         await PublishLadderAsync(store, repository, catalogue, versions, upTo: 3);
 
-        var (plan, reachable, reader) = await PlanAsync(store, passphrase);
+        var (plan, reachable, reader) = await PlanAsync(store, credential);
         using (reader)
         {
             Assert.IsEmpty(plan.Vetoes, string.Join("; ", plan.Vetoes));
@@ -252,10 +258,10 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
             await new PublicationOrchestrator(
                 SmallBlobPolicy, repository.RepositoryId, Scribe, repository.CurrentDataGeneration,
-                repository.Keys, repository.Hierarchy, store,
+                repository.Keys, repository.Credential, store,
                 new WriterSequence(new FileSequenceStateStore(
                     Path.Combine(SpoolDirectory, "sequence.txt"))),
-                spool, observer: null, catalogue)
+                spool, FormatVersions.RelocatableRecords, observer: null, catalogue: catalogue)
                 .PublishAsync(job, CancellationToken.None);
         }
 
@@ -264,9 +270,9 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
     /// <summary>What the policy would expire, with nothing else consulted.</summary>
     private static async Task<IReadOnlyList<SnapshotFact>> SelectAsync(
-        LocalFileSystemObjectStore store, Passphrase passphrase)
+        LocalFileSystemObjectStore store, RepositoryWriteCredential credential)
     {
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, credential, CancellationToken.None);
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         Assert.IsEmpty(survey.Undecodable, "an undecodable snapshot vetoes every deletion");
 
@@ -277,9 +283,9 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
 
     /// <summary>Plans a pass and hands back the plan, the mark set and the loaded reader.</summary>
     private static async Task<(CollectionPlan Plan, HashSet<ObjectId> Reachable, RepositoryReader Reader)> PlanAsync(
-        LocalFileSystemObjectStore store, Passphrase passphrase)
+        LocalFileSystemObjectStore store, RepositoryWriteCredential credential)
     {
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, credential, CancellationToken.None);
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         var selection = RetentionPlanner.Select(
             [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], Policy, Now);
@@ -293,7 +299,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
             .Concat(gate.Held.Select(held => held.Snapshot.SnapshotId))
             .ToHashSet(StringComparer.Ordinal);
 
-        var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(
@@ -305,38 +311,43 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
             await JournalRecordsAsync(store, repository), unparseableCount: 0,
             SealingGeneration(repository), (ulong)Now.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
 
-        return (CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents),
+        return (CollectionPlanner.Plan(survey, selection, gate, reader, reachable, unwalkable, intents, ListingConsistency.Strong),
             reachable, reader);
     }
 
     /// <summary>Tombstones what a fresh plan condemns; returns how many tombstones were written.</summary>
-    private static async Task<int> CondemnAsync(LocalFileSystemObjectStore store, Passphrase passphrase)
+    private static async Task<int> CondemnAsync(LocalFileSystemObjectStore store, RepositoryWriteCredential credential)
     {
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, credential, CancellationToken.None);
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
-        var (plan, _, reader) = await PlanAsync(store, passphrase);
+        var (plan, _, reader) = await PlanAsync(store, credential);
         using (reader)
         {
             Assert.IsTrue(plan.Deletable, string.Join("; ", plan.Vetoes));
 
+            // A tombstone carries a reclaim signature on this branch
+            // (ADR-0055 §6), so the sweep is handed the reclaim authority the
+            // repository's own key seed supplies.
+            using var reclaim = new ReclaimAuthority(Authority.ReclaimKeySeed);
             return await StagingSweep.TombstoneAsync(
                 store, repository, Scribe, plan, survey,
                 await PublicationSequenceAsync(store, repository),
-                (ulong)Now.ToUnixTimeMilliseconds(), CancellationToken.None);
+                (ulong)Now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim);
         }
     }
 
     /// <summary>Revalidates against the world as it is now, then deletes what is still condemned.</summary>
-    private static async Task<SweepOutcome> SweepAsync(LocalFileSystemObjectStore store, Passphrase passphrase)
+    private static async Task<SweepOutcome> SweepAsync(LocalFileSystemObjectStore store, RepositoryWriteCredential credential)
     {
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var repository = await RepositoryLifecycle.OpenAsync(store, credential, CancellationToken.None);
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
-        var (plan, _, reader) = await PlanAsync(store, passphrase);
+        var (plan, _, reader) = await PlanAsync(store, credential);
         using (reader)
         {
+            using var reclaim = new ReclaimAuthority(Authority.ReclaimKeySeed);
             return await StagingSweep.SweepAsync(
                 store, repository, plan, survey,
-                await PublicationSequenceAsync(store, repository), CancellationToken.None);
+                await PublicationSequenceAsync(store, repository), CancellationToken.None, reclaim);
         }
     }
 
@@ -347,7 +358,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
     private static async Task<IReadOnlyList<JournalRecord>> JournalRecordsAsync(
         LocalFileSystemObjectStore store, OpenedRepository repository)
     {
-        using var journal = new JournalReader(store, repository.RepositoryId, repository.Hierarchy);
+        using var journal = new JournalReader(store, repository.RepositoryId, repository.Credential);
         var (records, _, _) = await journal.LoadAsync(SealingGeneration(repository), CancellationToken.None);
         return records;
     }
@@ -379,7 +390,7 @@ public sealed class MidHistoryPurgeTests : ArchiveTestHarness
         // collection left behind, not the one that was there when the
         // snapshot was published.
         var target = RestoreTargetProfile.ForLocalPlatform();
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var plan = RestorePlanner.Plan(catalogue, snapshotId, string.Empty, target);

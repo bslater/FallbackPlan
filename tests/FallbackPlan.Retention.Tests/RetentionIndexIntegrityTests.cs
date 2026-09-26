@@ -62,6 +62,7 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
     public RetentionIndexIntegrityTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "steady.txt"), "never edited again");
         File.WriteAllText(Path.Combine(SourceRoot, "churn.txt"), "day one");
@@ -103,12 +104,12 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
     {
         var store = await SweptArchiveAsync();
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
         Assert.IsNotEmpty(survey.Snapshots);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         Assert.IsEmpty(reader.SkippedBlobs, "a blob would not open, so the inventory below is not authoritative");
 
@@ -142,11 +143,11 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
     {
         var store = await SweptArchiveAsync();
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var (reachable, _) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
@@ -177,10 +178,10 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
     {
         var store = await SweptArchiveAsync();
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var held = reader.Blobs.Select(blob => blob.BlobId).ToHashSet();
 
@@ -227,12 +228,12 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
         await BackUpAsync(Day1);
 
         var faulting = new ReadFaultingObjectStore(new LocalFileSystemObjectStore(RepoPath));
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(faulting, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(faulting, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         faulting.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, faulting);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, faulting, opened.Authority);
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
             await reader.LoadBlobsAsync(CancellationToken.None));
 
@@ -259,10 +260,10 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
         var victim = Directory.EnumerateFiles(Path.Combine(RepoPath, "blobs"), "*", SearchOption.AllDirectories).First();
         File.WriteAllBytes(victim, new byte[new FileInfo(victim).Length]);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         Assert.ContainsSingle(reader.SkippedBlobs);
 
@@ -316,7 +317,7 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
         IReadOnlyList<(ObjectId ObjectId, BlobId Winner)> Resolved)> RebuildAsync(
         LocalFileSystemObjectStore store, OpenedRepository repository, Func<BlobId, BlobState>? blobState)
     {
-        var loader = new IndexLoader(store, repository.RepositoryId, repository.Hierarchy);
+        var loader = new IndexLoader(store, repository.RepositoryId, repository.Credential);
         var state = await loader.LoadAsync(
             Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value),
             gapPatienceGenerations: 2,
@@ -374,14 +375,14 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
     private async Task<RetentionReport> RunAsync(LocalFileSystemObjectStore store, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
@@ -389,7 +390,7 @@ public sealed class RetentionIndexIntegrityTests : IDisposable
             [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
-            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None);
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
     }
 
     public void Dispose()

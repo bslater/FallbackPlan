@@ -30,6 +30,7 @@ public sealed class RetentionSyncInterlockTests : IDisposable
 
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var grant = await _harness.ReclaimGrantAsync(handler, _timeout.Token);
 
         // A sync is mid-flight for this set: the gate is held. The retention
         // pass must not run its destructive half against a moving target —
@@ -39,7 +40,7 @@ public sealed class RetentionSyncInterlockTests : IDisposable
         try
         {
             Assert.IsInstanceOfType<RetentionResult>(
-                await handler.ExecuteAsync(new RetentionCommand(Apply: true), _timeout.Token), out var report);
+                await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), _timeout.Token), out var report);
 
             Assert.Contains(
                 line => line.Contains("apply deferred", StringComparison.Ordinal)
@@ -53,7 +54,7 @@ public sealed class RetentionSyncInterlockTests : IDisposable
 
         // With the gate free, the same command applies — no deferral line.
         Assert.IsInstanceOfType<RetentionResult>(
-            await handler.ExecuteAsync(new RetentionCommand(Apply: true), _timeout.Token), out var applied);
+            await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), _timeout.Token), out var applied);
         Assert.IsFalse(applied.Lines.Any(line => line.Contains("apply deferred", StringComparison.Ordinal)));
     }
 
@@ -96,8 +97,8 @@ public sealed class RetentionSyncInterlockTests : IDisposable
 
         var result = await HostHarness.RunAsync(
             AgentHost.RunAsync,
-            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "sync", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory
+            );
 
         Assert.AreEqual(1, result.ExitCode, result.All);
         Assert.Contains("writer role", result.Error, StringComparison.Ordinal);
@@ -145,8 +146,7 @@ public sealed class RetentionSyncInterlockTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -154,7 +154,6 @@ public sealed class RetentionSyncInterlockTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 

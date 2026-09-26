@@ -1,11 +1,23 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "console": {
+    "console (default installation, opens the browser)": {
       "commandName": "Project",
-      "commandLineArgs": "--state C:\\fbp\\state --port 5099 --log-level trace",
+      "commandLineArgs": "--port 5099",
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:5099"
+    },
+    "console (default installation)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 5099",
       "launchBrowser": false
     },
     "console (quiet — shipped default)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 5099 --log-level debug",
+      "launchBrowser": false
+    },
+    "console (specific state)": {
       "commandName": "Project",
       "commandLineArgs": "--state C:\\fbp\\state --port 5099",
       "launchBrowser": false

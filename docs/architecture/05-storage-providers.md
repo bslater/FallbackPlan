@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built; cloud providers are phase 3 — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). Cloud providers are phase 3 — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -11,6 +11,10 @@
 The repository engine depends on a deliberately small interface. The core must **not** assume filesystem rename, strong listing consistency, provider checksums, or mutable objects — every one of those is absent from at least one provider we intend to support.
 
 Provider capabilities are probed once and reported separately from the data path, so a capability check never sits inside a hot loop, and no provider-specific behaviour leaks into snapshot or file-version semantics (NFR-COMP-005).
+
+**Not assuming a capability is not the same as tolerating its absence**, and the difference is where the engine says which it means. Two capabilities are required, and a store declaring either absent is refused by name before it is used rather than failing somewhere deep: **conditional create**, because every durable step of a publication is an if-absent put and without it "created" stops meaning "nothing was there"; and **ranged reads**, because opening a blob costs three of them before a record is read. A reader is held only to the second — a peer's replica over the retrieval session has no put at all ([peer-protocol 07 §1](../../specifications/peer-protocol/07-retrieval.md)) — so the caller states which it is doing, defaulting to writing.
+
+**Strong listing consistency is the one the core genuinely does not assume, and what that costs is deletion.** Anything that reasons from an object's *presence* works against a lagging listing and is pinned doing so: a replication pass re-offers what it already sent and is refused, a stale writer head collides on its conditional put, an unseen index delta is reported as an unresolved gap rather than assumed away. Anything that reasons from an object's **absence** cannot: collection calls a blob garbage because nothing reachable names it, and a snapshot a listing has not caught up to is indistinguishable from one that was never written. So against anything but a `Strong` promise a collection pass reports the plan it would have acted on and condemns nothing, and a destination's keep-set is refused rather than built ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). Lifting that needs an attested witness of completeness for the snapshot plane, which does not exist; the catalogue cannot be it, being a cache and never the authority a deletion hangs off.
 
 > **Terminology.** A **repository blob** is our immutable container ([`01-domain-model.md`](01-domain-model.md#1-glossary)). A **store object** is the provider's unit of storage. Azure calls the latter a blob; this document does not.
 
@@ -103,6 +107,15 @@ Two capabilities change engine behaviour rather than merely informing it:
 
 `MinimumStorageDuration` and `ArchivalTiers` inform retention and garbage collection about early-deletion charges and rehydration latency. They never change what is *correct* to delete — only what is *advisable*, and when.
 
+**Capabilities of a composed store are an open edge.** The ship sink (§4.5)
+is itself an `IObjectStore` over N provider stores, and nothing yet defines
+whether such a store reports the intersection of its members' capabilities,
+its weakest member's, or its highest-priority member's. Today the question
+is moot in practice — every sink member is the local filesystem provider —
+but it becomes real with the first cloud or peer member, and the answer
+belongs here when it is needed. Stated so the gap is a decision awaiting a
+forcing case rather than an assumption nobody made.
+
 ## 4. Providers
 
 A provider is how a **destination kind** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
@@ -113,6 +126,9 @@ implementations behind the same contract. Fan-out neither knows nor cares which
 kind it is copying to — that indifference is the seam
 ([ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)),
 and it is why a cloud bucket is one more destination rather than a feature.
+The same indifference is what the ship sink (§4.5) inherits: it writes
+providers through the same contract, so a direct-ship set gains a new
+destination kind the day its provider exists.
 
 ### 4.1 Local filesystem
 
@@ -120,7 +136,7 @@ Durable file creation with explicit flush · atomic temp-to-final rename where t
 
 ### 4.2 FallbackPlan peer
 
-Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)).
+Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather than exposing raw filesystem access. Quota and authorisation controls, streamed uploads, ranged downloads, peer-side integrity verification, optional store-and-forward. A source device never receives unrestricted filesystem access to a destination ([`09-replication-and-peers.md` §3](09-replication-and-peers.md#3-pairing)). A peer destination is served by fan-out and catch-up today; the ship sink does not yet write to peers — on a direct-ship set a peer is a stated `NotSupported` in the sync ledger until the peer write adapter lands ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
 
 ### 4.3 Azure Blob Storage
 
@@ -132,6 +148,24 @@ AWS SDK for .NET · multipart upload above the threshold · IAM roles, profiles,
 
 S3-compatible implementations vary in conditional-operation semantics, checksum support, and listing consistency. A tested compatibility matrix is maintained per implementation, and a store whose behaviour cannot be established is treated as the weakest case rather than assumed compatible.
 
+### 4.5 The ship sink — a composed store, not a provider
+
+A direct-ship set's publication writes a `DestinationShipSink`
+([ADR-0046](../adr/0046-direct-to-destination-publication.md)): an
+`IObjectStore` composed over the set's in-scope destination stores plus its
+local metadata store, living in `Agent` beside the runtime that composes it
+([`11-solution-structure.md` §2](11-solution-structure.md#2-dependency-rules)).
+It is not a provider — providers stay dumb byte stores and never know it
+exists — and the pipeline above it cannot tell it from the staging store it
+replaced, which is the whole trick. Routing is by key prefix: `blobs/`
+objects go to the destinations and never to local disk; every other object
+goes to the metadata store *and* the destinations. Reads answer from whoever
+holds the bytes — metadata locally, a blob from the first destination
+holding the key in priority order, a listing as the union across
+destinations. §2.1's re-openable content factory is what makes the fan-write
+affordable: one sealed spool file re-opens per destination instead of
+buffering N copies.
+
 ## 5. Request economics
 
 Object stores charge per request, so request count is a first-class design concern, not a tuning detail.
@@ -139,9 +173,11 @@ Object stores charge per request, so request count is a first-class design conce
 - **Never one request per segment.** Segments are packed into blobs of 128 MiB by default ([`02-repository-format.md` §5.1](02-repository-format.md#51-purpose-and-sizing)).
 - **Never enumerate to resolve a lookup.** The catalogue and index answer lookups; listing is an accelerator for finding recent checkpoints and a fallback for forensic rebuild ([`02-repository-format.md` §7](02-repository-format.md#7-index-architecture)).
 - **Range reads on restore** so a single needed segment does not drag its whole blob across the network.
+- **Never open a blob to read from it.** Opening one through its locator and recovery footer costs three ranged reads before a byte of payload, so a restore reads each record straight from the location the catalogue already holds, and opens the footer only when that read fails — which is also how damage keeps being described by the reader built to describe it ([ADR-0068](../adr/0068-the-catalogue-directed-restore-read.md); [`04-concurrency-and-publication.md` §7](04-concurrency-and-publication.md)).
+- **Coalesce neighbouring reads, under stated bounds.** A file's records sit next to each other in the blob they were written into, so they are fetched together — and the run that fetches the first of them reaches down to offset 0 to collect the blob's envelope on the way past, which is the difference between two requests a blob and one. The bounds are what keep the saving honest: a window, so a large file does not become one buffer (NFR-PERF-001); and a cap on the bytes a read may *waste*, so a gap between two wanted records is bridged only when bridging is cheaper than a second request. Without that second bound a request budget is simply paid for in bandwidth.
 - **Batch deletes** where supported, in bounded batches.
 
-Requests and PUTs per GB are measured against explicit targets — see [`../requirements/non-functional.md`](../requirements/non-functional.md#performance) NFR-PERF-008/009 — because §23 of the original proposal named request amplification as a major risk and named packing as the mitigation, without any way to detect the mitigation ceasing to work.
+Requests and PUTs per GB are measured against explicit targets — see [`../requirements/non-functional.md`](../requirements/non-functional.md#performance) NFR-PERF-008/009 — because §23 of the original proposal named request amplification as a major risk and named packing as the mitigation, without any way to detect the mitigation ceasing to work. There is one now for the GET half: `Repository.Tests/RestoreBreadthTests` measures a whole-snapshot restore's requests against the blobs it needs, and the three terms that made the budget reachable are held apart so each can be lost on its own. The PUT half is still a target and not a measurement.
 
 ## 6. Contract tests
 

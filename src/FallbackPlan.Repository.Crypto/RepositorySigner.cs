@@ -45,14 +45,14 @@ public sealed class RepositorySigner : IDisposable
     public ReadOnlySpan<byte> PublicKey => _publicKey;
 
     /// <summary>
-    /// Creates a signer for <paramref name="generation"/> from the hierarchy's
+    /// Creates a signer for <paramref name="generation"/> from the credential's
     /// derived seed.
     /// </summary>
-    public static RepositorySigner Create(KeyHierarchy hierarchy, KeyGeneration generation)
+    public static RepositorySigner Create(RepositoryWriteCredential credential, KeyGeneration generation)
     {
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
-        var seed = hierarchy.DeriveSigningKeySeed(generation);
+        var seed = credential.DeriveSigningKeySeed(generation);
 
         try
         {
@@ -98,5 +98,43 @@ public sealed class RepositorySigner : IDisposable
         signature.Length == SignatureLength && _key.VerifyData(message, signature);
 
     /// <inheritdoc />
+    /// <summary>
+    /// Verifies a signature against a bare public key — no seed, no private
+    /// half ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5).
+    /// </summary>
+    /// <remarks>
+    /// The one verification path that does not start inside the key boundary.
+    /// A peer destination holds ciphertext and no repository keys, so it
+    /// cannot derive a verifier the way ADR-0020 §3 assumes every reader can;
+    /// what it holds is the public key recorded beside its attribution, and
+    /// this is what it checks a deletion instruction with.
+    /// </remarks>
+    /// <param name="publicKey">The 32-byte Ed25519 public key.</param>
+    /// <param name="signedBytes">The bytes the signature covers.</param>
+    /// <param name="signature">The 64-byte signature.</param>
+    /// <returns><see langword="true"/> when the signature verifies.</returns>
+    public static bool VerifyWithPublicKey(
+        ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signedBytes, ReadOnlySpan<byte> signature)
+    {
+        if (publicKey.Length != PublicKeyLength || signature.Length != SignatureLength)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var key = Ed25519.Create();
+            key.ImportPublicKey(publicKey);
+            return key.VerifyData(signedBytes, signature);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // A public key the primitive will not import is a key that
+            // verifies nothing, which is the honest answer rather than an
+            // exception a caller would have to translate into one.
+            return false;
+        }
+    }
+
     public void Dispose() => _key.Dispose();
 }

@@ -19,17 +19,18 @@ public enum ProtectionState
     /// <summary>Committed, but only within the source's own failure domain — real, and no defence against losing the machine.</summary>
     Captured = 1,
 
-    /// <summary>Durable at a replica outside the source's failure domain (PT-8).</summary>
+    /// <summary>Durable at a replica separate from the drive the source lives on (ADR-0051; PT-8's same-disk confidence stays impossible).</summary>
     Protected = 2,
 
-    /// <summary>Durable at a named destination.</summary>
-    Replicated = 3,
+    // 3 and 5 are retired, and their numbers stay reserved: the contract
+    // serializer carries this enum numerically, so a reassigned value would
+    // change meaning under a deployed client. Replicated (3) said nothing
+    // the Captured/Protected failure-domain distinction does not say more
+    // precisely, and PolicyCompliant (5) presupposed a durability policy
+    // that does not exist; neither was ever emitted by the deriver.
 
     /// <summary>Independently confirmed at that destination — always with coverage and age, never a bare tick.</summary>
     Verified = 4,
-
-    /// <summary>The set's durability policy is satisfied.</summary>
-    PolicyCompliant = 5,
 
     /// <summary>Recoverable, but below policy — act soon.</summary>
     Degraded = 6,

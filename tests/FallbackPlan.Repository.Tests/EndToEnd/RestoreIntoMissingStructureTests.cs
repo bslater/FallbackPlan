@@ -33,21 +33,20 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private CatalogueDb OpenCatalogue(string name) =>
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue, string spoolName)
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue, string spoolName)
     {
         var spool = Path.Combine(SpoolDirectory, spoolName);
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
     }
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
@@ -89,9 +88,9 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
 
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue(name);
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, name)
+        await CreateOrchestrator(store, keys, credential, catalogue, name)
             .PublishAsync(Job(source, seed), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -113,7 +112,7 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
         var output = Path.Combine(SpoolDirectory, "no-such-directory", "nor-this-one");
         Assert.IsFalse(Directory.Exists(output));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -154,7 +153,7 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
         var output = Path.Combine(SpoolDirectory, "empty-target-out");
         Directory.CreateDirectory(output);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -191,7 +190,7 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
         var output = Path.Combine(SpoolDirectory, "partial-structure-out");
         Directory.CreateDirectory(Path.Combine(output, "one", "two"));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -225,9 +224,9 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("single-deep");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "single-deep")
+        await CreateOrchestrator(store, keys, credential, catalogue, "single-deep")
             .PublishAsync(Job(source, 0xF4), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -237,7 +236,7 @@ public sealed class RestoreIntoMissingStructureTests : ArchiveTestHarness
         var output = Path.Combine(SpoolDirectory, "single-deep-out");
         Assert.IsFalse(Directory.Exists(output));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(

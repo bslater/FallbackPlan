@@ -17,14 +17,14 @@ public sealed class PeerSession
         ushort version,
         IReadOnlyList<string> features,
         PeerTerms? theirTerms,
-        ReadOnlyMemory<byte> transcriptHash)
+        ReadOnlyMemory<byte> binding)
     {
         Stream = stream;
         Peer = peer;
         Version = version;
         Features = features;
         TheirTerms = theirTerms;
-        TranscriptHash = transcriptHash;
+        Binding = binding;
     }
 
     /// <summary>The open duplex stream. What flows over it now is the payload, not the handshake.</summary>
@@ -35,6 +35,20 @@ public sealed class PeerSession
 
     /// <summary>The negotiated protocol version (02 §3).</summary>
     public ushort Version { get; }
+
+    /// <summary>
+    /// The 32 bytes both ends call this connection (02 §3.5) — a name for one
+    /// session that neither side chose and that no other session shares.
+    /// </summary>
+    /// <remarks>
+    /// It is what a payload binds to when it must say *this session* and not
+    /// merely *this repository*: a signature over material including these
+    /// bytes is one a recording of the exchange cannot replay into a later
+    /// connection. Derived from the authentication transcript, so it costs
+    /// nothing on the wire — the nonces and channel bindings it names were
+    /// already exchanged to prove who is speaking.
+    /// </remarks>
+    public ReadOnlyMemory<byte> Binding { get; }
 
     /// <summary>The features in effect (02 §4) — a gated message is sent only when its feature is here.</summary>
     public IReadOnlyList<string> Features { get; }
@@ -140,6 +154,12 @@ public static class PeerSessionDriver
     /// prove possession (04 §1, FR-VER-006); a console demands nothing, because
     /// it stores nothing.
     /// </param>
+    /// <param name="offeredFeatures">
+    /// What this side offers, or null for everything this build supports (02
+    /// §6). A caller narrows it to behave as a peer that does not have a
+    /// feature — which is what makes an older pair's behaviour something this
+    /// build can exercise rather than only reason about.
+    /// </param>
     /// <param name="cancellationToken">Cancels the handshake.</param>
     /// <returns>The open session.</returns>
     /// <exception cref="PeerProtocolException">The peer was refused, or refused this side.</exception>
@@ -153,11 +173,12 @@ public static class PeerSessionDriver
         PeerTerms? terms = null,
         IReadOnlyList<string>? requiredFeatures = null,
         ILogger? logger = null,
+        IReadOnlyList<string>? offeredFeatures = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(expected);
         return RunAsync(
-            connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, offeredFeatures: null,
+            connection, keypair, grants, expected, agentVersion, terms, termsForPeer: null, offeredFeatures,
             requiredFeatures, preread: null, logger, cancellationToken);
     }
 
@@ -220,8 +241,7 @@ public static class PeerSessionDriver
 
             authenticator.Open();
             return new PeerSession(
-                stream, peer, accept.Version, accept.Features, theirHello.Terms,
-                authenticator.TranscriptHash!.Value);
+                stream, peer, accept.Version, accept.Features, theirHello.Terms, authenticator.SessionId);
         }
         catch (PeerProtocolException exception)
         {

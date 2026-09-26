@@ -1,13 +1,21 @@
 using System.Text;
+using FallbackPlan.Agent;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// Builds a real repository with the CLI, then drives the Agent and Recovery
-/// hosts against it in process. A recovery drill only means something
-/// against a repository that was created the ordinary way, so the setup goes
-/// through the same commands a user would run.
+/// Sets a real installation up with the agent's own <c>setup</c> verb, then
+/// drives the Agent and Recovery hosts against it in process. A recovery
+/// drill only means something against an installation that was set up the
+/// ordinary way, so the fixture goes through the same commands a user would
+/// run, and the "docs" set's archive is created the way the service creates
+/// one: from the installation credential setup stored.
 /// </summary>
 public sealed class HostHarness : IDisposable
 {
@@ -19,26 +27,41 @@ public sealed class HostHarness : IDisposable
     /// </summary>
     public string PassphraseVariable { get; } = "FBP_HOST_TEST_" + Guid.NewGuid().ToString("N");
 
+    /// <summary>The variable naming the first account's password, for the setup verb (FR-USR-006).</summary>
+    public string PasswordVariable { get; } = "FBP_HOST_TEST_PW_" + Guid.NewGuid().ToString("N");
+
+    /// <summary>The owner account the setup verb creates (FR-USR-001).</summary>
+    public const string OwnerUser = "ben";
+
+    /// <summary>The owner account's password.</summary>
+    public const string OwnerPassword = "The-0wner-passw0rd";
+
     private readonly string _scratch =
         Path.Combine(Path.GetTempPath(), "fbp-host-tests", Guid.NewGuid().ToString("n"));
+
+    private bool _setUp;
 
     public HostHarness()
     {
         Directory.CreateDirectory(StateDirectory);
         Directory.CreateDirectory(SourceRoot);
-        Environment.SetEnvironmentVariable(PassphraseVariable, "hosts-tests-passphrase!!");
+        // Strong enough for the setup verb's own gate (ADR-0044 §6), which
+        // is the gate a real installation's passphrase passes.
+        Environment.SetEnvironmentVariable(PassphraseVariable, "The hosts-tests Passphrase 42 of this installation!");
+        Environment.SetEnvironmentVariable(PasswordVariable, OwnerPassword);
     }
 
     /// <summary>The "docs" set's 32-hex identity, matching <see cref="WriteConfiguration"/>.</summary>
     public string DocsSetId { get; } = new string('a', 32);
 
-    /// <summary>The root holding one staging archive per set (ADR-0034).</summary>
+    /// <summary>The root holding a staging archive per staging-mode set (ADR-0034); a direct-ship set stages nothing here.</summary>
     public string ArchivesRoot => Path.Combine(_scratch, "archives");
 
     /// <summary>
     /// The "docs" set's staging archive — the path CLI direct-mode verbs and
-    /// recovery assertions aim at, and the archive the service opens for the
-    /// one configured set.
+    /// recovery assertions aim at. The harness's "docs" set stages
+    /// (ADR-0034), so this is the archive the service opens for it; a
+    /// direct-ship fixture keeps its store under <c>state/sets</c> instead.
     /// </summary>
     public string RepositoryPath => Path.Combine(ArchivesRoot, DocsSetId);
 
@@ -73,12 +96,149 @@ public sealed class HostHarness : IDisposable
         return new Invocation(exitCode, output.ToString(), error.ToString());
     }
 
-    /// <summary>Creates the repository through the CLI, as a user would.</summary>
+    /// <summary>
+    /// First-run setup through the agent's own verb, as a headless operator
+    /// would run it (ADR-0044): the passphrase becomes the installation's
+    /// credential and the first account is created. Once per harness; a second call is a no-op,
+    /// because the verb itself refuses a second run.
+    /// </summary>
+    public async Task SetupAsync()
+    {
+        if (_setUp)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(WorkPath);
+        var result = await RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", ArchivesRoot, "--state", StateDirectory,
+            "--passphrase-env", PassphraseVariable, "--acknowledge-loss",
+            "--user", OwnerUser, "--password-env", PasswordVariable);
+        Assert.AreEqual(0, result.ExitCode, $"setup failed: {result.All}");
+        _setUp = true;
+    }
+
+    /// <summary>
+    /// Sets the installation up and creates the "docs" set's staging archive
+    /// the way the service creates one on a set's first backup: write-only,
+    /// from the installation credential, under the installation's salt. The
+    /// CLI's direct-mode verbs then open it with the same passphrase.
+    /// </summary>
     public async Task CreateRepositoryAsync()
     {
-        var exitCode = await Cli.CliApplication.RunAsync(
-            ["init", "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable]);
-        Assert.AreEqual(0, exitCode);
+        await SetupAsync();
+
+        if (File.Exists(Path.Combine(RepositoryPath, RepositoryLifecycle.DescriptorKey.Value)))
+        {
+            return;
+        }
+
+        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+        Assert.IsNotNull(provisioning, "setup stored no installation credential");
+
+        Directory.CreateDirectory(RepositoryPath);
+        (await RepositoryLifecycle.CreateAsync(
+            new LocalFileSystemObjectStore(RepositoryPath), provisioning.Credential,
+            provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
+            createdBy: Environment.MachineName,
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), CancellationToken.None)).Dispose();
+    }
+
+    /// <summary>
+    /// The restore grant a console sends when it opens a restore source on a
+    /// set-up installation (ADR-0042 §5): the sealing scalar, re-derived from
+    /// the passphrase under the installation's salt and sealed to the
+    /// service's recipient key, as hex. <paramref name="execute"/> is the
+    /// service's command surface, however the test reaches it.
+    /// </summary>
+    public async Task<string> RestoreGrantAsync(
+        Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>> execute,
+        CancellationToken cancellationToken,
+        string? setName = null)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await execute(new DescribeServiceCommand(), cancellationToken), out var description);
+
+        // The set's own derivation facts when it publishes them (contract
+        // 1.30): an adopted set's archive was born under another
+        // installation's salt, and only a grant derived under THAT salt
+        // reproduces its sealing key. The installation's otherwise.
+        Argon2Parameters parameters;
+        byte[] salt;
+        BackupSetDescriptor? set = null;
+        if (setName is not null)
+        {
+            Assert.IsInstanceOfType<BackupSetsResult>(
+                await execute(new ListBackupSetsCommand(), cancellationToken), out var sets);
+            set = sets.Sets.FirstOrDefault(candidate => candidate.Name == setName);
+        }
+
+        if (set is { KdfSalt.Length: > 0, KdfMemoryKib: { } memory, KdfIterations: { } iterations, KdfParallelism: { } lanes })
+        {
+            parameters = new Argon2Parameters { MemoryKiB = memory, Iterations = iterations, Parallelism = lanes };
+            salt = Convert.FromHexString(set.KdfSalt);
+        }
+        else
+        {
+            using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+            Assert.IsNotNull(provisioning, "the installation is not set up");
+            parameters = provisioning.KdfParameters;
+            salt = provisioning.KdfSalt.ToArray();
+        }
+
+        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(PassphraseVariable)!);
+        using var authority = WriteOnlyDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealGrant(
+                Convert.FromHexString(description.RestoreGrantRecipient!), authority.SealingPrivateKey));
+    }
+
+    /// <summary>
+    /// Opens a restore source under a restore grant, the way the console
+    /// does before any restore on a set-up installation: the service holds no
+    /// content key of its own (ADR-0042 §7), so a run with no source opened
+    /// this way reads every record as sealed.
+    /// </summary>
+    public async Task<RestoreSourceOpenedResult> OpenGrantedSourceAsync(
+        Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>> execute,
+        string setName, string? destinationName, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+
+        var opened = await execute(
+            new OpenRestoreSourceCommand(
+                setName, destinationName, Envelope: await RestoreGrantAsync(execute, cancellationToken, setName)),
+            cancellationToken);
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            opened, out var source, (opened as ServiceError)?.Message ?? opened.GetType().Name);
+        return source;
+    }
+
+    /// <summary>
+    /// The reclaim grant a console sends with <c>retention --apply</c> on a
+    /// set-up installation (ADR-0055 §6): the reclaim sub-root, re-derived
+    /// from the passphrase under the installation's salt and sealed to the
+    /// service <paramref name="handler"/> fronts, as hex.
+    /// </summary>
+    public async Task<string> ReclaimGrantAsync(ServiceCommandHandler handler, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), cancellationToken), out var description);
+
+        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+        Assert.IsNotNull(provisioning, "the installation is not set up");
+
+        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(PassphraseVariable)!);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, provisioning.KdfParameters, provisioning.KdfSalt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealReclaimGrant(
+                Convert.FromHexString(description.RestoreGrantRecipient!), authority.ReclaimKeySeed));
     }
 
     /// <summary>Backs the source tree up through the CLI, so the store holds a real snapshot.</summary>
@@ -90,21 +250,6 @@ public sealed class HostHarness : IDisposable
             "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable, "--state", StateDirectory,
         ]);
         Assert.AreEqual(0, exitCode);
-    }
-
-    /// <summary>Exports a recovery kit through the CLI and returns its path.</summary>
-    public async Task<string> ExportKitAsync()
-    {
-        Directory.CreateDirectory(WorkPath);
-        var kit = Path.Combine(WorkPath, "kit.bin");
-
-        var exitCode = await Cli.CliApplication.RunAsync(
-        [
-            "key-export", "--output", kit,
-            "--repo", RepositoryPath, "--passphrase-env", PassphraseVariable, "--state", StateDirectory,
-        ]);
-        Assert.AreEqual(0, exitCode);
-        return kit;
     }
 
     /// <summary>Writes a source file the backup set will capture.</summary>
@@ -159,11 +304,42 @@ public sealed class HostHarness : IDisposable
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));
 
+    /// <summary>
+    /// Adds (or replaces) a configured backup set by editing the file
+    /// directly — fixture setup for tests that need a set to simply exist,
+    /// WITHOUT the upsert verb's queued first backup (ADR-0047). The runtime
+    /// re-reads the file per access, so the set is visible immediately.
+    /// </summary>
+    public void AddConfiguredSet(
+        string id, string name, string destination, string? schedule = null,
+        IReadOnlyList<string>? excludeRules = null)
+    {
+        var path = Path.Combine(StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        (configuration with
+        {
+            BackupSets =
+            [
+                .. configuration.BackupSets.Where(set => !string.Equals(set.Id, id, StringComparison.Ordinal)),
+                new BackupSetConfiguration
+                {
+                    Id = id,
+                    Name = name,
+                    Roots = [new BackupRootConfiguration { Path = SourceRoot }],
+                    Schedule = schedule,
+                    ExcludeRules = excludeRules ?? [],
+                    Destinations = [new SetDestinationReference { Ref = destination }],
+                },
+            ],
+        }).Save(path);
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         Environment.SetEnvironmentVariable(PassphraseVariable, null);
+        Environment.SetEnvironmentVariable(PasswordVariable, null);
         if (Directory.Exists(_scratch))
         {
             try

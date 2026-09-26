@@ -80,11 +80,15 @@ TLS session — its purpose is domain separation and freshness, not secrecy.
 
 Three consequences the verifier MUST respect:
 
-- **It can only challenge what it can recompute.** A source challenges keys its
-  own staging archive still holds. A key the staging trim removed
-  ([ADR-0034 §6](../../docs/adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted))
-  has no local ground truth to compare against; challenging it from another
-  replica's answer is a stated future extension, not this document.
+- **It can only challenge what it can recompute.** A source challenges keys
+  it can read the ground truth for: a staging set's own archive, or — for a
+  direct-ship set, which holds no blob bytes locally — the object read back
+  through the ship sink from a sibling destination
+  ([ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)),
+  which is how destination verification is proven in that shape. A key no
+  reachable ground truth serves — the staging trim removed it
+  ([ADR-0034 §6](../../docs/adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)),
+  or every sibling holding it is away — cannot be challenged this pass.
 - **Ranges come from the verifier's copy.** The verifier knows the object's
   exact length; a range it sends is always inside it. A destination whose copy
   is shorter cannot read the range and MUST answer `cannot-prove` (§3) — a
@@ -218,6 +222,48 @@ action (FR-VER-005) — durable, like every fact a human must eventually see
 Nothing on the wire distinguishes "lost it" from "never had it"; the ledger the
 verifier keeps is what tells those apart, and either way the destination is not
 currently protecting that data.
+
+### 5.1 What a source with no copy of its own can prove
+
+The challenge above needs an expected proof computed from bytes the source
+holds. A source that ships straight to this destination and keeps no content
+of its own has none, and MUST NOT stamp a proof drawn from the metadata plane
+alone. It proves the replica by **reading it back** over the retrieval session
+([07](07-retrieval.md)) instead: a sample of the blobs the destination
+declared in its inventory, each opened where it sits — the footer
+authenticated under the metadata key — and then, per blob, one of two proofs
+the destination cannot forge because it never held the key:
+
+- a **record's AEAD tag**, opened under the repository's keys, where the
+  source holds them; or
+- the **whole-blob digest**, where the records are sealed to a key the
+  source does not hold (a write-only repository): the blob short of its
+  sixteen-byte locator is hashed at the source as it streams back and
+  compared in fixed time with the digest the writer signed into the index
+  delta ([repository format 07 §2.2](../repository-format/07-index.md)).
+
+The digest proof reads the whole blob and is budgeted per pass on the
+source's side; a blob it cannot afford is left unproved, never blamed, and
+the sample walks the destination's declared inventory on a cursor the source
+keeps, so successive passes reach every blob. A message in which the
+destination hashes its own copy and answers with the digest — sparing the
+link the blob — is deliberately **not** defined: the source holds only the
+flat digest, so it could check nothing keyed to a nonce, and a bare digest
+is an answer the destination may have computed once at receipt and kept
+after discarding the bytes. Such an answer is a claim, and a source MUST NOT
+count it as a proof of possession.
+
+The condition that would make a cheaper challenge sound has since been met,
+and the challenge defined: the index of a format-3 repository commits to each
+covered blob with a **Merkle root** over fixed chunks
+([repository format 07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)),
+and [07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)
+defines a challenge over it. The distinction that keeps it a proof is that the
+answer carries the leaf's **bytes**, not a hash of them: an authentication
+path is public arithmetic over hashes the destination may freely cache, so it
+establishes nothing on its own, while the chunk it commits to cannot be
+produced without being held. A destination's own hash of its own copy remains
+a claim, in any message, at any width.
 
 ---
 

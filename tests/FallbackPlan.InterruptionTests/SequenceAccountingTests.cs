@@ -24,11 +24,11 @@ public sealed class SequenceAccountingTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         using (var source = new MemoryStream(BuildFile(seed: 1)))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         // Every number the run drew — journal records, blob counters, the
@@ -40,7 +40,7 @@ public sealed class SequenceAccountingTests : InterruptionHarness
 
         using (var source = new MemoryStream(BuildFile(seed: 2)))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None);
         }
 
         // The fresh process life found nothing to void: no interruption
@@ -54,7 +54,7 @@ public sealed class SequenceAccountingTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var faulting = new PutFaultingObjectStore(store);
 
@@ -63,7 +63,7 @@ public sealed class SequenceAccountingTests : InterruptionHarness
         // first run allocates: 1 the intent record, 2 the blob's counter,
         // 3 the covering extension; the blob's own put then dies, so number
         // 2 has no accounting object and never will.
-        var orchestrator = CreateOrchestrator(faulting, keys, hierarchy);
+        var orchestrator = CreateOrchestrator(faulting, keys, credential);
 
         faulting.Arm(key => key.StartsWith("blobs/", StringComparison.Ordinal));
         using (var source = new MemoryStream(BuildFile(seed: 1, regions: 1)))

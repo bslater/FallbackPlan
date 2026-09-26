@@ -325,6 +325,28 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_RetentionMustBePositive, arg0, arg1);
 
     /// <summary>
+    /// '{0}' declares max_concurrent_backups {1}; the backup pool takes 1 to 5 (ADR-0047).
+    /// </summary>
+    private static string ClientConfiguration_ConcurrencyOutOfRange => Get(nameof(ClientConfiguration_ConcurrencyOutOfRange));
+
+    /// <summary>
+    /// '{0}' declares max_concurrent_backups {1}; the backup pool takes 1 to 5 (ADR-0047).
+    /// </summary>
+    internal static string FormatClientConfiguration_ConcurrencyOutOfRange(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_ConcurrencyOutOfRange, arg0, arg1);
+
+    /// <summary>
+    /// '{0}' declares a background_window this build cannot read: {1}
+    /// </summary>
+    private static string ClientConfiguration_BackgroundWindowInvalid => Get(nameof(ClientConfiguration_BackgroundWindowInvalid));
+
+    /// <summary>
+    /// '{0}' declares a background_window this build cannot read: {1}
+    /// </summary>
+    internal static string FormatClientConfiguration_BackgroundWindowInvalid(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundWindowInvalid, arg0, arg1);
+
+    /// <summary>
     /// '{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.
     /// </summary>
     private static string ClientConfiguration_SchemaVersion1NeedsDestinations => Get(nameof(ClientConfiguration_SchemaVersion1NeedsDestinations));
@@ -378,4 +400,9 @@ internal static class Strings
     /// </summary>
     internal static string FormatModel_NotValidStateFile(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, Model_NotValidStateFile, arg0, arg1);
+
+    /// <summary>
+    /// A writer identity is exactly 16 bytes.
+    /// </summary>
+    internal static string LocalState_WriterIdentityIs16Bytes => Get(nameof(LocalState_WriterIdentityIs16Bytes));
 }

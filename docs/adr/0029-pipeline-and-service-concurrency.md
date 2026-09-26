@@ -156,7 +156,9 @@ question inside one process rather than a locking question across several.
 
 - **Backup sets run one at a time by default.** They contend for the same disk
   and the same writer sequence, and two sets at once mostly makes both slower
-  while doubling the memory bound.
+  while doubling the memory bound. *(Superseded by Amendment 4 below: per-set
+  archives dissolved the shared writer sequence, and the lane is now a
+  configurable pool of 1..5 — [ADR-0047](0047-backup-pool-and-priorities.md).)*
 - **Restore and verification are separately queued and may run alongside a
   backup.** A user waiting on a restore must not wait for a scheduled backup to
   finish; a restore is a read path and does not take the writer role.
@@ -230,31 +232,25 @@ budget per pass and resumes from a persisted cursor rather than running to
 completion. The cursor exists more for this than for the coverage claim it also
 supports.
 
-#### Amendment 4 (2026-08): backups coalesce per set, and a queued cancel is immediate
+#### Amendment 4 (2026-08): the writer lane becomes a pool, priorities enter the key, and a run can park
 
-Two gaps the first stranded-console session exposed, both in §4's writer lane.
-
-The coalescing rule keyed on job identity, and fan-out earned it by using
-deterministic ids per `(set, destination)`. Backups never could: their id is
-the journal row's GUID, fresh on every enqueue, so nothing stopped a scheduler
-pass — whose due-check anchors on the last *completed* run and cannot see a
-run in flight — from queueing a second backup for a set whose first was still
-running, and a set slower than its schedule interval accumulated a `Pending`
-duplicate per pass. Backups now coalesce **per set** at the scheduler's
-enqueue seam: a request for a set with an unsettled journal row that the queue
-still holds joins that job and is handed its id. The queue check is load-
-bearing — after a crash the journal can carry an unsettled row no queue
-remembers, and a ghost must not block a set for ever.
-
-And cancelling a job that had not started was truthful about the token and
-silent about the state: the CTS flipped, the acknowledgement went out, and the
-journal stayed `Pending` until the lane drained — behind a long backup, hours
-after the person clicked, with a `Scanning` flash on the way. A queued job
-that knows how to record its own cancellation is now taken out of play at the
-command: dequeued in effect, journalled `Cancelled` there and then, and a
-second cancel gets the honest not-found. A job already started keeps the
-cooperative path — cancellation remains a command whose effect the runner
-records (§4), only now the record never waits for a lane.
+[ADR-0047](0047-backup-pool-and-priorities.md) revises §4's first bullet: the
+writer lane is now a **pool** of 1..5 workers (`max_concurrent_backups`,
+default 2), safe because §4's stated reason for serialising no longer holds —
+under per-set archives (ADR-0034 §1) two sets share no writer sequence, no
+spool and no catalogue, only the disk, and the cap plus the modest default are
+the disk's guard. One run per set at a time survives as its own rule, enforced
+by the journal. The queue's ordering widens from "user-initiated outranks
+scheduled" to the full key `(initiation, -priority, arrival)` — a person still
+outranks any priority, then the configured set or destination priority, then
+arrival so nothing starves. And under priority pressure a running backup can
+now **park**: ADR-0047 Amendment 1's pause gate sits inside §1's pipeline at
+the scan loop's file boundary, suspending a run with its in-memory state held
+and its worker freed, resuming it — not restarting it — when a slot frees.
+The scheduler pass also stopped awaiting its own transfer phases inline
+(`AgentPassResult.Transfers`), so due-ness evaluation is never hostage to a
+multi-hour copy. The reader and transfer lanes stay one worker each, for this
+record's original reasons.
 
 ### 5. Progress is emitted, not inferred
 
@@ -324,6 +320,50 @@ than it otherwise might.
 produced, never what they are. `Concurrency = 1` reproduces today's behaviour.
 Repository-level multi-writer semantics are unaffected.
 
+### Amendment (2026-09): the CPU cap this record anticipated was never built
+
+> **2026-09, scoped to this amendment.** One of the four now exists. The
+> **time window** was built as [ADR-0069](0069-the-background-window.md), and
+> it was built out of this record's own machinery rather than beside it: the
+> pause gate §4 gives a running capture is what a closing window asks for, and
+> [ADR-0047](0047-backup-pool-and-priorities.md)'s max-pause cap — which
+> self-cancels a long-parked run into the interruption-safe re-run path — is
+> exactly the behaviour a closure lasting all night needs, already written and
+> already tested. So the sentence below should be read as naming **three**
+> limits that do not exist, not four, and the last paragraph's "scoped
+> decision somebody takes on purpose" is what taking one looked like. What the
+> paragraph says about the CPU cap in particular is unchanged: its acceptance
+> is machine-dependent in a way this project cannot settle from a container,
+> and it is the figure NFR-PERF-007 already discounts for the same reason.
+
+§3's default was chosen to satisfy **NFR-OPS-004** and **NFR-PERF-013**, and
+the 2026-08 amendment above ends by saying that "NFR-PERF-013's CPU cap
+should be measured against that rather than assumed from the number".
+Measuring it, in the round that filled the last unmeasured performance rows,
+found there is nothing to measure: **none of the four limits NFR-PERF-013
+names — CPU, disk, network, time window — exists anywhere in `src/`.**
+
+`CapturePolicy.Concurrency` is the only configured bound in the product, and
+it bounds *parallel work* and the memory that follows from it. It is not a
+CPU cap, and this record should not be read as implying one: the sentence
+above asks for a measurement of something a reader could reasonably think
+exists.
+
+What §4 *does* deliver against NFR-PERF-013 is its other clause, and this
+record already states it plainly — **"a user-initiated operation outranks a
+scheduled one. Where they contend, background work yields — the concrete
+meaning of NFR-PERF-013's 'background activity shall observe configured
+limits'"** — built as [ADR-0047](0047-backup-pool-and-priorities.md)'s
+priorities and pause gate. So the requirement is *partly built*, and the half
+that is missing is the half its acceptance criterion is written about.
+
+A configured CPU, disk, bandwidth or time-window plane is a feature with its
+own contract surface and console control, and its acceptance ("with a 25%
+CPU cap, measured agent CPU stays ≤ 30% over any 60 s window") is
+machine-dependent in a way this project cannot settle from a container. It is
+named as a scoped decision somebody takes on purpose, rather than left
+looking like a measurement nobody got round to.
+
 ## Alternatives considered
 
 **Parallelise per file rather than within one.** Archive several files
@@ -360,8 +400,9 @@ guarantee that is not tracked.
 **All of it is built.**
 
 §3's `Concurrency` setting, validated on `CapturePolicy` with `1` a tested value.
-§4's service-level scheduling — sets serialised, read work in its own lane,
-user-initiated work ahead of scheduled, and cancellation recording
+§4's service-level scheduling — the writer pool of Amendment 4 (formerly
+sets serialised), read work in its own lane, user-initiated work ahead of
+scheduled with priorities beneath it, and cancellation recording
 `JobState.Cancelled` — with §4's full acceptance now held by tests: the five
 T-2 cancellation tests (`InterruptionTests/CancellationTests`,
 `Hosts.Tests/ServiceTests`), and "discharged by the next publication, exactly
@@ -423,4 +464,6 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted | §6 steps 1 and 2 measured; Q20 closed on both halves, with the concurrency default and pinning's cost each settled by a number |
 | 2026-08 | Accepted (amended) | §4 gains the transfer lane: fan-out to destinations is neither writer nor reader work, coalesced per `(set, destination)` ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Accepted (amended) | Amendment 3: the pass gains a third phase — the scheduled deep sweep — on the transfer lane, bounded and resumable so one worker still serves replication ([ADR-0035](0035-destination-fitness.md)) |
-| 2026-08 | Accepted (amended) | Amendment 4: backups coalesce per set at the enqueue seam, and cancelling a not-yet-started job journals `Cancelled` at the command rather than when the lane drains |
+| 2026-08 | Accepted (amended) | Amendment 4: the writer lane is a pool of 1..5 with priorities in the queue key and a pause gate at the pipeline's file boundary, and the pass no longer awaits its transfer phases ([ADR-0047](0047-backup-pool-and-priorities.md)) |
+| 2026-09 | Accepted (amended) | The 2026-09 amendment: NFR-PERF-013's CPU cap was never built, and neither were its disk, network or time-window limits — `Domain/Configuration/CapturePolicy`'s `Concurrency` is the only configured bound and bounds parallel work rather than CPU. The requirement's yielding half is built; its measurable half does not exist |
+| 2026-09 | Accepted (amended) | One of the four is now built: the **time window** ([ADR-0069](0069-the-background-window.md)), out of this record's own §4 pause gate rather than beside it. CPU, disk and network remain unbuilt, and the CPU cap's acceptance stays machine-dependent in a way a container cannot settle |

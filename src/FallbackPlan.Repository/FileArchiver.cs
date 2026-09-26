@@ -48,6 +48,7 @@ public sealed class FileArchiver
     private readonly string _spoolDirectory;
     private readonly SpoolPinnedConfiguration _pinned;
     private readonly IIntentScope? _intentScope;
+    private readonly ushort _repositoryFormatVersion;
     private readonly ILogger? _logger;
 
     /// <summary>Creates an archiver over a validated policy.</summary>
@@ -61,6 +62,7 @@ public sealed class FileArchiver
         IObjectStore store,
         IBlobCounterAllocator counters,
         string spoolDirectory,
+        ushort repositoryFormatVersion,
         IIntentScope? intentScope = null,
         ILogger? logger = null)
     {
@@ -79,6 +81,7 @@ public sealed class FileArchiver
         }
 
         _logger = logger;
+        _repositoryFormatVersion = repositoryFormatVersion;
         _policy = policy;
         _pinned = SpoolPinnedConfiguration.FromPolicy(
             policy,
@@ -147,5 +150,5 @@ public sealed class FileArchiver
     /// </summary>
     public ArchiveSession OpenSession(ReusePredicate? mayReuseSegment = null) => new(
         _policy, _repositoryId, _writerId, _generation, _keys, _store, _counters, _spoolDirectory, _pinned, _intentScope,
-        mayReuseSegment, _logger);
+        mayReuseSegment, _repositoryFormatVersion, _logger);
 }

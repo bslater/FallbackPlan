@@ -6,6 +6,13 @@ namespace FallbackPlan.Application.Tests;
 /// The replica attribution store (peer-protocol 05 §2): which peer each
 /// replica repository belongs to — the quota's denominator, and later the
 /// authority a retention command is validated against.
+/// <para>
+/// That "later" is now (FR-GC-008, ADR-0055 §5): the attribution carries the
+/// repository's reclaim public key, recorded at first attribution and never
+/// replaceable by a later offer, because the peer sending deletion
+/// instructions is the peer that would like the key they are checked against
+/// to be its own.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class ReplicaOwnerStoreTests : IDisposable
@@ -71,177 +78,211 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
         Assert.IsTrue(File.Exists(Path.Combine(_stateDirectory, "replica-owners.json.corrupt")));
     }
 
-    // ------------------------------------------------ the claim credential
+    [TestMethod]
+    public void Attribute_TheReclaimPublicKey_IsRecordedWithTheFirstOffer()
+    {
+        // A destination holds no repository keys, so the key published at
+        // attribution is the only thing it can check a deletion instruction
+        // against (ADR-0055 §5).
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
 
-    private static byte[] Token(byte fill) => [.. Enumerable.Repeat(fill, 16)];
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
 
-    private const string PublicKey = "9181d3460816a92b16e53cfc8bebdfb815426eee35e0a5603201b76c1bc770ad";
+        var owner = store.Find(RepoA);
+        Assert.IsNotNull(owner);
+        Assert.AreEqual("peer-one", owner.Fingerprint);
+        Assert.AreEqual(new string('a', 64), owner.ReclaimPublicKey);
+    }
 
     [TestMethod]
-    public void Open_TheOlderFlatFile_IsMigratedRatherThanSetAside()
+    public void Attribute_ALaterOffer_CannotReplaceTheRecordedKey()
     {
-        // Before the claim ceremony each value was the owning fingerprint as a
-        // bare string. Reading that as the newer shape throws, and a catch that
-        // treated the throw as corruption would silently unattribute every
-        // replica the destination holds — the quota gone, every retention
-        // command unvalidatable. A format change is not damage.
-        Directory.CreateDirectory(_stateDirectory);
+        // The attack this closes. Whoever sends deletion instructions is
+        // whoever would like the key they are checked against to be theirs;
+        // a key a later offer could overwrite is a check the attacker owns.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('b', 64)));
+
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+    }
+
+    [TestMethod]
+    public void Attribute_AnAttributionThatRecordedNoKey_MayStillLearnOne()
+    {
+        // The upgrade path. A peering established before the decision, or by
+        // a source that published nothing, would otherwise have to be torn
+        // down and rebuilt to ever be secured — filling an absence is not
+        // replacing an answer.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one"));
+        Assert.IsNull(store.Find(RepoA)!.ReclaimPublicKey);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('c', 64)));
+        Assert.AreEqual(new string('c', 64), store.Find(RepoA)!.ReclaimPublicKey);
+    }
+
+    [TestMethod]
+    public void Attribute_AnotherPeersRepository_IsStillRefusedAndLearnsNothing()
+    {
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
+
+        Assert.IsFalse(store.TryAttribute(RepoA, "peer-two", new string('d', 64)));
+        Assert.AreEqual("peer-one", store.Find(RepoA)!.Fingerprint);
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+    }
+
+    [TestMethod]
+    public void Attribute_TheClaimPublicKey_IsRecordedAndNeverReplaced()
+    {
+        // Same rule as the reclaim key's (ADR-0055 §5), and it matters more
+        // here: the claim key decides which device this peer will hand the
+        // replica back to. A key a later offer could overwrite would let
+        // whoever can reach the peer nominate themselves as the owner.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('e', 64)));
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('f', 64)));
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+    }
+
+    [TestMethod]
+    public void Attribute_AnAttributionThatRecordedNoClaimKey_MayStillLearnOne()
+    {
+        // The self-healing half, and the whole of what makes an existing
+        // peering claimable: one more offer from an updated source fills the
+        // absence. What it cannot help is a machine that died before that
+        // offer — ADR-0053 §3's operator path (Reattribute, through the
+        // service's verb) is the answer there.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64)));
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
+
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('g', 64)));
+        Assert.AreEqual(new string('g', 64), store.Find(RepoA)!.ClaimPublicKey);
+        Assert.AreEqual(
+            new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey, "filling one must not disturb the other");
+    }
+
+    [TestMethod]
+    public void ClaimedBy_FindsEveryRepositoryOneInstallationRecorded()
+    {
+        // The claim key is the installation's, so it selects several
+        // repositories at once — which is the whole reason a claimant need
+        // not name one. It names none because it holds none.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", null, new string('e', 64)));
+        Assert.IsTrue(store.TryAttribute(RepoB, "peer-one", null, new string('e', 64)));
+        Assert.IsTrue(store.TryAttribute(new string('9', 32), "peer-two", null, new string('f', 64)));
+
+        var claimed = store.ClaimedBy(new string('e', 64));
+
+        Assert.HasCount(2, claimed);
+        Assert.Contains(RepoA, claimed);
+        Assert.Contains(RepoB, claimed);
+        Assert.IsEmpty(store.ClaimedBy(new string('0', 64)));
+    }
+
+    [TestMethod]
+    public void Reattribute_PointsTheReplicaAtTheNewDevice_AndKeepsBothKeys()
+    {
+        // The only writer in this store that changes a fingerprint, and the
+        // one place the "already stored here for another peer" rule is
+        // deliberately set aside — on proof, which the store does not itself
+        // hold, because the store does no cryptography.
+        //
+        // The keys must survive: a rebuilt machine derives the same claim and
+        // reclaim keys from the same passphrase, so replacing them would be
+        // replacing them with themselves at best, and with an attacker's at
+        // worst.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('e', 64)));
+
+        Assert.IsTrue(store.Reattribute(RepoA, "peer-rebuilt"));
+
+        Assert.AreEqual("peer-rebuilt", store.Find(RepoA)!.Fingerprint);
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.AreEqual(new string('e', 64), store.Find(RepoA)!.ClaimPublicKey);
+        Assert.ContainsSingle(store.OwnedBy("peer-rebuilt"));
+        Assert.IsEmpty(store.OwnedBy("peer-one"));
+
+        // And it is durable, or the claim would have to be made again after
+        // every restart.
+        Assert.AreEqual("peer-rebuilt", ReplicaOwnerStore.Open(_stateDirectory).Find(RepoA)!.Fingerprint);
+    }
+
+    [TestMethod]
+    public void Reattribute_ARepositoryThisPeerDoesNotHold_ChangesNothing()
+    {
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsFalse(store.Reattribute(RepoA, "peer-rebuilt"));
+        Assert.IsNull(store.Find(RepoA));
+    }
+
+    [TestMethod]
+    public void Open_AFileRecordedBeforeTheClaimKey_ReadsBackWithNone()
+    {
+        // The JSON tolerates a missing property, so an attribution written
+        // before this field reads with it null and rewrites in the new shape
+        // on the next offer — the same lift the pre-reclaim shape gets.
         File.WriteAllText(
-            Path.Combine(_stateDirectory, "replica-owners.json"),
-            $$"""{ "{{RepoA}}": "peer-one", "{{RepoB}}": "peer-two" }""");
+            Path.Combine(Directory.CreateDirectory(_stateDirectory).FullName, "replica-owners.json"),
+            $$"""{ "{{RepoA}}": { "Fingerprint": "peer-one", "ReclaimPublicKey": "{{new string('a', 64)}}" } }""");
 
         var store = ReplicaOwnerStore.Open(_stateDirectory);
 
-        Assert.ContainsSingle(store.OwnedBy("peer-one"));
-        Assert.ContainsSingle(store.OwnedBy("peer-two"));
         Assert.IsFalse(File.Exists(Path.Combine(_stateDirectory, "replica-owners.json.corrupt")));
-        Assert.IsFalse(store.TryAttribute(RepoA, "peer-two"), "the migrated attribution still stands");
+        Assert.AreEqual(new string('a', 64), store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
     }
 
     [TestMethod]
-    public void OfferClaimToken_BeforeAnythingIsRegistered_MintsOnceAndRepeatsIt()
+    public void Open_AFileInThePreReclaimShape_IsLiftedRatherThanSetAside()
     {
+        // The old shape was a flat id-to-fingerprint map. Discarding it would
+        // stop the quota being enforceable and make every peer re-offer to be
+        // recognised — too high a price for a field that was simply not there
+        // yet.
+        File.WriteAllText(
+            Path.Combine(Directory.CreateDirectory(_stateDirectory).FullName, "replica-owners.json"),
+            $$"""{ "{{RepoA}}": "peer-one" }""");
+
         var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
 
-        var first = store.OfferClaimToken(RepoA, () => Token(0xD0));
-        var second = store.OfferClaimToken(RepoA, () => Token(0xEE));
-
-        Assert.IsNotNull(first);
-        Assert.AreEqual(first, second, "a second offer must not re-mint and orphan the first token");
-    }
-
-    [TestMethod]
-    public void OfferClaimToken_OnceACredentialIsRegistered_OffersNothingFurther()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
-        var token = store.OfferClaimToken(RepoA, () => Token(0xD0))!;
-
-        Assert.IsTrue(store.TryRegisterClaimKey(RepoA, PublicKey));
-
-        // The destination asks exactly once. Re-offering would invite a source
-        // to derive a second keypair and register nothing, leaving the replica
-        // claimable only by a credential nobody holds.
-        Assert.IsNull(store.OfferClaimToken(RepoA, () => Token(0xEE)));
-        Assert.AreEqual(token, store.Find(RepoA)!.ClaimTokenHex);
-    }
-
-    [TestMethod]
-    public void TryRegisterClaimKey_WithNoTokenOffered_IsRefused()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
-
-        Assert.IsFalse(store.TryRegisterClaimKey(RepoA, PublicKey));
-        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKeyHex);
-    }
-
-    [TestMethod]
-    public void TryRegisterClaimKey_ASecondTime_IsRefusedRatherThanReplacing()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
-        store.OfferClaimToken(RepoA, () => Token(0xD0));
-        store.TryRegisterClaimKey(RepoA, PublicKey);
-
-        // Replacing it would let whoever spoke last decide who may recover.
-        Assert.IsFalse(store.TryRegisterClaimKey(RepoA, new string('b', 64)));
-        Assert.AreEqual(PublicKey, store.Find(RepoA)!.ClaimPublicKeyHex);
-    }
-
-    [TestMethod]
-    public void ClaimableBy_NamesOnlyRegisteredReplicasThisIdentityDoesNotOwn()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
-        store.TryAttribute(RepoB, "peer-two");
-        store.OfferClaimToken(RepoA, () => Token(0xD0));
-        store.TryRegisterClaimKey(RepoA, PublicKey);
-
-        // RepoB carries no credential, so it is not offered as a candidate at
-        // all — an unregistered replica is not claimable and must not appear.
-        CollectionAssert.AreEqual(new[] { RepoA }, store.ClaimableBy("rebuilt-peer").ToArray());
-        Assert.IsEmpty(store.ClaimableBy("peer-one"), "you are not challenged to claim what you already own");
-    }
-
-    [TestMethod]
-    public void TryReattribute_AfterAProofVerified_MovesTheAttributionAndWaitsForTheOperator()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "lost-machine");
-        store.OfferClaimToken(RepoA, () => Token(0xD0));
-        store.TryRegisterClaimKey(RepoA, PublicKey);
-
-        Assert.IsTrue(store.TryReattribute(RepoA, "rebuilt-machine"));
-
-        Assert.ContainsSingle(store.OwnedBy("rebuilt-machine"));
-        Assert.IsEmpty(store.OwnedBy("lost-machine"));
-
-        // Reading is available at once; deleting waits for the person who owns
-        // the disk (peer-protocol 06 §3).
-        Assert.IsTrue(store.IsClaimAwaitingAcknowledgement(RepoA));
-    }
-
-    [TestMethod]
-    public void TryReattribute_WithNoRegisteredCredential_IsRefused()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "lost-machine");
-
-        Assert.IsFalse(store.TryReattribute(RepoA, "rebuilt-machine"));
-        Assert.ContainsSingle(store.OwnedBy("lost-machine"));
-    }
-
-    [TestMethod]
-    public void TryReattribute_ByTheIdentityThatAlreadyOwnsIt_MovesNothingAndRaisesNoNotice()
-    {
-        var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "peer-one");
-        store.OfferClaimToken(RepoA, () => Token(0xD0));
-        store.TryRegisterClaimKey(RepoA, PublicKey);
-
-        Assert.IsTrue(store.TryReattribute(RepoA, "peer-one"));
-
-        Assert.ContainsSingle(store.OwnedBy("peer-one"));
         Assert.IsFalse(
-            store.IsClaimAwaitingAcknowledgement(RepoA),
-            "nothing moved, so there is nothing for an operator to acknowledge");
+            File.Exists(Path.Combine(_stateDirectory, "replica-owners.json.corrupt")),
+            "a readable older file is not corruption");
+        Assert.AreEqual("peer-one", store.Find(RepoA)!.Fingerprint);
+        Assert.IsNull(store.Find(RepoA)!.ReclaimPublicKey);
+        Assert.IsNull(store.Find(RepoA)!.ClaimPublicKey);
+        Assert.ContainsSingle(store.OwnedBy("peer-one"));
     }
 
     [TestMethod]
-    public void AcknowledgeClaim_ReleasesTheGate_AndIsIdempotent()
+    public void All_ListsEveryAttribution_WithWhatWasRecorded()
     {
+        // The operator's view (ADR-0053 §3): every replica stored here, whose
+        // it is, and whether a claim key is on record — which is what decides
+        // whether the passphrase can move it or only the operator can. Ids
+        // ascend so two listings of the same store read the same.
         var store = ReplicaOwnerStore.Open(_stateDirectory);
-        store.TryAttribute(RepoA, "lost-machine");
-        store.OfferClaimToken(RepoA, () => Token(0xD0));
-        store.TryRegisterClaimKey(RepoA, PublicKey);
-        store.TryReattribute(RepoA, "rebuilt-machine");
+        store.TryAttribute(RepoB, "peer-two", claimPublicKey: new string('e', 64));
+        store.TryAttribute(RepoA, "peer-one");
 
-        store.AcknowledgeClaim(RepoA);
-        store.AcknowledgeClaim(RepoA);
+        var all = store.All();
 
-        Assert.IsFalse(store.IsClaimAwaitingAcknowledgement(RepoA));
-    }
-
-    [TestMethod]
-    public void Open_AfterAClaim_ReadsTheCredentialAndTheGateBack()
-    {
-        var first = ReplicaOwnerStore.Open(_stateDirectory);
-        first.TryAttribute(RepoA, "lost-machine");
-        var token = first.OfferClaimToken(RepoA, () => Token(0xD0))!;
-        first.TryRegisterClaimKey(RepoA, PublicKey);
-        first.TryReattribute(RepoA, "rebuilt-machine");
-
-        // A restart must not release the retention gate, and must not forget
-        // the credential a second recovery would need.
-        var reopened = ReplicaOwnerStore.Open(_stateDirectory);
-        var attribution = reopened.Find(RepoA)!;
-
-        Assert.AreEqual("rebuilt-machine", attribution.Fingerprint);
-        Assert.AreEqual(token, attribution.ClaimTokenHex);
-        Assert.AreEqual(PublicKey, attribution.ClaimPublicKeyHex);
-        Assert.IsTrue(attribution.ClaimAwaitingAcknowledgement);
+        Assert.HasCount(2, all);
+        Assert.AreEqual(RepoA, all[0].RepositoryIdHex);
+        Assert.AreEqual("peer-one", all[0].Owner.Fingerprint);
+        Assert.IsNull(all[0].Owner.ClaimPublicKey);
+        Assert.AreEqual(RepoB, all[1].RepositoryIdHex);
+        Assert.AreEqual(new string('e', 64), all[1].Owner.ClaimPublicKey);
+        Assert.IsEmpty(ReplicaOwnerStore.Open(Path.Combine(_stateDirectory, "empty")).All());
     }
 
     public void Dispose()

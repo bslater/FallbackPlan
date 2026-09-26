@@ -37,7 +37,8 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
         ObjectId manifestId;
         var builder = new ManifestBuilder(
             Repo, Writer, KeyGeneration.Zero, keys, store,
-            new MonotonicBlobCounterAllocator(500), SpoolDirectory, BlobWriteProfile.LocalDefault);
+            new MonotonicBlobCounterAllocator(500), SpoolDirectory, BlobWriteProfile.LocalDefault,
+            FormatVersions.SealedDataPlane);
         await using (builder.ConfigureAwait(false))
         {
             manifestId = await builder.AppendManifestAsync(ObjectType.FileVersionManifest, encoded, CancellationToken.None);
@@ -48,7 +49,7 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
         }
 
         // Read it back through footers alone and decode.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(manifestId, CancellationToken.None);
@@ -94,7 +95,8 @@ public sealed class ManifestRoundTripTests : ArchiveTestHarness
 
         var builder = new ManifestBuilder(
             Repo, Writer, KeyGeneration.Zero, keys, store,
-            new MonotonicBlobCounterAllocator(600), SpoolDirectory, BlobWriteProfile.LocalDefault);
+            new MonotonicBlobCounterAllocator(600), SpoolDirectory, BlobWriteProfile.LocalDefault,
+            FormatVersions.SealedDataPlane);
         await using (builder.ConfigureAwait(false))
         {
             await builder.WriteStandaloneSnapshotAsync(snapshot, encoded, intentSequence: 601, CancellationToken.None);

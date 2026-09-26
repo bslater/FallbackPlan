@@ -24,18 +24,16 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class StaleCatalogueTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task Publication_TheCatalogueClaimsSegmentsTheStoreLost_WritesThemAgainRatherThanDanglingThem()
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("stale-ahead");
 
         var content = Deterministic(120_000, 17);
-        await Publish(store, keys, hierarchy, catalogue, "stale-ahead")
+        await Publish(store, keys, credential, catalogue, "stale-ahead")
             .PublishAsync(Job(SourceWith(content), 0xA1), CancellationToken.None);
 
         // The store loses the data blobs — a GC race, a provider rollback,
@@ -50,7 +48,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // the row with no store I/O publishes a manifest whose references
         // dangle — a snapshot that commits cleanly and can never restore,
         // the exact inverse of ADR-0006's write-time-detection purpose.
-        var republished = await Publish(store, keys, hierarchy, catalogue, "stale-ahead")
+        var republished = await Publish(store, keys, credential, catalogue, "stale-ahead")
             .PublishAsync(
                 Job(SourceWith(content, modifiedAt: 1_722_000_000_777), 0xA2, now: 1_722_600_000_002),
                 CancellationToken.None);
@@ -80,11 +78,11 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // review amendment records the reasoning.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("short-circuit");
 
         var content = Deterministic(120_000, 23);
-        await Publish(store, keys, hierarchy, catalogue, "short-circuit")
+        await Publish(store, keys, credential, catalogue, "short-circuit")
             .PublishAsync(Job(SourceWith(content), 0xB1), CancellationToken.None);
 
         DeleteEveryDataBlob();
@@ -92,7 +90,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // Same mtime, same length, same identity, prior snapshot named: the
         // short-circuit fires and the publication succeeds — nothing on this
         // path could know the store lost the bytes without reading them.
-        var republished = await Publish(store, keys, hierarchy, catalogue, "short-circuit")
+        var republished = await Publish(store, keys, credential, catalogue, "short-circuit")
             .PublishAsync(
                 Job(SourceWith(content), 0xB2, now: 1_722_600_000_002) with
                 {
@@ -116,7 +114,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-behind.db");
 
         var first = Deterministic(120_000, 31);
@@ -125,7 +123,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         byte[] fileVersion2;
         using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
         {
-            await Publish(store, keys, hierarchy, catalogue, "behind")
+            await Publish(store, keys, credential, catalogue, "behind")
                 .PublishAsync(Job(SourceWith(first), 0xC1), CancellationToken.None);
         }
 
@@ -137,7 +135,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
 
         using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
         {
-            var published = await Publish(store, keys, hierarchy, catalogue, "behind")
+            var published = await Publish(store, keys, credential, catalogue, "behind")
                 .PublishAsync(Job(SourceWith(second, fileId: 9_002), 0xC2, now: 1_722_600_000_002), CancellationToken.None);
             fileVersion2 = Assert.ContainsSingle(published.Files).ObjectId.ToArray();
         }
@@ -153,7 +151,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
             // offer the reuse, so the segments are written a second time —
             // a cost, never a correctness loss. The store's idempotent-put
             // posture (05 §5.1) absorbs any byte-identical collisions.
-            var republished = await Publish(store, keys, hierarchy, catalogue, "behind")
+            var republished = await Publish(store, keys, credential, catalogue, "behind")
                 .PublishAsync(
                     Job(SourceWith(second, fileId: 9_002, modifiedAt: 1_722_000_000_777), 0xC3, now: 1_722_600_000_003),
                     CancellationToken.None);
@@ -185,13 +183,13 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
         // rows would surface here as reused-but-wrong references.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         var cataloguePath = Path.Combine(SpoolDirectory, "catalogue-poison.db");
 
         var content = Deterministic(120_000, 41);
         using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
         {
-            await Publish(store, keys, hierarchy, catalogue, "poison")
+            await Publish(store, keys, credential, catalogue, "poison")
                 .PublishAsync(Job(SourceWith(content), 0xD1), CancellationToken.None);
         }
 
@@ -206,7 +204,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
 
         using (var catalogue = CatalogueDb.Open(cataloguePath, Repo))
         {
-            var republished = await Publish(store, keys, hierarchy, catalogue, "poison")
+            var republished = await Publish(store, keys, credential, catalogue, "poison")
                 .PublishAsync(
                     Job(SourceWith(content, modifiedAt: 1_722_000_000_777), 0xD2, now: 1_722_600_000_002),
                     CancellationToken.None);
@@ -230,7 +228,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     private static async Task<(bool Success, byte[] Bytes, string? Detail)> TryRestoreFileAsync(
         Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, ObjectId fileVersionId)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var read = await reader.ReadSegmentAsync(fileVersionId, CancellationToken.None);
@@ -251,7 +249,7 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
     private PublicationOrchestrator Publish(
         IObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         CatalogueDb catalogue,
         string spoolName)
     {
@@ -264,10 +262,11 @@ public sealed class StaleCatalogueTests : ArchiveTestHarness
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
             spool,
+            FormatVersions.SealedDataPlane,
             observer: null,
             catalogue);
     }

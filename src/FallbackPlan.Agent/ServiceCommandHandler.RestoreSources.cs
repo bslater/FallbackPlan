@@ -83,12 +83,20 @@ public sealed partial class ServiceCommandHandler
         var warnings = new List<string>();
         if (command.DestinationName is null)
         {
+            // What the operator is told has to be true of the shape they
+            // chose: a direct-ship set stages nothing, so naming a staging
+            // archive would describe a copy that does not exist and send
+            // anyone diagnosing a restore to an empty archives root. Its
+            // local store holds metadata only; the content is read through
+            // the sink from whichever destination holds it (ADR-0046).
+            var directShip = set.DirectShip;
             var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
             if (archive is null)
             {
                 return new ServiceError(
                     ServiceErrorReason.NotFound,
-                    $"Backup set '{set.Name}' has never backed up — its staging archive does not exist.");
+                    $"Backup set '{set.Name}' has never backed up — its "
+                    + (directShip ? "metadata store" : "staging archive") + " does not exist.");
             }
 
             handle = new OpenRestoreSourceHandle
@@ -96,7 +104,7 @@ public sealed partial class ServiceCommandHandler
                 SourceId = sourceId,
                 SetId = set.Id,
                 SetName = set.Name,
-                Location = "staging",
+                Location = directShip ? "metadata store" : "staging",
                 Store = archive.Store,
                 OwnedRepository = null,
                 RepositoryId = archive.Repository.RepositoryId,
@@ -348,15 +356,10 @@ public sealed partial class ServiceCommandHandler
     /// scalar, sealed to this service's recipient key; the scalar is proved
     /// against the repository's descriptor copy of the sealing public key —
     /// a mismatch is a wrong passphrase at the client and is refused by
-    /// name. A grant on a v1 source is ignored, as the contract says.
+    /// name.
     /// </summary>
     private ServiceError? AttachReadAuthority(OpenRestoreSourceHandle handle, string envelopeHex)
     {
-        if (!handle.Keys.WriteOnly)
-        {
-            return null;
-        }
-
         byte[] envelope;
         try
         {
@@ -390,12 +393,16 @@ public sealed partial class ServiceCommandHandler
                     + "was derived from is not this repository's.");
             }
 
-            using var credential = runtime.WriteCredentials.TryLoad(handle.SetId);
+            // The credential the set opens with — its own, or the
+            // installation's for a set created after setup — never only the
+            // per-set store, which a set-up installation leaves empty.
+            using var credential = runtime.TryLoadCredentialFor(handle.SetId);
             if (credential is null)
             {
                 return new ServiceError(
                     ServiceErrorReason.Failed,
-                    $"Set '{handle.SetName}' holds no write credential on this service — provision it first (ADR-0042 §10).");
+                    $"Set '{handle.SetName}' holds no write credential on this service — run first-run setup, "
+                    + "or provision the set (ADR-0044, ADR-0042 §10).");
             }
 
             handle.ReadAuthority = RepositoryReadAuthority.FromParts(credential, scalar);
@@ -409,34 +416,33 @@ public sealed partial class ServiceCommandHandler
 
     /// <summary>
     /// Opens a candidate source repository the way its set opens: a
-    /// provisioned write-only set with its credential — a v2 replica carries
-    /// the same descriptor, so the same bundle proves and opens it
-    /// (ADR-0042 §5) — and a v1 set with the runtime's passphrase. A v1
-    /// candidate on a passphrase-free service is a stated refusal the
-    /// probing loops surface as a warning like any other failed open.
+    /// write-only set with the credential it opens with — its own, or the
+    /// installation's — since a v2 replica carries the same descriptor, so
+    /// the same bundle proves and opens it (ADR-0042 §5). A candidate no
+    /// credential answers for is a stated refusal the probing loops surface
+    /// as a warning like any other failed open.
     /// </summary>
     private async ValueTask<OpenedRepository> OpenSourceRepositoryAsync(
         Application.BackupSetConfiguration set,
         Storage.Abstractions.IObjectStore store,
         CancellationToken cancellationToken)
     {
-        if (runtime.WriteCredentials.TryLoad(set.Id) is { } credential)
+        if (runtime.TryLoadCredentialFor(set.Id) is { } credential)
         {
             using (credential)
             {
-                return await RepositoryLifecycle.OpenWriteOnlyAsync(
-                        store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
+                return await RepositoryLifecycle.OpenAsync(
+                        store, credential, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)),
+                        // A restore source is read: the store may be a peer's
+                        // replica, which has no put at all.
+                        Repository.StoreUse.ReadingOnly)
                     .ConfigureAwait(false);
             }
         }
 
-        var passphrase = runtime.ArchivePassphrase
-            ?? throw new RepositoryOpenException(
-                "This service started without a passphrase and the set is not provisioned write-only (ADR-0042).");
-
-        return await RepositoryLifecycle.OpenAsync(
-                store, passphrase, cancellationToken, runtime.LoggerFor(typeof(RepositoryLifecycle)))
-            .ConfigureAwait(false);
+        throw new RepositoryOpenException(
+            $"Set '{set.Name}' holds no write credential this service can open its archive with — run "
+            + "first-run setup, or provision the set (ADR-0044, ADR-0042 §10).");
     }
 
     /// <summary>
@@ -463,42 +469,12 @@ public sealed partial class ServiceCommandHandler
         {
             Directory.CreateDirectory(cacheDirectory);
             var cataloguePath = Path.Combine(cacheDirectory, "catalogue.db");
-            var generation = Math.Max(
-                repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
-            RebuildReport report;
-            using (var catalogue = CatalogueDb.Open(
-                cataloguePath, repository.RepositoryId, runtime.LoggerFor<CatalogueDb>()))
+            using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(store, repository, cancellationToken)
+                .ConfigureAwait(false))
+            using (var catalogue = await CatalogueRebuild.OpenRebuiltAsync(
+                runtime, store, repository, cataloguePath, reader, warnings, cancellationToken).ConfigureAwait(false))
             {
-                // The index plane rebuilds the locations; no blob inventory
-                // is taken, because an entry naming a trimmed blob is
-                // re-answered honestly by the plan probe, which asks the
-                // store per blob (FR-RST-003).
-                report = await new CatalogueRebuilder(
-                    new IndexLoader(
-                        store, repository.RepositoryId, repository.Hierarchy, runtime.LoggerFor<IndexLoader>()),
-                    runtime.LoggerFor<CatalogueRebuilder>())
-                    .RebuildAsync(
-                        catalogue, generation, gapPatienceGenerations: 2,
-                        isSequenceAccountedAsync: null, cancellationToken)
-                    .ConfigureAwait(false);
-
-                using (var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store))
-                {
-                    var metadataBlobs = new List<Storage.Abstractions.ObjectKey>();
-                    await foreach (var blob in store.ListAsync(
-                        Storage.Abstractions.ObjectPrefix.Parse("blobs/meta/"),
-                        Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
-                    {
-                        metadataBlobs.Add(blob.Key);
-                    }
-
-                    await reader.LoadBlobsAsync(metadataBlobs, cancellationToken).ConfigureAwait(false);
-                    await CatalogueProjector.ProjectAsync(
-                        catalogue, reader, store, repository.RepositoryId, repository.Keys,
-                        repository.Hierarchy, cancellationToken).ConfigureAwait(false);
-                }
-
                 if (!catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(setId)))
                 {
                     TryDeleteCache(cacheDirectory);
@@ -506,7 +482,6 @@ public sealed partial class ServiceCommandHandler
                 }
             }
 
-            warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
             return new OpenRestoreSourceHandle
             {
                 SourceId = sourceId,

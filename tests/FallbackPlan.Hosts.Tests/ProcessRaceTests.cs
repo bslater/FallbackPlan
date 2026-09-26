@@ -105,8 +105,8 @@ public sealed class ProcessRaceTests : IDisposable
             ApphostPath("FallbackPlan.Agent"),
             "run",
             "--archives", _harness.ArchivesRoot,
-            "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable);
+            "--state", _harness.StateDirectory
+            );
 
         // Reads started now so the child can never block on a full pipe.
         var holderOutput = holder.StandardOutput.ReadToEndAsync();

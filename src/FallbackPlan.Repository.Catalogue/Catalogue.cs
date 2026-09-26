@@ -171,6 +171,13 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>Marks a blob's lifecycle state (1 live, 2 tombstoned, 3 deleted) for precedence rule 3.</summary>
+    /// <remarks>
+    /// A blob no <see cref="RecordBlob"/> has described gets a placeholder
+    /// row whose store key is its own id — the column is not null and
+    /// unique, and the id is both. Readers treat that shape as "no store key
+    /// recorded" and derive one (<see cref="QueryWinner"/>), so a placeholder
+    /// never masquerades as a physical fact.
+    /// </remarks>
     public void SetBlobState(BlobId blobId, BlobState state)
     {
         using var command = _connection.CreateCommand();
@@ -220,7 +227,116 @@ public sealed class Catalogue : IDisposable
             InsertLocation(transaction, entry, delta.Generation, delta.WriterId, delta.Sequence);
         }
 
+        // The signed blob digests ride the delta (07 §2.2) so that a catalogue
+        // rebuilt from the index plane alone holds them: they are what lets a
+        // verifier prove a sealed blob it cannot open at a destination. A
+        // delta that carries none records nothing about its blobs, and a row
+        // RecordBlob already described keeps every physical fact it has.
+        if (delta.CoveredBlobDigests.Count > 0 && delta.CoveredBlobDigests.Count == delta.CoveredBlobIds.Count)
+        {
+            for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+            {
+                UpsertDigest(transaction, delta.CoveredBlobIds[i], delta.CoveredBlobDigests[i]);
+            }
+        }
+
+        // And the Merkle commitment beside it (07 §2.3), on the same terms:
+        // a delta that carries none records nothing, and never clears a root
+        // an earlier delta established.
+        if (delta.CoveredBlobMerkleRoots.Count > 0
+            && delta.CoveredBlobMerkleRoots.Count == delta.CoveredBlobIds.Count)
+        {
+            for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+            {
+                UpsertMerkleRoot(transaction, delta.CoveredBlobIds[i], delta.CoveredBlobMerkleRoots[i]);
+            }
+        }
+
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// The signed digest of a blob's sealed bytes, or <see langword="null"/>
+    /// when none is on record. It reached the catalogue either from a delta
+    /// this reader authenticated or from this writer's own seal — never from
+    /// a destination — so it is something to check a replica's bytes against.
+    /// </summary>
+    public ReadOnlyMemory<byte>? SignedDigestOf(BlobId blobId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT digest FROM blobs WHERE blob_id = $id;";
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+
+        // Spelled out rather than as a conditional: a null byte[] converts
+        // to an EMPTY memory, not to no memory, and "no digest on record"
+        // must never read as "a digest of nothing".
+        if (command.ExecuteScalar() is byte[] digest)
+        {
+            return digest;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The signed Merkle commitment over a blob's sealed bytes, or
+    /// <see langword="null"/> when none is on record — which is every blob
+    /// of a repository below format 3, and every blob whose delta a reader
+    /// applied before this column existed.
+    /// </summary>
+    /// <remarks>
+    /// Its provenance is the digest's: a delta this reader authenticated or
+    /// this writer's own seal, never a destination. That is what makes it
+    /// something to challenge a replica against rather than something to
+    /// compare a replica with itself.
+    /// </remarks>
+    public ReadOnlyMemory<byte>? SignedMerkleRootOf(BlobId blobId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT merkle_root FROM blobs WHERE blob_id = $id;";
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+
+        // Spelled out for the reason SignedDigestOf is: a null byte[] would
+        // convert to an empty memory, and "no root on record" must never
+        // read as "a root of nothing".
+        if (command.ExecuteScalar() is byte[] root)
+        {
+            return root;
+        }
+
+        return null;
+    }
+
+    private static void UpsertDigest(SqliteTransaction transaction, BlobId blobId, ReadOnlyMemory<byte> digest)
+    {
+        using var command = transaction.Connection!.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO blobs (blob_id, store_blob_key, blob_class, key_generation, record_count, length, digest)
+            VALUES ($id, $id, 0, 0, 0, 0, $digest)
+            ON CONFLICT (blob_id) DO UPDATE SET digest = excluded.digest;
+            """;
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+        command.Parameters.AddWithValue("$digest", digest.ToArray());
+        command.ExecuteNonQuery();
+    }
+
+    private static void UpsertMerkleRoot(SqliteTransaction transaction, BlobId blobId, ReadOnlyMemory<byte> root)
+    {
+        using var command = transaction.Connection!.CreateCommand();
+        command.Transaction = transaction;
+
+        // Its own statement rather than a column on the digest's: a delta
+        // that carries digests and no roots must leave a root already on
+        // record alone, and one UPDATE over both columns would erase it.
+        command.CommandText = """
+            INSERT INTO blobs (blob_id, store_blob_key, blob_class, key_generation, record_count, length, merkle_root)
+            VALUES ($id, $id, 0, 0, 0, 0, $root)
+            ON CONFLICT (blob_id) DO UPDATE SET merkle_root = excluded.merkle_root;
+            """;
+        command.Parameters.AddWithValue("$id", blobId.ToArray());
+        command.Parameters.AddWithValue("$root", root.ToArray());
+        command.ExecuteNonQuery();
     }
 
     /// <summary>Applies one checkpoint idempotently, entries carrying the checkpoint's provenance.</summary>
@@ -807,7 +923,9 @@ public sealed class Catalogue : IDisposable
     {
         using var command = _connection.CreateCommand();
         command.CommandText = $"""
-            SELECT l.blob_id, b.store_blob_key, l.physical_offset, l.stored_length,
+            SELECT l.blob_id,
+                   CASE WHEN b.store_blob_key = b.blob_id THEN NULL ELSE b.store_blob_key END,
+                   l.physical_offset, l.stored_length,
                    l.compression_profile, l.encryption_profile, l.generation, l.writer_id, l.sequence
             FROM object_locations l
             LEFT JOIN blobs b ON b.blob_id = l.blob_id

@@ -19,10 +19,9 @@ namespace FallbackPlan.Repository.Format.Descriptor;
 /// <param name="CreatedBy">Informational implementation name and version (key 7).</param>
 /// <param name="UnstableFormat">True while the format is unfrozen — readers surface a prominent warning (key 8).</param>
 /// <param name="SealingPublicKey">
-/// A write-only (format v2) repository's X25519 sealing public key (key 9;
-/// ADR-0042 §1) — the key file contents seal to, and the derive-and-compare
-/// wrong-passphrase verifier. Not a secret, exactly like the salt beside it.
-/// Empty for format v1.
+/// The repository's X25519 sealing public key (key 9; ADR-0042 §1) — the key
+/// file contents seal to, and the derive-and-compare wrong-passphrase
+/// verifier. Not a secret, exactly like the salt beside it.
 /// </param>
 public sealed record RepositoryDescriptor(
     RepositoryId RepositoryId,

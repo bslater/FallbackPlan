@@ -5,6 +5,7 @@ namespace FallbackPlan.Application.Tests;
 /// <summary>
 /// Schedules across the clock boundaries a real machine actually crosses
 /// (ADR-0027 §1, NFR-TIME-001).
+/// Establishes NFR-TIME-002.
 /// </summary>
 /// <remarks>
 /// <para>

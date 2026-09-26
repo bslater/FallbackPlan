@@ -7,7 +7,6 @@ using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
-using FallbackPlan.Keystore;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -44,45 +43,57 @@ public static class AgentHost
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(error);
 
-        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        if (args.Length > 0 && args[0] is "-h" or "--help" or "help")
         {
             output.WriteLine("""
                 FallbackPlan service — scheduled backups, and the command surface clients talk to
 
                 usage:
-                  fallbackplan-agent run    --archives <root> --state <dir> [--passphrase-env <VAR>]
+                  fallbackplan-agent [run]  [--archives <root>] [--state <dir>]
                                             [--once] [--poll-seconds <n>]   (default 60)
                                             [--remote-interface <ip> --remote-port <n>]
                   fallbackplan-agent setup  --archives <root> --state <dir> --passphrase-env <VAR>
-                                            --acknowledge-loss --kit-output <path>
-                                            --user <name> --password-env <VAR>
-                  fallbackplan-agent unlock --archives <root> --state <dir> --passphrase-env <VAR>
-                  fallbackplan-agent lock   --state <dir>
+                                            --acknowledge-loss --user <name> --password-env <VAR>
                   fallbackplan-agent pair   --state <dir> --remote-interface <ip> --remote-port <n>
                                             [--label <name>] [--role stores-here|stores-for-us|both] [--quota <bytes>]
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]
+                  fallbackplan-agent reattribute --state <dir> --repository <hex> --to <fingerprint>
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
-                  fallbackplan-agent sync   --archives <root> --state <dir> [--passphrase-env <VAR>]
+                  fallbackplan-agent sync   --archives <root> --state <dir>
                                             [--set <name>] [--destination <name>]
                   fallbackplan-agent verify-destination --archives <root> --state <dir>
-                                            [--passphrase-env <VAR>] [--set <name>]
-                                            [--destination <name>] [--probe | --full]
+                                            [--set <name>] [--destination <name>] [--probe | --full]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
+                  fallbackplan-agent receipts --state <dir> [--kind deletion|replication] [--set <name>]
+                                            [--repository <hex>] [--limit <n>] [--json]
+                  fallbackplan-agent upgrade-format --state <dir> --set <name>
 
                 Every verb accepts --log-level <trace|debug|information|warning|
                 error|critical|none>, which also reads from FALLBACKPLAN_LOG_LEVEL
                 when the flag is absent (ADR-0043 §6). Logs go to <state>/logs;
                 `run` echoes them to the console as well.
 
+                With no arguments the service simply starts: --archives and
+                --state default to the machine's data directory —
+                %ProgramData%\FallbackPlan on Windows, /var/lib/fallbackplan
+                on Linux, /Library/Application Support/FallbackPlan on macOS
+                (falling back to the user profile only where that cannot be
+                created) — overridable by FALLBACKPLAN_ARCHIVES and
+                FALLBACKPLAN_STATE. Every process of the installation shares
+                the same default, so the web console and the CLI find this
+                service with no path arguments either. Name the paths only
+                to aim at a specific installation.
+
                 Backup sets, their destinations and their schedules come from
-                <state>/config.json. Each set's staging archive lives under
+                <state>/config.json. A staging set's archive lives under
                 --archives as <root>/<set id>, created on the set's first backup
-                (ADR-0034). Missed runs coalesce to one catch-up run per set
-                (ADR-0027 §1).
+                (ADR-0034); a direct-ship set keeps only metadata, under
+                <state>/sets/<set id> (ADR-0046). Missed runs coalesce to
+                one catch-up run per set (ADR-0027 §1).
 
                 `setup` gives a fresh installation the passphrase everything derives
                 from (ADR-0044). It is for headless installs with no browser; the
@@ -93,16 +104,14 @@ public static class AgentHost
                 passphrase can never be changed, so a second attempt is refused
                 rather than obeyed. --acknowledge-loss is required, because losing
                 the passphrase makes every backup unrecoverable and there is no
-                reset, no export and no support path. --kit-output names where to
-                write the recovery kit, which setup does not complete without: the
-                binary form goes there and the printable form to '<path>.txt'. The
-                kit is ONE factor — store it apart from the passphrase.
+                reset, no export and no support path. The passphrase is the whole
+                recovery credential (ADR-0060): there is no kit to write, and a
+                recovery needs only the passphrase and reach to an archive.
 
-                `unlock` stores the passphrase in this account's platform keystore so
-                scheduled backups run with nobody present; `run` then needs no
-                --passphrase-env. `lock` removes it. Key export always takes a
-                passphrase per invocation and never reads the keystore
-                (ADR-0028 section 9).
+                The service never holds the passphrase (ADR-0042 §5): after
+                `setup` it opens every archive with the stored write credential,
+                which publishes and cannot read content back. Scheduled backups
+                therefore run with nobody present and nothing to unlock.
 
                 While it runs the service holds the writer role for <dir> exclusively,
                 and listens on a local socket or named pipe there. It listens on no
@@ -112,16 +121,36 @@ public static class AgentHost
                 `install` prints the definition that registers this agent with the
                 operating system's service manager — a systemd unit, a launchd job,
                 or the Windows `sc.exe` commands (default: this platform). It only
-                prints it; nothing is changed. Store the passphrase with `unlock`
-                first, as the account the service will run as (ADR-0033).
+                prints it; nothing is changed. Run `setup` first, as the account
+                the service will run as, so the credential it leaves behind is
+                readable at boot (ADR-0033).
 
                 `sync` converges declared destinations now, outside the schedule
                 (ADR-0034 §3): one pass per matching (set, destination) pair,
                 reported from the sync ledger. `retention` runs one pass per set
                 — the report either way, tombstones, sweep and staging trim only
-                with --apply (FR-GC-005).
+                with --apply (FR-GC-005). On a set-up installation --apply needs
+                --passphrase-env: the service holds the key that publishes, not
+                the key that authorises a deletion, and the passphrase derives
+                that authority for the one run (ADR-0055).
+
+                `reattribute` is this machine's operator re-pointing a replica a
+                peer stores here at a different paired device (ADR-0053 §3) —
+                for a replica attributed before its owner's claim key was
+                published, which the passphrase alone cannot claim back. A
+                replica that carries a claim key is refused: its owner claims it
+                with the passphrase. Through the running service when one is
+                listening; directly on the ledger otherwise.
                 """);
             return 0;
+        }
+
+        // A bare invocation — or one that leads with options — is `run`: the
+        // service starts on the installation the defaults name (FR-SVC-016).
+        // A verb is for doing something specific.
+        if (args.Length == 0 || args[0].StartsWith('-'))
+        {
+            args = ["run", .. args];
         }
 
         string? Get(string name)
@@ -142,6 +171,33 @@ public static class AgentHost
         var stateDirectory = Get("--state");
         var passphraseVariable = Get("--passphrase-env");
 
+        // The flags override; the environment overrides the platform default;
+        // a command line naming neither still names an installation
+        // (FR-SVC-016). Only a DEFAULT location is created on first touch — a
+        // path somebody typed is left to the verb, which reports what is
+        // missing rather than inventing it.
+        var archivesWereExplicit = archivesRoot is not null;
+        var stateWasExplicit = stateDirectory is not null;
+        try
+        {
+            if (archivesRoot is null)
+            {
+                archivesRoot = Api.InstallationDefaults.ArchivesRoot;
+                Directory.CreateDirectory(archivesRoot);
+            }
+
+            if (stateDirectory is null)
+            {
+                stateDirectory = Api.InstallationDefaults.StateDirectory;
+                Directory.CreateDirectory(stateDirectory);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+
         // The verb `replicate` used to push one archive by path. Removed, not
         // shimmed (pre-1.0): destinations are declared in the configuration
         // and the service syncs them itself (ADR-0034 §3).
@@ -154,10 +210,21 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "unlock" or "lock" or "pair" or "pairings" or "unpair" or "install" or "sync" or "notices" or "retention" or "verify-destination"))
+        if (args[0] is "unlock" or "lock")
+        {
+            // Retired with the passphrase-holding service (ADR-0042 §5,
+            // ADR-0033 amended): a service opens archives with the credential
+            // setup leaves behind, so there is nothing to store or forget.
+            error.WriteLine(
+                $"error: `{args[0]}` was removed — the service never holds the passphrase. Run `setup` once; "
+                + "the stored write credential opens every archive afterwards (ADR-0042 §5).");
+            return 1;
+        }
+
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `unlock`, `lock`, `pair`, `pairings`, `unpair`, `install`, `sync`, `verify-destination`, `notices`, or `retention` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
             return 1;
         }
 
@@ -167,7 +234,7 @@ public static class AgentHost
         // configuration that does not load leaves the level to the flag, the
         // environment and the fallback, and the defect is reported through the
         // ordinary path a moment later.
-        var configured = stateDirectory is null ? null : LoggingFromConfiguration(stateDirectory);
+        var configured = LoggingFromConfiguration(stateDirectory);
 
         // The level in force, resolved before any verb runs: the flag, then
         // the environment, then config.json, then Information (ADR-0043 §6). A
@@ -217,13 +284,53 @@ public static class AgentHost
         // ended at 3 a.m. is still known at breakfast.
         if (args[0] == "notices")
         {
-            if (stateDirectory is null)
+            return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // `receipts` reads back the receipts filed here — deletion
+        // (ADR-0063) and replication (ADR-0064): the ones this device signed
+        // as a destination and the ones it verified as a commander.
+        // File-direct always — the stores are append-only and this verb only
+        // reads, so there is no writer to race and no reason to need the
+        // service up at breakfast.
+        if (args[0] == "receipts")
+        {
+            int? receiptLimit = null;
+            if (Get("--limit") is { } limitText)
             {
-                error.WriteLine("error: usage is `notices --state <dir> [--ack <id>]`.");
-                return 1;
+                if (!int.TryParse(limitText, System.Globalization.CultureInfo.InvariantCulture, out var parsedLimit))
+                {
+                    error.WriteLine($"error: --limit takes a whole number, not '{limitText}'.");
+                    return 1;
+                }
+
+                receiptLimit = parsedLimit;
             }
 
-            return await NoticesAsync(stateDirectory, Get("--ack"), output, error, cancellationToken)
+            return Receipts(
+                stateDirectory, Get("--kind"), Get("--set"), Get("--repository"), args.Contains("--json"),
+                receiptLimit, output, error);
+        }
+
+        // `reattribute` re-points a replica stored here (ADR-0053 §3), routed
+        // like `notices`: the live service's ledger when one is listening,
+        // the file when none is — never both, which is the one thing that
+        // would make the override silently undone.
+        if (args[0] == "reattribute")
+        {
+            return await ReattributeAsync(stateDirectory, Get("--repository"), Get("--to"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // `upgrade-format` moves one set to the latest repository format
+        // (ADR-0066). Through the running service only, and deliberately so:
+        // the effective format version is fixed when an archive opens, so a
+        // service listening elsewhere would go on sealing the older format
+        // against its cached handle while this verb reported success.
+        if (args[0] == "upgrade-format")
+        {
+            return await UpgradeFormatAsync(stateDirectory, Get("--set"), output, error, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -232,12 +339,6 @@ public static class AgentHost
         // inside the repository (ADR-0030 §1).
         if (args[0] is "pair" or "pairings" or "unpair")
         {
-            if (stateDirectory is null)
-            {
-                error.WriteLine($"error: usage is `{args[0]} --state <dir>`.");
-                return 1;
-            }
-
             return args[0] switch
             {
                 "pairings" => ListPairings(stateDirectory, output),
@@ -249,27 +350,21 @@ public static class AgentHost
             };
         }
 
-        if (repoPath is not null && archivesRoot is null)
+        if (repoPath is not null && !archivesWereExplicit)
         {
             // The old single-repository flag, refused with directions rather
-            // than reinterpreted: --archives names a root that holds one
-            // staging archive per set (ADR-0034), which is not what a --repo
-            // caller was pointing at.
+            // than reinterpreted: --archives names a root that holds staging
+            // sets' archives (ADR-0034), which is not what a --repo caller
+            // was pointing at.
             error.WriteLine(
-                "error: `--repo` became `--archives <root>` — the service holds one staging archive per "
-                + "backup set under that root (ADR-0034). An existing single archive can be adopted by "
-                + "moving it to <root>/<set id>.");
+                "error: `--repo` became `--archives <root>` — the service holds a staging set's archive "
+                + "under that root, at <root>/<set id> (ADR-0034). An existing single archive can be "
+                + "adopted by moving it there.");
             return 1;
         }
 
-        if (stateDirectory is null || (args[0] is not "lock" && archivesRoot is null))
-        {
-            error.WriteLine("error: usage is `run --archives <root> --state <dir>`.");
-            return 1;
-        }
-
-        // `install` opens neither the repository nor the keystore: it only prints
-        // the definition that would register this agent as a service (ADR-0033).
+        // `install` opens nothing: it only prints the definition that would
+        // register this agent as a service (ADR-0033).
         if (args[0] == "install")
         {
             return Install(
@@ -288,81 +383,33 @@ public static class AgentHost
             return string.IsNullOrEmpty(value) ? null : value;
         }
 
-        if (args[0] == "lock")
+        if (passphraseVariable is not null && args[0] is "run" or "sync" or "verify-destination")
         {
-            try
-            {
-                var store = PlatformKeystore.For(stateDirectory);
-                store.Delete(stateDirectory);
-                output.WriteLine($"removed the stored passphrase from {store.Description}.");
-                return 0;
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
-        }
-
-        if (args[0] == "unlock")
-        {
-            var supplied = FromEnvironment();
-            if (supplied is null)
-            {
-                error.WriteLine(
-                    "error: `unlock` needs --passphrase-env <VAR> naming a set environment variable — the "
-                    + "passphrase is passed by name, never on the command line.");
-                return 1;
-            }
-
-            try
-            {
-                var store = PlatformKeystore.For(stateDirectory);
-                store.Write(stateDirectory, supplied);
-                output.WriteLine($"stored the passphrase in {store.Description}.");
-                output.WriteLine(
-                    "an attacker who obtains this service account obtains the backups — see T-19 in the threat model.");
-                return 0;
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
+            // Not ignored: a flag that used to mean "hold this passphrase for
+            // the run" and now means nothing would let an operator believe
+            // the service holds something it does not (ADR-0042 §5).
+            error.WriteLine(
+                $"error: `{args[0]}` takes no --passphrase-env — the service never holds the passphrase; it opens "
+                + "every archive with the credential `setup` stored. The flag belongs to `setup` and to "
+                + "`retention --apply`, which derive an authority from it for one run.");
+            return 1;
         }
 
         if (passphraseVariable is not null && FromEnvironment() is null)
         {
-            // An explicitly named variable that is unset is a mistake, not an
-            // invitation to use the keystore instead: falling back would run
-            // the backup under a different passphrase than the operator asked
-            // for, and say nothing.
+            // An explicitly named variable that is unset is a mistake, and
+            // running on without it would silently do something other than
+            // what the operator asked.
             error.WriteLine(
                 $"error: environment variable '{passphraseVariable}' is unset — the passphrase is passed by name, never on the command line.");
             return 1;
         }
 
+        // Only `setup` and `retention --apply` read this: the first derives
+        // the installation's credential where the person typed, the second
+        // the reclaim grant for one run. A running service holds no
+        // passphrase at all (ADR-0042 §5).
         var passphraseValue = FromEnvironment();
-        if (passphraseValue is null)
-        {
-            // The keystore is what makes unattended scheduled backup possible
-            // at all (ADR-0028 section 9). An environment variable held for the
-            // life of the process, and inherited by every child, is the thing
-            // it replaces. Holding neither is a valid way to run since
-            // ADR-0042: a provisioned write-only set opens with its stored
-            // credential and no passphrase at all — a v1 set on such a start
-            // is refused per set, with the remedy named, when something
-            // actually tries to open it.
-            try
-            {
-                PlatformKeystore.For(stateDirectory).TryRead(stateDirectory, out passphraseValue);
-            }
-            catch (KeystoreException exception)
-            {
-                error.WriteLine($"error: {exception.Message}");
-                return 1;
-            }
-        }
 
         // A one-shot verb that speaks the service surface: its own runtime
         // (taking the writer role for its duration), one command, the lines
@@ -371,11 +418,11 @@ public static class AgentHost
         // rendered as errors here, exactly as the `run` verb renders them; an
         // unhandled stack trace is never the answer to a held lock.
         async Task<int> ServiceVerbAsync(
-            Api.ServiceCommand command, Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
+            Func<ServiceRuntime, Api.ServiceCommand?> commandFor,
+            Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
         {
             try
             {
-                using var verbPassphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
                 await using var verbRuntime = await ServiceRuntime.StartAsync(
                     new ServiceOptions
                     {
@@ -383,7 +430,13 @@ public static class AgentHost
                         StateDirectory = stateDirectory,
                         Logging = logging,
                     },
-                    verbPassphrase, cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
+
+                // A null command is a refusal the factory already printed.
+                if (commandFor(verbRuntime) is not { } command)
+                {
+                    return 1;
+                }
 
                 var handler = new ServiceCommandHandler(verbRuntime, RemoteBindingState.Off);
                 var result = await handler.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -420,11 +473,67 @@ public static class AgentHost
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
-            catch (KeyUnwrapFailedException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                error.WriteLine("error: the passphrase does not open this repository.");
+                // A state directory or archives root that cannot be used — a
+                // parent that is a file, a permission wall — is a stated
+                // refusal, never a stack trace. Surfaced here since the paths
+                // gained defaults: an unusable EXPLICIT path used to die on
+                // the usage check instead of reaching the verb.
+                error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
+        }
+
+        // On a set-up installation the service holds the key that publishes
+        // and not the key that authorises a deletion (ADR-0055 §6), so
+        // `retention --apply` needs a grant the way a console sends one: the
+        // reclaim sub-root, re-derived from the passphrase under the
+        // installation's own salt and sealed to this service's recipient key.
+        // The passphrase is proved against the stored credential BEFORE the
+        // grant is built — a wrong one would otherwise author tombstones
+        // nothing can verify on an archive that has none yet to disagree
+        // with. A dry run authors nothing and needs nothing; an installation
+        // without a stored credential derives the key it already holds.
+        (string? Grant, bool Refused) ReclaimGrantFor(ServiceRuntime verbRuntime, bool apply)
+        {
+            if (!apply)
+            {
+                return (null, false);
+            }
+
+            using var provisioning = new InstallationCredentialStore(stateDirectory).TryLoad();
+            if (provisioning is null)
+            {
+                return (null, false);
+            }
+
+            if (passphraseValue is null)
+            {
+                error.WriteLine(
+                    "error: `retention --apply` on a set-up installation needs --passphrase-env <VAR>: applying "
+                    + "retention authors deletions, and this service holds the key that publishes, not the key "
+                    + "that authorises a deletion. The passphrase derives that authority for this run only "
+                    + "(ADR-0055).");
+                return (null, true);
+            }
+
+            using var passphrase = Passphrase.Create(passphraseValue);
+            using var authority = WriteOnlyDerivation.Derive(
+                passphrase, provisioning.KdfParameters, provisioning.KdfSalt,
+                Domain.Configuration.KdfValidationMode.OpenRepository);
+
+            if (!authority.Credential.SealingPublicKey.SequenceEqual(provisioning.Credential.SealingPublicKey))
+            {
+                error.WriteLine(
+                    "error: the passphrase does not reproduce this installation's credential, so it cannot "
+                    + "authorise a deletion. Nothing was tombstoned.");
+                return (null, true);
+            }
+
+            return (Convert.ToHexStringLower(
+                WriteOnlyProvisioning.SealReclaimGrant(
+                    [.. verbRuntime.GrantRecipient.PublicKey], authority.ReclaimKeySeed)), false);
         }
 
         // Setup speaks the same one-shot shape as the other verbs here: its
@@ -455,8 +564,8 @@ public static class AgentHost
             if (!created.IsOk)
             {
                 error.WriteLine(
-                    $"error: the first account was refused ({created.Outcome}). The installation is set up "
-                    + "and its kit is saved; add the account from the console or the CLI.");
+                    $"error: the first account was refused ({created.Outcome}). The installation is set up; "
+                    + "add the account from the console or the CLI.");
                 return 2;
             }
 
@@ -464,10 +573,8 @@ public static class AgentHost
             return 0;
         }
 
-        async Task<int> SetupVerbAsync(string kitOutput, string firstUser, string firstPassword)
+        async Task<int> SetupVerbAsync(string firstUser, string firstPassword)
         {
-            byte[] kitFramed = [];
-
             try
             {
                 await using var setupRuntime = await ServiceRuntime.StartAsync(
@@ -477,7 +584,7 @@ public static class AgentHost
                         StateDirectory = stateDirectory,
                         Logging = logging,
                     },
-                    passphrase: null, cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 var handler = new ServiceCommandHandler(setupRuntime, RemoteBindingState.Off, CallerScope.Local);
 
@@ -497,20 +604,12 @@ public static class AgentHost
                         Repository.Crypto.KekDerivation.SaltLength);
 
                     // Argon2id runs here, in the process the operator started.
-                    // What crosses is the sealed bundle (NFR-SEC-011) — and
-                    // the same derivation produces the recovery kit, so the
-                    // expensive part is paid once.
+                    // What crosses is the sealed bundle (NFR-SEC-011).
                     using var authority = Repository.Crypto.WriteOnlyDerivation.Derive(
                         passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.CreateRepository);
                     envelope = Convert.ToHexStringLower(
                         Repository.Crypto.WriteOnlyProvisioning.SealProvision(
                             Convert.FromHexString(description.RestoreGrantRecipient), authority, salt, parameters));
-
-                    kitFramed = Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(
-                        Repository.RecoveryKitFactory.BuildForInstallation(
-                            authority.Credential, salt, parameters,
-                            Convert.FromHexString(description.DeviceId ?? string.Empty),
-                            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
                 }
 
                 var result = await handler.ExecuteAsync(
@@ -524,12 +623,7 @@ public static class AgentHost
                             output.WriteLine(line);
                         }
 
-                        var written = await WriteKitAndConfirmAsync(handler, kitOutput, kitFramed)
-                            .ConfigureAwait(false);
-
-                        return written == 0
-                            ? CreateFirstAccount(firstUser, firstPassword)
-                            : written;
+                        return CreateFirstAccount(firstUser, firstPassword);
 
                     case Api.ServiceError refusal:
                         error.WriteLine($"error: {refusal.Message}");
@@ -545,56 +639,6 @@ public static class AgentHost
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
-        }
-
-        // Writing the kit and confirming it are one step here, because a
-        // headless operator cannot tick a box: the confirmation records that
-        // the kit reached durable storage, which for this verb is the file
-        // having been written where they asked for it.
-        async Task<int> WriteKitAndConfirmAsync(
-            ServiceCommandHandler handler, string kitOutput, byte[] kitFramed)
-        {
-            var textPath = kitOutput + ".txt";
-            try
-            {
-                await File.WriteAllBytesAsync(kitOutput, kitFramed, cancellationToken).ConfigureAwait(false);
-                await File.WriteAllTextAsync(
-                    textPath,
-                    Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                        kitFramed,
-                        "This kit is ONE of the two things you need. The other is your passphrase, which is "
-                        + "not in here. Keep them apart."),
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            {
-                // The installation has its passphrase; only the kit is
-                // missing. Saying which half succeeded is the difference
-                // between "run setup again" (which would be refused) and
-                // "fix the path and save the kit".
-                error.WriteLine(
-                    $"error: the installation is set up, but its recovery kit could not be written to "
-                    + $"'{kitOutput}': {failure.Message}. Save the kit from the console before relying on "
-                    + "this installation.");
-                return 2;
-            }
-
-            var checksum = Convert.ToHexStringLower(kitFramed.AsSpan(kitFramed.Length - 32));
-            var confirmed = await handler.ExecuteAsync(
-                new Api.ConfirmRecoveryKitCommand(checksum), cancellationToken).ConfigureAwait(false);
-
-            if (confirmed is Api.ServiceError refusal)
-            {
-                error.WriteLine($"error: {refusal.Message}");
-                return 2;
-            }
-
-            output.WriteLine($"recovery kit   {kitOutput}");
-            output.WriteLine($"kit (text)     {textPath}");
-            output.WriteLine(
-                "the kit is ONE factor — move it somewhere that is not this machine, and not beside the "
-                + "passphrase.");
-            return 0;
         }
 
         // `setup` gives a fresh installation its passphrase (ADR-0044) for
@@ -631,20 +675,21 @@ public static class AgentHost
             {
                 error.WriteLine(
                     $"error: that passphrase is too weak to be an installation's master key — it needs at "
-                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters, and more "
-                    + "than one repeated unit (ADR-0044 §6).");
+                    + $"least {Domain.Configuration.PassphraseStrength.MinimumLength} characters including "
+                    + "an uppercase letter, two digits and a special character, and more than one repeated "
+                    + "unit (ADR-0044 §6).");
                 return 1;
             }
 
-            if (Get("--kit-output") is not { Length: > 0 } kitOutput)
+            if (args.Contains("--kit-output"))
             {
-                // Setup does not complete without a saved kit (FR-KIT-004),
-                // and a headless operator has nowhere to click — so the path
-                // is required rather than the confirmation being waived for
-                // want of a button.
+                // Refused by name rather than ignored: a flag that used to
+                // name where the recovery kit went would otherwise leave an
+                // operator believing a kit had been written somewhere.
                 error.WriteLine(
-                    "error: `setup` needs --kit-output <path>. Setup is not complete until the recovery kit "
-                    + "is saved, and this is where it goes (ADR-0044, FR-KIT-004).");
+                    "error: `setup` no longer takes --kit-output. The recovery kit is withdrawn (ADR-0060): "
+                    + "the passphrase is the whole recovery credential, and a recovery needs only it and "
+                    + "reach to an archive. Drop the flag and run again.");
                 return 1;
             }
 
@@ -673,14 +718,16 @@ public static class AgentHost
                 return 1;
             }
 
-            if (firstPassword.Length < UserStore.MinimumPasswordLength)
+            if (!Domain.Configuration.PasswordPolicy.Assess(firstPassword).IsAcceptable)
             {
                 error.WriteLine(
-                    $"error: that password is shorter than {UserStore.MinimumPasswordLength} characters.");
+                    $"error: that password does not meet the account policy — at least "
+                    + $"{UserStore.MinimumPasswordLength} characters, with an uppercase letter, two digits "
+                    + "and a special character (ADR-0045).");
                 return 1;
             }
 
-            return await SetupVerbAsync(kitOutput, firstUser, firstPassword).ConfigureAwait(false);
+            return await SetupVerbAsync(firstUser, firstPassword).ConfigureAwait(false);
         }
 
         // `retention [--apply]` runs one pass per configured set
@@ -690,8 +737,11 @@ public static class AgentHost
         // against anything else that writes (FR-GC-005/008).
         if (args[0] == "retention")
         {
+            var apply = args.Contains("--apply");
             return await ServiceVerbAsync(
-                new Api.RetentionCommand(args.Contains("--apply")),
+                verbRuntime => ReclaimGrantFor(verbRuntime, apply) is var (grant, refused) && !refused
+                    ? new Api.RetentionCommand(apply, grant)
+                    : null,
                 result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }
 
@@ -703,7 +753,7 @@ public static class AgentHost
         if (args[0] == "verify-destination")
         {
             return await ServiceVerbAsync(
-                new Api.VerifyDestinationCommand(
+                _ => new Api.VerifyDestinationCommand(
                     Get("--set"), Get("--destination"), args.Contains("--full"), args.Contains("--probe")),
                 result => (result as Api.VerifyDestinationResult)?.Lines).ConfigureAwait(false);
         }
@@ -715,7 +765,7 @@ public static class AgentHost
         if (args[0] == "sync")
         {
             return await ServiceVerbAsync(
-                new Api.SyncCommand(Get("--set"), Get("--destination")),
+                _ => new Api.SyncCommand(Get("--set"), Get("--destination")),
                 result => (result as Api.SyncResult)?.Lines).ConfigureAwait(false);
         }
 
@@ -788,8 +838,45 @@ public static class AgentHost
 
         try
         {
-            using var passphrase = passphraseValue is null ? null : Passphrase.Create(passphraseValue);
-            await using var runtime = await ServiceRuntime.StartAsync(options, passphrase, cancellationToken)
+        // The recycle loop (ADR-0049): restart_service asks the host to tear
+        // the runtime down and start it again in the same process — the same
+        // outcome on every platform, whatever the service manager's restart
+        // policy would make of an exit. Each iteration owns its own lifetime
+        // token; only the operator's restart re-enters the loop, and the
+        // caller's cancellation still means stop.
+        while (true)
+        {
+            var restartRequested = false;
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            void RequestRestart()
+            {
+                restartRequested = true;
+
+                // The acknowledgement must reach the wire before the
+                // listener dies under it; the grace period is what lets the
+                // pump flush the reply it is writing right now. Deliberately
+                // no token: this delay must run even as the lifetime it is
+                // about to cancel winds down.
+                _ = Task.Run(
+                    async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), CancellationToken.None)
+                            .ConfigureAwait(false);
+                        try
+                        {
+                            await lifetime.CancelAsync().ConfigureAwait(false);
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            // The iteration already ended for another reason.
+                        }
+                    },
+                    CancellationToken.None);
+            }
+
+            try
+            {
+            await using var runtime = await ServiceRuntime.StartAsync(options, lifetime.Token)
                 .ConfigureAwait(false);
 
             // The remote binding, when enabled, is opened before the command
@@ -811,7 +898,8 @@ public static class AgentHost
                     remoteListener = RemoteServiceListener.Start(
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
                         log: logging.Factory.CreateLogger<RemoteServiceListener>(),
-                        replicationStateDirectory: stateDirectory);
+                        replicationStateDirectory: stateDirectory,
+                        owners: runtime.ReplicaOwners);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
 
@@ -824,7 +912,12 @@ public static class AgentHost
                 // only whether the remote binding is on; a verb that must be
                 // refused to a remote console needs to know that THIS caller
                 // is remote (ADR-0044 §5).
-                var localHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Local);
+                // The local handler carries the recycle signal; the remote one
+                // deliberately does not — restart is refused to remote scope
+                // by name, and a null callback is defence in depth behind
+                // that refusal. --once has no host loop to re-enter.
+                var localHandler = new ServiceCommandHandler(
+                    runtime, bindingState, CallerScope.Local, once ? null : RequestRestart);
                 var remoteHandler = new ServiceCommandHandler(runtime, bindingState, CallerScope.Remote);
 
                 // One account store and one session registry for the whole
@@ -854,6 +947,39 @@ public static class AgentHost
                 // foreground run is somebody waiting to see it start.
                 var hostLog = logging.Factory.CreateLogger(typeof(AgentHost).FullName!);
                 Log.LocalBindingUp(hostLog);
+
+                // The startup configuration record (FR-SVC-010; ADR-0049):
+                // what was RESOLVED, provenance included — the first thing a
+                // diagnostics read needs is what this service was actually
+                // operating against. Formatted into locals inside the guard:
+                // CA1873 is right that argument expressions are evaluated
+                // whether or not anybody is listening.
+                if (hostLog.IsEnabled(LogLevel.Information))
+                {
+                    var stateProvenance = Provenance(
+                        stateWasExplicit, Api.InstallationDefaults.StateVariable, stateDirectory);
+                    var archivesProvenance = Provenance(
+                        archivesWereExplicit, Api.InstallationDefaults.ArchivesVariable, archivesRoot!);
+                    var poolWidth = ServiceRuntime.ConfiguredBackupPoolWidth(options);
+                    var remoteBound = remoteListener is null ? "off" : remoteListener.Endpoint.ToString();
+                    Log.StartupLocations(hostLog, stateDirectory, stateProvenance, archivesRoot!, archivesProvenance);
+                    Log.StartupPosture(hostLog, pollSeconds, poolWidth, remoteBound);
+                    foreach (var set in runtime.Configuration.BackupSets)
+                    {
+                        var schedule = set.Schedule ?? "manual-only";
+                        var priority = set.Priority?.ToString(CultureInfo.InvariantCulture) ?? "none";
+                        Log.StartupSet(
+                            hostLog, set.Name, set.Roots.Count, schedule,
+                            set.Destinations.Count, set.DirectShip, priority);
+                    }
+
+                    foreach (var declared in runtime.Configuration.Destinations)
+                    {
+                        var kind = declared.Kind.ToString();
+                        var domain = declared.FailureDomain?.ToString() ?? "unstated";
+                        Log.StartupDestination(hostLog, declared.Name, kind, domain);
+                    }
+                }
                 if (remoteListener is not null)
                 {
                     var boundTo = remoteListener.Endpoint.ToString();
@@ -872,9 +998,14 @@ public static class AgentHost
                 }
 
             var failed = 0;
-            while (!cancellationToken.IsCancellationRequested)
+            while (!lifetime.IsCancellationRequested)
             {
-                var result = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, cancellationToken)
+                // `--once` is a person at a terminal, so the background
+                // window does not hold it (ADR-0069): gating an operator who
+                // typed the command would be the same mistake as making a
+                // restore wait for a backup.
+                var result = await Scheduler
+                    .RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token, userInitiated: once)
                     .ConfigureAwait(false);
 
                 foreach (var set in result.Sets)
@@ -886,12 +1017,25 @@ public static class AgentHost
                 failed = result.Failed;
                 if (once)
                 {
+                    // --once means once, whole: the transfer phases the
+                    // service would leave running are awaited, because the
+                    // runtime — and every queued job — is torn down on return.
+                    await result.Transfers.WaitAsync(lifetime.Token).ConfigureAwait(false);
                     return failed == 0 ? 0 : 2;
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(pollSeconds), cancellationToken).ConfigureAwait(false);
+                // Deliberately NOT awaiting result.Transfers (ADR-0047): the
+                // loop ticks on its interval whatever the transfer lane is
+                // doing, so due-ness keeps being evaluated during an
+                // hours-long copy. The stable per-pair job identities keep
+                // un-awaited passes from piling transfers up.
+                await Task.Delay(TimeSpan.FromSeconds(pollSeconds), lifetime.Token).ConfigureAwait(false);
             }
 
+            // A cancelled lifetime never returns here quietly: the throw is
+            // what routes a restart back into the recycle loop and a real
+            // stop out to the clean-shutdown catch below.
+            lifetime.Token.ThrowIfCancellationRequested();
             return failed == 0 ? 0 : 2;
             }
             finally
@@ -903,6 +1047,14 @@ public static class AgentHost
 
                 peerKeypair?.Dispose();
             }
+            }
+            catch (OperationCanceledException) when (restartRequested && !cancellationToken.IsCancellationRequested)
+            {
+                // The teardown above ran whole — listeners, runtime, writer
+                // role — so the next iteration reacquires cleanly.
+                output.WriteLine($"{DateTimeOffset.Now:u}  restarting at an operator's request");
+            }
+        }
         }
         catch (OperationCanceledException)
         {
@@ -923,11 +1075,36 @@ public static class AgentHost
             error.WriteLine($"error: {exception.Message}");
             return 1;
         }
-        catch (KeyUnwrapFailedException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            error.WriteLine("error: the passphrase does not open this repository.");
+            // An unusable state directory or archives root is a stated
+            // refusal, never a stack trace — same mapping as the one-shot
+            // verbs above.
+            error.WriteLine($"error: {exception.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// How a directory was chosen (FR-SVC-016's precedence), for the startup
+    /// configuration record: the flag, the environment variable, or which
+    /// default the resolution landed on.
+    /// </summary>
+    private static string Provenance(bool explicitFlag, string environmentVariable, string resolved)
+    {
+        if (explicitFlag)
+        {
+            return "named by flag";
+        }
+
+        if (Environment.GetEnvironmentVariable(environmentVariable) is { Length: > 0 })
+        {
+            return $"from {environmentVariable}";
+        }
+
+        return resolved.StartsWith(Api.InstallationDefaults.MachineRoot, StringComparison.Ordinal)
+            ? "machine-wide default"
+            : "profile fallback";
     }
 
     /// <summary>
@@ -1155,6 +1332,198 @@ public static class AgentHost
         return 0;
     }
 
+    private static async Task<int> UpgradeFormatAsync(
+        string stateDirectory,
+        string? setName,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(setName))
+        {
+            error.WriteLine("error: usage is `upgrade-format --state <dir> --set <name>`.");
+            return 1;
+        }
+
+        ServiceResult result;
+        try
+        {
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+            result = await client.ExecuteAsync(new UpgradeSetFormatCommand(setName), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException)
+        {
+            // No fallback to the files, unlike `reattribute`. Writing the
+            // record here would be safe only if nothing held the archive
+            // open, and this verb cannot tell "no service" from "a service
+            // this socket did not reach" — the second leaves a set sealing
+            // the old format with a record saying otherwise.
+            error.WriteLine(
+                "error: no service is listening on this state directory, and the format upgrade takes effect "
+                + "through the running service — it drops the set's open archive so the next backup seals the "
+                + "newer format. Start the service and run this verb again.");
+            return 1;
+        }
+
+        switch (result)
+        {
+            case ConfigurationChangeResult changed:
+                foreach (var line in changed.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+
+            case ServiceError refusal:
+                error.WriteLine($"error: {refusal.Message}");
+                return 1;
+
+            default:
+                error.WriteLine($"error: the service answered a format upgrade with {result.GetType().Name}.");
+                return 1;
+        }
+    }
+
+    private static async Task<int> ReattributeAsync(
+        string stateDirectory,
+        string? repositoryId,
+        string? to,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId) || string.IsNullOrWhiteSpace(to))
+        {
+            error.WriteLine("error: usage is `reattribute --state <dir> --repository <hex> --to <fingerprint>`.");
+            return 1;
+        }
+
+        ServiceResult result;
+        try
+        {
+            // The running service's ledger is the one its listener serves
+            // from (ADR-0053 §3): a second writer on replica-owners.json
+            // beside it would move the file while the live gate went on
+            // refusing from what it read at start — and the next offer the
+            // service recorded would write the override away again.
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+            result = await client.ExecuteAsync(new ReattributeReplicaCommand(repositoryId, to), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (result is ServiceError { Reason: ServiceErrorReason.Refused } gate
+                && gate.Message.Contains("signed in", StringComparison.Ordinal))
+            {
+                // The service's socket wants a signed-in owner and this verb
+                // carries no session. Said plainly, with the two honest ways
+                // on — and never the file, which is the race above.
+                error.WriteLine($"error: {gate.Message}");
+                error.WriteLine(
+                    "The running service answers this verb only to a signed-in owner. Re-point the replica from "
+                    + "the console (Pairings → Replicas stored here), or stop the service and run this verb again: "
+                    + "with no service listening it edits the ledger directly.");
+                return 1;
+            }
+        }
+        catch (ServiceConnectionException)
+        {
+            // No service holds the state directory; the ledger is ours to touch.
+            result = ReplicaReattribution.Apply(
+                FallbackPlan.Application.ReplicaOwnerStore.Open(stateDirectory),
+                PeerGrantStore.Open(stateDirectory),
+                FallbackPlan.Application.NoticeStore.Open(stateDirectory),
+                repositoryId,
+                to,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
+        switch (result)
+        {
+            case ConfigurationChangeResult changed:
+                foreach (var line in changed.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+
+            case ServiceError refusal:
+                error.WriteLine($"error: {refusal.Message}");
+                return 1;
+
+            default:
+                error.WriteLine($"error: the service answered a re-attribution with {result.GetType().Name}.");
+                return 1;
+        }
+    }
+
+    private static int Receipts(
+        string stateDirectory, string? kind, string? set, string? repository, bool json, int? limit,
+        TextWriter output, TextWriter error)
+    {
+        // A mistyped path holds nothing, and "no receipts" for it would be
+        // the one answer this verb must never give by accident.
+        if (!Directory.Exists(stateDirectory))
+        {
+            error.WriteLine($"error: no state directory at '{stateDirectory}' — nothing has been filed there.");
+            return 1;
+        }
+
+        if (kind is not null && kind is not (DeletionReceiptStore.Kind or ReplicationReceiptStore.Kind))
+        {
+            error.WriteLine(
+                $"error: --kind takes '{DeletionReceiptStore.Kind}' or '{ReplicationReceiptStore.Kind}', not '{kind}'.");
+            return 1;
+        }
+
+        string? repositoryIdHex = null;
+        if (repository is not null)
+        {
+            if (!DeletionReceiptReport.TryParseRepositoryId(repository, out var parsed))
+            {
+                error.WriteLine("error: --repository takes the repository id as 32 hex digits.");
+                return 1;
+            }
+
+            repositoryIdHex = parsed;
+        }
+
+        if (limit is <= 0)
+        {
+            error.WriteLine("error: --limit must be at least 1.");
+            return 1;
+        }
+
+        // No limit reads everything, which is what an operator reading their
+        // own audit trail asked for; a limit bounds the reading and not only
+        // the printing.
+        IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
+            ? []
+            : DeletionReceiptStore.Open(stateDirectory).List(repositoryIdHex, limit);
+        IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
+            ? []
+            : ReplicationReceiptStore.Open(stateDirectory).List(repositoryIdHex, limit);
+        if (set is not null)
+        {
+            deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+            replications = [.. replications.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+        }
+
+        if (json)
+        {
+            output.WriteLine(ReceiptReport.ToJson(deletions, replications));
+        }
+        else
+        {
+            ReceiptReport.Write(output, deletions, replications, kind);
+        }
+
+        return 0;
+    }
+
     private static void WriteNotices(TextWriter output, IReadOnlyList<(string Id, ulong RaisedAt, string Message)> pending)
     {
         if (pending.Count == 0)
@@ -1318,11 +1687,12 @@ public static class AgentHost
 
         error.WriteLine($"# To apply: {apply}");
         error.WriteLine(
-            "# First, store the passphrase once as the SAME account the service runs as, so it self-unlocks "
-            + "at boot with nobody present (ADR-0028 §9):");
+            "# First, run `setup` once as the SAME account the service runs as, so the write credential it "
+            + "stores is readable at boot with nobody present (ADR-0042 §5, ADR-0044):");
         error.WriteLine(
-            $"#   \"{executablePath}\" unlock --archives \"{options.ArchivesRoot}\" "
-            + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR>");
+            $"#   \"{executablePath}\" setup --archives \"{options.ArchivesRoot}\" "
+            + $"--state \"{options.StateDirectory}\" --passphrase-env <VAR> --acknowledge-loss "
+            + "--user <name> --password-env <VAR>");
         return 0;
     }
 

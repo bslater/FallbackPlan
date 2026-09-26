@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
@@ -97,6 +98,49 @@ public sealed class InstallationCredentialTests : IDisposable
     }
 
     [TestMethod]
+    public void Store_AFileInThePreReclaimShape_StillLoadsRatherThanReadingAsDamage()
+    {
+        // The write credential grew a sixth member when the reclaim key
+        // landed, and learned to read the five-member shape an older build
+        // wrote. Its CONTAINER did not: a stored provisioning is checked
+        // against one exact length, so an installation.bin from before that
+        // change is 201 bytes where 233 is demanded and is reported as
+        // damage. There is no way back from that — TrySave never overwrites,
+        // so the operator cannot re-provision, and re-running setup would
+        // mint a second salt that no existing archive was written under.
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+
+        var stored = new byte[8 + 168 + KekDerivation.SaltLength + 9];
+        "FBPINST1"u8.CopyTo(stored);
+        "FBPWCRD1"u8.CopyTo(stored.AsSpan(8));
+        RandomNumberGenerator.Fill(stored.AsSpan(16, 160));
+        salt.CopyTo(stored.AsSpan(8 + 168));
+        var kdf = 8 + 168 + KekDerivation.SaltLength;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            stored.AsSpan(kdf), parameters.MemoryKiB);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            stored.AsSpan(kdf + 4), parameters.Iterations);
+        stored[kdf + 8] = parameters.Parallelism;
+
+        var directory = Path.Combine(_harness.StateDirectory, "write-credentials");
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, "installation.bin"), stored);
+
+        var store = new InstallationCredentialStore(_harness.StateDirectory);
+        using var loaded = store.TryLoad();
+
+        Assert.IsNotNull(loaded, "an installation provisioned by an older build is still this installation");
+        SequenceAssert.AreEqual(salt, loaded.KdfSalt.ToArray());
+        Assert.AreEqual(parameters.MemoryKiB, loaded.KdfParameters.MemoryKiB);
+        Assert.AreEqual(parameters.Iterations, loaded.KdfParameters.Iterations);
+        Assert.AreEqual(parameters.Parallelism, loaded.KdfParameters.Parallelism);
+        Assert.IsTrue(
+            loaded.Credential.ReclaimPublicKey.IsEmpty,
+            "a credential written before the reclaim key publishes none until it is re-provisioned");
+    }
+
+    [TestMethod]
     public async Task Runtime_SetUpInstallation_CreatesANewSetsArchiveWriteOnlyRatherThanFormatOne()
     {
         // The heart of ADR-0044: a set created after setup is write-only
@@ -112,9 +156,7 @@ public sealed class InstallationCredentialTests : IDisposable
         Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
 
         var descriptor = await ReadDescriptorAsync();
-        Assert.IsTrue(
-            RepositoryLifecycle.IsWriteOnly(descriptor),
-            $"the archive is format {descriptor.FormatVersion}, not write-only");
+        Assert.AreEqual(FormatLimits.FormatVersion, descriptor.FormatVersion);
     }
 
     [TestMethod]
@@ -161,7 +203,7 @@ public sealed class InstallationCredentialTests : IDisposable
             strangerSalt, KdfValidationMode.CreateRepository))
         {
             Directory.CreateDirectory(_harness.RepositoryPath);
-            (await RepositoryLifecycle.CreateWriteOnlyFromCredentialAsync(
+            (await RepositoryLifecycle.CreateAsync(
                 new LocalFileSystemObjectStore(_harness.RepositoryPath), strangerAuthority.Credential,
                 strangerSalt, RepositoryCreationSettings.Default.KdfParameters, "stranger",
                 (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), _timeout.Token)).Dispose();
@@ -178,30 +220,6 @@ public sealed class InstallationCredentialTests : IDisposable
 
         Assert.Contains("different passphrase", failure.Message, StringComparison.Ordinal);
         Assert.Contains("adopt", failure.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [TestMethod]
-    public async Task Runtime_AFormatOneArchiveThatPredatesSetup_KeepsOpeningWithThePassphrase()
-    {
-        // Write-only is chosen at creation (ADR-0042). Setting up an
-        // installation must not quietly change what an existing set is.
-        _harness.WriteSourceFile("notes.txt", "made before setup");
-        _harness.WriteConfiguration("every 1h");
-        await _harness.CreateRepositoryAsync();
-
-        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
-        await using var runtime = await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
-            passphrase, _timeout.Token);
-        Save(Store());
-
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
-
-        var descriptor = await ReadDescriptorAsync();
-        Assert.IsFalse(
-            RepositoryLifecycle.IsWriteOnly(descriptor),
-            "the pre-existing format 1 archive must not have been migrated");
     }
 
     [TestMethod]
@@ -298,13 +316,101 @@ public sealed class InstallationCredentialTests : IDisposable
             await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
         Assert.AreEqual("setup_required", description.SetupState);
 
-        // And a provisioned installation still answers — reaching the kit
-        // step rather than being stuck at setup_required — because the
-        // installation credential answers without the configuration at all.
+        // And a provisioned installation still answers — ready rather than
+        // stuck at setup_required — because the installation credential
+        // answers without the configuration at all.
         Save(Store());
         Assert.IsInstanceOfType<ServiceDescriptionResult>(
             await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var afterwards);
-        Assert.AreEqual("kit_required", afterwards.SetupState);
+        Assert.AreEqual("ready", afterwards.SetupState);
+    }
+
+    [TestMethod]
+    public async Task Runtime_SetUpInstallation_RestoresSealedContentUnderAGrant()
+    {
+        // The set was created from the installation credential, so no per-set
+        // credential exists — and the restore ceremony must find the one the
+        // set actually opens with rather than telling the owner of a set-up
+        // installation to provision a set that setup already provisioned.
+        var salt = Save(Store());
+        _harness.WriteSourceFile("notes.txt", "sealed until granted");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
+
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand("docs", Envelope: SealGrant(description.RestoreGrantRecipient!, salt)),
+            _timeout.Token);
+        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+            opened, out var granted, (opened as ServiceError)?.Message ?? opened.GetType().Name);
+        var snapshotId = Assert.ContainsSingle(granted.Snapshots).SnapshotId;
+
+        var restoredOut = Path.Combine(_harness.WorkPath, "granted");
+        Assert.IsInstanceOfType<Api.RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(snapshotId, null, restoredOut, Source: granted.SourceId, InPlace: true),
+                _timeout.Token),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome, string.Join("; ", restored.FailedSample ?? []));
+        Assert.AreEqual("sealed until granted", File.ReadAllText(Path.Combine(restoredOut, "notes.txt")));
+    }
+
+    [TestMethod]
+    public async Task Runtime_SetUpInstallation_OpensTheDestinationsCopyAsARestoreSource()
+    {
+        // The same credential opens the destination's replica of the set —
+        // a v2 replica carries the same descriptor (ADR-0042 §5) — so the
+        // restore path that probes destinations must reach it for a set the
+        // installation created, not only for one provisioned per set.
+        Save(Store());
+        _harness.WriteSourceFile("notes.txt", "held at the vault too");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            Assert.AreEqual(JobState.Complete, await RunBackupAsync(runtime, handler));
+
+            // The fan-out rides the backup; the replica has to have LANDED,
+            // so the wait is on the ledger, which whichever pass finishes
+            // will stamp.
+            Assert.IsInstanceOfType<SyncResult>(
+                await handler.ExecuteAsync(new SyncCommand("docs", null), _timeout.Token));
+            while (runtime.DestinationSync.Find(_harness.DocsSetId, "vault")
+                is not { State: FallbackPlan.Application.DestinationSyncState.InSync })
+            {
+                _timeout.Token.ThrowIfCancellationRequested();
+                await Task.Delay(50, _timeout.Token);
+            }
+        }
+
+        await using (var runtime = await StartWithoutPassphraseAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token);
+            Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
+                opened, out var replica, (opened as ServiceError)?.Message ?? opened.GetType().Name);
+            Assert.AreEqual("vault", replica.Location);
+            Assert.ContainsSingle(replica.Snapshots);
+            Assert.IsEmpty(replica.Warnings, string.Join("; ", replica.Warnings));
+        }
+    }
+
+    /// <summary>The restore grant a console seals: the sealing scalar, re-derived under the installation's salt.</summary>
+    private static string SealGrant(string recipientHex, byte[] salt)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        using var authority = WriteOnlyDerivation.Derive(
+            passphrase, RepositoryCreationSettings.Default.KdfParameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealGrant(Convert.FromHexString(recipientHex), authority.SealingPrivateKey));
     }
 
     /// <summary>Provisions the installation as setup would, returning the salt it used.</summary>
@@ -357,7 +463,13 @@ public sealed class InstallationCredentialTests : IDisposable
 
     private async Task<ServiceRuntime> StartWithoutPassphraseAsync() =>
         await ServiceRuntime.StartAsync(
-            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
-            passphrase: null,
+            new ServiceOptions
+            {
+                ArchivesRoot = _harness.ArchivesRoot,
+                StateDirectory = _harness.StateDirectory,
+                // The fixture's paths share one real volume; the vault is
+                // told apart by name, the compliant shape ADR-0051 describes.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+            },
             _timeout.Token);
 }

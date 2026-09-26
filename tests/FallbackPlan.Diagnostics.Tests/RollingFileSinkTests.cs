@@ -165,16 +165,31 @@ public sealed class RollingFileSinkTests : IDisposable
     {
         // An unbounded queue in front of a slow disk is a memory leak with a
         // delay on it. Dropping is the right answer; silence about it is not.
-        using var sink = new RollingFileSink(_directory, maximumBytes: 1024 * 1024, retain: 3);
+        //
+        // The back pressure has to be structural rather than a race this test
+        // hopes to win. A cap smaller than one line rolls the file for every
+        // line, so the writer pays a rename, a prune and a create per line
+        // while the caller pays a queue slot — two costs orders of magnitude
+        // apart, whatever the scheduler does with the two of them. Asserting
+        // the caller outruns a writer that is merely appending is a coin toss
+        // that lands heads on an idle machine and tails on a loaded one.
+        using var sink = new RollingFileSink(_directory, maximumBytes: 64, retain: 3);
 
         for (var index = 0; index < 200_000; index++)
         {
             sink.Write($"line {index} {new string('z', 100)}");
         }
 
-        Assert.IsTrue(
-            sink.Dropped > 0,
+        Assert.IsGreaterThan(
+            0L,
+            sink.Dropped,
             "the drill must actually have outrun the writer for this to prove anything");
+
+        // A writer whose every open failed is also a writer nothing queues
+        // behind, and it would satisfy the assertion above for the wrong
+        // reason. Rolled files are the evidence that the drain was doing the
+        // slow work rather than discarding it.
+        Assert.IsNotEmpty(RolledFiles(), "nothing reached the disk, so nothing was queued behind it");
     }
 
     [TestMethod]

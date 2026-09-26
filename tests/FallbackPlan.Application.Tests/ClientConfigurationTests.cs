@@ -58,6 +58,92 @@ public sealed class ClientConfigurationTests
         new() { Ref = name, Retention = retention };
 
     [TestMethod]
+    public void SaveThenLoad_PrioritiesAndConcurrency_RoundTrip()
+    {
+        // ADR-0047 (FR-SVC-012): a set and a destination each carry a
+        // priority, a set's reference may override the destination's, and
+        // the pool width is a configured number. Absent everywhere means default — a v4 file is a
+        // valid v5 file that simply says nothing.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            MaxConcurrentBackups = 3,
+            Destinations = [LocalPath("vault") with { Priority = 7 }],
+            BackupSets =
+            [
+                Set("docs", Ref("vault") with { Priority = 2 }) with { Priority = 5 },
+            ],
+        }.Save(ConfigPath);
+
+        var loaded = ClientConfiguration.Load(ConfigPath);
+        Assert.AreEqual(3, loaded.MaxConcurrentBackups);
+        Assert.AreEqual(7, loaded.Destinations.Single().Priority);
+        var set = loaded.BackupSets.Single();
+        Assert.AreEqual(5, set.Priority);
+        Assert.AreEqual(2, set.Destinations.Single().Priority);
+    }
+
+    [TestMethod]
+    public void Save_WritesTheStorageShapeExplicitly()
+    {
+        // With the default now context-dependent at the command boundary
+        // (a new local-path set is born direct-ship, ADR-0046), a written
+        // configuration must state each set's shape rather than lean on
+        // omission — an omitted flag in an old file keeps meaning staging,
+        // and a file this build writes says what it means.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("vault")],
+            BackupSets = [Set("docs", Ref("vault"))],
+        }.Save(ConfigPath);
+
+        Assert.Contains(
+            "\"direct_ship\": false", File.ReadAllText(ConfigPath), StringComparison.Ordinal,
+            "the shape must be written even at its default — omission is a pre-1.23 file's dialect");
+    }
+
+    [TestMethod]
+    public void Validate_ConcurrencyOutsideOneToFive_IsRefused()
+    {
+        foreach (var invalid in new[] { 0, 6, -1 })
+        {
+            var refused = Assert.ThrowsExactly<ClientStateException>(() => new ClientConfiguration
+            {
+                SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+                MaxConcurrentBackups = invalid,
+                Destinations = [LocalPath("vault")],
+                BackupSets = [Set("docs", Ref("vault"))],
+            }.Save(ConfigPath));
+
+            Assert.Contains("max_concurrent_backups", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public void Load_RecordsTheLoadAtDebug()
+    {
+        // The scheduler reads through this path every pass — every ten to
+        // sixty seconds for the life of the service. At Information that one
+        // message was 98% of the tier an operator reads (the 2026-08-24/25
+        // service log: 347 of 353 Information records). The record stays, at
+        // the level of routine mechanics; "the configuration changed" is the
+        // operator-facing event, and the host that can see change logs it.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb-vault")],
+            BackupSets = [Set("docs", Ref("usb-vault"))],
+        }.Save(ConfigPath);
+
+        var log = new FallbackPlan.TestSupport.RecordingLogger();
+        ClientConfiguration.Load(ConfigPath, log);
+
+        var record = Assert.ContainsSingle(log.Records.Where(record => record.EventId == 3400));
+        Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Debug, record.Level);
+    }
+
+    [TestMethod]
     public void SaveThenLoad_DestinationsAndRetention_RoundTrip()
     {
         new ClientConfiguration
@@ -588,5 +674,32 @@ public sealed class ClientConfigurationTests
         Assert.AreEqual("root", derived[1].Label);
         Assert.IsNull(ClientConfiguration.LabelDefect(derived[0].Label!));
         Assert.IsNull(ClientConfiguration.LabelDefect(derived[1].Label!));
+    }
+
+    [TestMethod]
+    public void EffectivePriority_ResolvesTheOverrideThenTheDeclarationThenZero()
+    {
+        // One resolution rule for a pair's transfer priority (ADR-0047): the
+        // set's per-reference override, else the destination's declaration,
+        // else 0. Ship order, restore-read order and the transfer queue all
+        // call this one method, so they can never disagree about which copy
+        // comes first.
+        var declared = new DestinationConfiguration
+        {
+            Id = new string('1', 32),
+            Name = "vault",
+            Kind = DestinationKind.LocalPath,
+            Path = "/mnt/vault",
+            Priority = 3,
+        };
+
+        Assert.AreEqual(9, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault", Priority = 9 }, declared));
+        Assert.AreEqual(3, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault" }, declared));
+        Assert.AreEqual(0, SetDestinationReference.EffectivePriority(
+            new SetDestinationReference { Ref = "vault" }, declared with { Priority = null }));
+        Assert.AreEqual(3, SetDestinationReference.EffectivePriority(reference: null, declared));
+        Assert.AreEqual(0, SetDestinationReference.EffectivePriority(reference: null, destination: null));
     }
 }

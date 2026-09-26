@@ -46,7 +46,6 @@ public sealed class LoggingShapeTests
         (3000, 3099, "FallbackPlan.Replication"),
         (3100, 3199, "FallbackPlan.Recovery"),
         (3200, 3299, "FallbackPlan.Protocol"),
-        (3300, 3399, "FallbackPlan.Keystore"),
         (3400, 3599, "FallbackPlan.Application"),
         (3600, 3699, "FallbackPlan.Api"),
         (3700, 3999, "FallbackPlan.Agent"),

@@ -44,7 +44,7 @@ public sealed class RestoreSourceTests : IDisposable
             // The staging source: snapshots answered on open, the listing and
             // a multi-path run served through the handle.
             Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var staging);
+                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var staging);
             Assert.AreEqual("staging", staging.Location);
             var snapshot = Assert.ContainsSingle(staging.Snapshots);
             snapshotId = snapshot.SnapshotId;
@@ -98,7 +98,7 @@ public sealed class RestoreSourceTests : IDisposable
         await using (var runtime = await StartAsync())
         {
             var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token);
+            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token);
             if (opened is ServiceError openError)
             {
                 Assert.Fail($"replica open refused: {openError.Reason}: {openError.Message}");
@@ -136,7 +136,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         // The live file moved on; the rename policy keeps it and lands the
@@ -184,7 +184,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         Assert.IsInstanceOfType<ConfigurationChangeResult>(
@@ -220,11 +220,10 @@ public sealed class RestoreSourceTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.NotFound, expired.Reason);
         Assert.Contains("expired", expired.Message, StringComparison.Ordinal);
 
-        // A set that has never backed up has no staging source to open.
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
-            new UpsertBackupSetCommand(new BackupSetDescriptor(
-                new string('b', 32), "fresh", _harness.SourceRoot, null, [], [], ["vault"])),
-            _timeout.Token));
+        // A set that has never backed up has no staging source to open. By
+        // file edit, not the upsert verb: the verb queues the set's first
+        // backup at once (ADR-0047), so "never backed up" would be a race.
+        _harness.AddConfiguredSet(new string('b', 32), "fresh", "vault");
         Assert.IsInstanceOfType<ServiceError>(
             await handler.ExecuteAsync(new OpenRestoreSourceCommand("fresh"), _timeout.Token), out var never);
         Assert.Contains("never backed up", never.Message, StringComparison.Ordinal);
@@ -252,7 +251,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var staging);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var staging);
         var snapshotId = Assert.ContainsSingle(staging.Snapshots).SnapshotId;
 
         var stagingOut = Path.Combine(_harness.WorkPath, "big-from-staging");
@@ -270,7 +269,7 @@ public sealed class RestoreSourceTests : IDisposable
         // The same bytes from the replica source — the targeted blob load
         // walking a multi-segment manifest against a second store.
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token),
             out var replica);
         var replicaOut = Path.Combine(_harness.WorkPath, "big-from-replica");
         Assert.IsInstanceOfType<RestoreResult>(
@@ -316,7 +315,7 @@ public sealed class RestoreSourceTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
 
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var source);
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", Envelope: await _harness.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)), _timeout.Token), out var source);
         var snapshotId = Assert.ContainsSingle(source.Snapshots).SnapshotId;
 
         // Both live files have moved on since the capture.
@@ -416,16 +415,18 @@ public sealed class RestoreSourceTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                // The placement condition (ADR-0051) judges by volume, and the
+                // fixture's every path shares one real volume — the vaults are
+                // told apart by name, the compliant install's shape.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
             _timeout.Token);
     }
 }

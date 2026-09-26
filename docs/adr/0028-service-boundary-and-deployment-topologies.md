@@ -149,6 +149,11 @@ plus a kit — the clean-machine premise of NFR-OPS-005 and the reason 11 §2 pi
 its dependency closure. A recovery tool that needed a running service would not
 be a recovery tool.
 
+> **Amended 2026-09.** Plus the passphrase, not plus a kit: the kit is
+> withdrawn ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)), and the tool reads the repository and derives
+> from the passphrase against the repository's own descriptor. The premise
+> is unchanged and one artefact shorter.
+
 ### 4. Exclusion is a lock on the state directory, not on the repository
 
 A single **writer lock** in the state directory (an OS-level advisory file lock
@@ -281,6 +286,20 @@ neither is known.
 
 ### 9. Unlock: the service holds key material, released by the OS keystore
 
+> **Amended 2026-09 — retired.** The service holds no passphrase and no
+> keystore entry. Format 1 was withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) and with it the
+> only archive a passphrase could open; every set opens with the write
+> credential first-run setup stores ([ADR-0044](0044-first-run-setup.md)),
+> which publishes and cannot read content back ([ADR-0042 §5](0042-write-only-repositories.md)).
+> The `unlock` and `lock` verbs and the platform keystore project are
+> gone, and `--passphrase-env` on `run`, `sync` and `verify-destination`
+> is refused by name rather than ignored, so nobody is left believing the
+> service holds what it does not. The three bounding rules below hold
+> more strongly than before: key material that never enters the process
+> cannot cross its boundary. The consequence this section stated plainly
+> — *an attacker who obtains the service account obtains the backups* —
+> is no longer true; T-19 in the threat model records what is.
+
 The service obtains the repository passphrase or wrapped key material from the
 platform keystore — **DPAPI** (Windows), **Keychain** (macOS), **kernel keyring
 or an equivalent** (Linux) — scoped to the service account, and unlocks itself
@@ -304,6 +323,11 @@ Bounded by three rules:
 - Operations that re-derive the KEK from a user-supplied passphrase — key export
   above all — take it per invocation and never from the keystore, so possession
   of the running service is not sufficient to mint a recovery kit.
+
+  > **Amended 2026-09.** Key export and the kit are gone
+  > ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the rule survives them as NFR-SEC-009 now states it:
+  > possession of the running service is not sufficient to derive any read
+  > authority.
 
 ## Consequences
 
@@ -447,6 +471,17 @@ The CLI's direct mode and the recovery tool carry over unchanged: a repository
 path is a repository path, whether it is a staging archive, a destination copy,
 or the pre-0034 single archive.
 
+**Qualified by [ADR-0046](0046-direct-to-destination-publication.md)** for a
+set flagged `direct_ship`: such a set has no staging archive — the service
+holds the set's **metadata store** (`<state>/sets/<setId>/`) and writes
+content through the ship sink to the destinations — and its writer role, its
+gapless sequence and the lock arithmetic above attach to that store exactly
+as they attached to the archive. But the local path is then *not* an openable
+repository: it holds every object **except** `blobs/`, so "a repository path
+is a repository path" narrows to the destination copies, which are the whole
+repositories, and the recovery tool opens those. The hazard analysis is still
+untouched — one process, one lock, N sequences.
+
 ## Amendment (2026-08): "no password" is about the connection, not about the person
 
 §5 says of the local binding: *"No password, no token file, no port."*
@@ -477,6 +512,35 @@ The two objections §5 raised are honoured rather than argued around:
 
 A password is therefore never a way *in*. It is a way to be *named* once
 inside a door the operating system or a pinned pairing already opened.
+
+
+## Amendment (2026-08): a client that hangs up takes its command with it
+
+§5 and §7 describe the pump as request/response "until the client goes away",
+and the implementation read *goes away* as something that could only happen
+between commands: the token a command executed under was the **listener's**
+stopping token, so a command still running when its connection died ran to
+completion and answered into a closed stream. The 2026-08-25 service log
+recorded the worst case of that reading: a `preview_set_changes` walk that
+outlived its browser by seven hours (26,161,154 ms) and was answered into a
+pipe that had been broken since the machine woke — logged as a very slow
+success followed by an unrelated-looking "Connection failed: Pipe is broken".
+
+The pump now hands every command a token linked to the **connection's** life.
+No new machinery watches the socket: the pump already owes the stream a read
+for the next frame, and that read is simply started while the command runs.
+The contract is strictly request/response, so that read resolving mid-command
+means the client is gone — end of stream and a broken pipe both fire the
+command's token, which is the same token `OnReaderLaneAsync` registers against
+the job queue (ADR-0029), so the reader lane is released and the walk actually
+stops. A frame that does arrive early — a client running ahead of its answers —
+is held for the next turn of the loop, not treated as an error.
+
+The abandonment is one Information line — event 3606, *"Command {Verb}
+abandoned after {ElapsedMs} ms: the client disconnected, so the work was
+cancelled"* — in place of the two misleading lines above. Nothing about the
+contract changes: no new frame, no new verb, and a client that waits for its
+answer sees exactly the behaviour it always did.
 
 
 ## Implementation status (2026-08)
@@ -526,3 +590,8 @@ keystore unlock, which is what lets the boot-started service self-unlock.
 | 2026-08 | Accepted | How the OS hosts the process decided in [ADR-0033](0033-hosting-under-an-os-service-manager.md): clean shutdown on a manager's stop, the Windows SCM bridge, and generated systemd/launchd/`sc.exe` registration |
 | 2026-08 | Accepted (amended) | One process, N staging archives: the writer rule is per archive, all roles held by the one locked service process ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
 | 2026-08 | Amended | §5's "no password, no token file, no port" is scoped explicitly to the connection: [ADR-0045](0045-client-authentication.md) adds person-identity inside the already-authenticated channel, with no new listener and a session that is never written to disk |
+| 2026-08 | Amended | A connection's death cancels its in-flight command: the pump reads ahead while a command runs, end of stream fires the command's token — the one the reader lane already registers — and the abandonment is one log line (3606) instead of a seven-hour "success" and an unrelated-looking broken pipe |
+| 2026-08 | Amended | The several-archives amendment is qualified for direct-ship sets ([ADR-0046](0046-direct-to-destination-publication.md)): the writer role attaches to the set's metadata store, whose local path is deliberately not an openable repository — the destination copies are, and "a repository path is a repository path" narrows to them |
+| 2026-09 | Amended | §9 retired: the service holds no passphrase and no keystore entry, `unlock`/`lock` are gone, and the verbs that ran under a passphrase refuse the flag by name. Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
+| 2026-09 | Conformance fix | §3's rule — "the CLI connects to the service when one is running" — did not hold for the verb it matters most for. The backup verb, given a set name, demanded --repo, which means direct mode, which that same running service refuses because it holds the writer role; --connect reached only a *remote* service. So asking your own service to run your own configured set had no route, and the console's run_backup had no CLI equal. The machinery was already there: the read verbs route through `OperationGateway.OpenServiceOnlyAsync`, and backup now takes the same branch when no repository is named. An ad-hoc root with a service running is refused by name rather than by missing flag, and with nothing listening the refusal states both ways forward, as §4 requires |
+| 2026-09 | Amended (kit withdrawn) | The recovery tool reads the repository plus the passphrase, and key export is gone with the kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the boundary rule survives as "not sufficient to derive any read authority" |

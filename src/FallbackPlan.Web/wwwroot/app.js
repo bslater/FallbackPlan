@@ -72,6 +72,7 @@ const gateEl = document.getElementById("gate");
 const S = {
   connected: null,          // null until first answer; then true/false
   signedInUser: null,       // whose session this browser is presenting, per describe_service
+  signedInRole: null,       // Owner | Operator, per describe_service — gates the admin controls
   signInRequired: false,    // whether the sign-in screen stands in place of the views
   everRefused: false,       // whether a command has been refused for want of a session
   diagnostics: null,        // DiagnosticsResult, or null before the first read
@@ -86,30 +87,52 @@ const S = {
   snapshots: [],            // SnapshotDescriptor[]
   jobs: [],                 // JobDescriptor[]
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
+  eta: new Map(),           // jobId -> smoothed completion-rate tracking (trackEta)
+  openDests: new Set(),     // "set|destination" boxes the person expanded on the overview
+  openSets: new Set(),      // set rows the person expanded on the overview
+  setsSeeded: false,        // whether the one-set default-open has been applied once
   view: "overview",
   snapshotFilter: "",
   destinations: [],         // DestinationDescriptor[]
   pairings: [],             // PairingDescriptor[]
+  attributions: [],         // ReplicaAttributionDescriptor[] — replicas stored here (contract 1.31); [] where the service predates it
+  receipts: null,           // ReceiptDescriptor[] newest first (contract 1.33); null until first list_receipts, [] where the service predates it
+  receiptsTotal: 0,         // how many are on file for the whole pile (contract 1.35); 0 where the service predates it
   invites: [],              // PairingInviteDescriptor[]
   notices: null,            // NoticeDescriptor[]; null until first list_notices
   noticesHistory: false,    // whether the view includes acknowledged history
   setupRequired: false,     // describe_service said the ceremony is unfinished (ADR-0044)
-  setupState: null,         // setup_required | kit_required | ready — which step it resumes at
+  setupState: null,         // setup_required | ready (| users_required, from the auth layer)
 };
 
+// Paused is deliberately live, not settled (ADR-0047): a suspended run holds
+// its place and resumes unattended when a pool slot frees.
 const SETTLED = new Set([
-  "Complete", "CompletedWithFailures", "Cancelled", "Paused", "FailedRecoverable", "FailedPermanent",
+  "Complete", "CompletedWithFailures", "Cancelled", "FailedRecoverable", "FailedPermanent",
 ]);
 
 const PROTECTION = {
   NeverBackedUp: { cls: "", icon: "○", label: "Never backed up", blurb: "No committed snapshot exists for this set yet." },
-  Captured: { cls: "warn", icon: "◐", label: "Captured", blurb: "Committed, but only within this machine's own failure domain — no defence against losing the machine." },
-  Protected: { cls: "ok", icon: "●", label: "Protected", blurb: "Durable at a replica outside this machine's failure domain." },
-  Replicated: { cls: "ok", icon: "●", label: "Replicated", blurb: "Durable at a named destination." },
+  Captured: { cls: "warn", icon: "◐", label: "Captured", blurb: "Committed, but only on the drive the files live on — no defence against losing it." },
+  Protected: { cls: "ok", icon: "●", label: "Protected", blurb: "Durable at a replica on its own drive — or beyond." },
   Verified: { cls: "ok", icon: "✔", label: "Verified", blurb: "Independently confirmed at a destination." },
-  PolicyCompliant: { cls: "ok", icon: "✔", label: "Policy compliant", blurb: "This set's durability policy is satisfied." },
   Degraded: { cls: "serious", icon: "▲", label: "Degraded", blurb: "Recoverable, but below policy — act soon." },
   Unrecoverable: { cls: "bad", icon: "✖", label: "Unrecoverable", blurb: "Required objects are missing or damaged with no replica able to heal them." },
+};
+
+// The glance vocabulary (10 §1.1's presentation layer): five words for the
+// collapsed row, grouped from the derived state without crossing a
+// never-merge rule (NFR-OPS-002) — captured never reads like protected
+// (a copy that dies with the machine is not "Healthy"), and degraded never
+// reads like unrecoverable. The precise state and its reasons sit one
+// expand away; every other surface keeps the full vocabulary.
+const GLANCE = {
+  NeverBackedUp: { cls: "", icon: "○", label: "Never backed up" },
+  Captured: { cls: "warn", icon: "▲", label: "Needs attention" },
+  Protected: { cls: "ok", icon: "●", label: "Healthy" },
+  Verified: { cls: "ok", icon: "●", label: "Healthy" },
+  Degraded: { cls: "serious", icon: "▲", label: "Needs attention" },
+  Unrecoverable: { cls: "bad", icon: "✖", label: "Unrecoverable" },
 };
 
 const JOBSTATE = {
@@ -171,6 +194,30 @@ function rel(ms) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
+// rel()'s forward twin. A window's next change is ahead of now, and "in 4
+// hours" is the shape a person reads it in; rel() would say "-4 h ago".
+function until(ms) {
+  if (!ms) return "";
+  const s = Math.max(0, (Number(ms) - Date.now()) / 1000);
+  if (s < 60) return "in under a minute";
+  if (s < 3600) return `in ${Math.round(s / 60)} min`;
+  if (s < 172800) return `in ${Math.round(s / 3600)} h`;
+  return `in ${Math.round(s / 86400)} d`;
+}
+
+// The background window governs every set below it, so it belongs on the
+// overview's one-line summary rather than in a card of its own (ADR-0069).
+// Absent means no window — from a service that has none configured and from
+// one older than contract 1.37 alike, which is the same instruction either
+// way: draw no line.
+function windowNote() {
+  const w = S.status?.backgroundWindow;
+  if (!w) return "";
+  return w.open
+    ? ` Background window ${esc(w.text)} — open, shuts ${esc(until(w.changesAt))}.`
+    : ` Background window ${esc(w.text)} — <strong>shut</strong>, opens ${esc(until(w.changesAt))}.`;
+}
+
 function setName(backupSetId) {
   const set = S.sets.find(s => s.id === backupSetId);
   return set ? set.name : (backupSetId ? backupSetId.slice(0, 12) + "…" : "—");
@@ -193,7 +240,7 @@ function badge(meta, label) {
 
 /* ---------------------------------------------------------------- api */
 
-async function api(command) {
+async function api(command, { signal } = {}) {
   let response;
   try {
     response = await fetch("/api/command", {
@@ -206,9 +253,14 @@ async function api(command) {
           }
         : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
       body: JSON.stringify(command),
+      signal,
     });
-  } catch {
-    trace("api", `${command?.command ?? "?"} — fetch failed, console unreachable`);
+  } catch (error) {
+    // An abort is this page changing its mind, not the console failing —
+    // and it does real work: the console drops its service connection for
+    // the aborted request, which the service takes as a hang-up and cancels
+    // the command's work.
+    if (error.name === "AbortError") throw new ConsoleError("aborted", "This request was superseded.");
     setConnected(false);
     throw new ConsoleError("unreachable", "The console process stopped answering.");
   }
@@ -232,14 +284,35 @@ async function api(command) {
   // A refusal naming the sign-in is what tells this browser it is anonymous.
   // Read from the answer rather than guessed from the command, because the
   // service is the one that decides whether an installation has accounts.
-  if (body?.result === "error" && typeof body.message === "string"
-      && body.message.includes("has not signed in")) {
-    S.everRefused = true;
-    S.signInRequired = true;
-    renderSignIn();
+  if (body?.result === "error" && typeof body.message === "string") {
+    // The session this browser held has lapsed — it idled out, was revoked,
+    // or did not survive a service restart. Forget it: a dead token
+    // re-presented on every request is a doomed resume per poll, for ever.
+    // (The 2026-08-25 service log: 581 of them in sixteen minutes.)
+    if (session && body.message.includes("not current")) {
+      sessionExpired();
+    } else if (body.message.includes("has not signed in")) {
+      S.everRefused = true;
+      S.signInRequired = true;
+      renderSignIn();
+    }
   }
 
   return body;
+}
+
+// The one transition out of "acting as somebody": forget the dead token so
+// requests stop presenting it, stop the event stream so it stops redialling
+// with it, and stand the sign-in screen up. The pollers check
+// S.signInRequired themselves, so this also quiets them until sign-in.
+function sessionExpired() {
+  rememberSession(null);
+  S.signedInUser = null;
+  S.signedInRole = null;
+  S.everRefused = true;
+  S.signInRequired = true;
+  disconnectEvents();
+  renderSignIn();
 }
 
 async function safeJson(response) { try { return await response.json(); } catch { return null; } }
@@ -249,9 +322,9 @@ class ConsoleError extends Error {
 }
 
 // A command whose ServiceError should surface as a toast rather than a throw.
-async function run(command, { okToast, errToast } = {}) {
+async function run(command, { okToast, errToast, signal } = {}) {
   try {
-    const result = await api(command);
+    const result = await api(command, { signal });
     if (result.result === "error") {
       toast("bad", `${errToast ?? "The service refused"}: ${result.message}`);
       return null;
@@ -259,6 +332,7 @@ async function run(command, { okToast, errToast } = {}) {
     if (okToast) toast("ok", okToast);
     return result;
   } catch (error) {
+    if (error.kind === "aborted") return null; // superseded on purpose; nothing to tell anyone
     if (error.kind === "unreachable") toast("warn", `Service unreachable — ${error.message}`);
     else if (error.kind !== "token") toast("bad", error.message);
     return null;
@@ -314,7 +388,9 @@ async function refreshSets() {
 }
 
 async function refreshJobs() {
-  const result = await api({ command: "list_jobs", activeOnly: false }).catch(() => null);
+  // Bounded ask (contract 1.22): the journal grows for the life of the
+  // installation, and one frame cannot carry it forever.
+  const result = await api({ command: "list_jobs", activeOnly: false, limit: 200 }).catch(() => null);
   if (!result || result.result !== "jobs") return;
   S.jobs = result.jobs;
   const live = S.jobs.filter(j => !SETTLED.has(j.state)).length;
@@ -322,6 +398,8 @@ async function refreshJobs() {
   count.hidden = live === 0;
   count.textContent = live;
   if (S.view === "jobs") renderJobs();
+  // The overview's per-set backup buttons follow the live-job set.
+  if (S.view === "overview") renderOverview();
 }
 
 async function refreshSnapshots() {
@@ -338,6 +416,8 @@ async function refreshDesc() {
     S.desc = result;
     // A service older than contract 1.13 answers null here, which reads as
     // "cannot tell" and so as no reason to interrupt anybody.
+    // kit_required is a value contracts 1.14–1.28 reported between the two;
+    // a service still saying it has an unfinished ceremony, and is treated so.
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;
     if ((result.setupState ?? null) !== S.setupState) {
@@ -345,6 +425,7 @@ async function refreshDesc() {
     }
     S.setupState = result.setupState ?? null;
     S.signedInUser = result.signedInUser ?? null;
+    S.signedInRole = result.signedInRole ?? null;
 
     // Signing in is asked for when the installation has accounts and this
     // browser is not acting as one of them. users_required is the other side
@@ -369,16 +450,107 @@ function refreshAll() {
 
 /* ---------------------------------------------------------------- SSE */
 
+let eventSource = null;
+
 function connectEvents() {
-  const source = new EventSource("/api/events?token=" + encodeURIComponent(token));
-  source.onmessage = event => {
+  disconnectEvents();
+
+  // The session rides the query the same way the console token does, because
+  // EventSource cannot set a header. Without it, an installation with
+  // accounts answers every watch with an empty stream that ends at once, and
+  // EventSource redials every two seconds for ever — progress never arrives.
+  let url = "/api/events?token=" + encodeURIComponent(token);
+  if (session) url += "&session=" + encodeURIComponent(session);
+
+  eventSource = new EventSource(url);
+  eventSource.onmessage = event => {
     const { progress } = JSON.parse(event.data);
     if (!progress) return;
+    if (SETTLED.has(progress.state)) S.eta.delete(progress.jobId);
+    else trackEta(progress);
     S.progress.set(progress.jobId, progress);
     if (S.view === "jobs") scheduleJobsRender();
+    if (S.view === "overview") scheduleOverviewRender();
   };
+  // The console's answer when the session it was handed is dead: stop
+  // streaming, show sign-in, and do not redial with the same dead token.
+  eventSource.addEventListener("session", () => sessionExpired());
   // EventSource redials on its own; nothing to do on error — the poller is
   // what decides reachability, from actual answers.
+}
+
+function disconnectEvents() {
+  eventSource?.close();
+  eventSource = null;
+}
+
+// The stream follows the tab (and the pollers, which already pause on
+// hidden): a backgrounded console must not hold a service watch — and
+// therefore a hub subscription — that nobody is reading.
+function applyVisibility() {
+  if (document.hidden) {
+    disconnectEvents();
+    return;
+  }
+  if (!S.signInRequired && !S.setupRequired) connectEvents();
+  refreshAll();
+}
+
+// A smoothed files-per-second rate per job, fed by every progress event.
+// File rate rather than byte rate on purpose: bytesSeen counts archived
+// content only, so on a mostly-unchanged run a byte rate against the
+// planned bytes would promise hours for a backup that reuses its way to
+// done in seconds.
+function trackEta(progress) {
+  const now = performance.now();
+  const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
+  const track = S.eta.get(progress.jobId);
+  if (!track) {
+    S.eta.set(progress.jobId, { t0: now, t: now, handled, rate: 0, bytes: progress.bytesSeen ?? 0, byteRate: 0 });
+    return;
+  }
+  const dt = (now - track.t) / 1000;
+  if (dt <= 0 || handled < track.handled) return;
+  const instant = (handled - track.handled) / dt;
+  // Exponential smoothing over a ~30s window, weighted by the gap between
+  // events so a burst of reports does not dominate the average.
+  const alpha = 1 - Math.exp(-dt / 30);
+  track.rate = track.rate === 0 ? instant : track.rate + alpha * (instant - track.rate);
+  // The byte throughput, same smoothing: logical bytes read (bytesSeen),
+  // because that is what "how fast is it chewing the source" means.
+  const bytes = progress.bytesSeen ?? 0;
+  const instantBytes = bytes >= (track.bytes ?? 0) ? (bytes - (track.bytes ?? 0)) / dt : 0;
+  track.byteRate = (track.byteRate ?? 0) === 0 ? instantBytes : track.byteRate + alpha * (instantBytes - track.byteRate);
+  track.bytes = bytes;
+  track.t = now;
+  track.handled = handled;
+}
+
+// The live throughput for one job's card: bytes/s while content moves,
+// files/s when a reuse-heavy run reads next to nothing, "" until the rate
+// has settled enough to mean something.
+function jobRate(progress) {
+  const track = S.eta.get(progress.jobId);
+  if (!track || performance.now() - track.t0 < 5000) return "";
+  if (track.byteRate > 1024) return `${fmtBytes(track.byteRate)}/s`;
+  if (track.rate > 0) return `${fmtCount(Math.round(track.rate))} files/s`;
+  return "";
+}
+
+// The remaining-time estimate for one job's progress, or "" when the plan
+// (totalFiles) is absent. Held back until the rate has settled: an estimate
+// from the first two events is a random number with a unit.
+function jobEta(progress) {
+  const total = progress?.totalFiles;
+  if (total == null) return "";
+  const track = S.eta.get(progress.jobId);
+  if (!track || performance.now() - track.t0 < 5000 || !(track.rate > 0)) return "estimating…";
+  const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
+  const seconds = Math.max(0, total - handled) / track.rate;
+  if (seconds < 5) return "almost done";
+  if (seconds < 90) return `~${Math.round(seconds)}s left`;
+  if (seconds < 5400) return `~${Math.round(seconds / 60)} min left`;
+  return `~${(seconds / 3600).toFixed(1)}h left`;
 }
 
 let jobsRenderQueued = false;
@@ -386,6 +558,13 @@ function scheduleJobsRender() {
   if (jobsRenderQueued) return;
   jobsRenderQueued = true;
   requestAnimationFrame(() => { jobsRenderQueued = false; renderJobs(); });
+}
+
+let overviewRenderQueued = false;
+function scheduleOverviewRender() {
+  if (overviewRenderQueued) return;
+  overviewRenderQueued = true;
+  requestAnimationFrame(() => { overviewRenderQueued = false; renderOverview(); });
 }
 
 /* ---------------------------------------------------------------- views */
@@ -406,6 +585,7 @@ function route() {
      diagnostics: renderDiagnostics })[S.view]();
   if (S.view === "config") refreshConfigData();
   if (S.view === "notices") refreshNotices();
+  if (S.view === "maintenance") refreshReceipts();
   if (S.view === "diagnostics") refreshDiagnostics();
 }
 
@@ -423,7 +603,7 @@ function renderOverview() {
   if (sets.length === 0) {
     el.innerHTML = `
       <h2>Overview</h2>
-      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}</p>
+      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}${windowNote()}</p>
       <div class="card empty"><span class="big">🗂</span>
         No backup sets are configured yet.<br>
         Create one under <a href="#config">Configuration</a> — add a destination first; every set needs at least one.
@@ -431,49 +611,252 @@ function renderOverview() {
     return;
   }
 
+  // A lone set opens itself once — a fresh page with a single collapsed
+  // row reads empty. Only once: a row the person then closes stays closed.
+  if (!S.setsSeeded) {
+    if (sets.length === 1) S.openSets.add(sets[0].setName);
+    S.setsSeeded = true;
+  }
+
   el.innerHTML = `
     <h2>Overview</h2>
-    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.</p>
-    <div class="grid cols-2">${sets.map(renderSetCard).join("")}</div>`;
+    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.${windowNote()}</p>
+    <div class="set-stack">${sets.map(renderSetCard).join("")}</div>`;
+
+  // The CSP forbids inline style attributes, so mark widths are set from
+  // script — same as the jobs view.
+  for (const bar of el.querySelectorAll(".meter > i")) {
+    bar.style.width = (bar.dataset.w ?? 0) + "%";
+  }
+
+  // The rings, for the same reason: no inline style attribute may appear
+  // in the markup, so the arc's length is applied here.
+  for (const arc of el.querySelectorAll(".ring-fill")) {
+    const pct = Math.max(0, Math.min(100, Number(arc.dataset.pct ?? 0)));
+    arc.style.strokeDasharray = String(RING_CIRCUMFERENCE);
+    arc.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - pct / 100));
+  }
+
+  // The overview re-renders on every status poll and progress event; a box
+  // the person opened must not snap shut under them — set rows and the
+  // destination boxes inside them alike.
+  for (const box of el.querySelectorAll("details.dest")) {
+    box.addEventListener("toggle", () => {
+      if (box.open) S.openDests.add(box.dataset.dest);
+      else S.openDests.delete(box.dataset.dest);
+    });
+  }
+  for (const row of el.querySelectorAll("details.set")) {
+    row.addEventListener("toggle", () => {
+      if (row.open) S.openSets.add(row.dataset.set);
+      else S.openSets.delete(row.dataset.set);
+    });
+  }
+}
+
+// How much of what a destination is owed it holds, as a percentage — or
+// null when nobody has counted. Null is NOT zero, and the card must not
+// draw it as an empty ring: a destination no pass has reached holds an
+// unknown amount, and an empty gauge over it would claim otherwise
+// (contract 1.24).
+function destCompletion(d) {
+  if (d.measuredAt == null) return null;
+  // Counted, and the set owes it nothing yet — an archive with no content
+  // is completely held by anyone who holds none of it.
+  if (!(d.owedBytes > 0)) return 100;
+  return Math.max(0, Math.min(100, Math.round(d.heldBytes / d.owedBytes * 100)));
+}
+
+// What the last restore drill found (contract 1.25). Three states, and the
+// console must keep all three apart: never drilled, drilled and passed,
+// drilled and failed. The first and the third both mean "this has not been
+// shown to work"; only the third means something is wrong, and collapsing
+// "never" into either of the others is how an unexercised destination comes
+// to look reassuring.
+// Which proof the last verification rested on (contract 1.32, 1.34): a
+// record's AEAD tag opened at the destination, the whole sealed blob hashed
+// against the digest the writer signed, or one leaf of the blob's Merkle
+// commitment checked against the signed root. Said beside the possession word
+// so a write-only set's "proven" is legible — its data plane can never be
+// proved by tag. The three are named apart rather than summed because they
+// are different strengths: a chunk proof samples the blob where a digest
+// proof reads all of it. Nothing when the service counted none (pre-1.32).
+function verificationTiers(d) {
+  const parts = [];
+  if (d.verifiedSealed > 0) parts.push(`${fmtCount(d.verifiedSealed)} by tag`);
+  if (d.verifiedDigest > 0) parts.push(`${fmtCount(d.verifiedDigest)} by digest`);
+  if (d.verifiedChunk > 0) parts.push(`${fmtCount(d.verifiedChunk)} by chunk`);
+  return parts.length ? ` · ${parts.join(", ")}` : "";
+}
+
+function drillLabel(d) {
+  if (d.drilledAt == null) {
+    return `<span class="detail">never drilled</span>`;
+  }
+
+  if (d.drillFailure) {
+    return `<b class="bad">could not restore</b> <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillFailure)}</span>`;
+  }
+
+  // A pass with a stated limit (contract 1.27): a write-only set's drill
+  // proves the road back as far as the sealed content, and says so rather
+  // than claiming a restore it did not perform — or a failure it did not
+  // find.
+  if (d.drillLimit) {
+    const proved = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) proved to the sealed content` : "proved to the sealed content";
+    return `${esc(proved)} <span class="detail">${esc(rel(d.drilledAt))} — ${esc(d.drillLimit)}</span>`;
+  }
+
+  const files = d.drillFiles > 0 ? `${fmtCount(d.drillFiles)} file(s) restored` : "restored";
+  return `${esc(files)} <span class="detail">${esc(rel(d.drilledAt))}</span>`;
+}
+
+// The ring: an SVG arc whose offset is set from script, because the CSP
+// forbids inline style attributes — the same reason the meters' widths are.
+// The unknown state draws the track alone rather than a zero-length arc, so
+// "nobody has counted" never looks like "holds nothing".
+const RING_CIRCUMFERENCE = 113.097;
+
+function ring(percent) {
+  const known = percent != null;
+  return `<span class="ring ${known ? "" : "unknown"}">
+    <svg viewBox="0 0 44 44" aria-hidden="true">
+      <circle class="ring-track" cx="22" cy="22" r="18"></circle>
+      ${known ? `<circle class="ring-fill" cx="22" cy="22" r="18" data-pct="${percent}"></circle>` : ""}
+    </svg>
+    <span class="ring-label">${known ? `${percent}<i>%</i>` : "—"}</span>
+  </span>`;
 }
 
 function renderSetCard(set) {
   const meta = PROTECTION[set.status.state] ?? { cls: "", icon: "?", label: set.status.state, blurb: "" };
   const config = S.sets.find(s => s.name === set.setName);
+  // The service refuses a second run per set anyway (it answers with the
+  // active job); disabling here just says so before the click.
+  const liveJob = config ? S.jobs.find(j => j.backupSetId === config.id && !SETTLED.has(j.state)) : null;
+  const running = !!liveJob;
+
+  // The live run's meter, right on the overview: plan-divided when the
+  // counted plan has arrived (contract 1.20), indeterminate while counting.
+  const lp = liveJob ? S.progress.get(liveJob.id) : null;
+  const lpTotal = lp?.totalFiles;
+  const lpHandled = (lp?.filesDone ?? 0) + (lp?.filesFailed ?? 0);
+  const lpRatio = lpTotal > 0 ? Math.min(100, Math.round(lpHandled / lpTotal * 100)) : 0;
+  const lpEta = lp ? jobEta(lp) : "";
+  const liveRow = liveJob ? `
+    <div class="set-live">
+      <div class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></div>
+      <span class="detail">${!lp
+        ? "Backup starting…"
+        : lpTotal == null
+          ? (lp.state === "Scanning" ? `Counting files… ${fmtCount(lp.filesSeen)} found` : "Backing up…")
+          : `${fmtCount(lpHandled)} of ${fmtCount(lpTotal)} files · ${lpRatio}%${lpEta ? " · " + esc(lpEta) : ""}`}</span>
+    </div>` : "";
   const verification = set.status.verification
     ? `<span class="chip" title="Verification coverage and age — never a bare tick">
          ${Math.round(set.status.verification.coverage * 100)}% verified ${esc(rel(set.status.verification.verifiedAtUnixMilliseconds))}
        </span>`
     : "";
 
-  const destinations = set.destinations?.length ? `
-    <div class="table-wrap"><table class="data">
-      <thead><tr><th>Destination</th><th>State</th><th>Failure domain</th><th>Possession</th><th>Last sync</th></tr></thead>
-      <tbody>${set.destinations.map(d => {
-        const ds = DEST_STATE[d.state] ?? { cls: "", icon: "?" };
-        return `<tr>
-          <td><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>${d.detail ? `<div class="detail">${esc(d.detail)}</div>` : ""}</td>
-          <td>${badge(ds, d.state)}</td>
-          <td>${esc(d.failureDomain)}</td>
-          <td class="detail">${esc(d.verification)}</td>
-          <td class="detail">${esc(rel(d.lastSuccessAt))}</td>
-        </tr>`;
-      }).join("")}</tbody>
-    </table></div>` : `<p class="sub">No destinations declared for this set.</p>`;
+  // Vertically stacked, collapsible, in the order backups ship (ADR-0047:
+  // higher priority first, ties by name) — the vitals live on the summary
+  // line, so a collapsed stack still reads at a glance. Open state is
+  // remembered across the frequent overview re-renders.
+  const destPriority = name => S.destinations.find(dd => dd.name === name)?.priority ?? null;
+  const ordered = [...(set.destinations ?? [])].sort((a, b) => {
+    const pa = destPriority(a.name) ?? Number.NEGATIVE_INFINITY;
+    const pb = destPriority(b.name) ?? Number.NEGATIVE_INFINITY;
+    return pb - pa || a.name.localeCompare(b.name);
+  });
+  const destinations = ordered.length ? `<div class="dest-stack">${ordered.map(d => {
+    // The catch-up window is activity, not alarm (ADR-0050 amendment): the
+    // chip keys off the wire reason — rendering the service's answer, never
+    // re-deriving (ADR-0028 §8). Any other behind keeps the warn chip.
+    const ds = d.reason === "catching-up"
+      ? { cls: "accent", icon: "↻", label: "syncing" }
+      : DEST_STATE[d.state] ?? { cls: "", icon: "?" };
+    // The ledger's two full-backup facts (contract 1.19): a pair owed
+    // its seed says so — "behind" alone under-describes a destination
+    // incrementals will skip until its full backup lands.
+    const baseline = d.needsFull
+      ? badge({ cls: "warn", icon: "◐" }, "awaiting seed")
+      : d.baselineCompletedAt
+        ? `<span class="detail" title="First held a full backup ${esc(fmtWhen(d.baselineCompletedAt))}">✓ since ${esc(rel(d.baselineCompletedAt))}</span>`
+        : `<span class="detail">never</span>`;
+    const key = `${set.setName}|${d.name}`;
+    const pr = destPriority(d.name);
 
-  return `<div class="card">
-    <h3>${esc(set.setName)} ${badge(meta, meta.label)} ${verification}</h3>
-    <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${esc(meta.blurb)}
-       ${set.nextRun ? `· next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "· manual only"}</p>
-    ${destinations}
-    ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-    <div class="actions-row">
-      <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}">⛊ Back up now</button>
-      <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
-      <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
-      <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}">Full…</button>
+    // The card's one caption line. While this set's run is live AND it ships
+    // straight to its destinations, the run's own progress IS this
+    // destination's progress, so it is shown here with its estimate. A
+    // staging set's live job is a capture rather than a transfer, and
+    // putting it on a destination card would attribute the wrong work to it.
+    const percent = running && config?.directShip && lpTotal > 0 ? lpRatio : destCompletion(d);
+    const caption = running && config?.directShip
+      ? (lpTotal > 0
+          ? `shipping · ${fmtCount(lpHandled)} of ${fmtCount(lpTotal)} files${lpEta ? " · " + esc(lpEta) : ""}`
+          : "shipping…")
+      : d.measuredAt == null
+        ? "not counted yet — no pass has reached it"
+        : d.owedBytes > 0 && d.heldBytes < d.owedBytes
+          ? `${fmtBytes(d.heldBytes)} of ${fmtBytes(d.owedBytes)} · last synced ${esc(rel(d.lastSuccessAt))}`
+          : `holds every byte it is owed · last synced ${esc(rel(d.lastSuccessAt))}`;
+
+    return `<details class="dest" data-dest="${esc(key)}" ${S.openDests.has(key) ? "open" : ""}>
+      <summary>
+        ${ring(percent)}
+        <span class="dest-head">
+          <span class="dest-title"><b>${esc(d.name)}</b> <span class="detail">${esc(d.kind)}</span>
+            ${badge(ds, ds.label ?? d.state)}
+            ${d.needsFull ? badge({ cls: "warn", icon: "◐" }, "awaiting seed") : ""}
+            ${pr != null ? `<span class="chip" title="Backups ship to destinations in priority order">priority ${pr}</span>` : ""}</span>
+          <span class="detail dest-caption">${caption}</span>
+        </span>
+      </summary>
+      <div class="dest-body">
+        <div><span class="detail">Full backup</span><span>${baseline}</span></div>
+        <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
+        <div><span class="detail">Possession</span><span>${esc(d.verification)}${verificationTiers(d)}</span></div>
+        <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
+        <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
+        ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
+        ${d.reason === "catching-up" && set.lastCompletedAt
+          ? `<div class="dest-note detail">last backup finished ${esc(fmtWhen(set.lastCompletedAt))}; this destination last synced ${esc(rel(d.lastSuccessAt))} — heals on the next sync pass</div>`
+          : ""}
+      </div>
+    </details>`;
+  }).join("")}</div>` : `<p class="sub">No destinations declared for this set.</p>`;
+
+  // The destinations' collapse pattern, one level up: the summary line is
+  // the glance — name, one of the five glance words, and a slim meter while
+  // a run is live ("Backing up" IS the glance then) — and everything else,
+  // the precise derived state included, waits behind the expand. Open state
+  // is remembered across the frequent overview re-renders.
+  const glance = GLANCE[set.status.state] ?? { cls: "", icon: "?", label: set.status.state };
+  return `<details class="set" data-set="${esc(set.setName)}" ${S.openSets.has(set.setName) ? "open" : ""}>
+    <summary>
+      <b>${esc(set.setName)}</b>
+      ${running
+        ? `${badge({ cls: "accent", icon: "◐" }, "Backing up")}<span class="set-live-mini"><span class="meter ${lpTotal > 0 ? "" : "indeterminate"}"><i data-w="${lpRatio}"></i></span><span class="detail">${lpTotal > 0 ? lpRatio + "%" : "…"}</span></span>`
+        : badge(glance, glance.label)}
+    </summary>
+    <div class="set-body">
+      <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
+      <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}
+         ${verification}</p>
+      ${destinations}
+      ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${liveRow}
+      <div class="actions-row">
+        <button type="button" class="btn primary small" data-action="backup" data-set="${esc(set.setName)}"
+          ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>⛊ Back up now</button>
+        <button type="button" class="btn small" data-action="sync" data-set="${esc(set.setName)}">⇄ Sync destinations</button>
+        <button type="button" class="btn small" data-action="what-changed" data-set="${esc(set.setName)}">Δ What changed?</button>
+        <button type="button" class="btn small" data-action="backup-full" data-set="${esc(set.setName)}"
+          ${running ? `disabled title="A backup for this set is already running — a new trigger would attach to it"` : ""}>Full…</button>
+      </div>
     </div>
-  </div>`;
+  </details>`;
 }
 
 /* ----- snapshots ----- */
@@ -555,7 +938,7 @@ function renderJobs() {
         <div class="table-wrap"><table class="data">
           <thead><tr><th>Started</th><th>Set</th><th>Outcome</th><th>Snapshot</th><th>Detail</th></tr></thead>
           <tbody>${settled.map(j => `
-            <tr>
+            <tr class="rowlink" data-action-row="job-details" data-job="${esc(j.id)}">
               <td>${esc(fmtWhen(j.startedAt))}</td>
               <td>${esc(setName(j.backupSetId))}</td>
               <td>${badge(JOBSTATE[j.state] ?? { cls: "", label: j.state }, (JOBSTATE[j.state] ?? { label: j.state }).label)}</td>
@@ -571,23 +954,65 @@ function renderJobs() {
   }
 }
 
+function truncateMiddle(path, max) {
+  // The middle gives way first: the top folder survives at the front, the
+  // parent folder and the file name survive at the back — the two things
+  // that identify what is being processed. The full path rides the title.
+  if (!path || path.length <= max) return path ?? "";
+  const sep = path.includes("\\") ? "\\" : "/";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  const name = parts[parts.length - 1] ?? path;
+  const parent = parts.length > 1 ? parts[parts.length - 2] : "";
+  const head = parts.length > 2 ? parts[0] : "";
+  const tail = parent && parts.length > 2 ? `${parent}${sep}${name}` : name;
+  const framed = head ? `${head}${sep}…${sep}${tail}` : `…${sep}${tail}`;
+  if (framed.length <= max) return framed;
+  // Even the frame is too long: keep the end of the path, where the name is.
+  return "…" + path.slice(-(max - 1));
+}
+
 function renderLiveJob(job) {
   const progress = S.progress.get(job.id);
+  // The journal outranks the progress stream for Paused (ADR-0047
+  // Amendment 1): a suspended run's engine is silent, so the last progress
+  // event still says Packing while the truth is "parked for a
+  // higher-priority run".
+  const paused = job.state === "Paused";
+  // A commanded cancel outranks both the journal and the stream: neither has
+  // caught up with the operator yet, so the only source that knows the run is
+  // stopping is the click that stopped it.
   const cancelling = CANCELLING.has(job.id);
   const meta = cancelling
     ? { cls: "warn", label: "Cancelling…" }
-    : JOBSTATE[progress?.state ?? job.state] ?? { cls: "accent", label: job.state };
-  const seen = progress?.filesSeen ?? 0;
-  const handled = (progress?.filesDone ?? 0) + (progress?.filesReused ?? 0) + (progress?.filesFailed ?? 0);
-  const ratio = seen > 0 ? Math.min(100, Math.round(handled / seen * 100)) : 0;
-  const scanning = !progress || progress.state === "Scanning" || seen === 0;
+    : JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
+  // The denominator is the run's counted plan (contract 1.20). Reused files
+  // are a subset of done, so handled is done plus failed — never reused
+  // added on top. Failed files left the plan's path, so the clamp keeps an
+  // over-delivering run at 100 rather than beyond it.
+  const total = progress?.totalFiles;
+  const handled = (progress?.filesDone ?? 0) + (progress?.filesFailed ?? 0);
+  const ratio = total > 0 ? Math.min(100, Math.round(handled / total * 100)) : 0;
+  const counting = !paused && progress?.state === "Scanning" && total == null;
+  const scanning = !paused && (!progress || total == null);
+  const eta = progress ? jobEta(progress) : "";
+  const rate = progress ? jobRate(progress) : "";
 
   return `<div class="card job-live">
     <h3>${esc(setName(job.backupSetId))} ${badge(meta, meta.label)}</h3>
     <p class="sub">Job <span class="mono">${esc(job.id)}</span> · started ${esc(rel(job.startedAt))}</p>
+    ${paused ? `<p class="sub">${esc(job.detail || "Suspended for a higher-priority run — it resumes when a pool slot frees.")}</p>` : ""}
+    ${!paused && progress?.currentFile
+      ? `<p class="sub mono job-file" title="${esc(progress.currentFile)}">${esc(truncateMiddle(progress.currentFile, 72))}</p>`
+      : ""}
     <div class="meter ${scanning ? "indeterminate" : ""}"><i data-w="${ratio}"></i></div>
     ${progress ? `<div class="job-stats">
-        <span><b>${fmtCount(handled)}</b> of <b>${fmtCount(seen)}</b> files seen</span>
+        ${counting
+          ? `<span>Counting files… <b>${fmtCount(progress.filesSeen)}</b> found</span>`
+          : total != null
+            ? `<span><b>${fmtCount(handled)}</b> of <b>${fmtCount(total)}</b> files · <b>${ratio}%</b></span>`
+            : `<span><b>${fmtCount(handled)}</b> file(s) so far</span>`}
+        ${eta ? `<span>${esc(eta)}</span>` : ""}
+        ${rate ? `<span><b>${esc(rate)}</b></span>` : ""}
         <span><b>${fmtCount(progress.filesReused)}</b> unchanged</span>
         ${progress.filesFailed ? `<span><b>${fmtCount(progress.filesFailed)}</b> failed</span>` : ""}
         <span><b>${fmtBytes(progress.bytesStored)}</b> written of <b>${fmtBytes(progress.bytesSeen)}</b> read</span>
@@ -625,6 +1050,10 @@ function renderNotices() {
             <span class="text">${esc(notice.message)}
               <span class="subtle" title="${esc(fmtWhen(notice.raisedAt))}">· raised ${esc(rel(notice.raisedAt))}
               ${notice.acknowledgedAt ? `· acknowledged ${esc(rel(notice.acknowledgedAt))}` : ""}</span></span>
+            ${!notice.acknowledgedAt && notice.key?.startsWith("staging-retirable:")
+              ? `<button type="button" class="btn small" data-action="retire-staging" data-key="${esc(notice.key)}">Retire staging…</button>` : ""}
+            ${!notice.acknowledgedAt && notice.key?.startsWith("format-upgradable:")
+              ? `<button type="button" class="btn small" data-action="upgrade-format" data-key="${esc(notice.key)}">Upgrade format…</button>` : ""}
             ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
           </div>`).join("")}</div>`}`;
 }
@@ -816,48 +1245,88 @@ function renderMaintenance() {
             <tr><td>Remote binding</td><td>${S.desc.remoteBindingEnabled ? badge({ cls: "accent", icon: "◉" }, "enabled") : badge({ cls: "", icon: "○" }, "off (default)")}</td></tr>
             <tr><td>Active jobs</td><td>${fmtCount(S.desc.activeJobs)}</td></tr>
           </tbody></table></div>` : `<p class="sub">Waiting for the service to describe itself…</p>`}
-        <div class="actions-row"><button type="button" class="btn small" data-action="show-config">View configuration</button></div>
+        <div class="actions-row">
+          <button type="button" class="btn small" data-action="show-config">View configuration</button>
+          ${S.signedInRole === "Owner"
+            ? `<button type="button" class="btn small danger" data-action="restart-service">↻ Restart service</button>`
+            : ""}
+        </div>
       </div>
 
-      <div class="card">
-        <h3>🗝 Recovery kit</h3>
-        <p class="sub">One of the two things a recovery needs. The kit is useless to a thief without the passphrase — and useless to you without it either.</p>
-        ${renderKitStatus()}
-      </div>
+      <div class="card" id="receipts-card"></div>
 
     </div>`;
+  renderReceiptsCard();
 }
 
-// FR-KIT-005 asks for kit status "surfaced continuously", and continuously
-// means here — on a card an operator passes every time they open Maintenance —
-// rather than only inside the setup ceremony they saw once and closed.
-//
-// Two states, not three. An installation kit carries no destinations, so the
-// requirement's staleness trigger cannot fire, and its salt, Argon2id
-// parameters and sealing public key are fixed for the life of the installation,
-// so nothing else can make it stale either (ADR-0013 as amended).
-function renderKitStatus() {
-  const status = S.desc?.kitStatus ?? null;
+// The Receipts card (contract 1.33): every fact is what the peer signed,
+// and the status is the service's own verdict on the signature over the
+// bytes on disk now — three states, rendered distinctly, never derived on
+// the page from the absence of a problem. Not yet fetched is not empty.
+/** How many receipts the card asks the service to read (contract 1.35's limit). */
+const RECEIPTS_SHOWN = 50;
 
-  if (status === null) {
-    // A service older than contract 1.15 says nothing here, which reads as
-    // "cannot tell" — not as a missing kit, which would be a false alarm.
-    return `<p class="sub">This service does not report kit status.</p>`;
+function renderReceiptsCard() {
+  const el = document.getElementById("receipts-card");
+  if (!el) return;
+
+  const status = row => {
+    switch (row.status) {
+      case "verified": return badge({ cls: "ok", icon: "✓" }, "verified");
+      case "signature-invalid": return badge({ cls: "bad", icon: "✗" }, "signature invalid");
+      case "unreadable": return badge({ cls: "warn", icon: "?" }, "unreadable");
+      default: return badge({ cls: "", icon: "·" }, esc(row.status ?? "unknown"));
+    }
+  };
+  const summary = row => {
+    if (row.status === "unreadable") return row.problem ?? "could not be read as a receipt";
+    if (row.kind === "deletion") {
+      return `${fmtCount(row.deletedCount)} deleted${row.notHeld ? `, ${fmtCount(row.notHeld)} not held` : ""}`;
+    }
+    return `${fmtCount(row.committedCount)} committed · holds ${fmtCount(row.heldObjects)} objects, ${fmtBytes(row.heldBytes)}`;
+  };
+  const where = row => row.set
+    ? `${esc(row.set)} → ${esc(row.destination ?? "?")}`
+    : `<span class="mono">${esc((row.repositoryId ?? "").slice(0, 12) || "—")}</span>`;
+
+  let body;
+  if (S.receipts === null) {
+    body = `<p class="sub">Reading the receipts filed here…</p>`;
+  } else if (S.receipts.length === 0) {
+    body = `<p class="sub">Nothing filed yet. A peer's signed statement — of what it deleted on this installation's
+              instruction, or of what it holds after a push — is filed here as it arrives, and this installation's
+              own statements to its peers beside them.</p>`;
+  } else {
+    body = `
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th>When</th><th>Kind</th><th>Set → destination</th><th>Role</th><th>Summary</th><th>Status</th></tr></thead>
+        <tbody>${S.receipts.map(row => `
+          <tr>
+            <td>${esc(fmtWhen(row.issuedAt ?? row.filedAt))}</td>
+            <td>${esc(row.kind)}</td>
+            <td>${where(row)}</td>
+            <td>${esc(row.role)}</td>
+            <td>${esc(summary(row))}</td>
+            <td>${status(row)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>`;
   }
 
-  if (status !== "saved") {
-    return `
-      <p class="dropped"><b>Never saved.</b> Nothing on this machine can rebuild your keys without it.
-      Losing the passphrase or the kit makes every backup unrecoverable — there is no reset and no support path.</p>`;
-  }
+  // The total is counted from file names across the whole pile and the rows
+  // are the newest few that were actually read, so saying which is which is
+  // also what makes the retention sweep (NFR-OPS-008) visible. A service
+  // older than contract 1.35 sends no total, and then there is nothing
+  // honest to say about the rest.
+  const shown = S.receipts === null || S.receipts.length === 0 || S.receiptsTotal <= S.receipts.length
+    ? ""
+    : ` Showing the newest ${fmtCount(S.receipts.length)} of ${fmtCount(S.receiptsTotal)} on file.`;
 
-  const when = S.desc.kitConfirmedAt
-    ? new Date(Number(S.desc.kitConfirmedAt)).toLocaleString()
-    : null;
-
-  return `
-    <p>${badge({ cls: "ok", icon: "✓" }, "saved")}${when ? ` <span class="sub">confirmed ${esc(when)}</span>` : ""}</p>
-    <p class="sub">Keep it somewhere separate from the passphrase. It holds neither the passphrase nor any key.</p>`;
+  el.innerHTML = `
+    <h3>🧾 Receipts</h3>
+    <p class="sub">What peers attested under their own signatures — deletions on this installation's instruction,
+       and what they hold after each push (ADR-0063, ADR-0064). Every signature re-checked as it is read.${shown}</p>
+    ${body}`;
 }
 
 /* ---------------------------------------------------------------- dialogs */
@@ -874,6 +1343,7 @@ function closeDialog() {
   dialog.innerHTML = "";
   dialog.classList.remove("wide");
   E = null;
+  endSourceScans(); // a walk for an editor that no longer exists stops now, not in ten minutes
   if (W) {
     // The wizard's server-side source handle is released best-effort; the
     // idle sweep reclaims it anyway if this never lands. The passphrase
@@ -883,9 +1353,11 @@ function closeDialog() {
   }
 }
 
-dialog.addEventListener("click", event => {
-  if (event.target === dialog) closeDialog(); // backdrop click
-});
+// A shown dialog is modal: its own buttons are the only exits. The browser's
+// Escape would close the native element while bypassing closeDialog()'s
+// teardown — leaking the draft, the restore wizard and its server-side
+// source handle — and a backdrop click discards mid-edit state by accident.
+dialog.addEventListener("cancel", event => event.preventDefault());
 
 function reportDialog(title, lines, sub) {
   openDialog(`
@@ -920,15 +1392,81 @@ function comparisonReport(result) {
   };
 }
 
+/* ----- the completed-job report (ADR-0050) ----- */
+
+function jobChangesReport(result) {
+  // The comparisonReport idiom over the run diff's coarser buckets: counts
+  // are exact, samples bounded, and the report says when it shows a sample.
+  const buckets = [
+    ["new", result.new], ["changed", result.changed], ["removed", result.removed],
+  ].filter(([, bucket]) => bucket.count > 0);
+
+  const baseline = result.baselineSnapshotId
+    ? `vs the previous backup: ${fmtCount(result.unchanged)} unchanged`
+    : "the set's first backup — everything is new";
+  const detail = buckets.map(([label, bucket]) => {
+    const more = bucket.count > bucket.sample.length
+      ? `\n  … and ${fmtCount(bucket.count - bucket.sample.length)} more` : "";
+    return `${fmtCount(bucket.count)} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
+  }).join("\n");
+
+  return {
+    summary: `${baseline}${buckets.length === 0 ? " — nothing else changed" : ""}`,
+    detail,
+  };
+}
+
+function jobReport(job, snapshot) {
+  const lines = [];
+
+  // Duration from the row's own two timestamps — started, and the terminal
+  // transition that settled it.
+  const tookMs = Math.max(0, (job.updatedAt ?? 0) - (job.startedAt ?? 0));
+  const took = tookMs >= 3_600_000 ? `${(tookMs / 3_600_000).toFixed(1)}h`
+    : tookMs >= 60_000 ? `${Math.round(tookMs / 60_000)}m`
+    : `${Math.max(1, Math.round(tookMs / 1000))}s`;
+  lines.push(`took ${took}`);
+
+  if (job.filesDone == null && job.filesSeen == null) {
+    // A row from before the run record existed (pre-1.22): only its detail
+    // line survives, so say that rather than rendering invented zeroes.
+    lines.push(job.detail ?? "no run record survives for this job");
+    lines.push("(this run predates the per-run record; newer runs carry their numbers)");
+  } else {
+    const total = job.totalFiles != null ? ` of ${fmtCount(job.totalFiles)} planned` : "";
+    lines.push(`${fmtCount(job.filesDone)} file(s) captured${total}`);
+    lines.push(`${fmtCount(job.filesReused)} unchanged (re-used without re-reading their bytes)`);
+    if ((job.filesFailed ?? 0) > 0) lines.push(`${fmtCount(job.filesFailed)} unreadable — see Failures`);
+    lines.push(`${fmtBytes(job.bytesSeen ?? 0)} read · ${fmtBytes(job.bytesStored ?? 0)} newly stored`);
+  }
+
+  if (snapshot) {
+    lines.push("");
+    lines.push(`snapshot ${snapshot.snapshotId.slice(0, 16)}… · ${fmtCount(snapshot.files)} file(s) · ${snapshot.captureStatus === 2 ? "partial capture" : "complete capture"}`);
+    for (const line of snapshot.destinations ?? []) lines.push(`  ${line}`);
+  } else if (job.snapshotId) {
+    lines.push("");
+    lines.push(`snapshot ${job.snapshotId.slice(0, 16)}…`);
+  } else {
+    lines.push("");
+    lines.push("no snapshot was committed by this run");
+  }
+
+  return lines;
+}
+
 // Step two of the material-edit save (ADR-0038): the editor stays in the
 // dialog, hidden, so Back loses nothing; only the Apply here performs the
 // upsert. Rendered even when the comparison failed — the operator may be
 // pointing at a drive that is not mounted yet — but then it says so
-// instead of pretending to know the consequences.
-function renderSetSaveConfirm(saved, preview, previewError) {
+// instead of pretending to know the consequences. And rendered before the
+// comparison arrives ({ comparing: true }): the walk fills the panel in
+// from the background, because Apply must never wait on it — the service
+// runs its own rescan job after a material save regardless.
+function renderSetSaveConfirm(saved, preview, previewError, { comparing = false } = {}) {
   document.getElementById("set-confirm")?.remove();
-  const editor = document.getElementById("set-editor");
-  if (editor) editor.hidden = true;
+  const beneath = document.getElementById("set-summary") ?? document.getElementById("set-editor");
+  if (beneath) beneath.hidden = true;
 
   const savedRoots = rootsOf(saved);
   const draftRoots = (E.pendingSave?.roots ?? []).map(root => root.path);
@@ -978,7 +1516,9 @@ function renderSetSaveConfirm(saved, preview, previewError) {
     ${warnings.length ? `<ul class="warnings">${warnings.map(text => `<li>${esc(text)}</li>`).join("")}</ul>` : ""}
     ${report ? `
       <p class="subtle">${esc(report.summary)}</p>
-      ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}` : ""}
+      ${report.detail ? `<pre class="report">${esc(report.detail)}</pre>` : ""}` : comparing ? `
+      <p class="subtle">Comparing with the last backup in the background — there is no need to wait.
+      Applying runs the same comparison as a service job, and its findings land under Notices.</p>` : ""}
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="set-save-back">Back to editing</button>
       <button type="button" class="btn ${dropping ? "danger" : "primary"}" data-action="set-save-apply">Apply these changes</button>
@@ -1008,6 +1548,15 @@ async function applySetUpsert(payload) {
 
 /* ---------------------------------------------------------------- actions */
 
+// A whole number, or null for blank or garbage — the caller decides whether
+// garbage deserves a toast before the payload goes anywhere.
+function intOrNull(raw) {
+  const text = String(raw ?? "").trim();
+  if (text === "") return null;
+  const value = Number(text);
+  return Number.isInteger(value) ? value : null;
+}
+
 async function withBusy(button, work) {
   if (button) { button.disabled = true; button.classList.add("busy"); }
   try { await work(); }
@@ -1017,30 +1566,29 @@ async function withBusy(button, work) {
 /* -------------------------------------------------- first-run setup (ADR-0044) */
 
 // The one ceremony that runs before anything else works. Three steps —
-// what you are about to commit to, the passphrase, and confirming it —
-// shown INSTEAD of the console rather than in a dialog over it, because
-// there is nothing behind it that functions until an installation has a
-// passphrase.
+// what you are about to commit to, the passphrase with its confirmation,
+// and the first account — shown INSTEAD of the console rather than in a
+// dialog over it, because there is nothing behind it that functions until
+// an installation has a passphrase and an owner. There is nothing to save
+// but the passphrase (ADR-0060): every archive carries the rest.
 let U = null;
 
-// The ONLY shape of U that may reach a trace line. U holds the passphrase
-// and its confirmation for the length of steps 2–3, so tracing U itself —
-// or anything JSON.stringify would walk into — would put the master key in
-// the browser console. This projector derives what a diagnosis needs and
-// nothing a screenshot could leak.
+// The ONLY shape of U that may reach a trace line. U holds the passphrase and
+// its confirmation for the length of steps 2-3, so tracing U itself — or
+// anything JSON.stringify would walk into — would put the master key in the
+// browser console. This projector derives what a diagnosis needs and nothing
+// a screenshot could leak.
 function setupView() {
   if (!U) return { u: null };
   return {
-    step: U.step, acknowledged: U.acknowledged, busy: U.busy, taken: U.taken,
-    saved: !!U.saved, resumed: U.resumed,
+    step: U.step, acknowledged: U.acknowledged, busy: U.busy,
     passphraseLength: U.passphrase?.length ?? 0,
     confirmationMatches: U.confirmation === U.passphrase,
     strengthAcceptable: U.strength?.acceptable ?? null,
-    hasKit: !!U.kit, kitChecksum8: U.kit?.checksum?.slice(0, 8) ?? null,
   };
 }
 
-const SETUP_STEPS = ["What this is", "Passphrase", "Confirm", "Recovery kit"];
+const SETUP_STEPS = ["What this is", "Passphrase", "Account"];
 
 /* ------------------------------------------------------------- sign-in */
 
@@ -1061,6 +1609,15 @@ function renderSignIn() {
   if (out) {
     out.hidden = !S.signedInUser;
     out.onclick = signOut;
+  }
+
+  // While the setup ceremony is mid-flight it owns the screen — including
+  // its own account step — so the sign-in gate stays down until the wizard
+  // object is gone. Without this, the moment the passphrase is accepted the
+  // service reports users_required and BOTH gates would render.
+  if (U) {
+    host.hidden = true;
+    return;
   }
 
   if (!S.signInRequired) {
@@ -1087,7 +1644,7 @@ function renderSignIn() {
   host.innerHTML = `<div class="gate-card">
     <h2>${esc(heading)}</h2>
     <p class="muted">${blurb}</p>
-    <label>Account name<input id="signin-user" autocomplete="username" value="${esc(SI.user)}"></label>
+    <label>Account name<input type="text" id="signin-user" autocomplete="username" value="${esc(SI.user)}"></label>
     <label>Password<input id="signin-pass" type="password"
       autocomplete="${SI.first ? "new-password" : "current-password"}"></label>
     ${SI.message ? `<p class="warn">${esc(SI.message)}</p>` : ""}
@@ -1125,6 +1682,8 @@ async function signInSubmit() {
     S.signedInUser = answered.user;
     SI = null;
     renderSignIn();
+    connectEvents(); // redial the progress stream with the new session
+    refreshAll();
     await refreshDesc();
   } catch (failure) {
     SI.message = failure?.message ?? "The console could not reach the service.";
@@ -1143,27 +1702,35 @@ async function signOut() {
 
   rememberSession(null);
   S.signedInUser = null;
+  S.signedInRole = null;
   S.signInRequired = true;
+  disconnectEvents();
   renderSignIn();
 }
 
 function renderSetupGate() {
   const host = document.getElementById("setup");
   if (!S.setupRequired) {
-    if (U) trace("renderSetupGate", "setup no longer required — ceremony state released");
+    // The account step outlives setup_required: the moment the passphrase
+    // is accepted the service reads ready-or-users_required, but the
+    // ceremony is not over until the first account exists (or the service
+    // says one already does). A live step-3 wizard keeps the gate up.
+    if (U && U.step === 3) {
+      appEl.hidden = true;
+      host.hidden = false;
+      setupRender();
+      return;
+    }
+
     host.hidden = true;
     appEl.hidden = false;
     U = null;
     return;
   }
 
-  // A service in kit_required has a passphrase already: the ceremony
-  // resumes at the kit step rather than asking for one again.
-  if (!U) U = S.setupState === "kit_required"
-    ? { step: 4, passphrase: "", confirmation: "", acknowledged: true, strength: null, busy: false,
-        kit: null, taken: false, resumed: true }
-    : { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false,
-        kit: null, taken: false, resumed: false };
+  if (!U) U = { step: 1, passphrase: "", confirmation: "", acknowledged: false, strength: null, busy: false,
+        passHash: null, setupLines: [],
+        account: { user: "", password: "", confirm: "", check: null, hash: null } };
   appEl.hidden = true;
   host.hidden = false;
   trace("renderSetupGate", setupView());
@@ -1180,10 +1747,10 @@ function setupRender() {
     closeDialog();
   }
   const host = document.getElementById("setup");
-  const body = [setupStep1, setupStep2, setupStep3, setupStep4][U.step - 1]();
+  const body = [setupStep1, setupStep2, setupStep3][U.step - 1]();
   host.innerHTML = `<div class="gate-card setup-card">
     <div class="rst-steps">${SETUP_STEPS.map((label, index) =>
-      `<span class="${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
+      `<span class="rst-step ${index + 1 === U.step ? "now" : index + 1 < U.step ? "done" : ""}">${esc(label)}</span>`).join("")}</div>
     ${body}
   </div>`;
   // The strength bar's width cannot be an inline style attribute — the CSP
@@ -1193,6 +1760,11 @@ function setupRender() {
   if (bar) bar.style.width = `${bar.dataset.meterWidth}%`;
   if (U.step === 2) {
     const field = document.getElementById("setup-pass");
+    field?.focus();
+  }
+
+  if (U.step === 3) {
+    const field = document.getElementById("setup-user");
     field?.focus();
   }
 }
@@ -1227,129 +1799,173 @@ function setupStep1() {
 }
 
 function setupStep2() {
-  const meter = U.strength;
   return `
     <h1>Choose the passphrase</h1>
-    <p>Longer is better than complicated. Several unrelated words you will
-    remember beat a short string of symbols you will not.</p>
+    <p>At least 16 characters, with an uppercase letter, two digits and a
+    special character. Several unrelated words you will remember beat a short
+    string of symbols you will not.</p>
     <input type="password" id="setup-pass" class="setup-field" autocomplete="new-password"
       spellcheck="false" placeholder="the passphrase for this installation"
       value="${esc(U.passphrase)}" data-action-input="setup-pass">
-    ${meter ? `
-      <div class="meter meter-${esc(meter.band)}"><i data-meter-width="${Math.max(4, meter.score)}"></i></div>
-      <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}
-    <div class="dlg-actions">
-      <button type="button" class="btn" data-action="setup-back">‹ Back</button>
-      <button type="button" class="btn primary" data-action="setup-to-confirm"
-        ${meter?.acceptable ? "" : "disabled"}>Continue</button>
-    </div>`;
-}
-
-function setupStep3() {
-  const mismatch = U.confirmation.length > 0 && U.confirmation !== U.passphrase;
-  return `
-    <h1>Type it again</h1>
-    <p>The one thing that cannot be fixed later is a typo in a passphrase you
-    only ever entered once.</p>
+    <div id="setup-strength">${setupStrengthMarkup()}</div>
     <input type="password" id="setup-confirm" class="setup-field" autocomplete="new-password"
-      spellcheck="false" placeholder="the same passphrase" value="${esc(U.confirmation)}"
+      spellcheck="false" placeholder="the same passphrase, again" value="${esc(U.confirmation)}"
       data-action-input="setup-confirm">
-    ${mismatch ? `<p class="setup-danger">These do not match.</p>` : ""}
+    <div id="setup-match">${setupMatchMarkup()}</div>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="setup-back">‹ Back</button>
       <button type="button" class="btn danger" data-action="setup-finish"
-        ${U.busy || mismatch || U.confirmation.length === 0 ? "disabled" : ""}>
-        ${U.busy ? "Setting up…" : "Set up this installation"}</button>
+        ${setupBuildReady() ? "" : "disabled"}>
+        ${U.busy ? "Setting…" : "Set the passphrase"}</button>
     </div>`;
 }
 
-function setupStep4() {
-  // The kit is the second of the two things a recovery needs, and the only
-  // one this ceremony can hand over. It holds no passphrase and no keys, so
-  // it is safe to print — and useless to anyone who does not also have the
-  // passphrase, which is exactly why it must not live beside it.
-  // Keyed on the kit's absence, not on how we got here: a resumed ceremony
-  // and a fresh one whose response lost the kit (a stale cached page against
-  // a newer host, a console restarted mid-ceremony) are the same situation —
-  // no kit in hand, and the only way to one is the passphrase. Rendering the
-  // buttons without a kit made both of them silently do nothing, which is
-  // how a person gets stranded on a page that looks finished.
-  if (!U.kit) {
-    return `
-      <h1>Your recovery kit is still unsaved</h1>
-      <p>This installation has its passphrase, but setup is not finished: the
-      recovery kit was never confirmed saved.</p>
-      <p>A kit can only be built from the passphrase, so to produce one now,
-      re-enter it.</p>
-      <input type="password" id="setup-pass" class="setup-field" autocomplete="current-password"
-        spellcheck="false" placeholder="the passphrase for this installation"
-        value="${esc(U.passphrase)}" data-action-input="setup-pass">
-      <div class="dlg-actions">
-        <button type="button" class="btn danger" data-action="setup-rebuild-kit"
-          ${U.busy || U.passphrase.length === 0 ? "disabled" : ""}>
-          ${U.busy ? "Building…" : "Build the recovery kit"}</button>
-      </div>`;
-  }
+// The meter's markup, shared by the step template and the in-place patch
+// below so the two cannot drift.
+function setupStrengthMarkup() {
+  const meter = U?.strength;
+  return meter ? `
+      <div class="meter meter-${esc(meter.band)}"><i data-meter-width="${Math.max(4, meter.score)}"></i></div>
+      <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
+}
 
+function setupMatchMarkup() {
+  return U && U.confirmation.length > 0 && U.confirmation !== U.passphrase
+    ? `<p class="setup-danger">These do not match.</p>` : "";
+}
+
+// The one gate for "Set the passphrase": the server's strength verdict,
+// AND a non-empty confirmation that matches, AND not mid-request.
+function setupBuildReady() {
+  return !!U && !U.busy
+    && U.strength?.acceptable === true
+    && U.confirmation.length > 0
+    && U.confirmation === U.passphrase;
+}
+
+// Applies a strength answer WITHOUT re-rendering the step. The answer lands
+// while the operator is typing, and a re-render replaces the very field
+// they are typing in: focus is re-applied to a fresh element with the caret
+// wherever the browser puts it, so the cursor jumps on every debounced
+// answer and in-flight keystrokes can die. Only the meter, the match hint
+// and the build button change, so only they are touched; if any is gone the
+// operator has moved on and there is nothing to show.
+function setupApplyStrength() {
+  const host = document.getElementById("setup-strength");
+  if (host) host.innerHTML = setupStrengthMarkup();
+  const match = document.getElementById("setup-match");
+  if (match) match.innerHTML = setupMatchMarkup();
+  const go = document.querySelector('[data-action="setup-finish"]');
+  if (go) go.disabled = !setupBuildReady();
+}
+
+// SHA-256 as lowercase hex, for comparing secrets without holding them:
+// the account step must refuse a password equal to the passphrase, and a
+// hash lets it ask that question after the passphrase itself is gone.
+// crypto.subtle is available because 127.0.0.1 is a secure context.
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function setupStep3() {
+  // The first account, inside the ceremony (FR-USR-001): the service is in
+  // its bootstrap window — no accounts yet, so create_user needs no session
+  // — and this first account becomes the owner (FR-USR-004). The password
+  // policy is the server's; the checklist below only repeats its verdict.
+  const a = U.account;
   return `
-    ${U.provisioned?.length ? `
-      <p class="gate-hint">Passphrase accepted.</p>
-      <pre class="report">${esc(U.provisioned.join("\n"))}</pre>` : ""}
-    <h1>Save your recovery kit</h1>
-    <p>This is the <b>second</b> of the two things a recovery needs. Your
-    passphrase is the first, and it is <b>not</b> in this file.</p>
-    <ul class="setup-facts">
-      <li><b>It holds no passphrase and no keys.</b> It is safe to print, and
-      it opens nothing on its own.</li>
-      <li><b>Keep it apart from your passphrase.</b> Together in one place they
-      are one thing to lose, not two.</li>
-      <li><b>It opens every archive this installation makes</b> — including
-      backup sets you have not created yet.</li>
-    </ul>
-    <div class="dlg-actions setup-kit-actions">
-      <button type="button" class="btn primary" data-action="setup-kit-file">Download the file</button>
-      <button type="button" class="btn" data-action="setup-kit-print">Open the printable page</button>
-    </div>
-    <label class="check-row"><input type="checkbox" id="setup-kit-ack" ${U.taken ? "" : "disabled"}
-      ${U.saved ? "checked" : ""} data-action-change="setup-kit-ack">
-      I have saved this somewhere separate from my passphrase.</label>
-    ${U.taken ? "" : `<p class="gate-hint">Take one of the two forms above first.</p>`}
+    <h1>Create the first account</h1>
+    <p>The installation is set up. Actions on it are recorded against a
+    person, so it needs its owner account — this one.</p>
+    <label class="setup-label">Account name
+      <input type="text" id="setup-user" class="setup-field" autocomplete="username"
+        spellcheck="false" maxlength="64" value="${esc(a.user)}" data-action-input="setup-user"></label>
+    <label class="setup-label">Password — at least 10 characters, with an uppercase letter, two digits
+      and a special character; not the installation passphrase
+      <input type="password" id="setup-user-pass" class="setup-field" autocomplete="new-password"
+        spellcheck="false" value="${esc(a.password)}" data-action-input="setup-user-pass"></label>
+    <label class="setup-label">Confirm password
+      <input type="password" id="setup-user-confirm" class="setup-field" autocomplete="new-password"
+        spellcheck="false" value="${esc(a.confirm)}" data-action-input="setup-user-confirm"></label>
+    <div id="setup-account-rules">${setupAccountRulesMarkup()}</div>
     <div class="dlg-actions">
-      <button type="button" class="btn danger" data-action="setup-kit-done"
-        ${U.busy || !U.saved ? "disabled" : ""}>
-        ${U.busy ? "Finishing…" : "Finish setup"}</button>
+      <button type="button" class="btn danger" data-action="setup-create-user"
+        ${setupAccountReady() ? "" : "disabled"}>
+        ${U.busy ? "Creating…" : "Create User"}</button>
     </div>`;
 }
 
-// The kit is handed over as a download the page builds itself: the console
-// host returned it inline and keeps no copy, so there is nothing to fetch
-// back and nothing left behind if this tab closes.
-function setupTakeKit(kind) {
-  trace("setupTakeKit", { kind, ...setupView() });
-  if (!U.kit) {
-    // Unreachable now that the kit page requires a kit to render — but if a
-    // path back here ever appears, it must say so rather than eat the click.
-    trace("setupTakeKit", "no kit in hand — flipping to the rebuild page");
-    toast("warn", "This page no longer holds the kit. Re-enter the passphrase to build it again.");
-    U.resumed = true;
-    setupRender();
-    return;
+// The one gate for "Create User": a name, the server's password verdict, a
+// password that is not the passphrase (by hash), a matching confirmation,
+// and not mid-request.
+function setupAccountReady() {
+  const a = U?.account;
+  return !!a && !U.busy
+    && a.user.trim().length > 0
+    && a.check?.acceptable === true
+    && a.hash !== null && a.hash !== U.passHash
+    && a.confirm.length > 0 && a.confirm === a.password;
+}
+
+function setupAccountRulesMarkup() {
+  const a = U?.account;
+  if (!a) return "";
+  const rules = [...(a.check?.findings ?? []).map(line => `<li>${esc(line)}</li>`)];
+  if (a.hash !== null && U.passHash && a.hash === U.passHash) {
+    rules.push("<li>The password must not be the installation passphrase.</li>");
   }
-  const [data, name, type] = kind === "file"
-    ? [Uint8Array.from(atob(U.kit.machine), c => c.charCodeAt(0)),
-       "fallbackplan-recovery-kit.fbpkrkit", "application/octet-stream"]
-    : [U.kit.text, "fallbackplan-recovery-kit.txt", "text/plain;charset=utf-8"];
+  if (a.confirm.length > 0 && a.confirm !== a.password) {
+    rules.push("<li>The two passwords do not match.</li>");
+  }
+  return rules.length ? `<ul class="setup-findings">${rules.join("")}</ul>` : "";
+}
 
-  const url = URL.createObjectURL(new Blob([data], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  trace("setupTakeKit", { kind, delivered: true });
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+// Same in-place discipline as the strength meter: the checklist and the
+// button change while the operator types, so only they are touched.
+function setupApplyAccount() {
+  const host = document.getElementById("setup-account-rules");
+  if (host) host.innerHTML = setupAccountRulesMarkup();
+  const go = document.querySelector('[data-action="setup-create-user"]');
+  if (go) go.disabled = !setupAccountReady();
+}
 
-  U.taken = true;
-  setupRender();
+// Debounced like the strength meter, and for the same reason: the policy is
+// the server's, asked per pause rather than per keystroke. The hash rides
+// the same beat so the not-the-passphrase verdict stays current.
+let setupPasswordTimer = null;
+function setupSchedulePasswordCheck() {
+  clearTimeout(setupPasswordTimer);
+  setupPasswordTimer = setTimeout(async () => {
+    const account = U?.account;
+    if (!account) return;
+    const candidate = account.password;
+    if (!candidate) {
+      account.check = null;
+      account.hash = null;
+      setupApplyAccount();
+      return;
+    }
+
+    try {
+      const [response, hash] = await Promise.all([
+        fetch("/api/password-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ candidate }),
+        }),
+        sha256Hex(candidate),
+      ]);
+      if (U?.account !== account || account.password !== candidate) return;
+      account.hash = hash;
+      if (response.ok) account.check = await response.json();
+      // Patched in place, never a full step re-render — the same rule the
+      // strength meter follows, pinned by SetupWizardScriptTests.
+      setupApplyAccount();
+    } catch {
+      // The checklist is a courtesy; create_user is where the policy is enforced.
+    }
+  }, 250);
 }
 
 // Debounced so a fast typist does not queue a request per keystroke. The
@@ -1362,7 +1978,7 @@ function setupScheduleStrength() {
   clearTimeout(setupStrengthTimer);
   setupStrengthTimer = setTimeout(async () => {
     const candidate = U?.passphrase ?? "";
-    if (!candidate) { if (U) { U.strength = null; setupRender(); } return; }
+    if (!candidate) { if (U) { U.strength = null; setupApplyStrength(); } return; }
     try {
       const response = await fetch("/api/passphrase-strength", {
         method: "POST",
@@ -1374,7 +1990,10 @@ function setupScheduleStrength() {
         return;
       }
       U.strength = await response.json();
-      if (U.step === 2) setupRender();
+      // Patched in place, never a full step re-render: the answer arrives
+      // while the operator is typing, and rebuilding the step would replace
+      // the focused field — SetupWizardScriptTests pins this.
+      setupApplyStrength();
     } catch {
       // The meter is a courtesy; the submit is where the policy is enforced.
       // But a meter that never answers leaves step 2's Continue disabled with
@@ -1398,26 +2017,13 @@ const setupActions = {
   "setup-pass"(el) {
     U.passphrase = el.value;
     // No re-render here: it would replace the field the person is typing in.
-    // The meter only means something on step 2 — on the rebuild page the
-    // passphrase must match the existing one, and strength is not the gate.
-    if (U.step === 2) setupScheduleStrength();
-    const go = document.querySelector('[data-action="setup-to-confirm"]');
-    if (go) go.disabled = !U.strength?.acceptable;
-    // The rebuild page reuses this field and gates its button on the text
-    // being non-empty. Enable it directly, for the same no-re-render reason —
-    // it used to depend on the strength response happening to re-render the
-    // page, which also replaced this field mid-typing and stole its focus:
-    // the page read as one where every control is dead.
-    const rebuild = document.querySelector('[data-action="setup-rebuild-kit"]');
-    if (rebuild) rebuild.disabled = U.busy || U.passphrase.length === 0;
+    setupScheduleStrength();
+    setupApplyStrength();
   },
-
-  "setup-to-confirm"() { if (U.strength?.acceptable) { U.step = 3; setupRender(); } },
 
   "setup-confirm"(el) {
     U.confirmation = el.value;
-    const go = document.querySelector('[data-action="setup-finish"]');
-    if (go) go.disabled = U.busy || U.confirmation.length === 0 || U.confirmation !== U.passphrase;
+    setupApplyStrength();
   },
 
   async "setup-finish"() {
@@ -1442,10 +2048,7 @@ const setupActions = {
       return;
     }
 
-    trace("setup-finish", {
-      outcome: body?.outcome ?? null, hasKit: !!body?.kit,
-      kitMachineLength: body?.kit?.machine?.length ?? 0, kitTextLength: body?.kit?.text?.length ?? 0,
-    });
+    trace("setup-finish", { outcome: body?.outcome ?? null });
     U.busy = false;
     if (body?.outcome !== "provisioned") {
       toast("warn", body?.detail ?? "Setup did not complete.");
@@ -1454,93 +2057,110 @@ const setupActions = {
       return;
     }
 
-    // The passphrase is done with; the kit is not. Setup is not finished
-    // until the operator says they saved it (FR-KIT-004).
+    // The hash first, the wipe second: the account step must refuse a
+    // password equal to the passphrase, and once the secret is cleared a
+    // hash is the only form of it this page may keep (pinned by
+    // SetupWizardScriptTests).
+    U.passHash = await sha256Hex(U.passphrase);
     U.passphrase = "";
     U.confirmation = "";
     U.strength = null;
-    U.kit = body.kit ?? null;
-    U.step = 4;
-    // Inline, never a modal: a native dialog makes everything behind it
-    // inert, and a ceremony that owns the whole screen must not hand the
-    // page to a second state machine mid-flight — a modal that fails to be
-    // seen or closed freezes every button on this page.
-    U.provisioned = body.lines ?? [];
-    setupRender();
-  },
+    U.setupLines = body.lines ?? [];
 
-  "setup-kit-file"() { setupTakeKit("file"); },
-
-  "setup-kit-print"() { setupTakeKit("print"); },
-
-  "setup-kit-ack"(el) { U.saved = el.checked; setupRender(); },
-
-  async "setup-rebuild-kit"() {
-    // Resuming an installation whose kit was never confirmed. The kit can
-    // only come from the passphrase, so it has to be entered again — the
-    // one place this ceremony asks twice, and only because the first
-    // attempt did not finish.
-    trace("setup-rebuild-kit", "posting /api/recovery-kit");
-    U.busy = true;
-    setupRender();
-    let body;
-    try {
-      const response = await fetch("/api/recovery-kit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify({ passphrase: U.passphrase }),
-      });
-      body = await response.json();
-    } catch {
-      trace("setup-rebuild-kit", "fetch failed — console unreachable");
-      U.busy = false;
-      toast("bad", "The console process stopped answering.");
+    // The passphrase is the whole ceremony's credential (ADR-0060): nothing
+    // else is produced or saved. Whether the ceremony is over depends on
+    // whether the installation has its first account. The account step is
+    // claimed BEFORE the refresh so renderSetupGate keeps this gate up while
+    // the service re-describes itself.
+    U.step = 3;
+    await refreshDesc();
+    if (S.setupState === "users_required") {
+      reportDialog("Passphrase accepted", body.lines ?? []);
       setupRender();
       return;
     }
 
-    trace("setup-rebuild-kit", { outcome: body?.outcome ?? null, hasKit: !!body?.kit });
-    U.busy = false;
-    if (body?.outcome !== "built") {
-      toast("warn", body?.detail ?? "The kit could not be built.");
-      setupRender();
-      return;
-    }
-
-    U.passphrase = "";
-    U.kit = body.kit;
-    U.resumed = false;
-    setupRender();
-  },
-
-  async "setup-kit-done"() {
-    trace("setup-kit-done", { checksum8: U.kit?.checksum?.slice(0, 8) ?? null });
-    U.busy = true;
-    setupRender();
-    let result;
-    try {
-      result = await api({ command: "confirm_recovery_kit", kitChecksum: U.kit.checksum });
-    } catch (error) {
-      U.busy = false;
-      toast("bad", error?.message ?? "Could not record the confirmation.");
-      setupRender();
-      return;
-    }
-
-    trace("setup-kit-done", { result: result?.result ?? null });
-    U.busy = false;
-    if (result?.result === "error") {
-      toast("warn", result.message ?? "Could not record the confirmation.");
-      setupRender();
-      return;
-    }
-
-    // Held only as long as the ceremony took.
+    const lines = U.setupLines;
     U = null;
     S.setupRequired = false;
     renderSetupGate();
-    reportDialog("Setup complete", result?.lines ?? []);
+    renderSignIn();
+    reportDialog("Setup complete", lines);
     refreshAll();
+  },
+
+  "setup-user"(el) {
+    U.account.user = el.value;
+    setupApplyAccount();
+  },
+
+  "setup-user-pass"(el) {
+    U.account.password = el.value;
+    // No re-render here either: the checklist answer patches in place.
+    setupSchedulePasswordCheck();
+    setupApplyAccount();
+  },
+
+  "setup-user-confirm"(el) {
+    U.account.confirm = el.value;
+    setupApplyAccount();
+  },
+
+  async "setup-create-user"() {
+    // The bootstrap window (ADR-0045 §5): no accounts exist, so create_user
+    // needs no session — and the account it creates is the owner. Then sign
+    // straight in as them, because a wizard that ends at a login form asking
+    // for what was just typed is a wizard with one step too many.
+    const account = U.account;
+    U.busy = true;
+    setupApplyAccount();
+
+    let created;
+    try {
+      created = await api({
+        command: "create_user", name: account.user.trim(), password: account.password,
+      });
+    } catch (error) {
+      U.busy = false;
+      toast("bad", error?.message ?? "The console process stopped answering.");
+      setupApplyAccount();
+      return;
+    }
+
+    if (created?.result === "error") {
+      U.busy = false;
+      toast("warn", created.message ?? "The account was not created.");
+      setupApplyAccount();
+      return;
+    }
+
+    let answered = null;
+    try {
+      answered = await api({ command: "login", user: account.user.trim(), password: account.password });
+    } catch {
+      // Signing in is a convenience on top of a created account; the gate
+      // below handles a service that would not answer.
+    }
+
+    trace("setup-done", { result: result?.result ?? null });
+    U.busy = false;
+    const lines = U.setupLines;
+    U = null;
+
+    if (answered?.result === "session") {
+      rememberSession(answered.token);
+      S.signedInUser = answered.user;
+      S.signInRequired = false;
+      S.everRefused = false;
+    }
+
+    S.setupRequired = false;
+    renderSetupGate();
+    renderSignIn();
+    connectEvents();
+    reportDialog("Setup complete", lines);
+    refreshAll();
+    refreshDesc();
   },
 };
 
@@ -1723,6 +2343,57 @@ const actions = {
     });
   },
 
+  "job-details"(el) {
+    const job = S.jobs.find(j => j.id === el.dataset.job);
+    if (!job) return;
+    // The summary is a join of the row's own record with its committed
+    // snapshot (S.snapshots carries capture facts and the per-destination
+    // vocabulary) — no new ask; the details are one click deeper.
+    const snapshot = job.snapshotId ? S.snapshots.find(s => s.snapshotId === job.snapshotId) : null;
+    const state = JOBSTATE[job.state] ?? { cls: "", label: job.state };
+    openDialog(`
+      <h3>${esc(setName(job.backupSetId))} — ${esc(state.label)}</h3>
+      <p class="dlg-sub">Started ${esc(fmtWhen(job.startedAt))} · what this run did, from its own record.</p>
+      <pre class="report">${esc(jobReport(job, snapshot).join("\n"))}</pre>
+      <div class="dlg-actions">
+        ${job.snapshotId ? `
+          <button type="button" class="btn" data-action="job-changes" data-job="${esc(job.id)}">What changed</button>
+          <button type="button" class="btn" data-action="job-failures" data-job="${esc(job.id)}">Failures</button>
+          <button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}">Browse snapshot</button>` : ""}
+        <button type="button" class="btn primary" data-action="close-dialog">Close</button>
+      </div>`);
+  },
+
+  async "job-changes"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "job_changes", jobId: el.dataset.job },
+        { errToast: "The service could not diff this run" });
+      if (result?.result !== "job_changes") return;
+      const report = jobChangesReport(result);
+      reportDialog(`What this run changed under '${result.setName}'`,
+        [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
+        "Against the set's previous snapshot, from the repository's own record.");
+    });
+  },
+
+  async "job-failures"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "job_failures", jobId: el.dataset.job },
+        { errToast: "The service could not read the failure record" });
+      if (result?.result !== "job_failures") return;
+      const lines = result.failures === 0
+        ? ["nothing failed — every file the run saw was captured"]
+        : result.sample.map(f => `${f.path}\n  ${f.reason} — ${f.detail}`);
+      const more = result.failures > result.sample.length
+        ? [`… and ${result.failures - result.sample.length} more`] : [];
+      reportDialog(`Failures of this run under '${result.setName}'`,
+        [`${result.failures} failure(s)`, "", ...lines, ...more],
+        "From the snapshot's error manifest — each path with its typed reason.");
+    });
+  },
+
   "backup-full"(el) {
     const name = el.dataset.set;
     openDialog(`
@@ -1746,6 +2417,36 @@ const actions = {
         toast("ok", `Full backup of '${el.dataset.set}' queued as job ${result.jobId}.`);
         refreshJobs();
         location.hash = "#jobs";
+      }
+    });
+  },
+
+  "restart-service"() {
+    openDialog(`
+      <h3>Restart the service</h3>
+      <p class="dlg-sub">The service tears itself down and starts again in the same process (ADR-0049). Running
+      backups are interrupted — they are resume-safe and retry on the next pass — and everyone is signed out,
+      this browser included. The page reconnects on its own once the service is back.</p>
+      <label class="field" for="confirm-word">Type <b>restart</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="restart" data-enables="restart-service-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="restart-service-go" data-action="restart-service-go" disabled>Restart service</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "restart-service-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run({ command: "restart_service" }, { errToast: "Restart refused" });
+      if (result?.result === "acknowledged") {
+        closeDialog();
+        toast("ok", "Restart commanded — the service is recycling; sign in again when it returns.");
+        // The restart signs everybody out by design (FR-USR-003): drop this
+        // browser's dead session now rather than discovering it refusal by
+        // refusal while the pollers reconnect.
+        sessionExpired();
       }
     });
   },
@@ -1792,12 +2493,136 @@ const actions = {
     });
   },
 
+  // The operator's re-attribution (ADR-0053 §3, contract 1.31): hand a
+  // replica stored here to a different paired device. Only devices that
+  // store here are offered — a destination we store at holds nothing here —
+  // and never the current owner.
+  "reattribute-open"(el) {
+    const repository = el.dataset.repository;
+    const owner = el.dataset.owner;
+    const candidates = S.pairings.filter(pairing =>
+      pairing.role !== "stores-for-us" && pairing.fingerprint !== owner);
+    openDialog(`
+      <h3>Re-point replica ${esc(repository.slice(0, 12))}…</h3>
+      <p class="dlg-sub">This replica was recorded before its owner published a claim key, so the passphrase
+      alone cannot claim it back: the machine it belonged to is gone, and only you can say which paired device
+      is that owner's rebuilt one. From then on the old identity's offers and retrievals for it are refused,
+      and the new device reads it under its own pairing. Nothing at rest changes.</p>
+      <p class="sub">Currently attributed to <b>${esc(el.dataset.label)}</b> <span class="mono">${esc(owner.slice(0, 10))}…</span></p>
+      ${candidates.length ? `
+      <label class="field" for="reattribute-to">Now belongs to</label>
+      <select id="reattribute-to">
+        ${candidates.map(pairing => `<option value="${esc(pairing.fingerprint)}">${esc(pairing.label)} — ${esc(pairing.fingerprint.slice(0, 12))}…</option>`).join("")}
+      </select>
+      <label class="field" for="confirm-word">Type <b>re-point</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="re-point" data-enables="reattribute-go">`
+      : `<p class="sub">No other paired device stores here. Pair the rebuilt machine first — as one that stores here — then re-point.</p>`}
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        ${candidates.length ? `<button type="button" class="btn danger" id="reattribute-go" data-action="reattribute-go" data-repository="${esc(repository)}" disabled>Re-point the replica</button>` : ""}
+      </div>`);
+    document.getElementById("confirm-word")?.focus();
+  },
+
+  async "reattribute-go"(el) {
+    const fingerprint = document.getElementById("reattribute-to").value;
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "reattribute_replica",
+        repositoryId: el.dataset.repository,
+        fingerprint: fingerprint,
+      }, { errToast: "The service refused to re-point the replica" });
+      if (result?.result === "configuration_change") {
+        closeDialog();
+        reportDialog("Replica re-pointed", result.lines);
+        refreshConfigData(); refreshNotices(); refreshStatus();
+      }
+    });
+  },
+
   async "notice-ack"(el) {
     await withBusy(el, async () => {
       const result = await run(
         { command: "acknowledge_notice", id: el.dataset.id },
         { errToast: "Could not acknowledge" });
       if (result) { await refreshNotices(); refreshStatus(); }
+    });
+  },
+
+  // The staging-retirable notice's act (ADR-0046, contract 1.18): delete a
+  // migrated direct-ship set's staging archive. The service refuses while
+  // staging holds anything no destination has, so the typed confirmation is
+  // about intent, not the safety check.
+  async "retire-staging"(el) {
+    const setId = (el.dataset.key ?? "").split(":")[1] ?? "";
+    if (!S.sets.length) await refreshSets();
+    const set = S.sets.find(s => s.id === setId);
+    if (!set) { toast("bad", "The set this notice names is no longer configured"); return; }
+    openDialog(`
+      <h3>Retire the staging archive for '${esc(set.name)}'</h3>
+      <p class="dlg-sub">Deletes the local staging archive this set no longer publishes to and reclaims
+      its disk space. The service refuses while any blob your live history still needs has yet to reach
+      a destination, naming them — history then restores from the destinations alone. Bytes no snapshot
+      references go with the archive.</p>
+      <label class="field" for="confirm-word">Type <b>retire</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="retire" data-enables="retire-staging-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="retire-staging-go" data-action="retire-staging-go"
+                data-set="${esc(set.name)}" disabled>Retire staging</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "retire-staging-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "retire_staging", setName: el.dataset.set },
+        { errToast: "Staging was not retired" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Staging retired", result.lines);
+        await refreshNotices(); refreshStatus();
+      }
+    });
+  },
+
+  // The format-upgradable notice's act (ADR-0066, contract 1.36): append a
+  // signed record so the set seals the latest format from its next blob. The
+  // typed confirmation is about intent — nothing removes the record and
+  // nothing rewrites a blob that is already sealed.
+  async "upgrade-format"(el) {
+    const setId = (el.dataset.key ?? "").split(":")[1] ?? "";
+    if (!S.sets.length) await refreshSets();
+    const set = S.sets.find(s => s.id === setId);
+    if (!set) { toast("bad", "The set this notice names is no longer configured"); return; }
+    openDialog(`
+      <h3>Upgrade the repository format for '${esc(set.name)}'</h3>
+      <p class="dlg-sub">Appends a signed record to this set's repository. Everything already backed up stays
+      exactly as it is and restores as it always did; the newer format begins at the set's next backup, and
+      the record reaches each destination on the next pass. This cannot be undone: a build older than this
+      one would read the newer backups as damage rather than as a format it does not know.</p>
+      <label class="field" for="confirm-word">Type <b>upgrade</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="upgrade" data-enables="upgrade-format-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="upgrade-format-go" data-action="upgrade-format-go"
+                data-set="${esc(set.name)}" disabled>Upgrade format</button>
+      </div>`);
+    document.getElementById("confirm-word").focus();
+  },
+
+  async "upgrade-format-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "upgrade_set_format", setName: el.dataset.set },
+        { errToast: "The format was not upgraded" });
+      if (result?.result === "configuration_change") {
+        reportDialog("Format upgraded", result.lines);
+        await refreshNotices(); refreshStatus();
+      }
     });
   },
 
@@ -1834,8 +2659,28 @@ async function refreshConfigData() {
   if (destinations?.result === "destinations") S.destinations = destinations.destinations;
   if (pairings?.result === "pairings") S.pairings = pairings.pairings;
   if (invites?.result === "pairing_invites") S.invites = invites.invites;
+  // The replicas stored here (contract 1.31, ADR-0053 §3). Asked for
+  // directly rather than through run(): a service that predates the verb,
+  // or a paired remote one, refuses it by name, and that is an empty table
+  // — not a toast on every refresh.
+  const attributions = await api({ command: "list_replica_attributions" }).catch(() => null);
+  S.attributions = attributions?.result === "replica_attributions" ? attributions.attributions : [];
   await refreshSets();
   if (S.view === "config") renderConfigBody();
+  if (S.view === "maintenance") refreshReceipts();
+}
+
+// The receipts filed here (contract 1.33; ADR-0063, ADR-0064): what peers
+// attested under their own signatures. Read on entering the Maintenance
+// view and never by the pollers — an audit listing changes when a pass
+// runs, not second by second — and asked for directly rather than through
+// run(): a service that predates the verb refuses it by name, and that is
+// an empty card, not a toast on every visit.
+async function refreshReceipts() {
+  const listed = await api({ command: "list_receipts", limit: RECEIPTS_SHOWN }).catch(() => null);
+  S.receipts = listed?.result === "receipts_listed" ? listed.receipts : [];
+  S.receiptsTotal = listed?.result === "receipts_listed" ? (listed.total ?? 0) : 0;
+  if (S.view === "maintenance") renderReceiptsCard();
 }
 
 function renderConfig() {
@@ -1886,6 +2731,7 @@ function renderConfigBody() {
       <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
       <td>
         <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
+        ${destination.kind === "local-path" ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
         <button type="button" class="btn small" data-action="cfg-delete-dest" data-name="${esc(destination.name)}">Delete…</button>
       </td>
     </tr>`).join("");
@@ -1898,6 +2744,24 @@ function renderConfigBody() {
       <td class="detail">${esc(rel(pairing.pairedAt))}</td>
       <td><button type="button" class="btn small" data-action="unpair-open"
             data-fingerprint="${esc(pairing.fingerprint)}" data-label="${esc(pairing.label)}">Unpair…</button></td>
+    </tr>`).join("");
+
+  // Whose each stored replica is, and whether its owner's passphrase can
+  // move it. The Re-point control is the operator's override (ADR-0053 §3):
+  // for the Owner alone, and only on a replica recorded without a claim
+  // key — one that carries a key is its owner's to claim, and the service
+  // refuses the override for it anyway.
+  const attributions = S.attributions.map(row => `
+    <tr>
+      <td class="mono" title="${esc(row.repositoryId)}">${esc(row.repositoryId.slice(0, 12))}…</td>
+      <td>${row.ownerLabel ? esc(row.ownerLabel) : `<span class="detail">no pairing</span>`}
+          <span class="mono detail" title="${esc(row.ownerFingerprint)}">${esc(row.ownerFingerprint.slice(0, 10))}…</span></td>
+      <td class="detail">${row.claimable ? "its owner, with the passphrase" : "the operator only — no claim key on record"}</td>
+      <td>${S.signedInRole === "Owner" && row.claimable === false
+        ? `<button type="button" class="btn small" data-action="reattribute-open"
+             data-repository="${esc(row.repositoryId)}" data-owner="${esc(row.ownerFingerprint)}"
+             data-label="${esc(row.ownerLabel ?? row.ownerFingerprint.slice(0, 10))}">Re-point…</button>`
+        : ""}</td>
     </tr>`).join("");
 
   const invites = S.invites.map(invite => `
@@ -1942,6 +2806,14 @@ function renderConfigBody() {
         <tbody>${pairings}</tbody></table></div></div>
     </div>` : ""}
 
+    ${S.attributions.length ? `<div class="cfg-section">
+      <div class="cfg-head"><h3>Replicas stored here</h3></div>
+      <p class="sub">What paired devices keep on this machine, and who may claim each back after losing theirs.</p>
+      <div class="card"><div class="table-wrap"><table class="data">
+        <thead><tr><th>Repository</th><th>Belongs to</th><th>Reclaimable by</th><th></th></tr></thead>
+        <tbody>${attributions}</tbody></table></div></div>
+    </div>` : ""}
+
     ${S.invites.length ? `<div class="cfg-section">
       <div class="cfg-head"><h3>Pairing invites</h3></div>
       <div class="card"><div class="table-wrap"><table class="data">
@@ -1980,6 +2852,9 @@ function newDraft(set) {
     destinations: new Set(set?.destinations ?? []),
     retention: set?.retention ?? null,
     overrides: { ...(set?.destinationRetention ?? {}) },
+    priority: set?.priority ?? null,
+    directShip: set ? (set.directShip ?? false) : true,
+    touched: new Set(),       // sections staged by their dialogs, pending the one confirm
     tree: new Map(),          // full path -> {open, listing}; "" is the machine's drive list
     lastPreviewKey: null,     // what the live preview last compared, to skip no-op walks
   };
@@ -1987,91 +2862,252 @@ function newDraft(set) {
 
 function openSetEditor(set) {
   E = newDraft(set);
+  renderSetSummary();
+}
+
+// The raw schedule grammar, said as a person would ("every 4 hours",
+// "daily at 02:30", "manual"). An unrecognised form is shown verbatim —
+// hiding it would be worse than reading oddly.
+function describeSchedule(schedule) {
+  if (!schedule) return "manual — runs only when you start it";
+  const every = /^every (\d+)([mhd])$/.exec(schedule);
+  if (every) {
+    const unit = { m: "minute", h: "hour", d: "day" }[every[2]];
+    const n = Number(every[1]);
+    return n === 1 ? `every ${unit}` : `every ${n} ${unit}s`;
+  }
+  const daily = /^daily at (.+)$/.exec(schedule);
+  return daily ? `daily at ${daily[1]}` : schedule;
+}
+
+// The retention policy as a sentence. Absent fields are "no rule"; with no
+// rules at all the truth is stated plainly rather than as blanks.
+function retentionProse(policy, overrides) {
+  const kept = [];
+  if (policy?.keepDaily != null) kept.push(`${policy.keepDaily} daily`);
+  if (policy?.keepWeekly != null) kept.push(`${policy.keepWeekly} weekly`);
+  if (policy?.keepMonthly != null) kept.push(`${policy.keepMonthly} monthly`);
+  let text = kept.length ? `keep ${kept.join(", ")} versions` : "";
+  if (policy?.minGenerations != null) {
+    text += `${text ? "; " : ""}always keep at least ${policy.minGenerations} backup${policy.minGenerations === 1 ? "" : "s"}`;
+  }
+  if (!text) text = "keeps everything — no rule ever expires a backup";
+  const named = Object.keys(overrides ?? {}).length;
+  return named ? `${text} · ${named} destination override${named === 1 ? "" : "s"}` : text;
+}
+
+// The landing view: what is set, per section, in prose — each with its own
+// Change… dialog — and the one confirm at the end. Nothing reaches the
+// service until that confirm; Cancel discards every staged change.
+function renderSetSummary() {
   dialog.classList.add("wide");
+  const pending = key => E.touched.has(key) ? ` <span class="chip accent">changed</span>` : "";
+  const compiled = compileMarks();
+  const roots = compiled.roots.length ? compiled.roots : E.roots;
+  const ruleCount = E.handIncludes.length + E.handExcludes.length;
+  const rows = [
+    ["sec-schedule", "schedule", "Schedule", esc(describeSchedule(E.schedule))],
+    ["sec-locations", "locations", "What is backed up",
+      roots.length
+        ? roots.map(root => `<span class="mono" title="${esc(root.path)}">${esc(truncateMiddle(root.path, 58))}</span>`).join(" · ")
+        : `<span class="subtle">nothing selected yet</span>`],
+    ["sec-exclusions", "exclusions", "Exclusions",
+      ruleCount === 0 ? "none"
+        : [...E.handExcludes.map(rule => `exclude ${esc(rule)}`),
+           ...E.handIncludes.map(rule => `include ${esc(rule)}`)].join(" · ")],
+    ["sec-destinations", "destinations", "Destinations",
+      E.destinations.size ? esc([...E.destinations].join(", ")) : `<span class="subtle">none chosen yet</span>`],
+    ["sec-retention", "retention", "Retention", esc(retentionProse(E.retention, E.overrides))],
+    ["sec-other", "other", "Other settings",
+      `${E.priority != null ? `priority ${esc(String(E.priority))}` : "default priority"} · `
+        + (E.directShip ? "ships straight to destinations" : "stages locally, then copies out")],
+  ];
 
-  const scheduleMode = !E.schedule ? "manual"
-    : /^every \d+[mhd]$/.test(E.schedule) ? "every"
-    : /^daily at /.test(E.schedule) ? "daily" : "custom";
-  const every = /^every (\d+)([mhd])$/.exec(E.schedule ?? "") ?? [null, "12", "h"];
-  const daily = /^daily at (.+)$/.exec(E.schedule ?? "")?.[1] ?? "02:30";
-
-  const policy = E.retention ?? {};
   openDialog(`
-    <div id="set-editor">
-    <h3>${E.isNew ? "New backup set" : "Edit backup set"}</h3>
-
-    <div class="editor-section">
-      <label class="field" for="set-name">Name</label>
-      <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">
+    <div id="set-summary">
+    <h3>${E.isNew ? "New backup set" : "Backup set settings"}</h3>
+    <p class="dlg-sub set-title-row"><b>${esc(E.name || "(unnamed)")}</b>
+      <button type="button" class="btn small" data-action="sec-name">Rename…</button>${pending("name")}</p>
+    <div class="cfg-rows">
+      ${rows.map(([action, key, label, value]) => `
+      <div class="cfg-row">
+        <div class="cfg-row-text"><b>${label}:</b> <span class="cfg-value">${value}</span>${pending(key)}</div>
+        <button type="button" class="btn small" data-action="${action}">Change…</button>
+      </div>`).join("")}
     </div>
-
-    <div class="editor-section">
-      <label class="field">Schedule</label>
-      <div class="radio-row">
-        <label><input type="radio" name="sched-mode" value="manual" ${scheduleMode === "manual" ? "checked" : ""}> manual only</label>
-        <label><input type="radio" name="sched-mode" value="every" ${scheduleMode === "every" ? "checked" : ""}> every
-          <input type="text" id="sched-n" class="num" value="${esc(every[1])}">
-          <select id="sched-unit">
-            <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
-            <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
-            <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
-          </select></label>
-        <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
-          <input type="time" id="sched-time" value="${esc(daily)}"></label>
-      </div>
-      <div id="sched-preview" class="subtle"></div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">What to capture <span class="plain">— on the service's machine</span></label>
-      <p class="subtle">Tick any folders — several, on any drive, in one set. Untick a child to leave it out;
-      everything ticked is captured, including what appears there later. Pattern rules refine further.</p>
-      <div id="sel-tree" class="tree"></div>
-      <div id="sel-summary" class="subtle"></div>
-      <div class="field-row">
-        <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
-        <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
-        <button type="button" class="btn small" data-action="rule-add-raw">Add rule</button>
-      </div>
-      <div id="rule-chips"></div>
-      <div id="draft-defects"></div>
-      <div class="field-row">
-        <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
-      </div>
-      <div id="change-preview"></div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Retention</label>
-      <p class="subtle">Absent fields are "no rule"; with no rules at all, every snapshot is kept. Retention selects —
-      deleting is a separate, confirmed act on the Maintenance page.</p>
-      <div class="field-row wrap">
-        <label class="mini">keep daily <input type="text" id="ret-daily" class="num" value="${policy.keepDaily ?? ""}"></label>
-        <label class="mini">weekly <input type="text" id="ret-weekly" class="num" value="${policy.keepWeekly ?? ""}"></label>
-        <label class="mini">monthly <input type="text" id="ret-monthly" class="num" value="${policy.keepMonthly ?? ""}"></label>
-        <label class="mini">min generations <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"></label>
-        <label class="mini">deferral days <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"></label>
-      </div>
-    </div>
-
-    <div class="editor-section">
-      <label class="field">Destinations</label>
-      <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
-      destination — unset fields do not fall back.</p>
-      <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>
-    </div>
-
     <div class="dlg-actions">
-      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-      <button type="button" class="btn primary" data-action="set-save">${E.isNew ? "Create set" : "Save changes"}</button>
+      <button type="button" class="btn" data-action="set-cancel-all">${E.touched.size ? "Discard changes" : "Close"}</button>
+      <button type="button" class="btn primary" data-action="set-confirm-all"
+        ${E.touched.size || E.isNew ? "" : "disabled"}>${E.isNew ? "Create set" : "Confirm changes"}</button>
     </div>
     </div>`);
+}
 
-  renderTree();
-  renderRuleChips();
-  renderSelectionSummary();
-  validateDraftSoon();
-  expandToMarks();
+/* ----- the per-section Change… dialogs ----- */
+
+function sectionTitle(key) {
+  return {
+    name: "Rename the set", schedule: "Schedule", locations: "What is backed up",
+    exclusions: "Exclusions", destinations: "Destinations", retention: "Retention",
+    other: "Other settings",
+  }[key];
+}
+
+// Each section's dialog body. One function so the whole vocabulary of what
+// a set carries is readable in one place; the ids match what the section
+// save reads and what the live pieces (tree, chips, previews) expect.
+function setSectionHtml(key) {
+  switch (key) {
+    case "name":
+      return `
+        <label class="field" for="set-name">Name</label>
+        <input type="text" id="set-name" value="${esc(E.name)}" spellcheck="false" placeholder="documents">`;
+
+    case "schedule": {
+      const scheduleMode = !E.schedule ? "manual"
+        : /^every \d+[mhd]$/.test(E.schedule) ? "every"
+        : /^daily at /.test(E.schedule) ? "daily" : "custom";
+      const every = /^every (\d+)([mhd])$/.exec(E.schedule ?? "") ?? [null, "12", "h"];
+      const daily = /^daily at (.+)$/.exec(E.schedule ?? "")?.[1] ?? "02:30";
+      return `
+        <div class="radio-row">
+          <label><input type="radio" name="sched-mode" value="manual" ${scheduleMode === "manual" ? "checked" : ""}> manual only</label>
+          <label><input type="radio" name="sched-mode" value="every" ${scheduleMode === "every" ? "checked" : ""}> every
+            <input type="text" id="sched-n" class="num" value="${esc(every[1])}">
+            <select id="sched-unit">
+              <option value="m" ${every[2] === "m" ? "selected" : ""}>minutes</option>
+              <option value="h" ${every[2] === "h" ? "selected" : ""}>hours</option>
+              <option value="d" ${every[2] === "d" ? "selected" : ""}>days</option>
+            </select></label>
+          <label><input type="radio" name="sched-mode" value="daily" ${scheduleMode === "daily" ? "checked" : ""}> daily at
+            <input type="time" id="sched-time" value="${esc(daily)}"></label>
+        </div>
+        <div id="sched-preview" class="subtle"></div>`;
+    }
+
+    case "locations":
+      return `
+        <p class="subtle">Tick any folders on the service's machine — several, on any drive, in one set.
+        Untick a child to leave it out; everything ticked is captured, including what appears there later.</p>
+        <div id="sel-tree" class="tree"></div>
+        <div id="sel-summary" class="subtle"></div>
+        <div id="draft-defects"></div>
+        <div class="field-row">
+          <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
+        </div>
+        <div id="change-preview"></div>`;
+
+    case "exclusions":
+      return `
+        <p class="subtle">Pattern rules refine what the folders capture — filters, not folder picks.</p>
+        <div class="field-row">
+          <input type="text" id="rule-new" class="mono" spellcheck="false" placeholder="pattern rule, e.g.  *.iso   or   node_modules">
+          <select id="rule-list"><option value="exclude">exclude</option><option value="include">include</option></select>
+          <button type="button" class="btn small" data-action="rule-add-raw">Add rule</button>
+        </div>
+        <div id="rule-chips"></div>
+        <div id="draft-defects"></div>`;
+
+    case "destinations":
+      return `
+        <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
+        destination — unset fields do not fall back.</p>
+        <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>`;
+
+    case "retention": {
+      const policy = E.retention ?? {};
+      return `
+        <p class="subtle">Absent fields are "no rule"; with no rules at all, every snapshot is kept.
+        Retention selects — deleting is a separate, confirmed act on the Maintenance page.</p>
+        <div class="ret-rows">
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-daily" class="num" value="${policy.keepDaily ?? ""}"> days</label>
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-weekly" class="num" value="${policy.keepWeekly ?? ""}"> weeks</label>
+          <label class="ret-row">Keep a version for each of the last
+            <input type="text" id="ret-monthly" class="num" value="${policy.keepMonthly ?? ""}"> months</label>
+          <label class="ret-row">Always keep at least
+            <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"> backups</label>
+          <label class="ret-row">Hold expiry for a destination behind by up to
+            <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"> days before warning</label>
+        </div>`;
+    }
+
+    case "other":
+      return `
+        <label class="field">Priority</label>
+        <p class="subtle">Among waiting backups, a higher-priority set runs first. A backup you start by hand
+        always outranks any priority.</p>
+        <label class="mini">priority <input type="text" id="set-priority" class="num" value="${E.priority ?? ""}"></label>
+        <label class="field">Storage shape</label>
+        <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
+        reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
+        local-path or paired-peer destination, and a backup waits when none is reachable. With only a peer
+        to ship to, there is no second copy here to check its content against, so it is never reported as
+        verified. Unticked, backups stage into a
+        local archive first and copy outward after — a local buffer at the cost of a second copy on this
+        machine. Changing this on an existing set migrates it; its staging archive stays as a read-only seed
+        until you retire it from the notice.</p>
+        <label class="mini"><input type="checkbox" id="set-direct-ship" ${E.directShip ? "checked" : ""}>
+          ship straight to destinations</label>`;
+  }
+}
+
+// Sections whose controls mutate the draft live (the tree's marks, the rule
+// chips, the destination checkboxes) are snapshotted on open so Cancel can
+// mean it; the rest stage nothing until Save reads their inputs.
+function snapshotSection(key) {
+  switch (key) {
+    case "locations": return { marks: new Map(E.marks), roots: E.roots.map(root => ({ ...root })) };
+    case "exclusions": return { handIncludes: [...E.handIncludes], handExcludes: [...E.handExcludes] };
+    case "destinations": return {
+      destinations: new Set(E.destinations),
+      overrides: Object.fromEntries(Object.entries(E.overrides).map(([name, policy]) => [name, { ...policy }])),
+    };
+    default: return null;
+  }
+}
+
+function openSetSection(key) {
+  E.section = key;
+  E.sectionSnapshot = snapshotSection(key);
+  openDialog(`
+    <div id="set-editor" data-section="${esc(key)}">
+    <h3>${sectionTitle(key)}</h3>
+    ${setSectionHtml(key)}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="sec-cancel">Cancel</button>
+      <button type="button" class="btn primary" data-action="sec-save">Save</button>
+    </div>
+    </div>`);
+  dialog.classList.add("wide");
+
+  if (key === "locations") { renderTree(); renderSelectionSummary(); validateDraftSoon(); expandToMarks(); }
+  if (key === "exclusions") { renderRuleChips(); validateDraftSoon(); }
+  if (key === "schedule") validateDraftSoon();
+  if (key === "name") document.getElementById("set-name")?.focus();
+}
+
+// The one payload, built from the draft alone — every section dialog has
+// already staged its values, so the confirm needs no DOM to read.
+function payloadFromDraft() {
+  const compiled = compileMarks();
+  return {
+    id: E.id, name: E.name,
+    root: compiled.roots[0]?.path ?? "", // back-fill for anything pre-1.10 reading it
+    roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
+    schedule: E.schedule,
+    includeRules: [...E.handIncludes],
+    excludeRules: [...compiled.excludeRules, ...E.handExcludes],
+    destinations: [...E.destinations],
+    retention: E.retention,  // all-null clears; values set — always explicit from this editor
+    destinationRetention: E.overrides,
+    priority: E.priority,
+    // Always explicit from this editor (contract 1.23): null is the
+    // preserve-by-omission a pre-1.23 client sends, and an editor that
+    // shows the checkbox must say what it shows.
+    directShip: E.directShip,
+  };
 }
 
 function rerenderDestChoices() {
@@ -2393,6 +3429,25 @@ function renderSelectionSummary() {
 // brand-new set, against nothing (contract 1.10's draft mode). Skipped when
 // the compiled output has not changed since the last walk.
 let livePreviewTimer = null;
+
+// One in-flight source walk at a time. A preview superseded by a newer edit,
+// a save, or the dialog closing is aborted — and because the console opens a
+// service connection per relayed request, the abort reaches the service as a
+// hang-up that cancels the walk itself, not just this page's fetch. Without
+// it, every settled edit of a large set stacked another multi-minute scan
+// behind the reader lane (583916 ms and friends in the 2026-08-25 log).
+let sourceScan = null;
+function beginSourceScan() {
+  sourceScan?.abort();
+  sourceScan = new AbortController();
+  return sourceScan.signal;
+}
+
+function endSourceScans() {
+  sourceScan?.abort();
+  sourceScan = null;
+}
+
 function scheduleLivePreview() {
   clearTimeout(livePreviewTimer);
   livePreviewTimer = setTimeout(async () => {
@@ -2412,7 +3467,7 @@ function scheduleLivePreview() {
       roots: roots.map(root => ({ path: root.path, label: root.label })),
       includeRules,
       excludeRules: allExcludes,
-    });
+    }, { signal: beginSourceScan() });
     if (!E || !document.getElementById("change-preview")) return;
     if (result?.result !== "set_change_preview") return;
     E.lastPreviewKey = key;
@@ -2483,6 +3538,9 @@ function validateDraftSoon() {
 }
 
 function scheduleFromEditor() {
+  // Outside the schedule dialog there are no radios to read — the staged
+  // draft is the answer, not a phantom "manual".
+  if (!document.querySelector("input[name=sched-mode]")) return E?.schedule ?? null;
   const mode = document.querySelector("input[name=sched-mode]:checked")?.value ?? "manual";
   if (mode === "manual") return null;
   if (mode === "every") {
@@ -2566,11 +3624,11 @@ Object.assign(actions, {
       host.innerHTML = `<p class="subtle">Walking the source…</p>`;
       const result = await run({
         command: "preview_set_changes",
-        setName: E.isNew ? (document.getElementById("set-name").value.trim() || "(draft)") : E.name,
+        setName: E.isNew ? (E.name || "(draft)") : E.name,
         roots: roots.map(root => ({ path: root.path, label: root.label })),
         includeRules: [...E.handIncludes],
         excludeRules: [...excludeRules, ...E.handExcludes],
-      }, { errToast: "The service could not compare" });
+      }, { errToast: "The service could not compare", signal: beginSourceScan() });
       if (!result || result.result !== "set_change_preview") { host.innerHTML = ""; return; }
 
       E.lastPreviewKey = JSON.stringify([roots, [...E.handIncludes], [...excludeRules, ...E.handExcludes]]);
@@ -2581,100 +3639,167 @@ Object.assign(actions, {
     });
   },
 
-  async "set-save"(el) {
-    E.name = document.getElementById("set-name").value.trim();
-    const compiled = compileMarks();
-    if (!E.name || compiled.roots.length === 0) {
-      toast("warn", "A set needs a name and at least one ticked folder.");
+  "sec-name"() { openSetSection("name"); },
+  "sec-schedule"() { openSetSection("schedule"); },
+  "sec-locations"() { openSetSection("locations"); },
+  "sec-exclusions"() { openSetSection("exclusions"); },
+  "sec-destinations"() { openSetSection("destinations"); },
+  "sec-retention"() { openSetSection("retention"); },
+  "sec-other"() { openSetSection("other"); },
+
+  // A section's Save stages its values into the draft and returns to the
+  // summary — the service hears nothing until the one confirm below.
+  "sec-save"() {
+    const section = document.getElementById("set-editor")?.dataset.section;
+    switch (section) {
+      case "name": {
+        const name = document.getElementById("set-name").value.trim();
+        if (!name) { toast("warn", "A set needs a name."); return; }
+        E.name = name;
+        break;
+      }
+      case "schedule":
+        E.schedule = scheduleFromEditor();
+        break;
+      case "locations": {
+        if (compileMarks().roots.length === 0) {
+          toast("warn", "Tick at least one folder first."); return;
+        }
+        endSourceScans();
+        break;
+      }
+      case "exclusions":
+        break; // the chips already staged into the draft; Save keeps them
+      case "destinations": {
+        const overrides = {};
+        for (const name of E.destinations) {
+          if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
+          const policy = {};
+          for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
+            const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
+            policy[field] = raw === "" ? null : Number(raw);
+          }
+          if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
+            toast("warn", `The override for '${name}' has a non-numeric value.`); return;
+          }
+          overrides[name] = policy;
+        }
+        E.overrides = overrides;
+        break;
+      }
+      case "retention": {
+        const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
+        if (Object.values(retention).some(Number.isNaN)) {
+          toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
+          return;
+        }
+        E.retention = retention;
+        break;
+      }
+      case "other": {
+        const priorityRaw = document.getElementById("set-priority")?.value ?? "";
+        const priority = intOrNull(priorityRaw);
+        if (priorityRaw.trim() !== "" && priority === null) {
+          toast("warn", "Priority is a whole number."); return;
+        }
+        E.priority = priority;
+        E.directShip = document.getElementById("set-direct-ship")?.checked ?? false;
+        break;
+      }
+      default: return;
+    }
+
+    E.touched.add(section);
+    E.sectionSnapshot = null;
+    renderSetSummary();
+  },
+
+  "sec-cancel"() {
+    // Live-mutating sections (tree marks, rule chips, destination toggles)
+    // are rolled back to the snapshot their dialog opened with.
+    if (E.sectionSnapshot) Object.assign(E, E.sectionSnapshot);
+    E.sectionSnapshot = null;
+    endSourceScans();
+    renderSetSummary();
+  },
+
+  "set-cancel-all"() {
+    closeDialog(); // the draft dies with the dialog; nothing was saved
+  },
+
+  async "set-confirm-all"(el) {
+    if (!E.name) { toast("warn", "A set needs a name — Rename… to give it one."); return; }
+    const payload = payloadFromDraft();
+    if (payload.roots.length === 0) {
+      toast("warn", "A set needs at least one folder — Change… under 'What is backed up'.");
       return;
     }
-
-    const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
-    if (Object.values(retention).some(Number.isNaN)) {
-      toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
-      return;
-    }
-
-    const destinations = [...document.querySelectorAll("[data-dest-check]")]
-      .filter(box => box.checked).map(box => box.dataset.destCheck);
-
-    const overrides = {};
-    for (const name of destinations) {
-      if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
-      const policy = {};
-      for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
-        const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
-        policy[field] = raw === "" ? null : Number(raw);
-      }
-      if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
-        toast("warn", `The override for '${name}' has a non-numeric value.`); return;
-      }
-      overrides[name] = policy;
-    }
-
-    const includeRules = [...E.handIncludes];
-    const excludeRules = [...compiled.excludeRules, ...E.handExcludes];
-    const payload = {
-      id: E.id, name: E.name,
-      root: compiled.roots[0].path, // back-fill for anything pre-1.10 reading it
-      roots: compiled.roots.map(root => ({ path: root.path, label: root.label })),
-      schedule: scheduleFromEditor(),
-      includeRules, excludeRules,
-      destinations,
-      retention,           // all-null clears; values set — always explicit from this editor
-      destinationRetention: overrides,
-    };
 
     // A material edit — the roots or the rules — changes what future backups
     // hold: files can silently leave the backup. So it is never applied on
-    // one click: step one compares the draft against the last backup and
-    // shows the consequences; only the explicit Apply in that step saves
+    // one click: step two states the edit and only its explicit Apply saves
     // (ADR-0038). Compared as sorted sets, so mere reordering is not
-    // material. Everything else (name, schedule, retention) saves directly.
+    // material. Everything else (name, schedule, retention) applies from
+    // this confirm directly.
     const saved = E.isNew ? null : S.sets.find(set => set.id === E.id);
     const sortedEqual = (left, right) =>
       JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
     const material = saved && (
       !sortedEqual(rootsOf(saved), payload.roots.map(root => root.path))
-      || !sortedEqual(saved.includeRules ?? [], includeRules)
-      || !sortedEqual(saved.excludeRules ?? [], excludeRules));
+      || !sortedEqual(saved.includeRules ?? [], payload.includeRules)
+      || !sortedEqual(saved.excludeRules ?? [], payload.excludeRules));
 
     if (!material) {
       await withBusy(el, () => applySetUpsert(payload));
       return;
     }
 
-    await withBusy(el, async () => {
-      let preview = null;
-      let previewError = null;
-      try {
-        const result = await api({
-          command: "preview_set_changes",
-          setName: saved.name,
-          roots: payload.roots,
-          includeRules, excludeRules,
-        });
-        if (result.result === "set_change_preview") preview = result;
-        else previewError = result.message ?? "the service answered unexpectedly";
-      } catch (error) {
-        previewError = error.message;
-      }
+    // The confirm panel opens at once and the comparison — a full walk of
+    // the source — fills it in from the background; Apply never waits for
+    // it (ADR-0038: the service queues its own rescan either way).
+    E.pendingSave = payload;
+    renderSetSaveConfirm(saved, null, null, { comparing: true });
 
-      E.pendingSave = payload;
+    const signal = beginSourceScan();
+    let preview = null;
+    let previewError = null;
+    try {
+      const result = await api({
+        command: "preview_set_changes",
+        setName: saved.name,
+        roots: payload.roots,
+        includeRules: payload.includeRules,
+        excludeRules: payload.excludeRules,
+      }, { signal });
+      if (result.result === "set_change_preview") preview = result;
+      else previewError = result.message ?? "the service answered unexpectedly";
+    } catch (error) {
+      if (error.kind === "aborted") return;
+      previewError = error.message;
+    }
+
+    // Filled in only if the operator is still looking at this very step —
+    // not after Back, not after Apply, not in a dialog reopened for
+    // something else.
+    if (E?.pendingSave === payload && document.getElementById("set-confirm")) {
       renderSetSaveConfirm(saved, preview, previewError);
-    });
+    }
   },
 
   "set-save-back"() {
+    endSourceScans(); // the walk was informing a step that no longer exists
     document.getElementById("set-confirm")?.remove();
-    const editor = document.getElementById("set-editor");
-    if (editor) editor.hidden = false;
+    const beneath = document.getElementById("set-summary") ?? document.getElementById("set-editor");
+    if (beneath) beneath.hidden = false;
     E.pendingSave = null;
   },
 
   async "set-save-apply"(el) {
     const payload = E.pendingSave;
     if (!payload) return;
+    // The advisory walk yields the reader lane before the save queues the
+    // authoritative rescan job onto it.
+    endSourceScans();
     await withBusy(el, () => applySetUpsert(payload));
   },
 
@@ -2719,8 +3844,8 @@ Object.assign(actions, {
       Restoring — or moving the archive to another machine — means entering the passphrase again.</p>
       <label class="field" for="wo-passphrase">Passphrase</label>
       <input type="password" id="wo-passphrase" autocomplete="new-password">
-      <ul class="warnings"><li>The passphrase can never change, and there is no reset, no export and no
-      recovery kit that restores without it. <b>If it is lost, this backup is unrecoverable.</b></li></ul>
+      <ul class="warnings"><li>The passphrase can never change, and there is no reset and no export.
+      <b>If it is lost, this backup is unrecoverable.</b></li></ul>
       <label class="check-row"><input type="checkbox" id="wo-ack">
         I understand that losing this passphrase loses the backup, permanently.</label>
       <div class="dlg-actions">
@@ -2758,6 +3883,96 @@ Object.assign(actions, {
     });
   },
 
+  // Adopting a destination's archives (ADR-0061): after a rebuild, point
+  // the product at the drive its backups are on, see what is there, and
+  // take a set back under its original ids. Discovery is credential-free;
+  // adoption is the write-only ceremony above, derived in the console
+  // process against the DISCOVERED archive's salt — the passphrase never
+  // crosses the command contract.
+  async "dest-discover"(el) {
+    const name = el.dataset.name;
+    await withBusy(el, async () => {
+      const result = await run({ command: "discover_archives", destinationName: name }, { errToast: "Discovery refused" });
+      if (!result || result.result !== "archives_discovered") return;
+      const rows = (result.archives ?? []).map(archive => `
+        <tr>
+          <td class="mono detail">${esc(archive.repositoryId.slice(0, 12))}…</td>
+          <td class="detail">${esc(archive.createdBy ?? "")}<br>${archive.createdAt ? esc(new Date(Number(archive.createdAt)).toLocaleString()) : ""}</td>
+          <td>${esc(String(archive.snapshotObjects ?? 0))}</td>
+          <td>${archive.ownedBySet ? `set '${esc(archive.ownedBySet)}'` : (archive.sameInstallation ? "this installation" : "nobody yet")}</td>
+          <td>${archive.ownedBySet ? "" : `<button type="button" class="btn small" data-action="dest-adopt" data-name="${esc(name)}" data-repo="${esc(archive.repositoryId)}">Adopt…</button>`}</td>
+        </tr>`).join("");
+      const warnings = (result.warnings ?? []).map(line => `<li>${esc(line)}</li>`).join("");
+      openDialog(`
+        <h3>Backups at '${esc(name)}'</h3>
+        <p class="dlg-sub">Every archive this destination holds, read from its descriptor alone. Adopting one
+        takes it back under its original ids with the passphrase it was written with; the next backup is
+        then incremental, not a fresh copy.</p>
+        ${rows ? `<table class="table"><thead><tr><th>Archive</th><th>Written by</th><th>Snapshots</th><th>Owned by</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<p class="detail">No archives here.</p>`}
+        ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
+        <div class="dlg-actions"><button type="button" class="btn" data-action="close-dialog">Close</button></div>`);
+    });
+  },
+
+  "dest-adopt"(el) {
+    const name = el.dataset.name;
+    const repo = el.dataset.repo;
+    openDialog(`
+      <h3>Adopt a backup from '${esc(name)}'</h3>
+      <p class="dlg-sub">Archive <span class="mono">${esc(repo.slice(0, 12))}…</span>. The set comes back as the
+      archive recorded it — name, folders, schedule, rules — and this service continues it. Enter the passphrase
+      the backup was written with; it is checked here, on this machine, before anything is sent.</p>
+      <label class="field" for="adopt-passphrase">Passphrase</label>
+      <input type="password" id="adopt-passphrase" autocomplete="current-password">
+      <label class="field" for="adopt-name">Set name <span class="detail">(leave blank to use the recorded name)</span></label>
+      <input type="text" id="adopt-name" autocomplete="off" spellcheck="false">
+      <ul class="warnings"><li>The passphrase can never change, and there is no reset and no export.
+      <b>If it is lost, this backup is unrecoverable.</b></li></ul>
+      <label class="check-row"><input type="checkbox" id="adopt-ack">
+        I understand that losing this passphrase loses the backup, permanently.</label>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" data-action="dest-adopt-go" data-name="${esc(name)}" data-repo="${esc(repo)}">Adopt</button>
+      </div>`);
+    document.getElementById("adopt-passphrase").focus();
+  },
+
+  async "dest-adopt-go"(el) {
+    const passphrase = document.getElementById("adopt-passphrase")?.value ?? "";
+    const acknowledged = document.getElementById("adopt-ack")?.checked ?? false;
+    const setName = document.getElementById("adopt-name")?.value.trim() ?? "";
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
+    if (!acknowledged) { toast("warn", "Adoption needs the loss acknowledgement."); return; }
+    await withBusy(el, async () => {
+      let response;
+      try {
+        response = await fetch("/api/adopt-archive", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({
+            destinationName: el.dataset.name, repositoryId: el.dataset.repo, passphrase, acknowledged,
+            setName: setName || null,
+          }),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const body = await safeJson(response);
+      if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return; }
+      if (body?.outcome === "adopted") {
+        const set = body.set ?? {};
+        const lines = [...(body.lines ?? [])];
+        if ((set.missingRoots ?? []).length) lines.push(`Folders not found on this machine: ${set.missingRoots.join(", ")}`);
+        reportDialog(`Backup set '${set.setName ?? ""}' adopted`, lines);
+        refreshConfigData(); refreshStatus();
+      } else {
+        toast("bad", body?.detail ?? "The ceremony refused.");
+      }
+    });
+  },
+
   "dest-add-local"() { openDestEditor("local-path", null); },
   "dest-add-peer"() { openDestEditor("peer", null); },
 
@@ -2777,8 +3992,12 @@ Object.assign(actions, {
       endpoint: kind === "peer" ? document.getElementById("dest-endpoint").value.trim() : null,
       failureDomain: document.getElementById("dest-domain").value || null,
       deepVerifyIntervalDays: Number(document.getElementById("dest-sweep").value.trim()) || null,
+      priority: intOrNull(document.getElementById("dest-priority").value),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
+    if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
+      toast("warn", "Priority is a whole number."); return;
+    }
 
     await withBusy(el, async () => {
       const result = await run(
@@ -2982,7 +4201,10 @@ function openDestEditor(kind, destination) {
           `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
         </select></label>
       <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num" value="${destination?.deepVerifyIntervalDays ?? ""}"></label>
+      <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
     </div>
+    <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
+    to its destinations in priority order.</p>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn primary" data-action="dest-save" data-kind="${esc(kind)}" data-id="${esc(destination?.id ?? "")}">
@@ -3170,9 +4392,16 @@ function rstStep1() {
 /* step 2 — source */
 function rstStep2() {
   const options = [];
+  // A direct-ship set stages nothing, so offering "this machine's staging
+  // archive" would name a copy that does not exist: what is here is the
+  // set's records, and the content comes from its destinations as it reads.
+  const chosen = W.sets.find(candidate => candidate.name === W.setName);
+  const here = chosen?.directShip
+    ? `<b>This machine's records</b> <span class="detail">content read from this set's destinations</span>`
+    : `<b>This machine's staging archive</b> <span class="detail">the service's own copy</span>`;
   options.push(`
     <label class="radio-block"><input type="radio" name="rst-src" value="staging" ${W.destinationName === null ? "checked" : ""}>
-      <b>This machine's staging archive</b> <span class="detail">the service's own copy</span></label>`);
+      ${here}</label>`);
   for (const destination of W.dests) {
     if (destination.kind !== "local-path" && destination.kind !== "peer") continue;
     const label = destination.kind === "local-path"
@@ -3621,7 +4850,18 @@ function toast(kind, text) {
   el.className = "toast " + kind;
   el.textContent = text;
   host.appendChild(el);
-  setTimeout(() => el.remove(), 7000);
+  // showModal() puts the dialog in the top layer, above any z-index; the
+  // host joins it as a popover — promoted later, so painted above — or a
+  // warning raised over an open modal is invisible behind the backdrop.
+  try {
+    if (host.showPopover && !host.matches(":popover-open")) host.showPopover();
+  } catch { /* older engine: the host stays a normal fixed element */ }
+  setTimeout(() => {
+    el.remove();
+    if (host.childElementCount === 0) {
+      try { host.hidePopover?.(); } catch { /* already hidden */ }
+    }
+  }, 7000);
 }
 
 /* ---------------------------------------------------------------- wiring */
@@ -3735,11 +4975,19 @@ function boot() {
   refreshAll();
   connectEvents();
 
-  setInterval(() => { if (!document.hidden) refreshStatus(); }, 5000);
-  setInterval(() => { if (!document.hidden) refreshJobs(); }, 3000);
-  setInterval(() => { if (!document.hidden) { refreshSets(); refreshSnapshots(); } }, 30000);
+  // The data pollers pause while sign-in (or setup) stands in place of the
+  // views: every one of these commands would be refused for want of a
+  // session, and a poll that can only be refused is traffic without
+  // information. The describe poll below is the signed-out heartbeat — it is
+  // answered without a session, and it is how the page notices the service
+  // going away or its setup state changing while somebody is not signed in.
+  const signedOut = () => S.signInRequired || S.setupRequired;
+  setInterval(() => { if (!document.hidden && !signedOut()) refreshStatus(); }, 5000);
+  setInterval(() => { if (!document.hidden && !signedOut()) refreshJobs(); }, 3000);
+  setInterval(() => { if (!document.hidden && !signedOut()) { refreshSets(); refreshSnapshots(); } }, 30000);
+  setInterval(() => { if (!document.hidden && signedOut()) refreshDesc(); }, 30000);
   setInterval(() => { if (!S.connected) renderConn(); }, 10000); // keep the age fresh
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshAll(); });
+  document.addEventListener("visibilitychange", applyVisibility);
 }
 
 /* ---------------------------------------------------------------- entry */

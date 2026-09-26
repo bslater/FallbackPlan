@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §10 · **Resolves:** [M3](../review/2026-08-architecture-review.md#m3--cross-platform-metadata-semantics-are-named-but-never-resolved)
 
-**Built:** Yes, except the no-follow handle-relative traversal §4.1 owes — see [implementation status](../implementation-status.md).
+**Built:** Yes — the no-follow handle-relative traversal §4.1 owed has since landed (names open relative to a directory descriptor, `O_NOFOLLOW`, stat re-taken from the descriptor) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -17,6 +17,7 @@ The scanner streams directory traversal with memory bounded independently of fil
 - handle inaccessible and concurrently changing files without aborting the snapshot — an unreadable file is an entry in the error manifest, not a failed backup;
 - use stable file identity where the platform provides it (`FileId` on Windows, `(device, inode)` on Unix) so a rename is recognised as the same file rather than a delete plus a create — see [§4.2](#42-a-rename-is-a-move-not-a-new-file);
 - **revalidate after reading** — compare size, mtime, and identity before and after; a file that changed mid-read is recorded as captured-inconsistent and re-queued, and one whose name has come to mean a different object is recorded as a substitution and **not** re-read ([§4.1](#41-links-are-classified-before-they-are-traversed)). A revalidation that cannot observe the object at all — the file was deleted while it was being read — is recorded the same way as a change rather than accepted as unchanged: the bytes are complete, but nothing can state what they are the content of. A file for which **no** read completed while it was changing is an error-manifest entry (reason 4) rather than a version, because there are no bytes to publish; a file that did yield a complete read keeps that read, which is why an appended-to log is captured-inconsistent and not a partial backup ([ADR-0026 §Decision 2](../adr/0026-phase-1-capture-shapes.md)).
+- **honour the run's pause gate between events** ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)) — the publication awaits the gate between scan events, never inside a file, so a preempted run parks at a file boundary with the walk's state held and resumes without re-scanning; a big file defers the park until it finishes, which is the stated granularity.
 
 ## 2. Path handling
 

@@ -36,6 +36,72 @@ public sealed class SessionBindingTests
     }
 
     [TestMethod]
+    public void SessionId_BuiltFromEitherEndsPointOfView_IsTheSameBytes()
+    {
+        // The property the whole identifier exists for, and the one the
+        // transcript deliberately does NOT have: both ends must reach the same
+        // 32 bytes, or nothing can be signed against it.
+        using var initiator = PeerKeypair.Generate();
+        using var responder = PeerKeypair.Generate();
+
+        var i = Contribution(initiator.Identity, 0x11);
+        var r = Contribution(responder.Identity, 0x22);
+
+        // Each side builds the pair by role, never by "us and them", so the
+        // two arguments are in the same order whichever end is asking.
+        SequenceAssert.AreEqual(SessionBinding.SessionId(i, r), SessionBinding.SessionId(i, r));
+        Assert.HasCount(SessionBinding.SessionIdLength, SessionBinding.SessionId(i, r));
+    }
+
+    [TestMethod]
+    public void SessionId_ForADifferentConnection_IsADifferentName()
+    {
+        // Freshness. The nonces and the ephemeral certificates differ per
+        // connection, so a signature bound to one of these cannot be presented
+        // on another — which is the point of having it at all.
+        using var initiator = PeerKeypair.Generate();
+        using var responder = PeerKeypair.Generate();
+
+        var i = Contribution(initiator.Identity, 0x11);
+        var r = Contribution(responder.Identity, 0x22);
+        var first = SessionBinding.SessionId(i, r);
+
+        Assert.IsFalse(
+            first.AsSpan().SequenceEqual(SessionBinding.SessionId(
+                i, r with { Nonce = Bytes(0x77, SessionBinding.NonceLength) })),
+            "a fresh responder nonce must give a fresh name");
+        Assert.IsFalse(
+            first.AsSpan().SequenceEqual(SessionBinding.SessionId(
+                i, r with { TlsPublicKeyHash = Bytes(0x88, SessionBinding.TlsPublicKeyHashLength) })),
+            "a different channel must give a different name");
+        Assert.IsFalse(
+            first.AsSpan().SequenceEqual(SessionBinding.SessionId(
+                i with { Identity = responder.Identity }, r)),
+            "a different pair of peers must give a different name");
+    }
+
+    [TestMethod]
+    public void SessionId_IsNotTheTranscriptEitherRoleSigns()
+    {
+        // Domain separation (00 §4). The two constructions cover the same
+        // context and must never be confusable: nothing signed as a proof can
+        // be read as a session name, or the reverse.
+        using var initiator = PeerKeypair.Generate();
+        using var responder = PeerKeypair.Generate();
+
+        var i = Contribution(initiator.Identity, 0x11);
+        var r = Contribution(responder.Identity, 0x22);
+        var name = SessionBinding.SessionId(i, r);
+
+        foreach (var role in new[] { PeerSessionRole.Initiator, PeerSessionRole.Responder })
+        {
+            Assert.IsFalse(
+                name.AsSpan().SequenceEqual(SessionBinding.Transcript(i, r, role)),
+                $"the {role} transcript and the session name must not be the same bytes");
+        }
+    }
+
+    [TestMethod]
     public void ChannelProof_CheckedUnderTheOtherRole_FailsToVerify()
     {
         using var keypair = PeerKeypair.Generate();

@@ -50,12 +50,13 @@
 
 </div>
 
-<!-- Page-level surfaces, deliberately OUTSIDE #app: both must render while
-     the app panel is hidden behind a gate. A modal dialog inside a hidden
-     ancestor is the worst of both worlds — it paints nothing, but its modal
-     state still makes the whole document inert, which froze the setup
-     ceremony and the sign-in screen with no visible cause. -->
-<div class="toasts" id="toasts" aria-live="polite"></div>
+<!-- The overlay layers live OUTSIDE the app shell, as direct children of
+     <body>, because the shell hides while a gate is up: a dialog opened by
+     showModal() from inside a [hidden] subtree renders at zero size while
+     its modal backdrop still makes the whole page inert — a setup
+     wizard step once went dead exactly that way — and a toast raised then
+     never appears. ConsoleShellLayerTests pins this arrangement. -->
+<div class="toasts" id="toasts" aria-live="polite" popover="manual"></div>
 <dialog class="dialog" id="dialog"></dialog>
 
 <!-- First-run setup (ADR-0044). Rendered by app.js when describe_service

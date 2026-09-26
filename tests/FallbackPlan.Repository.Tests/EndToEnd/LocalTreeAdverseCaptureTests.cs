@@ -1,3 +1,4 @@
+using FallbackPlan.Repository.Format;
 using System.Runtime.Versioning;
 using System.Text;
 using FallbackPlan.Domain;
@@ -40,8 +41,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _sourceRoot =
         Path.Combine(Path.GetTempPath(), "fbp-adverse-capture-tests", Guid.NewGuid().ToString("n"));
 
@@ -439,12 +438,12 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var orchestrator = new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
-            SpoolDirectory);
+            SpoolDirectory, FormatVersions.RelocatableRecords);
 
         // No catalogue and no prior snapshot, deliberately. With them, the
         // NFR-PERF-003 short-circuit would re-emit the earlier version of an
@@ -485,7 +484,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
     {
         var manifest = await ReadFileVersionAsync(VersionOf(published, name).ObjectId);
         using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore());
+        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         using var restored = new MemoryStream();
@@ -502,7 +501,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
     private async Task<FileVersionManifest> ReadFileVersionAsync(ObjectId id)
     {
         using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore());
+        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(id, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);
@@ -512,7 +511,7 @@ public sealed class LocalTreeAdverseCaptureTests : ArchiveTestHarness
     private async Task<int> CaptureStatusAsync(PublishedTreeSnapshot published)
     {
         using var keys = CreateKeys();
-        using var reader = new RepositoryReader(Repo, keys, CreateStore());
+        using var reader = new RepositoryReader(Repo, keys, CreateStore(), Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var read = await reader.ReadSegmentAsync(published.SnapshotObjectId, CancellationToken.None);
         Assert.AreEqual(RecordReadOutcome.Ok, read.Outcome);

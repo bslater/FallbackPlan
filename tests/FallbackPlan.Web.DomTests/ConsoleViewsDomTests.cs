@@ -202,12 +202,18 @@ public sealed class ConsoleViewsDomTests
         await Expect(page.GetByText("Waiting for the first progress event")).ToBeVisibleAsync();
 
         // A real SSE frame through the console's event bridge: the badge
-        // follows the stream's state and the meter's width follows the maths
-        // (40 done + 10 reused of 100 seen = 50%).
-        harness.Clients.Client.Emit(new JobProgress("job-1", JobState.Packing, 100, 40, 10, 0, 1024, 512));
+        // follows the stream's state and the meter's width follows the maths.
+        //
+        // The denominator is the run's counted plan (TotalFiles, contract
+        // 1.20), not the files seen so far, and reused files are a subset of
+        // done rather than a separate tally to add on: 40 done of a 100-file
+        // plan is 40%. Before the plan existed the meter divided by a moving
+        // denominator, so a run could show 90% and then fall back.
+        harness.Clients.Client.Emit(
+            new JobProgress("job-1", JobState.Packing, 100, 40, 10, 0, 1024, 512, TotalFiles: 100));
 
         await Expect(page.Locator(".job-live").GetByText("Packing")).ToBeVisibleAsync();
-        await Expect(page.Locator(".job-live .meter > i")).ToHaveAttributeAsync("data-w", "50");
+        await Expect(page.Locator(".job-live .meter > i")).ToHaveAttributeAsync("data-w", "40");
         await Expect(page.GetByText("512 B")).ToBeVisibleAsync();
     }
 }

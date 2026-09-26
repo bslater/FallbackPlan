@@ -51,9 +51,8 @@ public sealed class SealedBlobTests : IDisposable
             ? credential.DeriveMetadataKey(generation)
             : throw new InvalidOperationException("a write-only holder was asked for a data key");
 
-    private static Func<BlobEnvelope, byte[]> Grant(RepositoryReadAuthority authority) =>
-        envelope => SealedContentKey.Open(
-            authority.SealingPrivateKey, envelope.SealedContentKey, Repo, envelope.BlobId);
+    private static SealedContentKeyOpener Grant(RepositoryReadAuthority authority) =>
+        new(authority.SealingPrivateKey, Repo);
 
     private static ObjectId IdFor(byte[] plaintext, ObjectIdDeriver deriver) =>
         deriver.Derive(ObjectType.SegmentRecord, ContentHasher.Hash(plaintext));
@@ -74,6 +73,7 @@ public sealed class SealedBlobTests : IDisposable
                 EncryptionProfile.Aes256GcmV1,
                 BlobWriteProfile.LocalDefault,
                 SpoolDirectory,
+                FormatVersions.SealedDataPlane,
                 pinned: pinned);
         }
         finally
@@ -123,7 +123,7 @@ public sealed class SealedBlobTests : IDisposable
         // metadata key alone (the provider throws on a data-key ask), and
         // every record — content key unsealed by the grant — round-trips
         // through 04 §6 step 7 included.
-        Assert.AreEqual(FormatLimits.SealedFormatVersion, reader.Envelope.FormatVersion);
+        Assert.AreEqual(FormatVersions.SealedDataPlane, reader.Envelope.FormatVersion);
         Assert.AreEqual(FallbackPlan.Repository.Crypto.ContentSealing.SealedLength, reader.Envelope.SealedContentKey.Length);
         Assert.AreEqual(payloads.Count, reader.RecordTable.Count);
 
@@ -259,7 +259,7 @@ public sealed class SealedBlobTests : IDisposable
         var resumed = BlobWriter.TryResume(
             SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
             EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, pinned,
-            expectedFormatVersion: FormatLimits.SealedFormatVersion);
+            expectedFormatVersion: FormatVersions.SealedDataPlane);
         System.Security.Cryptography.CryptographicOperations.ZeroMemory(structureKey);
         Assert.IsInstanceOfType<ResumeResult.Resumed>(resumed, out var outcome);
 
@@ -374,7 +374,7 @@ public sealed class SealedBlobTests : IDisposable
             return BlobWriter.TryResume(
                 SpoolDirectory, Repo, Writer, KeyGeneration.Zero, BlobClass.Data, structureKey,
                 EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, Pinned,
-                expectedFormatVersion: FormatLimits.SealedFormatVersion,
+                expectedFormatVersion: FormatVersions.SealedDataPlane,
                 logger: logger);
         }
         finally
@@ -451,7 +451,8 @@ public sealed class SealedBlobTests : IDisposable
         var payload = Enumerable.Repeat((byte)0x42, 700).ToArray();
         var writer = BlobWriter.Create(
             Repo, Writer, KeyGeneration.Zero, BlobClass.Data, dataKey, blobCounter: 11,
-            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory, pinned: Pinned);
+            EncryptionProfile.Aes256GcmV1, BlobWriteProfile.LocalDefault, SpoolDirectory,
+            FormatVersions.Symmetric, pinned: Pinned);
         await writer.AppendRecordAsync(
             ObjectType.SegmentRecord, IdFor(payload, deriver), CompressionProfile.None,
             (ulong)payload.Length, payload, CancellationToken.None);

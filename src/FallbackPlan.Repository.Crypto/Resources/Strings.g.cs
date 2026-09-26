@@ -50,21 +50,6 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, BlobKeyDeriver_DestinationExactlyBytes, arg0);
 
     /// <summary>
-    /// The claim root is exactly 32 bytes.
-    /// </summary>
-    internal static string ClaimKeyDeriver_ClaimRootExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimRootExactlyBytes));
-
-    /// <summary>
-    /// The claim seed is exactly 32 bytes.
-    /// </summary>
-    internal static string ClaimKeyDeriver_ClaimSeedExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimSeedExactlyBytes));
-
-    /// <summary>
-    /// The claim token is exactly 16 bytes.
-    /// </summary>
-    internal static string ClaimKeyDeriver_ClaimTokenExactlyBytes => Get(nameof(ClaimKeyDeriver_ClaimTokenExactlyBytes));
-
-    /// <summary>
     /// The content-ID key is exactly 32 bytes.
     /// </summary>
     internal static string HardlinkGrouper_ContentIDKeyExactlyBytes => Get(nameof(HardlinkGrouper_ContentIDKeyExactlyBytes));
@@ -84,17 +69,6 @@ internal static class Strings
     /// </summary>
     internal static string FormatKekDerivation_KDFSaltExactlyBytesGot(object? arg0, object? arg1) =>
         string.Format(CultureInfo.CurrentCulture, KekDerivation_KDFSaltExactlyBytesGot, arg0, arg1);
-
-    /// <summary>
-    /// The master key is exactly {0} bytes.
-    /// </summary>
-    private static string KeyHierarchy_MasterKeyExactlyBytes => Get(nameof(KeyHierarchy_MasterKeyExactlyBytes));
-
-    /// <summary>
-    /// The master key is exactly {0} bytes.
-    /// </summary>
-    internal static string FormatKeyHierarchy_MasterKeyExactlyBytes(object? arg0) =>
-        string.Format(CultureInfo.CurrentCulture, KeyHierarchy_MasterKeyExactlyBytes, arg0);
 
     /// <summary>
     /// The device identifier is exactly 16 bytes.
@@ -187,12 +161,29 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_RootExactlyBytes, arg0);
 
     /// <summary>
-    /// This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).
+    /// A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.
     /// </summary>
-    internal static string KeyHierarchy_NotWriteOnly => Get(nameof(KeyHierarchy_NotWriteOnly));
+    internal static string RepositoryWriteCredential_ClaimNeedsReclaim => Get(nameof(RepositoryWriteCredential_ClaimNeedsReclaim));
 
     /// <summary>
-    /// A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).
+    /// A reclaim key seed is exactly {0} bytes.
     /// </summary>
-    internal static string KeyHierarchy_WriteOnlyHoldsNoDataKey => Get(nameof(KeyHierarchy_WriteOnlyHoldsNoDataKey));
+    private static string WriteOnlyDerivation_ReclaimSeedExactlyBytes => Get(nameof(WriteOnlyDerivation_ReclaimSeedExactlyBytes));
+
+    /// <summary>
+    /// A reclaim key seed is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyDerivation_ReclaimSeedExactlyBytes, arg0);
+
+    /// <summary>
+    /// A reclaim sub-root is exactly {0} bytes.
+    /// </summary>
+    private static string ReclaimAuthority_RootExactlyBytes => Get(nameof(ReclaimAuthority_RootExactlyBytes));
+
+    /// <summary>
+    /// A reclaim sub-root is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatReclaimAuthority_RootExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ReclaimAuthority_RootExactlyBytes, arg0);
 }

@@ -255,134 +255,36 @@ public sealed partial class ServiceCommandHandler
         return new ConfigurationChangeResult(lines);
     }
 
+    /// <summary>The operator's view of the replicas stored here (contract 1.31; ADR-0053 §3).</summary>
+    private ServiceResult ListReplicaAttributions() =>
+        Scope == CallerScope.Remote
+            ? NotARemoteDecision("see which replicas this service stores and for whom")
+            : ReplicaReattribution.List(runtime.ReplicaOwners, PeerGrantStore.Open(runtime.Options.StateDirectory));
+
     /// <summary>
-    /// Claims the replicas peers hold for this household (ADR-0046;
-    /// peer-protocol 07 §5) — the verb a machine rebuilt from bare metal uses
-    /// to reach data whose attribution names a device identity that no longer
-    /// exists.
+    /// The operator's override (contract 1.31; ADR-0053 §3), shared with the
+    /// agent's <c>reattribute</c> verb through <see cref="ReplicaReattribution"/>
+    /// so the two cannot drift.
     /// </summary>
-    /// <remarks>
-    /// Every peer is asked in turn and every answer is reported, including the
-    /// ones that could not be reached. A claim is run in the hours after a
-    /// household lost a machine, which is exactly when the far end is least
-    /// likely to be awake; one silent friend must not cost the others their
-    /// turn, and "could not ask" must not read as "holds nothing".
-    /// </remarks>
-    private async ValueTask<ServiceResult> ClaimReplicasAsync(
-        ClaimReplicasCommand command, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(command.Envelope))
-        {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                "Pass the sealed claim envelope — the passphrase's root, sealed to this service's recipient key.");
-        }
+    private ServiceResult ReattributeReplica(ReattributeReplicaCommand command) =>
+        Scope == CallerScope.Remote
+            ? NotARemoteDecision("re-point a replica this service stores")
+            : ReplicaReattribution.Apply(
+                runtime.ReplicaOwners,
+                PeerGrantStore.Open(runtime.Options.StateDirectory),
+                runtime.Notices,
+                command.RepositoryId,
+                command.Fingerprint,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
-        var grants = PeerGrantStore.Open(runtime.Options.StateDirectory);
-        var targets = new List<PeerGrant>();
-
-        if (command.Fingerprint is { Length: > 0 } fingerprint)
-        {
-            var (grant, matchCount) = PeerUnpairing.Resolve(grants, fingerprint);
-            if (matchCount == 0)
-            {
-                return new ServiceError(ServiceErrorReason.NotFound, $"No pairing matches '{fingerprint}'.");
-            }
-
-            if (grant is null)
-            {
-                return new ServiceError(
-                    ServiceErrorReason.InvalidArgument,
-                    $"'{fingerprint}' matches {matchCount} pairings; give more of the fingerprint.");
-            }
-
-            targets.Add(grant);
-        }
-        else
-        {
-            targets.AddRange(grants.Grants);
-        }
-
-        if (targets.Count == 0)
-        {
-            return new ServiceError(
-                ServiceErrorReason.NotFound,
-                "This device has no pairings. Pair with the peer holding your backups first — a claim proves "
-                + "who you are to somebody who already agreed to talk to you.");
-        }
-
-        byte[] claimRoot;
-        try
-        {
-            claimRoot = runtime.GrantRecipient.OpenClaimRoot(Convert.FromHexString(command.Envelope));
-        }
-        catch (Exception exception) when (exception is FormatException or SealedContentException)
-        {
-            // The two ways this fails read the same to a person and lead to
-            // the same fix, so they are worded as one: the envelope was not
-            // sealed to this service, or was not a claim root at all.
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                "The claim envelope did not open. Seal it to this service's recipient key — describe_service "
-                + "publishes it — and check the passphrase it was derived from.");
-        }
-
-        try
-        {
-            var log = runtime.LoggerFor(typeof(ClaimInitiator));
-            var peers = new List<ClaimedFromPeer>(targets.Count);
-            var moved = 0;
-
-            foreach (var grant in targets)
-            {
-                var endpoint = command.Endpoint
-                    ?? PeerUnpairing.EndpointFor(runtime.Options.StateDirectory, grant.Identity.Fingerprint);
-
-                var outcome = await ClaimInitiator.ClaimAsync(
-                    runtime.Options.StateDirectory, grants, grant, endpoint, claimRoot, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (outcome.Unreachable is { } reason)
-                {
-                    Log.ClaimPeerUnreachable(log, grant.Identity.Fingerprint, reason);
-                }
-                else if (outcome.Claimed.Count > 0)
-                {
-                    Log.ReplicasClaimedFrom(log, grant.Identity.Fingerprint, outcome.Claimed.Count);
-                }
-
-                peers.Add(new ClaimedFromPeer(
-                    grant.Identity.Fingerprint,
-                    [.. outcome.Claimed.Select(Describe)],
-                    outcome.Unreachable));
-                moved += outcome.Claimed.Count;
-            }
-
-            if (moved > 0)
-            {
-                // Durable, because the next step is the operator's: the set
-                // ids that came back are the one piece of lost configuration
-                // nothing else can supply (07 §5.8), and they are worth
-                // nothing if the window they appeared in is closed.
-                runtime.Notices.Raise(
-                    "replicas-claimed",
-                    $"Claimed {moved} replica(s) from {targets.Count} peer(s) by proving the passphrase. "
-                    + "Restores can run against them now; the sets they name still have to be rebuilt here.",
-                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            }
-
-            return new ClaimedReplicasResult(peers);
-        }
-        finally
-        {
-            // Held for the exchange and no longer. Every seed derived from it
-            // was zeroed as it was used; this is the last copy.
-            System.Security.Cryptography.CryptographicOperations.ZeroMemory(claimRoot);
-        }
-    }
-
-    /// <summary>The wire's answer as the contract's, both halves rendered hex.</summary>
-    private static ClaimedReplicaDescriptor Describe(ClaimedReplica replica) =>
-        new(Convert.ToHexStringLower(replica.RepositoryId.Span),
-            [.. replica.BackupSetIds.Select(id => Convert.ToHexStringLower(id.Span))]);
+    /// <summary>
+    /// Whose replica a machine stores is that machine's operator's decision
+    /// (ADR-0053 §3): a paired console may watch this service but not hand
+    /// out what it holds for others — the same line restart_service draws
+    /// (ADR-0028 §6).
+    /// </summary>
+    private static ServiceError NotARemoteDecision(string verb) => new(
+        ServiceErrorReason.Refused,
+        $"Only a local caller may {verb} — whose replica this machine holds is its own operator's decision "
+        + "(ADR-0053 §3), not a paired console's.");
 }

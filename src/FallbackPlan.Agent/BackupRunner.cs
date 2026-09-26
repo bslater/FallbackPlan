@@ -34,6 +34,10 @@ public static class BackupRunner
     /// <param name="jobId">The journal entry to transition.</param>
     /// <param name="now">The clock, passed in so the caller decides it.</param>
     /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
+    /// <param name="pauseGate">
+    /// The run's suspension point (ADR-0047 Amendment 1), when its scheduler preempts;
+    /// the capture pipeline honours it between scan events.
+    /// </param>
     /// <param name="cancellationToken">Cancels the backup.</param>
     /// <returns>What happened.</returns>
     public static async ValueTask<BackupOutcome> RunAsync(
@@ -42,6 +46,7 @@ public static class BackupRunner
         string jobId,
         DateTimeOffset now,
         bool full = false,
+        IPauseGate? pauseGate = null,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(runtime);
@@ -50,6 +55,25 @@ public static class BackupRunner
         var jobs = runtime.Jobs;
         var nowMs = (ulong)now.ToUnixTimeMilliseconds();
         var progress = new BackupProgress(runtime.Progress, jobId);
+
+        // A suspension must reach progress watchers, not only the journal
+        // (ADR-0047 Amendment 2). The paused report re-emits the run's live
+        // counts, so a watching card keeps its meter; on resume the state it
+        // parked from is restored, and the next scan event refreshes it.
+        if (pauseGate is PauseGate gate)
+        {
+            var resumeTo = JobState.Scanning;
+            gate.AddCallbacks(
+                onParked: _ =>
+                {
+                    // The reason reaches the journal rather than the meter:
+                    // a progress report carries a state and its counts, and
+                    // has nowhere to put a sentence.
+                    resumeTo = progress.LastState;
+                    progress.Enter(JobState.Paused);
+                },
+                onResumed: () => progress.Enter(resumeTo));
+        }
 
         // Every root must be there, or the run refuses: capturing a snapshot
         // silently missing a whole labelled subtree would make everything
@@ -61,19 +85,38 @@ public static class BackupRunner
             var detail = missing.Count == 1
                 ? $"root '{missing[0]}' does not exist"
                 : $"roots do not exist: '{string.Join("', '", missing)}'";
-            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail);
+            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, detail, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", detail);
         }
 
+        DestinationShipSink? sink = null;
+        var runCommitted = false;
         try
         {
             jobs.Transition(jobId, JobState.Scanning, nowMs);
             progress.Enter(JobState.Scanning);
 
-            // The set's staging archive, created on its first backup — staging
-            // is internal, so nobody runs `init` for it (ADR-0034 §1).
+            // The set's archive — staging, or a direct-ship sink over the
+            // metadata store — created on its first backup; either way it is
+            // internal, so nobody runs `init` for it (ADR-0034 §1, ADR-0046).
             var archive = await runtime.ArchiveForAsync(set, cancellationToken).ConfigureAwait(false);
+
+            // A direct-ship run (ADR-0046) resolves its destinations before a
+            // byte moves: with no staging archive, a capture with nowhere to
+            // ship refuses here (an IOException, recoverable — the next pass
+            // retries once a destination returns).
+            if (archive.ShipSink is { } shipSink)
+            {
+                sink = shipSink;
+                await shipSink.BeginRunAsync(
+                    set,
+                    nowMs,
+                    archive.Repository.Credential.ReclaimPublicKey.ToArray(),
+                    archive.Repository.Credential.ClaimPublicKey.ToArray(),
+                    cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             // A full run empties both the parent list and the incremental
             // baseline, exactly as direct mode does — the flag was accepted
@@ -89,13 +132,11 @@ public static class BackupRunner
                     ? archive.Repository.CurrentDataGeneration
                     : archive.Repository.CurrentMetadataGeneration;
 
-            // A write-only archive takes the device trust domain (ADR-0042):
-            // the repository domain's verify-on-reuse reads content, which a
-            // write-only holder cannot, and the orchestrator refuses the
-            // combination by name rather than degrading silently.
-            var policy = archive.Repository.Keys.WriteOnly
-                ? CapturePolicy.Default with { DedupTrustDomain = DedupTrustDomain.Device }
-                : CapturePolicy.Default;
+            // The device trust domain (ADR-0042, ADR-0046): the repository
+            // domain's verify-on-reuse reads content, which a service holds
+            // no key for, and the orchestrator refuses the combination by
+            // name rather than degrading silently.
+            var policy = CapturePolicy.Default;
 
             var orchestrator = new PublicationOrchestrator(
                 policy,
@@ -103,10 +144,11 @@ public static class BackupRunner
                 runtime.Writer,
                 generation,
                 archive.Repository.Keys,
-                archive.Repository.Hierarchy,
+                archive.Repository.Credential,
                 archive.Store,
                 archive.Sequence,
                 archive.SpoolDirectory,
+                archive.Repository.EffectiveFormatVersion,
                 observer: null,
                 archive.Catalogue,
                 progress,
@@ -122,6 +164,8 @@ public static class BackupRunner
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,
+                    SetName = set.Name,
+                    Schedule = set.Schedule,
                     DeviceId = runtime.State.DeviceId,
                     BackupSetId = backupSetId,
                     SnapshotId = snapshotId,
@@ -135,6 +179,7 @@ public static class BackupRunner
                     DeclaredMaxDurationMs = 3_600_000,
                     ExpiryGeneration = generation.Value + 2,
                     ClientVersion = "fallbackplan-agent/0.1",
+                    PauseGate = pauseGate,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -151,23 +196,26 @@ public static class BackupRunner
             var partial = published.ErrorManifestObjectId is not null;
             var outcome = partial ? JobState.CompletedWithFailures : JobState.Complete;
 
+            // Always an explicit detail: Transition keeps the prior detail on
+            // null, and a preempted run's prior detail is "resumed" — which
+            // must not survive onto the terminal record a person reads.
+            var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged";
             jobs.Transition(
                 jobId,
                 outcome,
                 nowMs,
-                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : null,
-                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant());
+                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
+                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
+                stats: StatsOf(progress.Latest));
             progress.Enter(outcome);
+            runCommitted = true;
 
             // The set-changed notice's condition is "the last backup predates
             // the settings", and this backup just captured under them
             // (ADR-0038). A no-op when no such notice stands.
             runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs);
 
-            return new BackupOutcome(
-                set.Name,
-                "ran",
-                $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged");
+            return new BackupOutcome(set.Name, "ran", summary);
         }
         catch (OperationCanceledException)
         {
@@ -176,31 +224,44 @@ public static class BackupRunner
             // sequences it had allocated stayed pending, which is correct: the
             // next publication discharges them as void deltas, exactly as it
             // would after a crash.
-            jobs.Transition(jobId, JobState.Cancelled, nowMs, "cancelled by request");
+            jobs.Transition(jobId, JobState.Cancelled, nowMs, "cancelled by request", stats: StatsOf(progress.Latest));
             progress.Enter(JobState.Cancelled);
             return new BackupOutcome(set.Name, "cancelled", "cancelled by request");
         }
         catch (ArgumentException exception)
         {
             // Invalid rules or configuration: a human must fix it (10 §3).
-            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedRecoverable, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
         catch (Exception exception) when (exception is RepositoryOpenException or Repository.Crypto.KeyUnwrapFailedException)
         {
-            // The staging archive refused to open — damage, or a passphrase
+            // The set's archive refused to open — damage, or a passphrase
             // that no longer matches. Retrying cannot fix either; a human can
             // (10 §3).
-            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message);
+            jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);
+        }
+        finally
+        {
+            // The run's books close however the run ended (ADR-0046 §3): a
+            // failed or cancelled run still owes the ledger its drops and
+            // skips — without them no back-off arms and the healing catch-up
+            // never schedules — and the run's read scope is released so a
+            // destination plugged back in answers without a restart.
+            // Successes are recorded only when the snapshot committed.
+            if (sink is not null)
+            {
+                await sink.CompleteRunAsync(nowMs, runCommitted).ConfigureAwait(false);
+            }
         }
     }
 
@@ -212,6 +273,10 @@ public static class BackupRunner
     {
         private JobProgress _latest = new(jobId, JobState.Pending, 0, 0, 0, 0, 0, 0);
 
+        public JobProgress Latest => _latest;
+
+        public JobState LastState => _latest.State;
+
         public void Report(JobProgress progress)
         {
             _latest = progress with { JobId = jobId };
@@ -220,4 +285,22 @@ public static class BackupRunner
 
         public void Enter(JobState state) => Report(_latest with { State = state });
     }
+
+    /// <summary>
+    /// The terminal numbers for the journal row (ADR-0050): the run's last
+    /// progress report, which the hub is about to forget. Recorded at every
+    /// terminal transition — for a failed or cancelled run no snapshot
+    /// exists, so this is the only record of how far it got.
+    /// </summary>
+    private static JobRunStats StatsOf(JobProgress latest) => new()
+    {
+        FilesSeen = latest.FilesSeen,
+        FilesDone = latest.FilesDone,
+        FilesReused = latest.FilesReused,
+        FilesFailed = latest.FilesFailed,
+        BytesSeen = latest.BytesSeen,
+        BytesStored = latest.BytesStored,
+        TotalFiles = latest.TotalFiles,
+        TotalBytes = latest.TotalBytes,
+    };
 }

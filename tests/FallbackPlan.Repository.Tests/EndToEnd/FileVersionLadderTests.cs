@@ -1,3 +1,4 @@
+using FallbackPlan.Repository.Format;
 using FallbackPlan.Domain;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -34,8 +35,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class FileVersionLadderTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const string FilePath = "ledger/book.bin";
 
     /// <summary>How much of the tail each version rewrites, and how much it then adds.</summary>
@@ -49,7 +48,7 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
         var versions = Ladder();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(
             Path.Combine(SpoolDirectory, "ladder.db"), Repo);
 
@@ -84,7 +83,7 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
                 job = job with { PriorSnapshotId = prior };
             }
 
-            await CreateOrchestrator(store, keys, hierarchy, catalogue, version)
+            await CreateOrchestrator(store, keys, credential, catalogue, version)
                 .PublishAsync(job, CancellationToken.None);
 
             snapshotIds.Add(snapshotId);
@@ -97,7 +96,7 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
         // reassembly that stopped at the previous length, shows up here as a
         // byte mismatch rather than as a missing file.
         var target = RestoreTargetProfile.ForLocalPlatform();
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         for (var version = 0; version < versions.Count; version++)
@@ -135,21 +134,21 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
         var versions = Ladder();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(
             Path.Combine(SpoolDirectory, "reuse.db"), Repo);
 
         var source = new FakeFileSystemSource();
         var node = source.AddFile(FilePath, versions[0], fileId: 4_243);
 
-        var first = await CreateOrchestrator(store, keys, hierarchy, catalogue, 0).PublishAsync(
+        var first = await CreateOrchestrator(store, keys, credential, catalogue, 0).PublishAsync(
             Job(source, [.. Enumerable.Repeat((byte)0xF0, 16)], 1_722_600_000_000),
             CancellationToken.None);
 
         node.Content = versions[1];
         node.Metadata = node.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
-        var second = await CreateOrchestrator(store, keys, hierarchy, catalogue, 1).PublishAsync(
+        var second = await CreateOrchestrator(store, keys, credential, catalogue, 1).PublishAsync(
             Job(source, [.. Enumerable.Repeat((byte)0xF1, 16)], 1_722_600_001_000) with
             {
                 PriorSnapshotId = Enumerable.Repeat((byte)0xF0, 16).ToArray(),
@@ -171,7 +170,7 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
             written,
             "the unchanged prefix should have been located, not re-stored");
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         using var restored = new MemoryStream();
         var outcome = await reader.RestoreAsync(
@@ -206,17 +205,17 @@ public sealed class FileVersionLadderTests : ArchiveTestHarness
     private PublicationOrchestrator CreateOrchestrator(
         Storage.Local.LocalFileSystemObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         CatalogueDb catalogue,
         int version)
     {
         var spool = Path.Combine(SpoolDirectory, $"publish-{version}");
         Directory.CreateDirectory(spool);
         return new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(
                 Path.Combine(SpoolDirectory, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool, FormatVersions.RelocatableRecords, observer: null, catalogue: catalogue);
     }
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte[] snapshotId, ulong now) => new()

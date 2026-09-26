@@ -116,6 +116,130 @@ credential expiry, eventual visibility, quota — remain scheduled with the firs
 remote provider, and matter more now that a provider failure is a destination
 failure a status matrix must classify.
 
+## Amendment 3 (2026-09) — the capabilities are read, and one promise is withdrawn
+
+This record has said since it was written that two capabilities "change engine
+behaviour rather than merely informing it": `ConditionalCreate = false`, where
+"publication relies on unique final identifiers instead", and
+`RangedReads = false`, where "restore fetches whole blobs, and the restore plan
+reports the cost up front". **Neither behaviour was ever built.** Every reader
+of `Capabilities` in the product asked for `MaximumObjectSize`, and
+`ListingConsistency` — the capability the correctness arguments lean on
+hardest — was read by nothing at all.
+
+**The withdrawal.** Those two alternative engine paths are not built and will
+not be. Every provider this product intends to support has had conditional
+create since 2024 (S3 `If-None-Match: *`, Azure `If-None-Match`, MinIO), so
+they would be dead code guarding a case that does not arise, and a decision
+record promising behaviour the code does not have is worse than a stated
+incapacity. In their place the engine **checks**: `Repository/StoreAdmission`
+answers why a store cannot be used, and `Repository/RepositoryLifecycle`
+refuses by name on every create and open path.
+
+Three things about that gate are decisions rather than details.
+
+**It lives beside the engine, not beside `IObjectStore`.** The requirement
+belongs to the consumer; an abstraction that stated what its consumers need
+would have stopped being one, and the next consumer's needs would have had to
+go there too. It is also not a seam in the service layer, because there is
+none — `new LocalFileSystemObjectStore(...)` appears at twenty-three sites
+across four projects, and a gate called at twenty-three sites is a gate that
+will be forgotten. `RepositoryLifecycle` is the one place an arbitrary store is
+handed to the engine.
+
+**Reading and writing ask different questions.** A reader never puts, so
+conditional create is nothing to it, and one real store here has no put at all:
+a peer's replica over the retrieval session
+([07 §1](../../specifications/peer-protocol/07-retrieval.md)), which is what an
+adoption or a restore from a peer opens. A single requirement refused peer
+adoption outright — `Hosts.Tests/PeerAdoptionTests` went red the first time the
+gate ran — so the caller states its `StoreUse`, defaulting to writing because
+that is the direction that fails closed.
+
+**Discovery is not gated.** `ReadDescriptorAsync` is credential-free and
+read-only ([ADR-0061](0061-adopt-a-destinations-archives.md)), and refusing a
+store before the product can say what it found would help nobody.
+
+**Listing consistency is now load-bearing too, and what it gates is deletion.**
+Collection reasons from **absence** end to end — a blob is garbage because
+nothing reachable names it, and what is reachable is what a listing of
+`snapshots/` could enumerate. Against a store that cannot promise a listing
+reflects what it holds, absence is not a fact, and a snapshot the listing has
+not caught up to is indistinguishable from one that was never written: it
+decodes perfectly, so it vetoes nothing, while its blobs read as fully dead.
+Measured, three protected snapshots, newest concealed from `snapshots/` alone:
+a pass that would have deleted nothing proposed two blobs and wrote the
+tombstones. So `Retention/CollectionPlanner` vetoes on anything but
+`Strong`, and `Retention/DestinationConvergence` refuses to build a keep-set
+from such a listing — the same reasoning executed at a destination that may
+hold the only other copy. Operations that reason from **presence** are
+untouched and were pinned rather than changed, because they survive: a
+replication pass re-offers and is refused, a stale head collides, an unseen
+delta is an unresolved gap.
+
+**The obligations this leaves.** The veto is not a permanent answer, and
+lifting it needs an attested witness of completeness for the snapshot plane —
+something that says "there are N snapshots" without enumerating them. The
+catalogue cannot be it: it is a cache, and this design has always said it is
+never the authority a deletion hangs off. ~~Second,
+`Agent/DestinationShipSink.Capabilities` forwards the local metadata store's,
+so a sink shipping to remote destinations reports the local filesystem's
+promises; harmless while every destination is a local path, and owed as the
+**intersection** of the metadata store's capabilities and every destination's
+before one is an object store.~~ *(Done — Amendment 4.)* Third, this record stays *Proposed* for the
+reason it always has — the second provider that disagrees with the contract
+has not been written, and the eventual-visibility fault case is now an
+instrument (`TestSupport/LaggingObjectStore`) and an answer rather than a
+scheduled item, but still not a provider.
+
+### Amendment 4 (2026-09): a store that stands in front of others promises the weakest answer they give
+
+Amendment 3 recorded the ship sink's forwarded capabilities as owed and the
+slice that recorded it deliberately did not fix them, on the grounds that
+doing so would be a change with no test that could fail. That was true and
+stopped being true in the same slice: `TestSupport/DegradedObjectStore`, built
+there to drive the admission gate, is a store that promises less while
+delegating everything — which is exactly the destination this rule needs.
+
+`Storage.Abstractions/StoreCapabilities.Intersect` is the rule.
+`Agent/DestinationShipSink` computes it once, where a run's targets are
+resolved, over the metadata store's capabilities and every target's. Outside a
+run it answers the metadata store's: nothing is being shipped and there is
+nothing to promise less. A destination dropped mid-run is deliberately not
+recomputed — dropping one can only remove a constraint, so the cached answer
+stays at least as conservative as the survivors', which is the direction that
+cannot mislead.
+
+Booleans **and**. The listing consistency is the laggiest. The object and
+metadata ceilings are the smallest accepted anywhere. The minimum storage
+duration is the **longest** wait, being the one numeric member where weakest
+means larger — a caller planning around early-deletion charges has to satisfy
+every target.
+
+`ArchivalTiers` is **or**ed, and the asymmetry is a decision rather than a
+slip. It is a hazard, not a promise: it says rehydration latency applies.
+Intersecting it away would have a fan-out claim that nothing it writes
+archives while one of its targets does, which is the opposite of the
+conservative answer every other member gives.
+
+**The find, and why it belongs in this record.** With the sink telling the
+truth, thirty-three tests went red at once: both peer adapters declared
+`MaximumObjectSize = 0` — not as a statement, but by leaving the member at its
+struct default — so every direct-ship run to a peer validated its capture
+policy against a ceiling of nought and refused itself. It had been invisible
+for exactly as long as the sink forwarded somebody else's answer. That is the
+second defect of this shape in two slices (Amendment 3 found `PeerShipStore`
+declaring no conditional create while implementing one), and both say the same
+thing about this contract: **a capability nobody reads is a capability nobody
+has to get right.** Making one load-bearing is what makes the declarations
+true, and it finds the untrue ones by breaking.
+
+Both adapters now declare what a local path declares, because the peer wire
+sets no ceiling of its own — `ReplicationObject` carries a u64 length and
+chunking is the transport's business. Declaring the format's own limit was
+considered and rejected: it would turn another layer's constant into a promise
+this adapter cannot keep updated.
+
 ## Status history
 
 | Date | Status | Note |
@@ -123,3 +247,5 @@ failure a status matrix must classify.
 | 2026-08 | Proposed | Revisit after the first two providers are implemented |
 | 2026-08 | Proposed (amended) | Amendment 1: concrete type shapes fixed by the Wave A6 implementation |
 | 2026-08 | Proposed (amended) | Amendment 2: the contract is the fan-out seam — copier ordering stated, deletion activated by retention ([ADR-0034](0034-hub-and-spoke-destinations.md)) |
+| 2026-09 | Proposed (amended) | Amendment 3: the two unimplemented capability behaviours withdrawn for a named refusal at `Repository/StoreAdmission`, split by whether the caller reads or writes; `ListingConsistency` made load-bearing, vetoing deletion that reasons from absence; the ship sink's forwarded capabilities and an attested completeness witness recorded as owed. Still *Proposed*: there is still one provider |
+| 2026-09 | Proposed (amended) | Amendment 4: `Storage.Abstractions/StoreCapabilities`'s `Intersect` and `Agent/DestinationShipSink` promising the weakest answer its destinations give, Amendment 3's owed item discharged; the archival-tier hazard **or**ed where every other member is **and**ed; `Agent/PeerShipStore` and `Agent/PeerRetrievalObjectStore` found declaring a zero object ceiling by struct default, which nothing read until the sink stopped forwarding. Still *Proposed*: there is still one provider (`Storage.ContractTests/CapabilityIntersectionTests`, `Hosts.Tests/ShipSinkCapabilityTests`) |

@@ -124,23 +124,18 @@ public sealed class KeyMaterialConfinementTests
     [TestMethod]
     public void ContractSurface_CommandVocabulary_OffersNoKeyExport()
     {
-        // Named exceptions, not a softer pattern. ConfirmRecoveryKitCommand
-        // carries a SHA-256 of a kit the CLIENT built and the operator
-        // saved; it produces nothing, opens nothing, and the service never
-        // holds the kit it names (ADR-0044's amendment, FR-KIT-004). The
-        // rule this test protects is that a kit is never *produced* by a
-        // command — which remains true, and stays checkable, only because
-        // the exception is written down here rather than dissolved into the
-        // match.
-        var recording = new[] { nameof(ConfirmRecoveryKitCommand) };
-
+        // No exceptions any more. ConfirmRecoveryKitCommand was the one
+        // named carve-out — a checksum of a kit the client built — and it
+        // went with the kit (ADR-0060). The rule this test protects is that
+        // no key material and no recovery artefact is ever *produced* by a
+        // command: the passphrase is the credential, and it is typed where
+        // the person is.
         var exporting = ContractTypes()
             .Where(type => typeof(ServiceCommand).IsAssignableFrom(type))
             .Where(type => type.Name.Contains("Kit", StringComparison.Ordinal)
                 || type.Name.Contains("Key", StringComparison.Ordinal)
                 || type.Name.Contains("Unlock", StringComparison.Ordinal))
             .Select(type => type.Name)
-            .Except(recording, StringComparer.Ordinal)
             .ToList();
 
         Assert.IsTrue(
@@ -159,7 +154,7 @@ public sealed class KeyMaterialConfinementTests
         // carve-out's fence: the fields must stay string-typed (never raw
         // bytes), and must not quietly spread to other verbs.
         //
-        // claim_replicas is the fourth, added by decision (ADR-0046). It is
+        // claim_replicas is the fourth, added by decision (ADR-0070). It is
         // the same shape and the same reason as the three above: the Argon2id
         // root is derived where the passphrase was typed, and what crosses is
         // an envelope only this service can open. It could not be avoided by
@@ -180,13 +175,14 @@ public sealed class KeyMaterialConfinementTests
                 nameof(ProvisionWriteOnlySetCommand),
                 nameof(ProvisionInstallationCommand),
                 nameof(OpenRestoreSourceCommand),
-                nameof(ClaimReplicasCommand),
+                nameof(AdoptArchiveCommand),
             },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
             "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation, "
-            + "open_restore_source and claim_replicas (NFR-SEC-009 as amended by ADR-0042, NFR-SEC-011 for "
-            + "setup, ADR-0046 for the claim) — nowhere else. This list grows only by decision, which is what "
-            + "keeps it a fence; widening it to a pattern that admits any verb named plausibly would not be one.");
+            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) and "
+            + "adopt_archive (ADR-0061: the same provisioning envelope, sealed against a discovered archive's "
+            + "descriptor) — nowhere else. This list grows only by decision, which is what keeps it a fence; "
+            + "widening it to a pattern that admits any verb named plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

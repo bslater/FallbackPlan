@@ -42,6 +42,8 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(BackupSetsResult), "backup_sets")]
 [JsonDerivedType(typeof(JobAcceptedResult), "job_accepted")]
 [JsonDerivedType(typeof(JobsResult), "jobs")]
+[JsonDerivedType(typeof(JobChangesResult), "job_changes")]
+[JsonDerivedType(typeof(JobFailuresResult), "job_failures")]
 [JsonDerivedType(typeof(SnapshotsResult), "snapshots")]
 [JsonDerivedType(typeof(DirectoryResult), "directory")]
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
@@ -55,9 +57,13 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
+[JsonDerivedType(typeof(ArchivesDiscoveredResult), "archives_discovered")]
+[JsonDerivedType(typeof(ArchiveAdoptedResult), "archive_adopted")]
 [JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
 [JsonDerivedType(typeof(DestinationsResult), "destinations")]
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
+[JsonDerivedType(typeof(ReplicaAttributionsResult), "replica_attributions")]
+[JsonDerivedType(typeof(ReceiptsResult), "receipts_listed")]
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
@@ -69,7 +75,6 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(LogRecordsResult), "log_records")]
 [JsonDerivedType(typeof(SessionResult), "session")]
 [JsonDerivedType(typeof(UserListResult), "users")]
-[JsonDerivedType(typeof(ClaimedReplicasResult), "claimed_replicas")]
 public abstract record ServiceResult;
 
 /// <summary>A command that did not succeed, with a reason a client can branch on.</summary>
@@ -142,6 +147,39 @@ public sealed record BackupRootDescriptor(string Path, string? Label = null);
 /// they win over <paramref name="Root"/> when present, and at least one of
 /// the two forms must be spoken.
 /// </param>
+/// <param name="Priority">
+/// The set's priority (ADR-0047, contract 1.17): among waiting backups of
+/// the same initiation, higher runs first; it never outranks a person. On an
+/// upsert, null preserves what the set already has — what a pre-1.17 client
+/// always sends.
+/// </param>
+/// <param name="DirectShip">
+/// The set's storage shape (ADR-0046, contract 1.23): true publishes
+/// straight into the destinations with no staging archive; false stages
+/// locally and fans out after. On an upsert, null preserves what the set
+/// already has — what every pre-1.23 client sends, so an old console
+/// cannot silently convert a set. Changing it re-homes the set's
+/// repository: refused while a run is live, and a staging set flipped on
+/// migrates at its next open with staging kept as a read-only seed until
+/// the explicit retire_staging.
+/// </param>
+/// <param name="KdfSalt">
+/// The set's archive's Argon2id salt, lowercase hex (contract 1.30): the
+/// public half of the derivation a restore grant for THIS set needs. An
+/// installation's sets normally share the installation's salt
+/// (<c>describe_service</c>), but a set adopted from a destination
+/// (ADR-0061) keeps the salt its archive was born under, so a client that
+/// derives per set is right for both. Null when the set has no archive
+/// yet, and from services before 1.30; on an upsert it is ignored.
+/// </param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfIterations">Argon2id time cost; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfParallelism">Argon2id lanes; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="SealingPublicKey">
+/// The archive's X25519 sealing public key, lowercase hex — the verifier a
+/// client compares its derivation against before sending a grant. Null
+/// with <paramref name="KdfSalt"/>.
+/// </param>
 public sealed record BackupSetDescriptor(
     string Id,
     string Name,
@@ -152,7 +190,14 @@ public sealed record BackupSetDescriptor(
     IReadOnlyList<string> Destinations,
     RetentionPolicyDescriptor? Retention = null,
     IReadOnlyDictionary<string, RetentionPolicyDescriptor>? DestinationRetention = null,
-    IReadOnlyList<BackupRootDescriptor>? Roots = null);
+    IReadOnlyList<BackupRootDescriptor>? Roots = null,
+    int? Priority = null,
+    bool? DirectShip = null,
+    string? KdfSalt = null,
+    uint? KdfMemoryKib = null,
+    uint? KdfIterations = null,
+    byte? KdfParallelism = null,
+    string? SealingPublicKey = null);
 
 /// <summary>
 /// One declared destination, as the configuration surface sees it
@@ -172,6 +217,12 @@ public sealed record BackupSetDescriptor(
 /// What is syntactically wrong with the declared address, when anything is —
 /// reported, never a refusal to load (ADR-0035 §1). Ignored on an upsert.
 /// </param>
+/// <param name="Priority">
+/// The destination's priority (ADR-0047, contract 1.17): among waiting
+/// transfers of the same initiation, higher ships first, and a prioritised
+/// backup writes to its destinations in this order. On an upsert, null
+/// preserves what the declaration already has.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -181,7 +232,8 @@ public sealed record DestinationDescriptor(
     string? Endpoint,
     string? FailureDomain = null,
     int? DeepVerifyIntervalDays = null,
-    string? AddressDefect = null);
+    string? AddressDefect = null,
+    int? Priority = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>
@@ -205,42 +257,77 @@ public sealed record PairingDescriptor(string Fingerprint, string Label, string 
 /// <param name="Pairings">The grants, oldest first.</param>
 public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) : ServiceResult;
 
-/// <summary>One replica whose attribution moved to this device (ADR-0046).</summary>
-/// <param name="RepositoryId">The repository, hex — the archive this replica holds.</param>
-/// <param name="SetIds">
-/// The backup sets its snapshots carry, hex. Read from the destination's own
-/// key namespace rather than from any manifest, so a peer that cannot decrypt
-/// a byte of the replica can still name them.
+/// <summary>One replica stored here, and whose it is (contract 1.31).</summary>
+/// <param name="RepositoryId">The replica's repository id, lower-hex.</param>
+/// <param name="OwnerFingerprint">The fingerprint of the peer it is attributed to.</param>
+/// <param name="OwnerLabel">What this device calls that peer, or null when no pairing with it remains.</param>
+/// <param name="Claimable">
+/// Whether a claim public key is on record for it — in which case its owner
+/// can claim it with the passphrase alone (peer-protocol 03 §6) and the
+/// operator's override is refused. The key itself never crosses.
 /// </param>
-/// <remarks>
-/// Named for the contract rather than for the wire: <c>ClaimedReplica</c> is
-/// already the peer protocol's frame type, and a handler that needs both in one
-/// file should not have to alias its way out of the collision.
-/// </remarks>
-public sealed record ClaimedReplicaDescriptor(string RepositoryId, IReadOnlyList<string> SetIds);
+public sealed record ReplicaAttributionDescriptor(
+    string RepositoryId, string OwnerFingerprint, string? OwnerLabel, bool Claimable);
 
-/// <summary>What one peer answered a claim with.</summary>
-/// <param name="Fingerprint">The peer that was asked.</param>
-/// <param name="Claimed">The replicas whose attribution moved here.</param>
-/// <param name="Unreachable">
-/// Why the peer could not be asked, or null when it answered. A household
-/// recovering from a disaster is exactly when the far end is least reachable,
-/// so this is reported per peer and never aborts the others.
-/// </param>
-public sealed record ClaimedFromPeer(
-    string Fingerprint, IReadOnlyList<ClaimedReplicaDescriptor> Claimed, string? Unreachable = null);
+/// <summary>The replicas stored here, ids ascending.</summary>
+/// <param name="Attributions">One row per attributed repository.</param>
+public sealed record ReplicaAttributionsResult(IReadOnlyList<ReplicaAttributionDescriptor> Attributions) : ServiceResult;
 
 /// <summary>
-/// The outcome of a claim across every peer it asked (ADR-0046).
+/// One filed peer receipt (contract 1.33), as facts: what the signed bytes
+/// attest and the service's verdict on whether the signature still holds
+/// over the bytes on disk. Neither the file's path nor any byte of the
+/// signed statement or of a key crosses — a client that needs those reads
+/// the file on the machine that holds it.
 /// </summary>
-/// <remarks>
-/// A peer with nothing to offer is reported with an empty list rather than
-/// omitted: "that friend holds nothing of yours" and "that friend was never
-/// asked" send a recovering person to different places, and a claim is run
-/// precisely when they cannot afford to confuse the two.
-/// </remarks>
-/// <param name="Peers">One entry per peer asked, in the order they were asked.</param>
-public sealed record ClaimedReplicasResult(IReadOnlyList<ClaimedFromPeer> Peers) : ServiceResult;
+/// <param name="Kind"><c>deletion</c> or <c>replication</c>.</param>
+/// <param name="Role"><c>destination</c> (this device signed it) or <c>commander</c> (this device verified it).</param>
+/// <param name="FiledAt">When it was filed here, Unix milliseconds by the filer's clock.</param>
+/// <param name="Status"><c>verified</c>, <c>signature-invalid</c> or <c>unreadable</c>.</param>
+/// <param name="Verified">Whether the signature verifies under the named signer over the bytes on disk now.</param>
+/// <param name="Problem">Why the file could not be read as a receipt, or why it is not verified; null when verified.</param>
+/// <param name="SignerFingerprint">The fingerprint of the device the file names as the signer.</param>
+/// <param name="Set">The commander's set name, when the commander filed it.</param>
+/// <param name="Destination">The commander's destination name, when the commander filed it.</param>
+/// <param name="RepositoryId">The repository the receipt names, lower-hex; null when unreadable.</param>
+/// <param name="IssuedAt">When the destination issued it, Unix milliseconds; null when unreadable.</param>
+/// <param name="SessionPrefix">The first eight bytes of the session it was issued in, lower-hex; null when unreadable.</param>
+/// <param name="DeletedCount">A deletion receipt's count of objects deleted.</param>
+/// <param name="NotHeld">A deletion receipt's count of instructed keys the destination did not hold.</param>
+/// <param name="CommittedCount">A replication receipt's count of objects the push created.</param>
+/// <param name="HeldObjects">A replication receipt's count of objects held for the repository after the push.</param>
+/// <param name="HeldBytes">A replication receipt's bytes held for the repository after the push.</param>
+public sealed record ReceiptDescriptor(
+    string Kind,
+    string Role,
+    ulong FiledAt,
+    string Status,
+    bool Verified,
+    string? Problem,
+    string SignerFingerprint,
+    string? Set,
+    string? Destination,
+    string? RepositoryId,
+    ulong? IssuedAt,
+    string? SessionPrefix,
+    ulong? DeletedCount,
+    ulong? NotHeld,
+    ulong? CommittedCount,
+    ulong? HeldObjects,
+    ulong? HeldBytes);
+
+/// <summary>The receipts filed here, newest first by issue time (contract 1.33).</summary>
+/// <param name="Receipts">One row per filed receipt, both kinds interleaved.</param>
+/// <param name="Total">
+/// How many receipts are on file for the kind and repository asked for,
+/// counted from file names (contract 1.35) — so a client can say how much of
+/// the pile it is showing, and a retention rule that is working is visible
+/// rather than inferred. It is counted before the set filter, which can only
+/// be answered by reading a receipt, so a listing narrowed by set may return
+/// fewer rows than the limit while the total is larger than both. A pre-1.35
+/// service answers zero.
+/// </param>
+public sealed record ReceiptsResult(IReadOnlyList<ReceiptDescriptor> Receipts, int Total = 0) : ServiceResult;
 
 /// <summary>One directory on the service's machine, for a folder picker.</summary>
 /// <param name="Name">The directory's name.</param>
@@ -368,6 +455,14 @@ public sealed record JobAcceptedResult(string JobId) : ServiceResult;
 /// <param name="UpdatedAt">When it last transitioned, Unix milliseconds.</param>
 /// <param name="SnapshotId">The snapshot it committed, when it did.</param>
 /// <param name="Detail">What the service wants the user to know.</param>
+/// <param name="FilesSeen">Files the run saw. Contract 1.22; null from an older service or a pre-1.22 row.</param>
+/// <param name="FilesDone">Files captured, reused ones included. Contract 1.22.</param>
+/// <param name="FilesReused">Of the done files, how many were unchanged. Contract 1.22.</param>
+/// <param name="FilesFailed">Files the run could not read. Contract 1.22.</param>
+/// <param name="BytesSeen">Logical bytes read. Contract 1.22.</param>
+/// <param name="BytesStored">Bytes newly stored after reuse and compression. Contract 1.22.</param>
+/// <param name="TotalFiles">The counted plan, when the run fixed one (ADR-0048). Contract 1.22.</param>
+/// <param name="TotalBytes">The counted plan's bytes. Contract 1.22.</param>
 public sealed record JobDescriptor(
     string Id,
     string BackupSetId,
@@ -375,11 +470,85 @@ public sealed record JobDescriptor(
     ulong StartedAt,
     ulong UpdatedAt,
     string? SnapshotId,
-    string? Detail);
+    string? Detail,
+    long? FilesSeen = null,
+    long? FilesDone = null,
+    long? FilesReused = null,
+    long? FilesFailed = null,
+    long? BytesSeen = null,
+    long? BytesStored = null,
+    long? TotalFiles = null,
+    long? TotalBytes = null);
 
 /// <summary>The known jobs.</summary>
 /// <param name="Jobs">The jobs, oldest first.</param>
 public sealed record JobsResult(IReadOnlyList<JobDescriptor> Jobs) : ServiceResult;
+
+/// <summary>
+/// What a run changed against its predecessor (contract 1.22, ADR-0050),
+/// from the catalogue alone. Deliberately coarser than
+/// <see cref="SetChangePreviewResult"/>'s live-scan buckets, and each
+/// coarsening is a stated limit of after-the-fact comparison:
+/// <c>Changed</c> does not split content from metadata-only (equal object
+/// ids are the exact "unchanged"; telling the two changes apart needs
+/// manifest reads), there is no <c>Moved</c> (file identity is a scan-time
+/// local fact, null in a rebuilt catalogue), and <c>Removed</c> does not
+/// split deleted-from-disk from no-longer-included (that needs both runs'
+/// rules re-evaluated). Counts are exact; samples are bounded.
+/// </summary>
+/// <param name="SetName">The set the run belonged to.</param>
+/// <param name="SnapshotId">The run's committed snapshot.</param>
+/// <param name="BaselineSnapshotId">The predecessor compared against; null for a first backup — everything reads new.</param>
+/// <param name="BaselineCapturedAt">When the predecessor was captured, Unix milliseconds.</param>
+/// <param name="Unchanged">Files whose recorded object is identical in both.</param>
+/// <param name="New">Files only the run's snapshot holds.</param>
+/// <param name="Changed">Files present in both under different recorded objects.</param>
+/// <param name="Removed">Files only the predecessor holds.</param>
+/// <param name="SampleLimit">The applied per-bucket cap, echoed.</param>
+public sealed record JobChangesResult(
+    string SetName,
+    string SnapshotId,
+    string? BaselineSnapshotId,
+    ulong? BaselineCapturedAt,
+    long Unchanged,
+    ChangeBucketDescriptor New,
+    ChangeBucketDescriptor Changed,
+    ChangeBucketDescriptor Removed,
+    int SampleLimit) : ServiceResult;
+
+/// <summary>
+/// One capture failure from a snapshot's error manifest, as a client shows
+/// it. The path is UTF-8 with replacement characters where the recorded name
+/// bytes have no faithful decoding — display truth; the raw bytes stay in
+/// the manifest.
+/// </summary>
+/// <param name="Path">The failed entry's path within its root.</param>
+/// <param name="Reason">
+/// The typed reason, kebab-cased: <c>permission</c>, <c>not-found</c>,
+/// <c>io-error</c>, <c>changed-during-read</c>, <c>unsupported-type</c>,
+/// <c>too-large</c>, <c>excluded-by-limit</c>, <c>name-not-representable</c>.
+/// </param>
+/// <param name="Detail">The scanner's own words.</param>
+public sealed record CaptureFailureDescriptor(string Path, string Reason, string Detail);
+
+/// <summary>
+/// What a run could not capture (contract 1.22, ADR-0050): the error
+/// manifest read back on demand. The count is exact; the listing is bounded
+/// — 1000 failures at the spec's worst-case path lengths would still be far
+/// under the 8 MiB frame, but a manifest may hold a million, and "send me
+/// everything" is not a thing this verb offers.
+/// </summary>
+/// <param name="SetName">The set the run belonged to.</param>
+/// <param name="SnapshotId">The run's committed snapshot.</param>
+/// <param name="Failures">The exact failure count; zero for a clean run.</param>
+/// <param name="Sample">The first failures, up to <paramref name="SampleLimit"/>.</param>
+/// <param name="SampleLimit">The applied cap, echoed.</param>
+public sealed record JobFailuresResult(
+    string SetName,
+    string SnapshotId,
+    long Failures,
+    IReadOnlyList<CaptureFailureDescriptor> Sample,
+    int SampleLimit) : ServiceResult;
 
 /// <summary>One committed snapshot.</summary>
 /// <param name="SnapshotId">The snapshot's hex identity.</param>
@@ -576,6 +745,83 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// <c>unproven</c> (no challenge has ever succeeded), or
 /// <c>unprovable (accepted)</c> (knowingly kept without proof).
 /// </param>
+/// <param name="BaselineCompletedAt">
+/// When this destination first held a full backup (ADR-0047 §6), Unix
+/// milliseconds; null while it never has. Contract 1.19.
+/// </param>
+/// <param name="NeedsFull">
+/// Whether the pair is owed its full backup (ADR-0047 §5) — a gained
+/// destination waiting on its seed, skipped by incrementals until it
+/// holds one. Contract 1.19.
+/// </param>
+/// <param name="Reason">
+/// The machine cause behind a not-in-sync state (contract 1.22, ADR-0027
+/// §4): <c>catching-up</c> (a backup completed after the last sync; the
+/// next pass heals it unaided), <c>awaiting-seed</c>, <c>never-synced</c>,
+/// or <c>reported</c> (<paramref name="Detail"/> carries the ledger's own
+/// words). Null on a healthy row and from older services.
+/// </param>
+/// <param name="HeldBytes">
+/// Bytes this destination holds of what it is owed, as the last pass counted
+/// them (contract 1.24). Meaningless without
+/// <paramref name="MeasuredAt"/>, which says whether anything counted at all.
+/// </param>
+/// <param name="OwedBytes">
+/// Bytes it is owed in total, by its own retention policy rather than by the
+/// set's (FR-GC-010): a narrow override is complete when it holds its own
+/// keep-set.
+/// </param>
+/// <param name="MeasuredAt">
+/// When the pair of byte figures was counted, Unix milliseconds; null when
+/// nothing has counted them and from services predating contract 1.24. Null
+/// is not zero: a destination no pass has reached holds an unknown amount,
+/// and a client that draws that as empty claims it holds nothing when nobody
+/// has looked.
+/// </param>
+/// <param name="DrilledAt">
+/// When a restore drill last brought a sampled file back out of this
+/// destination's replica, Unix milliseconds; null when none ever has, and
+/// from services before contract 1.25 (ADR-0054). Null is not a failure:
+/// "nobody has tried" and "we tried and it did not work" are different
+/// answers, and the second is <paramref name="DrillFailure"/>.
+/// </param>
+/// <param name="DrillFiles">Files that drill restored whole; zero when it restored none.</param>
+/// <param name="DrillFailure">
+/// Why the last drill could not bring a file back, in its own words; null
+/// when it could, and null when none has run. A destination may hold every
+/// byte it was sent, prove possession of them, and still fail this — which
+/// is the whole reason the field is separate from the sync state.
+/// </param>
+/// <param name="DrillLimit">
+/// What the last drill could not prove when it passed with a stated limit
+/// (contract 1.27, ADR-0054 Amendment 2): on a write-only set the service
+/// holds no content key, so its drill proves the road back as far as the
+/// sealed content — replica opens, index and catalogue rebuild, manifests
+/// and segment records found — and says so here. Null when the drill proved
+/// everything, when it failed, when none has run, and from services before
+/// 1.27. A limit is not a failure: <paramref name="DrillFailure"/> is null
+/// beside it, and a client must not render it as one.
+/// </param>
+/// <param name="VerifiedSealed">
+/// Of the objects the last passed verification proved, how many were proved
+/// by opening a record's AEAD tag at the destination (contract 1.32). Zero
+/// from services before 1.32, which had the tier and did not count it.
+/// </param>
+/// <param name="VerifiedChunk">
+/// Of the objects the last passed verification proved, how many were proved
+/// by asking the destination for one leaf of the blob's Merkle commitment
+/// and its authentication path, checked against the root the writer signed
+/// into the index (contract 1.34). A sampled proof of the blob, not a
+/// whole-blob one, and counted apart from <paramref name="VerifiedDigest"/>
+/// for that reason. Zero from services before 1.34.
+/// </param>
+/// <param name="VerifiedDigest">
+/// Of the objects the last passed verification proved, how many were proved
+/// by hashing the whole sealed blob at the destination against the digest
+/// the writer signed into the index (contract 1.32) — the proof a write-only
+/// set's data plane has, since its records are sealed to a key the service
+/// does not hold. Zero from services before 1.32, which had no such tier.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -583,18 +829,60 @@ public sealed record DestinationStatusDescriptor(
     ulong? LastSuccessAt,
     string? Detail,
     string FailureDomain,
-    string Verification);
+    string Verification,
+    ulong? BaselineCompletedAt = null,
+    bool NeedsFull = false,
+    string? Reason = null,
+    long HeldBytes = 0,
+    long OwedBytes = 0,
+    ulong? MeasuredAt = null,
+    ulong? DrilledAt = null,
+    int DrillFiles = 0,
+    string? DrillFailure = null,
+    string? DrillLimit = null,
+    int VerifiedSealed = 0,
+    int VerifiedDigest = 0,
+    int VerifiedChunk = 0);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>
 /// <param name="Status">The derived status — computed from the matrix, never beside it (ADR-0028 §8).</param>
 /// <param name="NextRun">When the schedule next fires, ISO-8601, or null for manual-only.</param>
+/// <param name="LastCompletedAt">
+/// When the set's last committed backup settled, Unix milliseconds — the
+/// operand every destination's catch-up demotion compares against, so a
+/// client can render "behind the backup that finished at …" without
+/// re-deriving anything (contract 1.22). Null when no run has committed,
+/// and from older services.
+/// </param>
 /// <param name="Destinations">The matrix rows, in declaration order.</param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
     string? NextRun,
-    IReadOnlyList<DestinationStatusDescriptor> Destinations);
+    IReadOnlyList<DestinationStatusDescriptor> Destinations,
+    ulong? LastCompletedAt = null);
+
+/// <summary>
+/// The background window's state at the instant the status was observed
+/// (ADR-0069, NFR-PERF-013). Reporting only, in this contract version: the
+/// window is edited in the configuration file, as <c>max_concurrent_backups</c>
+/// is, and a console control for it is owed rather than built.
+/// </summary>
+/// <param name="Text">The configured window, <c>HH:mm-HH:mm</c> in the service machine's local time.</param>
+/// <param name="Open">
+/// Whether background work may start right now. Evaluated at the instant
+/// <see cref="StatusResult.ObservedAt"/> names and from the same parsed window
+/// the scheduler's pass uses, so a client cannot see the two disagree.
+/// </param>
+/// <param name="ChangesAt">
+/// When the state next changes, Unix milliseconds: the next opening when shut,
+/// the next closing when open. One boundary rather than both, because the
+/// other is not the one a person is waiting on; and an instant rather than a
+/// duration, because a duration computed at the service goes stale in the
+/// client's hands.
+/// </param>
+public sealed record BackgroundWindowDescriptor(string Text, bool Open, ulong ChangesAt);
 
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
@@ -605,11 +893,20 @@ public sealed record BackupSetStatusDescriptor(
 /// <param name="Sets">Per-set detail.</param>
 /// <param name="ObservedAt">When the service produced this, Unix milliseconds.</param>
 /// <param name="Notices">Durable events awaiting a human — surfaced here until acknowledged (10 §3.1).</param>
+/// <param name="BackgroundWindow">
+/// The background window in force, or null (contract 1.37, ADR-0069). Null
+/// means the same thing from a service that has no window configured and from
+/// one older than 1.37: draw no line. Conflating them is honest here rather
+/// than lossy, because a client does nothing different in the two cases — and
+/// "no window" is itself the compatibility rule, an absent window being always
+/// open.
+/// </param>
 public sealed record StatusResult(
     string MachineName,
     IReadOnlyList<BackupSetStatusDescriptor> Sets,
     ulong ObservedAt,
-    IReadOnlyList<string> Notices) : ServiceResult;
+    IReadOnlyList<string> Notices,
+    BackgroundWindowDescriptor? BackgroundWindow = null) : ServiceResult;
 
 /// <summary>The client configuration as JSON.</summary>
 /// <param name="Json">The configuration document.</param>
@@ -634,39 +931,24 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// restore-grant envelopes to — public by construction, never sensitive.
 /// </param>
 /// <param name="SetupState">
-/// How far first-run setup has got — <c>"setup_required"</c>,
-/// <c>"kit_required"</c> or <c>"ready"</c> (ADR-0044 §7 as amended,
-/// FR-SVC-011, FR-KIT-004). A client meeting either unfinished state shows
-/// the ceremony in place of its normal views and resumes at the step named,
-/// so a closed tab between provisioning and confirming does not strand the
-/// installation. Null from a service older than contract 1.13, which a
+/// How far first-run setup has got — <c>"setup_required"</c> or
+/// <c>"ready"</c> (ADR-0044 §7 as amended by ADR-0060, FR-SVC-011). A
+/// client meeting the unfinished state shows the ceremony in place of its
+/// normal views. Null from a service older than contract 1.13, which a
 /// client reads as "cannot tell" and so as no reason to interrupt anybody.
+/// Contract 1.14 to 1.28 had a third value, <c>"kit_required"</c>, between
+/// the two; the recovery kit it waited for is withdrawn, and a client that
+/// still knows the word treats it as the ceremony being unfinished.
 /// </param>
 /// <param name="DeviceId">
-/// This device's public identity, lowercase hex — what a kit records as its
-/// issuer (FR-KIT-001). Public by construction; the device's private key
-/// never leaves the service (ADR-0010).
+/// This device's public identity, lowercase hex. Public by construction;
+/// the device's private key never leaves the service (ADR-0010).
 /// </param>
 /// <param name="LogLevel">
 /// The default level in force, by name (ADR-0043 §6). Carried here so a
 /// console can show what the service is logging without a second round trip,
 /// the same way the Maintenance card already reads this result. Null from a
 /// service older than contract 1.15.
-/// </param>
-/// <param name="KitStatus">
-/// Whether the installation's recovery kit has been saved —
-/// <c>"never_saved"</c> or <c>"saved"</c> (FR-KIT-005). Two values, not
-/// three: an installation kit carries no destinations, so the requirement's
-/// staleness trigger cannot fire, and its salt, Argon2id parameters and
-/// sealing public key are fixed for the life of the installation, so nothing
-/// else can make it stale either (ADR-0013 as amended). Carried on the result
-/// every client already polls, because "surfaced continuously" means visible
-/// outside the ceremony, not only during it. Null from a service older than
-/// contract 1.15.
-/// </param>
-/// <param name="KitConfirmedAt">
-/// When the kit was confirmed saved, Unix milliseconds, or null when none has
-/// been. What lets a console say how long ago rather than merely whether.
 /// </param>
 /// <param name="SignedInUser">
 /// Whose session this connection has presented, or null when it has presented
@@ -678,6 +960,25 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// That account's role, by name, so a console can hide the account-management
 /// controls it would only be refused for. The refusal is still enforced at the
 /// service — this saves a round trip, it does not decide anything.
+/// </param>
+/// <param name="KdfSalt">
+/// The installation's Argon2id salt, lowercase hex (contract 1.28): the
+/// public half of its key derivation, which every archive it writes records
+/// in its own descriptor. With the three parameters beside it and the
+/// passphrase, a client derives the same authority the console's restore
+/// ceremony derives — and seals the grant a set-up installation's restore
+/// needs (ADR-0042 §5) without holding the archive. Null until first-run
+/// setup has run, and from services before 1.28.
+/// </param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfIterations">Argon2id time cost; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="KdfParallelism">Argon2id lanes; null with <paramref name="KdfSalt"/>.</param>
+/// <param name="SealingPublicKey">
+/// The installation's X25519 sealing public key, lowercase hex — the
+/// verifier a client compares its derivation against before sending
+/// anything, so a wrong passphrase is caught where it was typed. Public by
+/// construction: it is what content is sealed <em>to</em>. Null with
+/// <paramref name="KdfSalt"/>.
 /// </param>
 public sealed record ServiceDescriptionResult(
     string ContractVersion,
@@ -691,10 +992,97 @@ public sealed record ServiceDescriptionResult(
     string? SetupState = null,
     string? DeviceId = null,
     string? LogLevel = null,
-    string? KitStatus = null,
-    ulong? KitConfirmedAt = null,
     string? SignedInUser = null,
-    string? SignedInRole = null) : ServiceResult;
+    string? SignedInRole = null,
+    string? KdfSalt = null,
+    uint? KdfMemoryKib = null,
+    uint? KdfIterations = null,
+    byte? KdfParallelism = null,
+    string? SealingPublicKey = null) : ServiceResult;
+
+/// <summary>
+/// One archive a destination holds, as discovery reads it from the
+/// descriptor and the cleartext object names (ADR-0061 §2, contract 1.30).
+/// </summary>
+/// <param name="RepositoryId">The repository id, lowercase hex — the directory's name at the destination.</param>
+/// <param name="FormatVersion">The descriptor's format version.</param>
+/// <param name="CreatedAt">When the repository was created, Unix milliseconds (informational).</param>
+/// <param name="CreatedBy">The implementation that created it (informational).</param>
+/// <param name="KdfSalt">The archive's Argon2id salt, lowercase hex — public, recorded in its descriptor.</param>
+/// <param name="KdfMemoryKib">Argon2id memory cost, KiB.</param>
+/// <param name="KdfIterations">Argon2id time cost.</param>
+/// <param name="KdfParallelism">Argon2id lanes.</param>
+/// <param name="SealingPublicKey">
+/// The archive's X25519 sealing public key, lowercase hex: the verifier a
+/// client compares its derivation against before sending an envelope.
+/// </param>
+/// <param name="SnapshotObjects">How many snapshot objects the archive holds.</param>
+/// <param name="HighestPublicationSequence">The highest publication counter among them; zero with none.</param>
+/// <param name="OwnedBySet">The configured set whose archive this already is, by name; null when nobody's.</param>
+/// <param name="SameInstallation">Whether this installation's own credential wrote it — the sealing keys agree.</param>
+public sealed record DiscoveredArchiveDescriptor(
+    string RepositoryId,
+    int FormatVersion,
+    ulong CreatedAt,
+    string CreatedBy,
+    string KdfSalt,
+    uint KdfMemoryKib,
+    uint KdfIterations,
+    byte KdfParallelism,
+    string SealingPublicKey,
+    int SnapshotObjects,
+    ulong HighestPublicationSequence,
+    string? OwnedBySet,
+    bool SameInstallation);
+
+/// <summary>The archives a destination holds (ADR-0061 §2).</summary>
+/// <param name="DestinationName">The destination looked in.</param>
+/// <param name="Archives">Every readable archive, in repository-id order.</param>
+/// <param name="Warnings">Directories that looked like archives and did not read, one line each.</param>
+public sealed record ArchivesDiscoveredResult(
+    string DestinationName,
+    IReadOnlyList<DiscoveredArchiveDescriptor> Archives,
+    IReadOnlyList<string> Warnings) : ServiceResult;
+
+/// <summary>
+/// The set an archive was adopted as (ADR-0061 §3): what the archive
+/// recorded, what the caller overrode, and what the service did about the
+/// writer identity.
+/// </summary>
+/// <param name="SetId">The set's id — the archive's own, or freshly minted when it held no snapshot.</param>
+/// <param name="SetName">The set's name as configured.</param>
+/// <param name="RepositoryId">The adopted repository, lowercase hex.</param>
+/// <param name="Roots">The roots as configured, labels materialised.</param>
+/// <param name="MissingRoots">Recorded root paths that do not exist on this machine — reported, not refused.</param>
+/// <param name="Schedule">The schedule as configured; null for manual-only.</param>
+/// <param name="IncludeRules">The include rules the archive's newest snapshot recorded.</param>
+/// <param name="ExcludeRules">The exclude rules it recorded.</param>
+/// <param name="SnapshotCount">How many snapshots the archive holds.</param>
+/// <param name="NewestSnapshotId">The newest snapshot's id, hex; null with none.</param>
+/// <param name="NewestSnapshotAt">When it completed, Unix milliseconds; null with none.</param>
+/// <param name="WriterIdentityResumed">
+/// Whether this installation now writes under the archive's writer identity.
+/// True only when nothing here had published yet and the archive has one
+/// writer; otherwise the next run re-sends unchanged content once (ADR-0006's
+/// device domain), and <paramref name="Lines"/> says so.
+/// </param>
+/// <param name="AlreadyAdopted">The set was already configured against this archive; nothing was repeated.</param>
+/// <param name="Lines">What was done, for a person.</param>
+public sealed record ArchiveAdoptedResult(
+    string SetId,
+    string SetName,
+    string RepositoryId,
+    IReadOnlyList<BackupRootDescriptor> Roots,
+    IReadOnlyList<string> MissingRoots,
+    string? Schedule,
+    IReadOnlyList<string> IncludeRules,
+    IReadOnlyList<string> ExcludeRules,
+    int SnapshotCount,
+    string? NewestSnapshotId,
+    ulong? NewestSnapshotAt,
+    bool WriterIdentityResumed,
+    bool AlreadyAdopted,
+    IReadOnlyList<string> Lines) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

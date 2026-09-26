@@ -9,6 +9,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.InterruptionTests;
 
@@ -33,13 +34,14 @@ public abstract class InterruptionHarness : IDisposable
     protected static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-interruption-tests", Guid.NewGuid().ToString("n"));
 
     protected static CapturePolicy SmallBlobPolicy { get; } = CapturePolicy.Default with
     {
+        // The device domain: the repository domain reads other writers'
+        // content to verify it, and a write-only holder cannot (ADR-0042 §7).
+        DedupTrustDomain = DedupTrustDomain.Device,
         SegmentSize = SegmentSize.Create(64 * 1024),
         BlobWriteProfile = BlobWriteProfile.LocalDefault with
         {
@@ -54,24 +56,31 @@ public abstract class InterruptionHarness : IDisposable
 
     protected LocalFileSystemObjectStore CreateStore() => new(StoreRoot);
 
-    protected static RepositoryKeySet CreateKeys() => RepositoryKeySet.FromMasterKey(MasterKey);
+    protected static RepositoryKeySet CreateKeys() =>
+        RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
 
-    protected static KeyHierarchy CreateHierarchy() => new(MasterKey);
+    protected static RepositoryWriteCredential CreateCredential() => TestAuthority.Shared.Credential.Clone();
+
+    /// <summary>The read authority sealed content opens under; shared, never disposed.</summary>
+    protected static RepositoryReadAuthority Authority => TestAuthority.Shared;
 
     /// <summary>A fresh "process life": new orchestrator, durable state shared through disk.</summary>
     protected PublicationOrchestrator CreateOrchestrator(
         IObjectStore store,
         RepositoryKeySet keys,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         IPublicationObserver? observer = null,
         int concurrency = 1,
         string? spoolDirectory = null,
-        Repository.Catalogue.Catalogue? catalogue = null) =>
+        Repository.Catalogue.Catalogue? catalogue = null,
+        WriterSequence? sequence = null) =>
         new(
             SmallBlobPolicy with { Concurrency = concurrency },
-            Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
-            new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
+            Repo, Writer, KeyGeneration.Zero, keys, credential, store,
+            sequence
+                ?? new WriterSequence(new FileSequenceStateStore(Path.Combine(spoolDirectory ?? SpoolDirectory, "sequence.txt"))),
             spoolDirectory ?? SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer,
             catalogue);
 
@@ -95,8 +104,10 @@ public abstract class InterruptionHarness : IDisposable
         ClientVersion: "interruption-tests/1.0");
 
     /// <summary>Restores a published snapshot cold — the "previously committed snapshots stay readable" oracle.</summary>
-    protected static async Task<byte[]> RestoreSnapshotAsync(IObjectStore store, RepositoryKeySet keys, byte snapshotSeed)
+    protected static async Task<byte[]> RestoreSnapshotAsync(
+        IObjectStore store, RepositoryKeySet keys, byte snapshotSeed, RepositoryId? repositoryId = null)
     {
+        var repository = repositoryId ?? Repo;
         var wantedId = Enumerable.Repeat(snapshotSeed, 16).ToArray();
 
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("snapshots/"), ListOptions.Default, CancellationToken.None))
@@ -107,7 +118,7 @@ public abstract class InterruptionHarness : IDisposable
 
             var record = StandaloneRecordFraming.Parse(memory.ToArray());
             var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);
-            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var plaintext));
+            Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, repository, metadataKey, out var plaintext));
 
             var decoded = SnapshotManifestCodec.Decode(plaintext);
             if (!decoded.Manifest.SnapshotId.Span.SequenceEqual(wantedId))
@@ -115,7 +126,7 @@ public abstract class InterruptionHarness : IDisposable
                 continue;
             }
 
-            using var reader = new RepositoryReader(Repo, keys, store);
+            using var reader = new RepositoryReader(repository, keys, store, Authority);
             await reader.LoadBlobsAsync(CancellationToken.None);
 
             var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
@@ -172,11 +183,13 @@ public abstract class InterruptionHarness : IDisposable
     /// </summary>
     protected static async Task<List<ObjectKey>> SimulateCollectorMarkAsync(
         LocalFileSystemObjectStore store,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         ulong currentGeneration,
-        ulong nowMs)
+        ulong nowMs,
+        RepositoryId? repositoryId = null)
     {
-        using var journalReader = new Repository.Index.Journal.JournalReader(store, Repo, hierarchy);
+        using var journalReader = new Repository.Index.Journal.JournalReader(
+            store, repositoryId ?? Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync((uint)currentGeneration, CancellationToken.None);
         var survey = Repository.Index.Journal.IntentSurveyor.Survey(
             records, unparseable, currentGeneration, nowMs, skewMarginMs: 60_000);

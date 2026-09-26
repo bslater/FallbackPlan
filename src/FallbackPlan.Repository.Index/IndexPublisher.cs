@@ -24,7 +24,7 @@ public sealed class IndexPublisher : IDisposable
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
     private readonly WriterId _writerId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
@@ -34,21 +34,21 @@ public sealed class IndexPublisher : IDisposable
         IObjectStore store,
         RepositoryId repositoryId,
         WriterId writerId,
-        KeyHierarchy hierarchy,
+        RepositoryWriteCredential credential,
         WriterSequence sequence,
         ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
         ThrowHelper.ThrowIfNull(sequence);
 
         _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
         _writerId = writerId;
-        _hierarchy = hierarchy;
+        _credential = credential;
         _sequence = sequence;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
@@ -62,7 +62,8 @@ public sealed class IndexPublisher : IDisposable
         CancellationToken cancellationToken)
     {
         var (deltaId, _) = await PublishDeltaDetailedAsync(
-            generation, coveredBlobIds, entries, coveredBlobDigests: [], cancellationToken).ConfigureAwait(false);
+            generation, coveredBlobIds, entries, coveredBlobDigests: [], coveredBlobMerkleRoots: [],
+            cancellationToken).ConfigureAwait(false);
         return deltaId;
     }
 
@@ -80,12 +81,20 @@ public sealed class IndexPublisher : IDisposable
     /// (specification 07 §2.2). This is what makes a blob's digest checkable
     /// by a participant other than the device that sealed it.
     /// </param>
+    /// <param name="coveredBlobMerkleRoots">
+    /// The Merkle commitment over each covered blob's sealed bytes, parallel
+    /// to <paramref name="coveredBlobIds"/>, or empty to publish none
+    /// (specification 07 §2.3). Only a writer at repository format 3 or
+    /// above may pass these: below it, an older reader is entitled to read
+    /// the delta and would refuse key 11 outright.
+    /// </param>
     /// <param name="cancellationToken">Cancels the publication.</param>
     public async ValueTask<(DeltaId DeltaId, IndexDelta Delta)> PublishDeltaDetailedAsync(
         ulong generation,
         IReadOnlyList<BlobId> coveredBlobIds,
         IReadOnlyList<IndexEntry> entries,
         IReadOnlyList<ReadOnlyMemory<byte>> coveredBlobDigests,
+        IReadOnlyList<ReadOnlyMemory<byte>> coveredBlobMerkleRoots,
         CancellationToken cancellationToken)
     {
         var sequence = _sequence.AllocateNext();
@@ -98,6 +107,7 @@ public sealed class IndexPublisher : IDisposable
             Generation = generation,
             CoveredBlobIds = coveredBlobIds,
             CoveredBlobDigests = coveredBlobDigests,
+            CoveredBlobMerkleRoots = coveredBlobMerkleRoots,
             Entries = entries,
         };
 
@@ -200,7 +210,7 @@ public sealed class IndexPublisher : IDisposable
 
     private byte[] SignAndEncode(byte[] signedBytes, Func<byte[], byte[]> encodeWithSignature, ulong generation)
     {
-        using var signer = RepositorySigner.Create(_hierarchy, ToKeyGeneration(generation));
+        using var signer = RepositorySigner.Create(_credential, ToKeyGeneration(generation));
         return encodeWithSignature(signer.Sign(signedBytes));
     }
 
@@ -214,7 +224,7 @@ public sealed class IndexPublisher : IDisposable
     {
         var keyGeneration = ToKeyGeneration(generation);
         var objectId = _objectIdDeriver.Derive(objectType, ContentHasher.Hash(encoded));
-        var metadataKey = _hierarchy.DeriveMetadataKey(keyGeneration);
+        var metadataKey = _credential.DeriveMetadataKey(keyGeneration);
 
         byte[] sealedObject;
         try

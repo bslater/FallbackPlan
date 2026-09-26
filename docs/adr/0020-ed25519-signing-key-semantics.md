@@ -21,6 +21,14 @@ The third point is not a drafting slip to be worded away. It is a real design fo
 
 ### 1. The derived bytes are an RFC 8032 seed
 
+> **Amended 2026-09.** With format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) the seed is
+> `HKDF-Expand(signing_root, "fbp/signing-generation/v2" ‖ u32(g), 32)`,
+> the signing root itself an HKDF domain of the passphrase-derived root
+> ([03 §4](../../specifications/repository-format/03-keys.md#4-derived-keys)).
+> The interpretation below — a seed, not a scalar — is unchanged, and so
+> is everything §2 says about scope: "a holder of the master key" reads
+> "a holder of the repository's write credential".
+
 The 32 bytes of `HKDF-Expand(master_key, "fbp/signing/v1" ‖ u32(g), 32)` are the Ed25519 **private-key seed** of RFC 8032 §5.1.5 — the value that is SHA-512-expanded and clamped inside the algorithm. Not a pre-clamped scalar.
 
 Chosen because it is the only interpretation mainstream APIs accept directly (`Ed25519.KeyPair.FromSeed` and equivalents), and because the scalar reading would force every implementation to perform clamping manually — an invitation to get it wrong in exactly the way that is hard to test.
@@ -32,6 +40,15 @@ A signature over a snapshot, index checkpoint, or journal record proves precisel
 It does not prove *which* member produced it. `device_id` and `writer_id` fields remain attribution **by claim** — they are authenticated as part of the signed content, so they cannot be altered after the fact, but a malicious member could have written any value into them before signing.
 
 ### 3. Readers derive the public key; nothing stores it
+
+> **Narrowed 2026-09 by [ADR-0055](0055-reclaim-authority.md) §5.** "Any reader
+> entitled to verify can derive it" is true of every reader *inside the key
+> boundary*, and a peer destination is deliberately outside it — it holds
+> ciphertext and no repository keys at all. A keyless destination asked to
+> check a signature therefore needs a published public key, and one is
+> recorded beside its attribution. The rule below is unchanged for the
+> repository plane, where nothing stores a public key and nothing needs to.
+> See the [amendment](#amendment-2026-09--a-keyless-destination-cannot-derive-anything).
 
 Because the seed derives from the master key, any reader entitled to verify a signature can compute the keypair itself. The format therefore stores **no public key object**: no registry, no key-bundle field, no namespace entry. Verification is: derive seed for generation *g*, compute public key, verify.
 
@@ -46,6 +63,35 @@ Given (2), it is fair to ask what a repository-scoped signature defends at all. 
 - **Tamper evidence over claims.** The claimed `device_id` cannot be edited after signing, so a member can lie about origin at write time but nobody can re-attribute an existing snapshot later.
 
 What it does not defend — one member impersonating another — is exactly [T-18](../threat-model.md#t-18-writer-identity-cloning)'s territory, where the existing mitigation is the writer-identity conflict alert, not cryptography.
+
+## Amendment (2026-09) — a keyless destination cannot derive anything
+
+Two of this record's conclusions were reasoned from the same premise — that
+everyone who verifies a signature holds the master key — and that premise has
+two exceptions this record did not foresee.
+
+**§3's "nothing stores a public key" does not reach a peer.** A destination
+holds ciphertext and no repository keys by design, so "derive it yourself" is
+not available to it. Wherever a keyless party must check a repository
+signature, the public half has to be published to it, and the place to publish
+it is beside the attribution that already records the repository as this
+peer's. [ADR-0053](0053-peer-claim-and-configuration-recovery.md) reached this
+first for a claim key and [ADR-0055](0055-reclaim-authority.md) §5 for a
+reclaim key; they share one carrier.
+
+**§2's "produced by a holder of the master key" is now too coarse for one
+object.** A tombstone's signature is an *authorisation to delete*
+([specification 11 §3](../../specifications/repository-format/11-lifecycle-objects.md#3-tombstone)),
+and a write-only service legitimately holds the signing key while
+deliberately holding nothing else. ADR-0055 gives tombstones their own
+derivation domain, so for a repository advertising `reclaim-authority` a
+tombstone signature proves the narrower and more useful thing: *produced by a
+holder of the reclaim key*. Publication signatures are unchanged and still
+prove exactly what §2 says.
+
+Neither changes §1's seed interpretation, which the reclaim key follows
+verbatim — one clamping rule for both keys, because two would be a second
+chance to get it wrong.
 
 ## Consequences
 
@@ -79,3 +125,5 @@ What it does not defend — one member impersonating another — is exactly [T-1
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Seed interpretation and repository scope fixed for v1; device attribution deferred to Q13 |
+| 2026-09 | Amended | The derivation moves to the format-2 signing root; the seed interpretation and the repository scope are unchanged. Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
+| 2026-09 | Accepted (amended) | §3 narrowed and §2 refined by [ADR-0055](0055-reclaim-authority.md): a keyless destination cannot derive a public key, so one is published beside its attribution; and a tombstone signs under its own reclaim domain, so its signature proves a narrower authority than a publication's. §1 unchanged |

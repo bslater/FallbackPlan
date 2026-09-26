@@ -203,9 +203,9 @@ Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a m
 
 ### 6.1 Signature
 
-Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the master key, so the reader computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.
+Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the signing root, so any holder of the write credential computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.
 
-In format version 1 a signature is **repository-scoped**: it proves the snapshot was produced by a holder of the master key at that generation, and no more. It does not attribute the snapshot to a particular device — `device_id` and `writer_id` fields are attribution **by claim**. Per-device signing keys are a considered and deferred extension. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md), [Q13](../../docs/open-questions.md#q13--device-level-signature-attribution)
+A signature is **repository-scoped**: it proves the snapshot was produced by a holder of the repository's signing key at that generation, and no more. It does not attribute the snapshot to a particular device — `device_id` and `writer_id` fields are attribution **by claim**. Per-device signing keys are a considered and deferred extension. → [ADR-0020](../../docs/adr/0020-ed25519-signing-key-semantics.md), [Q13](../../docs/open-questions.md#q13--device-level-signature-attribution)
 
 ## 7 Policy manifest
 
@@ -222,14 +222,19 @@ Object type `0x05`. Records the effective configuration a snapshot was captured 
 | 7 | u8 | `dedup_trust_domain` — 1 device, 2 repository, 3 repository-unverified |
 | 8 | array | `include_rules` — array of text strings, `rules-v1` (§7.1) |
 | 9 | array | `exclude_rules` — array of text strings, `rules-v1` (§7.1) |
+| 10 | array | `roots` — OPTIONAL; the capture roots as configured, one map each: `1` `label` (text, OPTIONAL — absent for a single root, whose tree is the folder itself; present for every root of a multi-root snapshot, and equal to the tree entry it names) and `2` `path` (text, REQUIRED — the path on the machine that captured it). At most 4 096 roots; a root carrying any other key is invalid |
+| 11 | text | `set_name` — OPTIONAL; the backup set's configured name |
+| 12 | text | `schedule` — OPTIONAL; the set's schedule text, absent when the set runs by hand only |
 
 This exists so that a snapshot can always answer "what settings produced this?" years later, without those settings having to still exist in anyone's configuration file. It is also what makes a benchmark comparing two profiles interpretable.
+
+Keys 10–12 record the **set's shape** — what a configuration file says about a set that the tree does not: where its roots sit on the source machine, what the set is called, and when it runs. They exist so that a destination's archive is enough to re-declare the set that wrote it after the machine and its configuration are gone ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md)). All three are OPTIONAL: a writer that has no set (a single-file archive, a direct `backup --repo` invocation) omits them, and a manifest that omits all three is byte-identical to one written before they were assigned. Text values are bounded at 4 096 UTF-8 bytes each. A reader MUST NOT fail to decode a manifest because a recorded path does not exist where it runs; the shape is informational at read time, as the rules are.
 
 > **Erratum (phase 0).** The inner shapes of key 2 `segmentation_parameters`, key 6 `blob_write_profile`, and the snapshot manifest's key 12 `source_filesystem` are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them. Phase 1 extends `source_filesystem` with optional keys 4 `max_path_bytes` (u32), 5 `max_component_bytes` (u32), and 6 `reserved_names` (bool) — the filesystem capability record of [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) §Decision 7; absence means "limits unknown". The snapshot manifest's `capture_status` triggers are pinned by the same ADR §Decision 3: 2 (partial) iff key 9 references a non-empty error manifest; 3 (aborted) is never published by this implementation.
 
 ### 7.1 Rule dialect (rules-v1)
 
-In format v1, every string in `include_rules` and `exclude_rules` is a
+Every string in `include_rules` and `exclude_rules` is a
 **rules-v1** rule ([ADR-0024](../../docs/adr/0024-include-exclude-rule-dialect.md)).
 No dialect field exists; a future dialect requires a new policy-manifest key
 assigned by a future format revision. Rules are evaluated **at capture** —

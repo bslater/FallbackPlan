@@ -87,9 +87,9 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy, concurrency: concurrency)
+        var published = await CreateOrchestrator(store, keys, credential, concurrency: concurrency)
             .PublishAsync(TreeJob(0xC4), CancellationToken.None);
 
         Assert.AreEqual(files.Count, published.Files.Count);
@@ -130,26 +130,26 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // A committed single-stream baseline predates the tree job.
         var baseline = BuildFile(seed: 1);
         using (var source = new MemoryStream(baseline))
         {
-            await CreateOrchestrator(store, keys, hierarchy)
+            await CreateOrchestrator(store, keys, credential)
                 .PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         }
 
         // The tree publication dies between steps.
         await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy, new KillAfter(killAfter))
+            await CreateOrchestrator(store, keys, credential, new KillAfter(killAfter))
                 .PublishAsync(TreeJob(0xB2), CancellationToken.None));
 
         // The committed snapshot is untouched by the wreckage.
         SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, snapshotSeed: 0xA1));
 
         // A fresh process completes the same tree job end to end.
-        var published = await CreateOrchestrator(store, keys, hierarchy)
+        var published = await CreateOrchestrator(store, keys, credential)
             .PublishAsync(TreeJob(0xB3), CancellationToken.None);
 
         Assert.AreEqual(3, published.Files.Count);
@@ -159,7 +159,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         // a rerun over the crash's leftovers, and then a restore of every
         // file is the whole journey, and "3 files, no failures" holds
         // without the restored bytes being right.
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             var engine = new RestoreEngine(reader);
@@ -191,10 +191,10 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var steps = new List<PublicationStep>();
-        await CreateOrchestrator(store, keys, hierarchy, new StepRecorder(steps))
+        await CreateOrchestrator(store, keys, credential, new StepRecorder(steps))
             .PublishAsync(TreeJob(0xC4), CancellationToken.None);
 
         SequenceAssert.AreEqual(
@@ -217,12 +217,12 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var faulting = new PutFaultingObjectStore(store);
         faulting.Arm(key => key.StartsWith("hints/", StringComparison.Ordinal));
 
-        var published = await CreateOrchestrator(faulting, keys, hierarchy)
+        var published = await CreateOrchestrator(faulting, keys, credential)
             .PublishAsync(TreeJob(0xB2), CancellationToken.None);
 
         Assert.AreEqual(files.Count, published.Files.Count);
@@ -242,12 +242,12 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         using var catalogue = Repository.Catalogue.Catalogue.Open(Path.Combine(SpoolDirectory, "live.db"), Repo);
 
         await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy, new KillAfter(PublicationStep.RetireIntent), catalogue: catalogue)
+            await CreateOrchestrator(store, keys, credential, new KillAfter(PublicationStep.RetireIntent), catalogue: catalogue)
                 .PublishAsync(TreeJob(0xB2), CancellationToken.None));
 
         // The store is complete — snapshot durable, intent retired — and the
@@ -257,7 +257,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
         // A cold reader restores the whole tree from the store alone: the
         // projection's absence is invisible to correctness (FR-ARCH-006).
-        using (var reader = new RepositoryReader(Repo, keys, store))
+        using (var reader = new RepositoryReader(Repo, keys, store, Authority))
         {
             await reader.LoadBlobsAsync(CancellationToken.None);
             var restoredRoot = await RestoreTreeFileAsync(reader, store, keys, 0xB2, "a.bin");
@@ -266,7 +266,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
         // The next completed publication projects itself — the cache catches
         // up by ordinary operation, not by repair.
-        await CreateOrchestrator(store, keys, hierarchy, catalogue: catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue: catalogue)
             .PublishAsync(TreeJob(0xC3), CancellationToken.None);
 
         var projected = Assert.ContainsSingle(catalogue.EnumerateSnapshots());
@@ -297,15 +297,15 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
         var files = BuildSourceTree();
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var faulting = new FaultInjectingObjectStore(store, putBudget);
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
-            await CreateOrchestrator(faulting, keys, hierarchy).PublishAsync(TreeJob(0xB2), CancellationToken.None));
+            await CreateOrchestrator(faulting, keys, credential).PublishAsync(TreeJob(0xB2), CancellationToken.None));
 
         // Nothing durable is collectable: every blob that made it to the
         // store is covered by the live intent (08 §8, C4).
-        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, hierarchy, currentGeneration: 0, nowMs: 1_722_600_000_000));
+        Assert.IsEmpty(await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000));
 
         // No partial snapshot exists at any budget: either the snapshot put
         // never ran, or the object is complete and restorable.
@@ -319,7 +319,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
 
         // A fresh process completes the job over whatever the fault left —
         // spool leftovers, covered blobs, published deltas — with no repair.
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(TreeJob(0xC3), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(TreeJob(0xC3), CancellationToken.None);
         Assert.AreEqual(files.Count, published.Files.Count);
         Assert.IsEmpty(published.Failures);
 
@@ -329,7 +329,7 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     private static async Task<byte[]> RestoreTreeFileFromColdReaderAsync(
         Storage.Local.LocalFileSystemObjectStore store, RepositoryKeySet keys, byte snapshotSeed, string relativePath)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         return await RestoreTreeFileAsync(reader, store, keys, snapshotSeed, relativePath);
     }

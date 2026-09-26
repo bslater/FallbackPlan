@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Descriptor;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
@@ -9,9 +10,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// <summary>
 /// Create-then-open bootstrap (specification 01 §3, §6; FR-REP-002,
 /// FR-ARCH-008, NFR-COMP-007): a repository created against a real store opens with the
-/// right passphrase through the 01 §6 discovery order, refuses the wrong
-/// passphrase indistinguishably from tampering, and surfaces the mandated
-/// unstable-format warning.
+/// right passphrase through the 01 §6 discovery order — the descriptor, then
+/// derive-and-compare against its sealing public key — refuses the wrong
+/// passphrase by that comparison and nothing else, refuses a withdrawn format
+/// by name, and surfaces the mandated unstable-format warning.
 /// </summary>
 [TestClass]
 public sealed class RepositoryLifecycleTests : IDisposable
@@ -26,6 +28,104 @@ public sealed class RepositoryLifecycleTests : IDisposable
         CreatedBy = "fallbackplan-tests/1.0",
     };
 
+    private static async Task<Domain.Identifiers.RepositoryId> CreateAsync(
+        LocalFileSystemObjectStore store, Passphrase passphrase, ulong createdAt = 1)
+    {
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings, createdAt, CancellationToken.None);
+        using (repository)
+        using (authority)
+        {
+            return repository.RepositoryId;
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat3AndDeclaresRelocatableRecords()
+    {
+        // The creation default moved to format 3. It stayed at 2 while the
+        // format was new and untried, which was right then and meant that
+        // nothing a person installed ever wrote a relocatable record or a
+        // Merkle commitment — a format reachable only from a test is a
+        // format that reaches nobody.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        _ = await CreateAsync(store, passphrase);
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
+                "a format-3 descriptor must list relocatable-records (01 §3.2)");
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedExplicitlyAsFormat2_IsStillWrittenAndReopened()
+    {
+        // Moving the default must not withdraw the format. Every repository
+        // written before the move is format 2 and is read in place; a build
+        // that could no longer produce one could no longer reproduce a
+        // customer's archive either, and the conformance fixture that freezes
+        // the format-2 read contract is built through this very path.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings with { FormatVersion = FormatVersions.SealedDataPlane },
+            createdAtUnixMilliseconds: 1, CancellationToken.None);
+        repository.Dispose();
+        createdAuthority.Dispose();
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.SealedDataPlane, reopened.Descriptor.FormatVersion);
+            Assert.IsFalse(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
+                "a format-2 descriptor must not list relocatable-records (01 §3.2)");
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedAsFormat3_DeclaresRelocatableRecordsAndReopens()
+    {
+        // Opt-in through the settings: the descriptor carries version 3 and
+        // feature 0x0003 together, and this build opens it (ADR-0052).
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings with { FormatVersion = FormatVersions.RelocatableRecords },
+            createdAtUnixMilliseconds: 1, CancellationToken.None);
+        repository.Dispose();
+        createdAuthority.Dispose();
+
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords));
+        }
+    }
+
+    [TestMethod]
+    public async Task Repository_CreatedAsAFormatThisBuildDoesNotWrite_IsRefusedByTheSettings()
+    {
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+
+        var settings = Settings with { FormatVersion = 4 };
+        Assert.IsFalse(settings.Validate().IsValid);
+        await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
+            await RepositoryLifecycle.CreateFromPassphraseAsync(
+                store, passphrase, settings, createdAtUnixMilliseconds: 1, CancellationToken.None));
+    }
+
     [TestMethod]
     public async Task Repository_CreatedThenOpenedWithItsPassphrase_Opens()
     {
@@ -33,38 +133,66 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
         Domain.Identifiers.RepositoryId created;
-        using (var repository = await RepositoryLifecycle.CreateAsync(
-            store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None))
+        var (repository, createdAuthority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        using (repository)
+        using (createdAuthority)
         {
             created = repository.RepositoryId;
             Assert.IsTrue(repository.UnstableFormatWarning, "phase-0 repositories are unstable and must say so (01 §3.2)");
         }
 
-        using var reopened = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
-
-        Assert.AreEqual(created, reopened.RepositoryId);
-        Assert.AreEqual(Domain.KeyGeneration.Zero, reopened.CurrentDataGeneration);
-        Assert.AreEqual(Domain.KeyGeneration.Zero, reopened.CurrentMetadataGeneration);
-        Assert.IsFalse(reopened.KdfBelowCreationMinimums);
-        Assert.AreEqual("fallbackplan-tests/1.0", reopened.Descriptor.CreatedBy);
+        var (reopened, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
+        using (reopened)
+        using (authority)
+        {
+            Assert.AreEqual(created, reopened.RepositoryId);
+            Assert.AreEqual(FormatLimits.FormatVersion, reopened.Descriptor.FormatVersion);
+            Assert.AreEqual(KeyGeneration.Zero, reopened.CurrentDataGeneration);
+            Assert.AreEqual(KeyGeneration.Zero, reopened.CurrentMetadataGeneration);
+            Assert.IsFalse(reopened.KdfBelowCreationMinimums);
+            Assert.AreEqual("fallbackplan-tests/1.0", reopened.Descriptor.CreatedBy);
+            SequenceAssert.AreEqual(
+                reopened.Descriptor.SealingPublicKey.ToArray(), authority.Credential.SealingPublicKey.ToArray());
+        }
     }
 
     [TestMethod]
-    public async Task RepositoryOpen_ThePassphraseIsWrong_FailsIndistinguishablyFromTampering()
+    public async Task RepositoryOpen_ThePassphraseIsWrong_IsRefusedByDeriveAndCompare()
     {
         var store = CreateStore();
         using (var passphrase = Passphrase.Create("correct horse battery staple"))
         {
-            (await RepositoryLifecycle.CreateAsync(
-                store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None)).Dispose();
+            await CreateAsync(store, passphrase);
         }
 
         using var wrong = Passphrase.Create("incorrect horse battery staple");
 
-        // 03 §3: wrong passphrase and tampered object are deliberately the
-        // same failure — nothing may leak which one it was.
+        // 03 §9.3: equality of the derived sealing public key against the
+        // descriptor's copy is the whole verifier — nothing is decrypted to
+        // find out, and a wrong passphrase and an altered descriptor report
+        // the same way.
         await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-            (await RepositoryLifecycle.OpenAsync(store, wrong, CancellationToken.None)).Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, wrong, CancellationToken.None)).Repository.Dispose());
+    }
+
+    [TestMethod]
+    public async Task RepositoryOpen_TheWriteCredentialOfAnotherRepository_IsRefusedByName()
+    {
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        await CreateAsync(store, passphrase);
+
+        // The same passphrase under another salt is another repository's
+        // credential; it is checked against the descriptor before anything
+        // is read.
+        var otherSalt = Enumerable.Repeat((byte)0x11, KekDerivation.SaltLength).ToArray();
+        using var other = WriteOnlyDerivation.Derive(
+            passphrase, Settings.KdfParameters, otherSalt, KdfValidationMode.OpenRepository);
+
+        var refusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
+            (await RepositoryLifecycle.OpenAsync(store, other.Credential, CancellationToken.None)).Dispose());
+        Assert.Contains("does not belong to this repository", refusal.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -74,7 +202,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
         var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None)).Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
 
         Assert.Contains("does not hold a FallbackPlan repository", exception.Message, StringComparison.Ordinal);
     }
@@ -85,12 +213,9 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        (await RepositoryLifecycle.CreateAsync(
-            store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None)).Dispose();
+        await CreateAsync(store, passphrase);
 
-        await Assert.ThrowsExactlyAsync<IOException>(async () =>
-            (await RepositoryLifecycle.CreateAsync(
-                store, passphrase, Settings, createdAtUnixMilliseconds: 2, CancellationToken.None)).Dispose());
+        await Assert.ThrowsExactlyAsync<IOException>(async () => await CreateAsync(store, passphrase, createdAt: 2));
     }
 
     [TestMethod]
@@ -99,8 +224,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        (await RepositoryLifecycle.CreateAsync(
-            store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None)).Dispose();
+        await CreateAsync(store, passphrase);
 
         var descriptorPath = Path.Combine(_root, "store", "repository-format");
         var bytes = await File.ReadAllBytesAsync(descriptorPath);
@@ -108,39 +232,83 @@ public sealed class RepositoryLifecycleTests : IDisposable
         await File.WriteAllBytesAsync(descriptorPath, bytes);
 
         var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-            (await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None)).Dispose());
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
 
         Assert.Contains("digest", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public async Task RepositoryOpen_AFormatOneDescriptor_IsRefusedByNameNotMisread()
+    {
+        // Format 1 — a master key wrapped under the passphrase at /keys/ —
+        // was withdrawn before any freeze (ADR-0014's rule: refuse, never
+        // misread). A descriptor stamped with it is a distinct finding with
+        // its remedy named, not "not a repository" and not a wrong passphrase.
+        // Built by hand, because the codec no longer writes the shape.
+        var store = CreateStore();
+        using var passphrase = Passphrase.Create("correct horse battery staple");
+        await CreateAsync(store, passphrase);
+
+        var descriptorPath = Path.Combine(_root, "store", "repository-format");
+        var bytes = await File.ReadAllBytesAsync(descriptorPath);
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, bytes[9],
+            "the framing carries the created version as u16 at offset 8");
+        bytes[9] = 1;
+        // The body repeats the version under CBOR key 2: after the 16-byte
+        // header come the map header, key 1, the byte-string header and the
+        // 16-byte repository id, so key 2 sits at offset 35 and its value at 36.
+        const int bodyVersion = RepositoryDescriptorCodec.HeaderLength + 1 + 1 + 1 + 16 + 1;
+        Assert.AreEqual(0x02, bytes[bodyVersion - 1], "key 2");
+        Assert.AreEqual(
+            FormatVersions.RelocatableRecords, bytes[bodyVersion], "the body repeats the created format_version");
+        bytes[bodyVersion] = 0x01;
+        // Re-stamp the trailing digest so the refusal is the version's, not the digest's.
+        System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32), bytes.AsSpan(bytes.Length - 32));
+        await File.WriteAllBytesAsync(descriptorPath, bytes);
+
+        var parsed = RepositoryDescriptorCodec.Parse(bytes);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(parsed, out var violation);
+        Assert.Contains("withdrawn", violation.Message, StringComparison.Ordinal);
+
+        var exception = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
+            (await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None)).Repository.Dispose());
+        Assert.Contains("format 1", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("withdrawn", exception.Message, StringComparison.Ordinal);
     }
 
     [TestMethod]
     public async Task Repository_OpenedFromDisk_ArchivesAndRestores()
     {
         // The bootstrap composes with the record path: create, open, archive
-        // through the opened key set, restore byte-identical.
+        // through the opened key set, restore byte-identical under the
+        // authority the open derived.
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        using var repository = await RepositoryLifecycle.CreateAsync(
+        var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
             store, passphrase, Settings, createdAtUnixMilliseconds: 1, CancellationToken.None);
+        using var _repository = repository;
+        using var _authority = authority;
 
         var data = new byte[300_000];
         new Random(17).NextBytes(data);
 
         var archiver = new FileArchiver(
-            CapturePolicy.Default with { SegmentSize = Domain.SegmentSize.Create(64 * 1024) },
+            CapturePolicy.Default with { SegmentSize = SegmentSize.Create(64 * 1024) },
             repository.RepositoryId,
             Domain.Identifiers.WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")),
             repository.CurrentDataGeneration,
             repository.Keys,
             store,
             new MonotonicBlobCounterAllocator(1),
-            Path.Combine(_root, "spool"));
+            Path.Combine(_root, "spool"),
+            FormatVersions.SealedDataPlane);
 
         using var source = new MemoryStream(data);
         var archived = await archiver.ArchiveAsync(source, CancellationToken.None);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         using var restored = new MemoryStream();

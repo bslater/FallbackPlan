@@ -57,6 +57,11 @@ internal static partial class Log
         ILogger logger, LogId snapshotId, long logicalBytes, int records, int blobs);
 
     [LoggerMessage(
+        EventId = 2033, Level = LogLevel.Information,
+        Message = "Compaction complete: {Produced} blob(s) produced, {Drained} drained, {Records} record(s) relocated")]
+    internal static partial void CompactionComplete(ILogger logger, int produced, int drained, long records);
+
+    [LoggerMessage(
         EventId = 2004, Level = LogLevel.Information,
         Message = "Snapshot {SnapshotId} published: {Files} files, {Failures} failed, "
             + "{LogicalBytes} logical bytes")]
@@ -109,15 +114,15 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 2030, Level = LogLevel.Information,
-        Message = "Repository {Repository} created at format version {FormatVersion}, write-only {WriteOnly}")]
+        Message = "Repository {Repository} created at format version {FormatVersion}")]
     internal static partial void RepositoryCreated(
-        ILogger logger, RepositoryId repository, int formatVersion, bool writeOnly);
+        ILogger logger, RepositoryId repository, int formatVersion);
 
     [LoggerMessage(
         EventId = 2031, Level = LogLevel.Information,
-        Message = "Repository {Repository} opened at format version {FormatVersion}, write-only {WriteOnly}")]
+        Message = "Repository {Repository} opened at format version {FormatVersion}")]
     internal static partial void RepositoryOpened(
-        ILogger logger, RepositoryId repository, int formatVersion, bool writeOnly);
+        ILogger logger, RepositoryId repository, int formatVersion);
 
     // No repository id: a refusal usually happens before there is one. The
     // descriptor is step one of an open, and "not a FallbackPlan repository",

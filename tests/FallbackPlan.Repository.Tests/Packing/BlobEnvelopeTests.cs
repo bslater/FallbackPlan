@@ -12,7 +12,7 @@ namespace FallbackPlan.Repository.Tests.Packing;
 public sealed class BlobEnvelopeTests
 {
     private static BlobEnvelope Sample() => new(
-        FormatLimits.FormatVersion,
+        FormatLimits.SymmetricFormatVersion,
         BlobClass.Data,
         new KeyGeneration(3),
         BlobId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7000000000000002a")),
@@ -78,7 +78,7 @@ public sealed class BlobEnvelopeTests
     private static byte[] SealedShare() => [.. Enumerable.Range(0x10, 80).Select(value => (byte)value)];
 
     private static BlobEnvelope SealedSample() => new(
-        FormatLimits.SealedFormatVersion,
+        FormatVersions.SealedDataPlane,
         BlobClass.Data,
         new KeyGeneration(3),
         BlobId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7000000000000002a")),
@@ -119,7 +119,7 @@ public sealed class BlobEnvelopeTests
     {
         var parsed = BlobEnvelope.Parse(SealedSampleBytes());
 
-        Assert.AreEqual(FormatLimits.SealedFormatVersion, parsed.FormatVersion);
+        Assert.AreEqual(FormatVersions.SealedDataPlane, parsed.FormatVersion);
         Assert.AreEqual(BlobClass.Data, parsed.BlobClass);
         Assert.AreEqual(42UL, parsed.BlobCounter);
         SequenceAssert.AreEqual(SealedShare(), parsed.SealedContentKey.ToArray());
@@ -147,13 +147,13 @@ public sealed class BlobEnvelopeTests
         // blob WITH one; a share of the wrong length — each refused by the
         // single presence rule (05 §2.1): sealed ⟺ v2 ∧ data.
         Assert.ThrowsExactly<ArgumentException>(() => new BlobEnvelope(
-            FormatLimits.SealedFormatVersion, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer));
+            FormatVersions.SealedDataPlane, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer));
         Assert.ThrowsExactly<ArgumentException>(() => new BlobEnvelope(
-            FormatLimits.FormatVersion, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer, SealedShare()));
+            FormatLimits.SymmetricFormatVersion, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer, SealedShare()));
         Assert.ThrowsExactly<ArgumentException>(() => new BlobEnvelope(
-            FormatLimits.SealedFormatVersion, BlobClass.Metadata, new KeyGeneration(0), blobId, salt, 1, writer, SealedShare()));
+            FormatVersions.SealedDataPlane, BlobClass.Metadata, new KeyGeneration(0), blobId, salt, 1, writer, SealedShare()));
         Assert.ThrowsExactly<ArgumentException>(() => new BlobEnvelope(
-            FormatLimits.SealedFormatVersion, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer,
+            FormatVersions.SealedDataPlane, BlobClass.Data, new KeyGeneration(0), blobId, salt, 1, writer,
             SealedShare().AsSpan(0, 79)));
     }
 

@@ -5,33 +5,33 @@
   "independently_derived": true,
   "inputs": {
     "repository_id": "0102030405060708090a0b0c0d0e0f10",
-    "format_version": 1,
+    "format_version": 2,
     "object_type": 1,
-    "object_id": "66817ba59f4e1868f6c52dfeca501904d9a70aa87b2dd5857e15be14738fdde0"
+    "object_id": "b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff24"
   },
   "cases": [
     {
       "ordinal": 0,
       "nonce_aes_gcm": "000000000000000000000000",
-      "aad": "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfeca501904d9a70aa87b2dd5857e15be14738fdde000000000",
+      "aad": "0102030405060708090a0b0c0d0e0f10000201b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff2400000000",
       "aad_length": 55
     },
     {
       "ordinal": 1,
       "nonce_aes_gcm": "000000000000000000000001",
-      "aad": "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfeca501904d9a70aa87b2dd5857e15be14738fdde000000001",
+      "aad": "0102030405060708090a0b0c0d0e0f10000201b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff2400000001",
       "aad_length": 55
     },
     {
       "ordinal": 47,
       "nonce_aes_gcm": "00000000000000000000002f",
-      "aad": "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfeca501904d9a70aa87b2dd5857e15be14738fdde00000002f",
+      "aad": "0102030405060708090a0b0c0d0e0f10000201b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff240000002f",
       "aad_length": 55
     },
     {
       "ordinal": 65535,
       "nonce_aes_gcm": "00000000000000000000ffff",
-      "aad": "0102030405060708090a0b0c0d0e0f1000010166817ba59f4e1868f6c52dfeca501904d9a70aa87b2dd5857e15be14738fdde00000ffff",
+      "aad": "0102030405060708090a0b0c0d0e0f10000201b0e02efebb5ba7effa08a5ae81ed7e6c13e5e44c6eed38f4f1a224045c28ff240000ffff",
       "aad_length": 55
     }
   ],
@@ -41,7 +41,7 @@
     "aad_shape": "repository_id || u16(format_version) || blob_id || u32(record_count)",
     "blob_id": "a0a1a2a3a4a5a6a7000000000000002a",
     "record_count": 3,
-    "aad": "0102030405060708090a0b0c0d0e0f100001a0a1a2a3a4a5a6a7000000000000002a00000003",
+    "aad": "0102030405060708090a0b0c0d0e0f100002a0a1a2a3a4a5a6a7000000000000002a00000003",
     "aad_length": 38
   }
 }

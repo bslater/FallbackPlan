@@ -10,6 +10,13 @@ namespace FallbackPlan.Web.DomTests;
 /// write-only provisioning ceremony — each asserting the command its dialog
 /// claims to send.
 /// </summary>
+/// <remarks>
+/// Re-homed onto the sectioned set editor when this line merged: the single
+/// form this suite filled in one pass became a summary with a Change… dialog
+/// per section and one confirm at the end. What is asserted — the tree's tick
+/// becomes a root, the draft is validated as it is built, and the editor sends
+/// exactly one upsert carrying the name, root and destination — is unchanged.
+/// </remarks>
 [TestClass]
 [BrowserCondition]
 public sealed class ConfigEditingDomTests
@@ -73,18 +80,31 @@ public sealed class ConfigEditingDomTests
         await Expect(add).ToBeEnabledAsync();
         await add.ClickAsync();
 
+        // The editor opens on its summary: what the set says now, one row per
+        // section, each behind its own Change… dialog. Nothing reaches the
+        // service until the single confirm at the end, so the walk below is
+        // three staged sections and one command.
+        await page.ClickAsync("[data-action=\"sec-locations\"]");
+
         // Ticking a folder in the selection tree marks it as a root, and the
         // draft round-trips through validate_set_draft (350 ms debounce).
         await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
         var validated = await harness.ReceivedAsync<ValidateSetDraftCommand>(draft =>
             draft.Roots is { } roots && roots.Contains("/data"));
         Assert.IsNotNull(validated);
+        await page.ClickAsync("[data-action=\"sec-save\"]");
 
+        await page.ClickAsync("[data-action=\"sec-name\"]");
         await page.FillAsync("#set-name", "docs");
-        await page.CheckAsync("[data-dest-check=\"vault\"]");
-        await page.ClickAsync("[data-action=\"set-save\"]");
+        await page.ClickAsync("[data-action=\"sec-save\"]");
 
-        // A NEW set has no saved baseline, so the save is non-material and
+        await page.ClickAsync("[data-action=\"sec-destinations\"]");
+        await page.CheckAsync("[data-dest-check=\"vault\"]");
+        await page.ClickAsync("[data-action=\"sec-save\"]");
+
+        await page.ClickAsync("[data-action=\"set-confirm-all\"]");
+
+        // A NEW set has no saved baseline, so the confirm is non-material and
         // goes straight to the upsert — no two-step consequence dialog.
         var upsert = await harness.ReceivedAsync<UpsertBackupSetCommand>();
         Assert.AreEqual("docs", upsert.Set.Name);

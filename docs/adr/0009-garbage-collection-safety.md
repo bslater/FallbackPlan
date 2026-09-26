@@ -146,36 +146,40 @@ multi-writer archives exist, this returns to the index generation
 speaks of; the property preserved is the same — no clock, only visible
 advancement.
 
-## Amendment 6 (2026-08) — set-configuration objects are collection roots
+## Amendment 6 (2026-08) — marking without a staging archive
 
-Reachability is the collector's whole safety argument: an object no snapshot
-reaches is garbage. The **set-configuration object**
-([specification 11 §5](../../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object),
-[ADR-0047](0047-recovering-operation-after-total-loss.md)) is reachable from
-nothing by design — no manifest references it, because it describes the
-operation rather than the data — and a reachability walk alone would therefore
-collect every one of them.
+[ADR-0046](0046-direct-to-destination-publication.md) removes the staging
+archive for direct-ship sets, and Amendment 4's placement rewords rather than
+moves: **marking still happens where the keys are** — on the hub — but the
+keep-set and its closure are computed against the set's **metadata store**
+plus the sink, whose blob reads answer from whichever destination holds each
+key and whose listings are the union across destinations. The retention
+traversal has been proven through that path (ADR-0046's read-paths record).
+Every safety mechanism above — intents, generation cut-off, grace counted in
+the journal sequence, revalidation — is unchanged, because none of it ever
+depended on the marked objects being local, only on the marker holding the
+keys and the journal.
 
-That is not a small loss. It would leave the repository intact and quietly
-disarm recovery of *operation*: a machine rebuilt from a replica would get its
-files back and have nothing to tell it what it was protecting, which is the
-failure the object exists to prevent. It would also be invisible until a
-disaster, because nothing else reads these objects during ordinary running.
-
-**The newest set-configuration object for each backup set is a root.** A
-collector MUST NOT delete it, whatever reachability says. Older objects for the
-same set are ordinary garbage and follow the tombstone path of the Decision
-above, unchanged.
-
-This is a stated root, in the sense the lifecycle objects already establish —
-leases and audit records are likewise not reached from any manifest — rather
-than a new inference inside the reachability walk. The distinction matters for
-review: nothing about how reachability is *computed* changes, and the rule is
-one the collector can check by listing a prefix.
-
-The rule is per set rather than per repository because sets are independent
-([ADR-0034](0034-hub-and-spoke-destinations.md)): keeping only the globally
-newest object would disarm every set but the most recently edited one.
+What Amendment 4 said about staging's own lifecycle goes moot for these sets:
+there is no "object leaves staging" — per-destination convergence is the
+deleting half, each destination bounded by its floor exactly as before, and
+"deletion may not outrun replication" keeps its force as FR-GC-009's
+proof-before-reclaim rule, now guarding the *destinations'* copies since no
+local copy exists behind them. A migrated set's leftover staging archive
+leaves only by `retire_staging` (ADR-0046, contract 1.18), refused while it
+holds a blob the live history reaches that no destination has — never over
+one nothing references, which no pass could ever carry (ADR-0046 Amendment
+2). Amendment 5's single-writer
+grace arithmetic carries over verbatim — the metadata store is single-writer
+by the same construction. Compaction was the open question here —
+"re-seals in staging and propagates as replication" has no staging to re-seal
+in for a direct-ship set — and the compaction record answered it:
+[ADR-0067](0067-the-keyless-compactor.md) reads a direct-ship set's candidates
+back through the ship sink and writes their replacements through it, so the
+hub still does the work and the destinations still receive ordinary objects.
+Steps 6 and 9 of this record's algorithm are what make that safe, and the
+built pass keeps them in the order this record requires while running the
+whole phase after the sweep rather than inside it (architecture 07 §3.3).
 
 ## Status history
 
@@ -184,4 +188,4 @@ newest object would disarm every set but the most recently edited one.
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Intent mechanism unchanged. Extended to the collector itself (PT-3, critical); blob identifier formation resolved via ADR-0016 (PT-4); expiry now requires both generation and declared-duration conditions (PT-5). |
 | 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
-| 2026-08 | Accepted (amended) | Amendment 6: the newest set-configuration object per backup set is a collection root, because nothing references it and a reachability walk alone would collect the very objects that let a rebuilt machine resume operating ([ADR-0047](0047-recovering-operation-after-total-loss.md)) |
+| 2026-08 | Accepted (amended) | Amendment 6: for direct-ship sets the hub marks against the metadata store through the sink, convergence is the deleting half, and compaction's placement is deferred to ADR-0025's record ([ADR-0046](0046-direct-to-destination-publication.md)). |

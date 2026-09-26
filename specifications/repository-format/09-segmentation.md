@@ -133,7 +133,7 @@ For each file version:
 1. Read the file as a bounded stream.
 2. Divide into segments per the profile.
 3. Compute each segment's content identifier.
-4. Compare against the corresponding segment of the prior version — positionally under `fixed-v1`, by content under `cdc-v1` — then against the reusable-segment index within the trust domain.
+4. Compare against the reusable-segment index within the trust domain. A writer holding the prior version's references MAY first compare against the corresponding prior segment — positionally under `fixed-v1`, by content under `cdc-v1` — as an optimisation; the index comparison is the required one, and in the reference implementation's backup path it is the only one performed (the prior-version fast paths live at the whole-file level, before segmentation).
 5. Reuse the existing object identifier where content identifier, logical length, profile and parameters all match.
 6. Otherwise compress, encrypt, authenticate, and append to the open blob.
 7. Record `[logical_offset, logical_length, object_id]` in the manifest.

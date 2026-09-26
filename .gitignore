@@ -86,11 +86,6 @@ artifacts/
 *.nupkg
 *.snupkg
 
-# The in-repo Bodu.CodeStyle.XmlDocumentation analyzer is shipped via a committed
-# .nupkg under local-packages/ (restored through NuGet.config's `bodu-local` source)
-# so a fresh clone resolves it without an explicit pack step.
-!/local-packages/*.nupkg
-
 # Transient solution filter written by tools/Update-CodeStyleAnalyzer.ps1 when it excludes
 # benchmark projects; normally deleted at the end of the run, ignored in case a run is interrupted.
 _codestyle-refresh.slnf

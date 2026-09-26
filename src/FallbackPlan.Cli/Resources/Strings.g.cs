@@ -223,12 +223,12 @@ internal static class Strings
     internal static string DirectGateway_VerifyDestinationNeedsTheService => Get(nameof(DirectGateway_VerifyDestinationNeedsTheService));
 
     /// <summary>
-    /// Syncing destinations is the service's job — its scheduler, ledger and staging archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
+    /// Syncing destinations is the service's job — its scheduler, ledger and per-set archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
     /// </summary>
     internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));
 
     /// <summary>
-    /// Previewing changes is the service's job — the rescan reads a staging catalogue the running service holds open. Connect to it with --connect.
+    /// Previewing changes is the service's job — the rescan reads a set's catalogue the running service holds open. Connect to it with --connect.
     /// </summary>
     internal static string DirectGateway_ChangesNeedsTheService => Get(nameof(DirectGateway_ChangesNeedsTheService));
 

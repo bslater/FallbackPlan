@@ -31,17 +31,17 @@ public sealed class VectorFileTests
     /// </summary>
     private static readonly Dictionary<string, bool> ExpectedFiles = new()
     {
-        ["keys.json"] = true,
         ["write-only.json"] = true,
         ["identifiers.json"] = true,
         ["records.json"] = true,
+        ["records-v3.json"] = true,
+        ["merkle.json"] = true,
         ["segmentation.json"] = true,
         ["compression.json"] = true,
         ["aes-gcm.json"] = false,
         ["argon2id.json"] = false,
         ["ed25519.json"] = true,
         ["path-rules.json"] = true,
-        ["recovery-kit.json"] = true,
     };
 
     private static string VectorDirectory =>
@@ -97,11 +97,11 @@ public sealed class VectorFileTests
     [TestMethod]
     public void KeyDerivationVectors_DifferentWriters_ProveSeparation()
     {
-        using var document = Load("keys.json");
-        var derived = document.RootElement.GetProperty("derived");
-        var checks = document.RootElement.GetProperty("separation_checks");
+        using var document = Load("write-only.json");
+        var group = document.RootElement.GetProperty("blob_key");
+        var checks = group.GetProperty("separation_checks");
 
-        var blobKey = derived.GetProperty("blob_key").GetString();
+        var blobKey = group.GetProperty("blob_key").GetString();
         var otherWriter = checks.GetProperty("blob_key_other_writer").GetString();
         var otherCounter = checks.GetProperty("blob_key_other_counter").GetString();
 
@@ -114,6 +114,24 @@ public sealed class VectorFileTests
         Assert.AreNotEqual(blobKey, otherWriter);
         Assert.AreNotEqual(blobKey, otherCounter);
         Assert.AreNotEqual(otherWriter, otherCounter);
+    }
+
+    [TestMethod]
+    public void AssociatedDataV3_TheCommittedCase_IsFiftyOneBytes()
+    {
+        // Format 3 drops the ordinal (04 §4): 16 + 2 + 1 + 32. The two record
+        // files describe one record under two formats, so the object and the
+        // repository must agree between them.
+        using var v3 = Load("records-v3.json");
+        using var v2 = Load("records.json");
+        Assert.AreEqual(51, v3.RootElement.GetProperty("aad_length").GetInt32());
+        Assert.AreEqual(102, v3.RootElement.GetProperty("aad").GetString()!.Length);
+        Assert.AreEqual(3, v3.RootElement.GetProperty("inputs").GetProperty("format_version").GetInt32());
+        Assert.AreEqual(
+            v2.RootElement.GetProperty("inputs").GetProperty("object_id").GetString(),
+            v3.RootElement.GetProperty("inputs").GetProperty("object_id").GetString());
+        Assert.AreEqual(12, v3.RootElement.GetProperty("prefix").GetProperty("metadata_prefix_length").GetInt32());
+        Assert.AreEqual(92, v3.RootElement.GetProperty("prefix").GetProperty("sealed_data_prefix_length").GetInt32());
     }
 
     [TestMethod]

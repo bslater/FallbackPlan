@@ -19,8 +19,6 @@ public sealed class JournalTests
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
 
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private static readonly byte[] BackupSet = [.. Enumerable.Repeat((byte)0x33, 16)];
 
     private static BlobId Blob(byte seed)
@@ -42,8 +40,8 @@ public sealed class JournalTests
     [DynamicData(nameof(EveryKind))]
     public void JournalRecord_EveryKind_RoundTripsThroughTheTwoPassSignature(JournalRecord record)
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
-        using var signer = RepositorySigner.Create(hierarchy, new KeyGeneration(1));
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, new KeyGeneration(1));
 
         var signedBytes = JournalRecordCodec.EncodeForSigning(record);
         var stored = JournalRecordCodec.Encode(record, signer.Sign(signedBytes));
@@ -63,14 +61,14 @@ public sealed class JournalTests
     [TestMethod]
     public void JournalVerification_TheSigningGenerationIsOlder_DescendsGenerationsToFindIt()
     {
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = TestAuthority.Shared.Credential.Clone();
 
         var record = new JournalRecord(JournalRecordKind.WriteIntent, Writer, 1, 1000,
             new JournalPayload.WriteIntent(BackupSet, [], 60_000, 5, IntentPurpose.Backup));
         var signedBytes = JournalRecordCodec.EncodeForSigning(record);
 
         byte[] signature;
-        using (var signer = RepositorySigner.Create(hierarchy, new KeyGeneration(1)))
+        using (var signer = RepositorySigner.Create(credential, new KeyGeneration(1)))
         {
             signature = signer.Sign(signedBytes);
         }
@@ -78,11 +76,11 @@ public sealed class JournalTests
         // The record has no generation field (08 §2 key 6): the reader tries
         // the current generation downward and accepts the first that
         // verifies — here, 3 → 2 → 1 succeeds.
-        Assert.AreEqual(1u, JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
+        Assert.AreEqual(1u, JournalRecordCodec.VerifyByDescent(signedBytes, signature, credential, maxGeneration: 3));
 
         // A forged signature verifies at no generation.
         signature[0] ^= 0x01;
-        Assert.IsNull(JournalRecordCodec.VerifyByDescent(signedBytes, signature, hierarchy, maxGeneration: 3));
+        Assert.IsNull(JournalRecordCodec.VerifyByDescent(signedBytes, signature, credential, maxGeneration: 3));
     }
 
     [TestMethod]

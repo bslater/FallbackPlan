@@ -13,9 +13,8 @@ The repository format must be documented · append-oriented · content-addressed
 ## 2. Object classes
 
 ```text
-/repository-format                                  format profile, repository ID, feature set
-/keys/<key-id>                                      wrapped key material
-/blobs/data/<shard>/<store-blob-key>                segment records
+/repository-format                                  format profile, repository ID, feature set, KDF salt and parameters, sealing public key
+/blobs/data/<shard>/<store-blob-key>                segment records (content sealed to the public key)
 /blobs/meta/<shard>/<store-blob-key>                manifest and tree records
 /index/delta/<generation>/<delta-id>                immutable writer index deltas
 /index/checkpoint/<generation>/<checkpoint-id>      compacted index generations
@@ -112,7 +111,7 @@ Sizing comes from a versioned write profile:
 
 Supported range is 8 MiB to the provider-safe limit reported by the store's capability record. Metadata blobs use smaller independent targets. Maximum open-blob age exists so a low-churn backup set still commits within a bounded time rather than waiting indefinitely to fill a blob.
 
-A segment record is **never split across blobs** in format v1. When the open blob cannot hold the next complete record within its maximum, it is sealed and the record starts a new blob.
+A segment record is **never split across blobs**. When the open blob cannot hold the next complete record within its maximum, it is sealed and the record starts a new blob.
 
 ### 5.2 Layout
 
@@ -135,7 +134,7 @@ A segment record is **never split across blobs** in format v1. When the open blo
 +-------------------------------------------------------------+
 ```
 
-The cleartext envelope carries only non-sensitive selectors — everything needed to derive the blob key and pick a parser, nothing about content. The blob salt, writer identity and blob counter are the inputs to per-blob key derivation, which is why all three are carried explicitly. The blob digest is computed at sealing and recorded in the **index**, not appended to the blob; the trailing element on disk is the 16-byte footer locator. The normative byte layout is [specification 05](../../specifications/repository-format/05-blob.md); the derivation itself is [`03-crypto.md` §3](03-crypto.md#3-nonce-and-key-construction).
+The cleartext envelope carries only non-sensitive selectors — everything needed to derive the blob key and pick a parser, nothing about content. In a **format-3** repository the same 88 bytes carry the same selectors and one of them means less: the blob key they derive still seals the footer, but a record's key is the object's rather than the blob's, so a data blob's envelope carries no sealed share at all — each record carries its own ([ADR-0052](../adr/0052-relocatable-records-format-v3.md)). The blob salt, writer identity and blob counter are the inputs to per-blob key derivation, which is why all three are carried explicitly. The blob digest is computed at sealing and recorded in the **index**, not appended to the blob; the trailing element on disk is the 16-byte footer locator. The normative byte layout is [specification 05](../../specifications/repository-format/05-blob.md); the derivation itself is [`03-crypto.md` §3](03-crypto.md#3-nonce-and-key-construction).
 
 The **recovery footer is the point of the whole structure**. It makes a blob self-describing: given the repository key material and the blob alone, every record in it can be located, decrypted, and verified with no index and no catalogue. That is what makes forensic rebuild (§8.2) possible and what bounds the blast radius of losing every index object.
 
@@ -180,7 +179,7 @@ With the physical layer behind an indirection, compaction republishes index entr
 
 The cost is one index lookup per segment on the restore path. That is bounded, local, indexed, and measured against NFR-PERF-004 — a good trade for making the maintenance story correct.
 
-That accounting holds while the index is healthy. When it is not, the cost is larger and should be stated plainly: before this change, a manifest plus a blob was enough to recover a file, because the manifest said where the bytes were. Now recovering a single file with no index means scanning blob recovery footers until its segments are located. A user who has lost their machine, holds the recovery kit, and wants one 4 MiB document could wait through a scale-**M** footer scan — hours — before that document can be produced, which is not what FR-MAN-010 promises ([PT-10](../review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
+That accounting holds while the index is healthy. When it is not, the cost is larger and should be stated plainly: before this change, a manifest plus a blob was enough to recover a file, because the manifest said where the bytes were. Now recovering a single file with no index means scanning blob recovery footers until its segments are located. A user who has lost their machine, holds the passphrase, and wants one 4 MiB document could wait through a scale-**M** footer scan — hours — before that document can be produced, which is not what FR-MAN-010 promises ([PT-10](../review/2026-08-fix-pressure-test.md#pt-10--emergency-single-file-restore-regressed-from-one-fetch-to-a-full-scan)).
 
 Two mitigations, neither of which reverses the decision:
 
@@ -238,6 +237,8 @@ Listing remains a useful accelerator for finding a recent checkpoint quickly. It
 ### 7.3 Compaction
 
 Checkpoint compaction is bounded, resumable, and cancellable. Prior checkpoints are retained for a configurable safety window. Compaction never invalidates a prior generation — a reader mid-operation against generation *n* continues to work while *n+1* is published.
+
+**Blob compaction is a different mechanism from the checkpoint compaction above**, and exists in one format only. In format 2 a record's key is its blob's and its nonce is its position, so moving one means opening and re-sealing it ([ADR-0025](../adr/0025-compaction-reseals-records.md)) — which a service cannot do at all, holding the structure key and not the content key, so a format-2 set is refused by name and pointed at the upgrade. In format 3 no key is needed: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob verbatim, re-framing only its header, and the record opens there. `Repository/BlobCompactor` is written over that primitive and runs where the structure key and a writer identity are, which is the source service, and never at a destination ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
 ## 8. Catalogue rebuild
 

@@ -1,16 +1,15 @@
 using Bodu;
-using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
-using Microsoft.Extensions.Logging;
 using RestoreResult = FallbackPlan.Api.RestoreResult;
 
 namespace FallbackPlan.Agent;
@@ -26,13 +25,14 @@ namespace FallbackPlan.Agent;
 /// </para>
 /// <para>
 /// Key material never appears in any command or result, in either direction
-/// (NFR-SEC-009). Exporting a recovery kit is <b>not a command</b> — it
-/// re-derives the key-encryption key from a passphrase supplied per invocation,
-/// so it runs where the person typed it.
+/// (NFR-SEC-009). Nothing that derives from the passphrase is a command:
+/// derivation runs where the person typed it, and only sealed envelopes and
+/// public parameters cross this surface.
 /// </para>
 /// </remarks>
 public sealed partial class ServiceCommandHandler(
-    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local)
+    ServiceRuntime runtime, RemoteBindingState remoteBinding, CallerScope scope = CallerScope.Local,
+    Action? requestRestart = null)
     : IFallbackPlanService
 {
     /// <summary>Where the caller on this session came from.</summary>
@@ -44,6 +44,13 @@ public sealed partial class ServiceCommandHandler(
     /// builds one handler per listener over the same runtime. Defaulting to
     /// <see cref="CallerScope.Local"/> keeps every one-shot verb and every
     /// test that constructs a handler directly meaning what it meant before.
+    /// <para>
+    /// <c>requestRestart</c> is the host's recycle signal (ADR-0049): the
+    /// run loop hands it in so restart_service can ask the process to tear
+    /// the runtime down and start it again. Null — one-shot verbs, --once,
+    /// tests — means there is no host to recycle, and the verb refuses with
+    /// that reason.
+    /// </para>
     /// </remarks>
     private CallerScope Scope => scope;
 
@@ -53,25 +60,6 @@ public sealed partial class ServiceCommandHandler(
         ThrowHelper.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var started = Stopwatch.GetTimestamp();
-        var answer = await ExecuteGuardedAsync(command, cancellationToken).ConfigureAwait(false);
-
-        // One trace line per command at the seam every verb crosses, so the
-        // service's log reads as a conversation. Type names only: several
-        // commands carry paths, and the names are enough to follow the flow.
-        var log = runtime.LoggerFor<ServiceCommandHandler>();
-        if (log.IsEnabled(LogLevel.Trace))
-        {
-            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name, elapsed);
-        }
-        return answer;
-    }
-
-    /// <summary>Dispatch with the expected-failure guards; the timing above wraps it.</summary>
-    private async ValueTask<ServiceResult> ExecuteGuardedAsync(
-        ServiceCommand command, CancellationToken cancellationToken)
-    {
         try
         {
             // The read paths are the only commands that do open-ended work, so
@@ -100,6 +88,14 @@ public sealed partial class ServiceCommandHandler(
                 PreviewSetChangesCommand preview => await OnReaderLaneAsync(
                     $"rescan {preview.SetName ?? "(default set)"}",
                     token => PreviewSetChangesAsync(preview, token),
+                    cancellationToken).ConfigureAwait(false),
+                JobChangesCommand jobChanges => await OnReaderLaneAsync(
+                    $"job changes {jobChanges.JobId}",
+                    token => JobChangesAsync(jobChanges, token),
+                    cancellationToken).ConfigureAwait(false),
+                JobFailuresCommand jobFailures => await OnReaderLaneAsync(
+                    $"job failures {jobFailures.JobId}",
+                    token => JobFailuresAsync(jobFailures, token),
                     cancellationToken).ConfigureAwait(false),
                 RetentionCommand retention => await OnWriterLaneAsync(
                     retention.Apply ? "retention apply" : "retention plan",
@@ -150,7 +146,7 @@ public sealed partial class ServiceCommandHandler(
         var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var jobId = $"read-{Guid.NewGuid():n}";
 
-        runtime.Queue.Enqueue(new QueuedJob(
+        var accepted = runtime.Queue.Enqueue(new QueuedJob(
             jobId,
             JobLane.Reader,
             UserInitiated: true,
@@ -167,6 +163,15 @@ public sealed partial class ServiceCommandHandler(
                 }
             }));
 
+        if (!accepted)
+        {
+            // The only refusal a fresh identity can draw is a queue that has
+            // stopped. Answering it is not optional: the completion below is
+            // signalled by the job running, so a caller left waiting on work
+            // the queue will never take waits for ever.
+            return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+        }
+
         // A caller that gives up releases the lane rather than leaving it held
         // by work nobody is waiting for.
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
@@ -175,8 +180,10 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// Runs a pass on the queue's writer lane and waits for it. Retention is
-    /// a writer: it tombstones and deletes in the staging archives, so it
-    /// serialises against backups rather than racing them (ADR-0029 §4's
+    /// a writer: it tombstones and deletes in the sets' archives, so it takes
+    /// the writer lane rather than racing the captures that share it — and
+    /// the per-set exclusion, not the lane (now a pool, ADR-0047), is what
+    /// keeps one set's retention and its capture apart (ADR-0029 §4's
     /// reasoning, applied to the one maintenance path that mutates).
     /// </summary>
     private async ValueTask<ServiceResult> OnWriterLaneAsync(
@@ -187,7 +194,7 @@ public sealed partial class ServiceCommandHandler(
         var completion = new TaskCompletionSource<ServiceResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var jobId = $"write-{Guid.NewGuid():n}";
 
-        runtime.Queue.Enqueue(new QueuedJob(
+        var accepted = runtime.Queue.Enqueue(new QueuedJob(
             jobId,
             JobLane.Writer,
             UserInitiated: true,
@@ -204,13 +211,22 @@ public sealed partial class ServiceCommandHandler(
                 }
             }));
 
+        if (!accepted)
+        {
+            // The only refusal a fresh identity can draw is a queue that has
+            // stopped. Answering it is not optional: the completion below is
+            // signalled by the job running, so a caller left waiting on work
+            // the queue will never take waits for ever.
+            return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+        }
+
         using var registration = cancellationToken.Register(() => runtime.Queue.Cancel(jobId));
         return await completion.Task.ConfigureAwait(false);
     }
 
     /// <summary>
-    /// One retention pass per configured set with a staging archive
-    /// (architecture 07): report always, tombstone and sweep only on apply.
+    /// One retention pass per configured set with an archive on disk —
+    /// staging, or a direct-ship metadata store (architecture 07, ADR-0046): report always, tombstone and sweep only on apply.
     /// A gate hold past its deferral bound raises the FR-GC-009 warning as a
     /// durable notice.
     /// </summary>
@@ -258,6 +274,17 @@ public sealed partial class ServiceCommandHandler(
                 return verification;
             }
 
+            // The run's authority to author deletions (ADR-0055 §6). Opened
+            // here and disposed with the run, so a service compromised
+            // between runs holds nothing that can delete.
+            var (reclaim, grantRefusal) = await OpenReclaimGrantAsync(
+                set, archive, apply, command.ReclaimGrant, cancellationToken).ConfigureAwait(false);
+            if (grantRefusal is not null)
+            {
+                acquiredGate?.Release();
+                return grantRefusal;
+            }
+
             Retention.RetentionReport report;
             try
             {
@@ -273,10 +300,45 @@ public sealed partial class ServiceCommandHandler(
                     now,
                     cancellationToken,
                     set.Name,
-                    runtime.LoggerFor(typeof(Retention.RetentionRunner))).ConfigureAwait(false);
+                    runtime.LoggerFor(typeof(Retention.RetentionRunner)),
+                    reclaim,
+                    // Where the index now says an object lives. Without it a
+                    // blob an earlier pass compacted is never condemned —
+                    // its records are still reachable and still physically
+                    // present — and compaction would reclaim nothing, ever
+                    // (ADR-0067).
+                    objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId).ConfigureAwait(false);
+
+                // A set's peers converge here and nowhere else (ADR-0055 §6):
+                // the scheduled sync holds no authority to delete, so it
+                // pushes whole copies and defers to this run, whose grant
+                // signs the instruction — while the gate is held and before
+                // the grant is zeroed.
+                if (apply && reclaim is not null)
+                {
+                    lines.AddRange(
+                        (await FanOut.ConvergePeersAsync(runtime, set, archive, reclaim, now, cancellationToken)
+                            .ConfigureAwait(false))
+                        .Select(line => $"{set.Name}: {line}"));
+                }
+
+                // And the third phase, in the same position and for the same
+                // reason: it writes, so it runs while the gate is held. It
+                // needs no reclaim authority, because it deletes nothing —
+                // the blobs it drains are condemned by the NEXT pass's plan,
+                // on the collector's own terms, and swept after their grace
+                // like any other garbage (ADR-0067).
+                if (apply && report.CompactionCandidates.Count > 0)
+                {
+                    lines.AddRange(
+                        (await CompactSetAsync(runtime, set, archive, report, now, cancellationToken)
+                            .ConfigureAwait(false))
+                        .Select(line => $"{set.Name}: {line}"));
+                }
             }
             finally
             {
+                reclaim?.Dispose();
                 acquiredGate?.Release();
             }
 
@@ -301,6 +363,83 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new RetentionResult(lines);
+    }
+
+    /// <summary>
+    /// Rewrites the blobs this pass's plan chose, and moves the index onto
+    /// the result ([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Source and destination are both <c>archive.Store</c>, which is what
+    /// makes the two set shapes one path: for a staging set that is the
+    /// archive's own directory, and for a direct-ship set it is the ship
+    /// sink — candidates read back from the destinations in priority order,
+    /// and the blobs produced written out through the same sink.
+    /// </para>
+    /// <para>
+    /// Peers are excluded, and by the sink rather than by anything here:
+    /// outside a run <c>DestinationShipSink.ReadOrder</c> resolves local
+    /// paths only, because a peer shipment is a live session rather than a
+    /// directory. A set whose destinations are all peers therefore lists no
+    /// blobs through the sink, its plan vetoes, and there is nothing to
+    /// compact — which is the same and correct answer as for a set whose
+    /// local paths are simply away.
+    /// </para>
+    /// <para>
+    /// A failure here fails the phase and not the pass. The retention the
+    /// run already did is durable and correct; compaction is maintenance,
+    /// and an unreadable candidate or a destination that went away mid-write
+    /// is a reason to say so and try again next time, not to lose the
+    /// report.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask<IReadOnlyList<string>> CompactSetAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        ArchiveHandle archive,
+        Retention.RetentionReport report,
+        ulong nowUnixMilliseconds,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outcome = await Repository.CompactionPass.RunAsync(
+                [.. report.CompactionCandidates.Select(blob =>
+                    new Repository.CompactionSource(blob.StoreKey, blob.BlobId, blob.Live))],
+                archive.Repository,
+                archive.Store,
+                archive.Store,
+                runtime.Writer,
+                CapturePolicy.Default,
+                archive.Sequence,
+                archive.Catalogue,
+                archive.SpoolDirectory,
+                nowUnixMilliseconds,
+                declaredMaxDurationMs: (ulong)TimeSpan.FromHours(6).TotalMilliseconds,
+                expiryGeneration: archive.Repository.CurrentMetadataGeneration.Value + 1,
+                cancellationToken,
+                logger: runtime.LoggerFor(typeof(Repository.CompactionPass))).ConfigureAwait(false);
+
+            var reclaimable = report.CompactionCandidates
+                .Where(blob => outcome.Drained.Contains(blob.BlobId))
+                .Sum(blob => blob.DeadBytes);
+
+            return
+            [
+                $"compacted: {outcome.RecordsMoved.ToString(CultureInfo.InvariantCulture)} record(s) out of "
+                + $"{outcome.Drained.Count.ToString(CultureInfo.InvariantCulture)} blob(s) into "
+                + $"{outcome.Published.Count.ToString(CultureInfo.InvariantCulture)}; "
+                + $"{reclaimable.ToString("N0", CultureInfo.InvariantCulture)} byte(s) come back once the next "
+                + "pass condemns them and their grace runs",
+            ];
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException
+            or Repository.Packing.BlobFormatException)
+        {
+            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), set.Name, exception);
+            return [$"compaction did not run: {exception.Message}"];
+        }
     }
 
     /// <summary>
@@ -333,7 +472,7 @@ public sealed partial class ServiceCommandHandler(
                     destination.Path!, archive.Repository.RepositoryId.ToString());
                 return Directory.Exists(replicaRoot)
                     ? Retention.TrimVerification.AgainstStore(
-                        StoreComposition.OpenLocal(replicaRoot))
+                        new Storage.Local.LocalFileSystemObjectStore(replicaRoot))
                     : Retention.TrimVerification.None;
 
             case DestinationKind.Peer:
@@ -351,8 +490,12 @@ public sealed partial class ServiceCommandHandler(
     private async ValueTask<ServiceResult> DispatchAsync(ServiceCommand command, CancellationToken cancellationToken) => command switch
     {
         ListBackupSetsCommand => ListBackupSets(),
-        UpsertBackupSetCommand upsert => UpsertBackupSet(upsert),
+        UpsertBackupSetCommand upsert => await UpsertBackupSetAsync(upsert, cancellationToken).ConfigureAwait(false),
         DeleteBackupSetCommand deleteSet => DeleteBackupSet(deleteSet),
+        RetireStagingCommand retireStaging =>
+            await RetireStagingAsync(retireStaging, cancellationToken).ConfigureAwait(false),
+        UpgradeSetFormatCommand upgradeFormat =>
+            await UpgradeSetFormatAsync(upgradeFormat, cancellationToken).ConfigureAwait(false),
         ListDestinationsCommand => ListDestinations(),
         UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
         DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
@@ -369,7 +512,9 @@ public sealed partial class ServiceCommandHandler(
         ListNoticesCommand listNotices => ListNotices(listNotices),
         AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
-        ClaimReplicasCommand claim => await ClaimReplicasAsync(claim, cancellationToken).ConfigureAwait(false),
+        ListReplicaAttributionsCommand => ListReplicaAttributions(),
+        ReattributeReplicaCommand reattribute => ReattributeReplica(reattribute),
+        ListReceiptsCommand listReceipts => ListReceipts(listReceipts),
         RunBackupCommand run => RunBackup(run),
         CancelJobCommand cancel => CancelJob(cancel),
         ListJobsCommand list => ListJobs(list),
@@ -379,19 +524,60 @@ public sealed partial class ServiceCommandHandler(
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
-        ConfirmRecoveryKitCommand confirm => ConfirmRecoveryKit(confirm),
+        DiscoverArchivesCommand discover => await DiscoverArchivesAsync(discover, cancellationToken).ConfigureAwait(false),
+        AdoptArchiveCommand adopt => await AdoptArchiveAsync(adopt, cancellationToken).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
+        RestartServiceCommand => RestartService(),
 
         // The read paths are handled before this dispatch, on the reader lane.
         _ => new ServiceError(ServiceErrorReason.InvalidArgument, $"Unknown command '{command.GetType().Name}'."),
     };
 
+    private ServiceResult RestartService()
+    {
+        // A paired console must not cut a machine it cannot see (ADR-0028
+        // §6) — and this verb would sever the very connection carrying its
+        // own refusal.
+        if (Scope == CallerScope.Remote)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "Restarting the service is a local decision — a paired console may watch this service "
+                + "but not cut it off from the machine that owns it (ADR-0028 §6).");
+        }
+
+        if (requestRestart is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "This service has no host to recycle it — a --once run, or a directly hosted handler. "
+                + "Restart the process the way it was started.");
+        }
+
+        // Acknowledge FIRST: the reply must reach the wire before the host
+        // tears the listener down under it. The signal only sets the host's
+        // flag; the actual teardown starts after this answer is flushed.
+        requestRestart();
+        return new AcknowledgedResult();
+    }
+
     /// <summary>Parses a verify level, or says what the vocabulary is.</summary>
+
+    /// <summary>
+    /// Whether a direct-ship capture can write to this destination at all —
+    /// the local-path store, or the peer write adapter
+    /// ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)). The reserved
+    /// cloud kinds (FR-DEST-005) are modelled by the configuration and served
+    /// by nothing.
+    /// </summary>
+    /// <param name="destination">The destination's declaration, or null when the reference dangles.</param>
+    private static bool ShipsDirectly(DestinationConfiguration? destination) =>
+        destination?.Kind is DestinationKind.LocalPath or DestinationKind.Peer;
     private static bool TryParseLevel(string text, out VerifyLevel level, out string canonical, out ServiceError? error)
     {
         (level, canonical, error) = text switch
@@ -505,253 +691,26 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// What a plan is for: the objects it needs and cannot find, reported
-    /// before any byte moves rather than discovered part-way through. The
-    /// catalogue alone cannot answer this — it is a cache, and a cache
-    /// ahead of the store says "nothing missing" about the very objects
-    /// the store has lost — so each located blob is probed against the
-    /// store, one memoized metadata call per distinct blob. The manifest
-    /// blob alone is not enough: an item's SEGMENTS live in other blobs —
-    /// after a staging trim, precisely the ones no longer here (ADR-0034
-    /// §6) — so each manifest is read (metadata never trims) and its
-    /// referenced blobs are probed too (FR-RST-003). The keys that answered
-    /// are returned too: they are exactly the blob set a run needs, which is
-    /// what the targeted load opens instead of every footer in the store.
+    /// before any byte moves rather than discovered part-way through — and
+    /// the blob set a run opens instead of every footer in the store.
     /// </summary>
+    /// <remarks>
+    /// The work lives in <see cref="Restore.RestoreBlobSet"/>, beside the
+    /// planner, because every restore path needs it and only this one had
+    /// it: the CLI's direct restore opened every footer in the store, and so
+    /// did this handler whenever the source was local.
+    /// </remarks>
     private static async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
         RestoreContext context,
         Repository.Catalogue.Catalogue catalogue,
         RestorePlan plan,
         CancellationToken cancellationToken)
     {
-        using var keyDeriver = new Repository.Crypto.StoreBlobKeyDeriver(context.Keys.KeyIdKey);
-        using var objectIdDeriver = new Repository.Crypto.ObjectIdDeriver(context.Keys.ContentIdKey);
-        using var metaReaders = new MetaReaderCache();
-        var blobKeys = new Dictionary<Domain.Identifiers.BlobId, ObjectKey?>();
-        var missing = new List<string>();
-        var needed = new HashSet<ObjectKey>();
+        var resolved = await Restore.RestoreBlobSet.ResolveAsync(
+            catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
+            .ConfigureAwait(false);
 
-        async ValueTask<bool> PresentAsync(Repository.Catalogue.ResolvedLocation location)
-        {
-            if (!blobKeys.TryGetValue(location.BlobId, out var key))
-            {
-                key = await FindBlobKeyAsync(
-                    context.Store, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId), cancellationToken)
-                    .ConfigureAwait(false);
-                blobKeys[location.BlobId] = key;
-            }
-
-            if (key is { } found)
-            {
-                needed.Add(found);
-                return true;
-            }
-
-            return false;
-        }
-
-        foreach (var item in plan.Items)
-        {
-            if (item.Kind == EntryKind.DirectoryPlaceholder)
-            {
-                continue;
-            }
-
-            if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
-            {
-                missing.Add(item.Path);
-                continue;
-            }
-
-            if (!await PresentAsync(location).ConfigureAwait(false))
-            {
-                missing.Add(item.Path);
-                continue;
-            }
-
-            // A manifest that is present but will not read is damage, not
-            // absence — verify's business, and nothing this plan can name
-            // segments from.
-            var manifest = await ReadManifestAsync(
-                context, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders, cancellationToken)
-                .ConfigureAwait(false);
-            if (manifest is null)
-            {
-                continue;
-            }
-
-            var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
-                .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
-            foreach (var referenced in references)
-            {
-                if (catalogue.ResolveLocation(referenced) is not { } segmentLocation
-                    || !await PresentAsync(segmentLocation).ConfigureAwait(false))
-                {
-                    missing.Add(item.Path);
-                    break;
-                }
-            }
-        }
-
-        return (missing, needed);
-    }
-
-    /// <summary>
-    /// Reads one file-version manifest through its meta blob's authenticated
-    /// footer — the plan-side targeted read, cached per blob because a
-    /// snapshot's manifests cluster in a few metadata blobs.
-    /// </summary>
-    private static async ValueTask<Repository.Format.Manifests.FileVersionManifest?> ReadManifestAsync(
-        RestoreContext context,
-        Domain.Identifiers.ObjectId objectId,
-        Repository.Catalogue.ResolvedLocation location,
-        Repository.Crypto.StoreBlobKeyDeriver keyDeriver,
-        Repository.Crypto.ObjectIdDeriver objectIdDeriver,
-        MetaReaderCache metaReaders,
-        CancellationToken cancellationToken)
-    {
-        var storeKey = Repository.Packing.BlobStoreKeys.ForBlob(
-            BlobClass.Metadata, location.StoreBlobKey ?? keyDeriver.Derive(location.BlobId));
-
-        if (!metaReaders.TryGet(storeKey, out var cached))
-        {
-            Repository.Packing.BlobReader? reader;
-            try
-            {
-                var metadata = await context.Store.GetMetadataAsync(storeKey, cancellationToken).ConfigureAwait(false);
-                reader = metadata.Metadata is not { Length: > 0 }
-                    ? null
-                    : await Repository.Packing.BlobReader.OpenAsync(
-                        context.Store, storeKey, metadata.Metadata.Length, context.RepositoryId,
-                        context.Keys.DeriveClassKey, objectIdDeriver, cancellationToken)
-                        .ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is Repository.Packing.BlobFormatException or IOException)
-            {
-                reader = null;
-            }
-
-            cached = metaReaders.Add(storeKey, reader);
-        }
-
-        if (cached is null || !cached.Manifests.TryGetValue(objectId, out var located))
-        {
-            return null;
-        }
-
-        var read = await cached.Reader.ReadRecordAsync(located, cancellationToken).ConfigureAwait(false);
-        if (read.Outcome != Repository.Packing.RecordReadOutcome.Ok || read.Plaintext is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return Repository.Format.Manifests.FileVersionManifestCodec.Decode(read.Plaintext);
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// The plan probe's open meta-blob readers: memoized, because a
-    /// snapshot's manifests cluster in a few metadata blobs — and BOUNDED,
-    /// because a whole-snapshot plan can touch as many metadata blobs as the
-    /// repository holds, and plan memory must not scale with repository size
-    /// (NFR-PERF-001). Each reader carries an object-id index over its
-    /// manifest records, so the per-item lookup is a dictionary hit rather
-    /// than a scan of the blob's whole record table.
-    /// </summary>
-    private sealed class MetaReaderCache : IDisposable
-    {
-        private const int Capacity = 32;
-
-        private readonly Dictionary<ObjectKey, Cached?> _entries = [];
-        private readonly Queue<ObjectKey> _openOrder = new();
-
-        /// <summary>One open reader and its manifest index.</summary>
-        public sealed record Cached(
-            Repository.Packing.BlobReader Reader,
-            IReadOnlyDictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry> Manifests);
-
-        /// <summary>Looks a blob up; a null <paramref name="cached"/> with a true return is a remembered unreadable blob.</summary>
-        public bool TryGet(ObjectKey key, out Cached? cached) => _entries.TryGetValue(key, out cached);
-
-        /// <summary>Caches a freshly opened reader (or the fact that the blob would not open).</summary>
-        public Cached? Add(ObjectKey key, Repository.Packing.BlobReader? reader)
-        {
-            if (reader is null)
-            {
-                // Negative entries are a key and a null — never worth evicting.
-                _entries[key] = null;
-                return null;
-            }
-
-            if (_openOrder.Count >= Capacity)
-            {
-                var evicted = _openOrder.Dequeue();
-                if (_entries.Remove(evicted, out var old))
-                {
-                    old?.Reader.Dispose();
-                }
-            }
-
-            var manifests = new Dictionary<Domain.Identifiers.ObjectId, Repository.Packing.RecordTableEntry>();
-            foreach (var entry in reader.RecordTable)
-            {
-                if (entry.ObjectType == Domain.ObjectType.FileVersionManifest)
-                {
-                    manifests.TryAdd(entry.ObjectId, entry);
-                }
-            }
-
-            var cached = new Cached(reader, manifests);
-            _entries[key] = cached;
-            _openOrder.Enqueue(key);
-            return cached;
-        }
-
-        /// <inheritdoc/>
-        public void Dispose()
-        {
-            foreach (var cached in _entries.Values)
-            {
-                cached?.Reader.Dispose();
-            }
-
-            _entries.Clear();
-        }
-    }
-
-    /// <summary>
-    /// The store key a blob actually exists under, trying both classes — or
-    /// null. A store that cannot answer reads as missing: the plan's job is
-    /// to warn before bytes move, and "unreachable" warrants the warning as
-    /// much as "absent". The found key is what the run's targeted load opens.
-    /// </summary>
-    private static async ValueTask<ObjectKey?> FindBlobKeyAsync(
-        Storage.Abstractions.IObjectStore store,
-        Domain.Identifiers.StoreBlobKey blobKey,
-        CancellationToken cancellationToken)
-    {
-        foreach (var blobClass in new[] { BlobClass.Metadata, BlobClass.Data })
-        {
-            var key = Repository.Packing.BlobStoreKeys.ForBlob(blobClass, blobKey);
-            try
-            {
-                var metadata = await store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
-                if (metadata.Found && metadata.Metadata!.Length > 0)
-                {
-                    return key;
-                }
-            }
-            catch (IOException)
-            {
-            }
-        }
-
-        return null;
+        return ([.. resolved.Missing], [.. resolved.Blobs]);
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
@@ -837,18 +796,16 @@ public sealed partial class ServiceCommandHandler(
 
             using var reader = new RepositoryReader(
                 context.RepositoryId, context.Keys, context.Store, context.Source?.ReadAuthority);
-            if (context.Source is null)
-            {
-                await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                // A source may be remote: open only the blobs the plan needs,
-                // known exactly from the same probe the plan verb runs
-                // (ADR-0041).
-                var (_, needed) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
-                await reader.LoadBlobsAsync(needed, cancellationToken).ConfigureAwait(false);
-            }
+
+            // No load at all: the catalogue already says where every record
+            // is, so a record is read from there and a blob is opened through
+            // its footer only when that fails (NFR-PERF-009). Opening the
+            // blobs a plan needs cost three ranged reads each before a byte of
+            // payload, which no amount of coalescing afterwards could get
+            // under the budget. The plan verb still runs the probe — naming
+            // unreachable paths before anything moves is its job, not this
+            // one's (FR-RST-003).
+            reader.UseLocationSource(catalogue.ResolveLocation);
 
             var options = new RestoreExecutionOptions
             {
@@ -1113,7 +1070,7 @@ public sealed partial class ServiceCommandHandler(
             }
 
             using (var journalReader = new JournalReader(
-                archive.Store, archive.Repository.RepositoryId, archive.Repository.Hierarchy))
+                archive.Store, archive.Repository.RepositoryId, archive.Repository.Credential))
             {
                 var generation = archive.Repository.CurrentDataGeneration.Value >= archive.Repository.CurrentMetadataGeneration.Value
                     ? archive.Repository.CurrentDataGeneration.Value
@@ -1142,18 +1099,32 @@ public sealed partial class ServiceCommandHandler(
 
     private BackupSetsResult ListBackupSets() =>
         new BackupSetsResult(
-            [.. runtime.Configuration.BackupSets.Select(set => new BackupSetDescriptor(
-                set.Id, set.Name,
-                // Root carries the first root for pre-1.10 clients; Roots is
-                // the whole truth (ADR-0040).
-                set.Roots[0].Path,
-                set.Schedule, set.IncludeRules, set.ExcludeRules,
-                [.. set.Destinations.Select(reference => reference.Ref)],
-                ToPolicyDescriptor(set.Retention),
-                ToOverrideDescriptors(set.Destinations),
-                [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))]))]);
+            [.. runtime.Configuration.BackupSets.Select(set =>
+            {
+                var facts = LocalDescriptorOf(set);
+                return new BackupSetDescriptor(
+                    set.Id, set.Name,
+                    // Root carries the first root for pre-1.10 clients; Roots is
+                    // the whole truth (ADR-0040).
+                    set.Roots[0].Path,
+                    set.Schedule, set.IncludeRules, set.ExcludeRules,
+                    [.. set.Destinations.Select(reference => reference.Ref)],
+                    ToPolicyDescriptor(set.Retention),
+                    ToOverrideDescriptors(set.Destinations),
+                    [.. set.Roots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
+                    set.Priority,
+                    set.DirectShip,
+                    // The archive's own derivation facts (contract 1.30): an
+                    // adopted set's differ from the installation's.
+                    facts is null ? null : Convert.ToHexStringLower(facts.KdfSalt.Span),
+                    facts?.KdfParameters.MemoryKiB,
+                    facts?.KdfParameters.Iterations,
+                    facts?.KdfParameters.Parallelism,
+                    facts is null ? null : Convert.ToHexStringLower(facts.SealingPublicKey.Span));
+            })]);
 
-    private ServiceResult UpsertBackupSet(UpsertBackupSetCommand command)
+    private async ValueTask<ServiceResult> UpsertBackupSetAsync(
+        UpsertBackupSetCommand command, CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;
 
@@ -1191,6 +1162,54 @@ public sealed partial class ServiceCommandHandler(
         var existing = configuration.BackupSets
             .FirstOrDefault(set => string.Equals(set.Id, command.Set.Id, StringComparison.Ordinal));
 
+        // The storage shape (ADR-0046, contract 1.23): null preserves — a
+        // pre-1.23 client cannot see the field and must not convert a set —
+        // and an explicit value sets it.
+        //
+        // What a NEW set defaults to is a judgement rather than a capability
+        // question, and the two came apart with the peer write adapter
+        // ([ADR-0058](../../docs/adr/0058-peer-write-adapter.md)). A peer can
+        // now be shipped to directly, so the refusal below asks only whether
+        // the set references anything the sink can write to at all. The
+        // default still asks for a LOCAL PATH, because for a set whose only
+        // destination is a peer the staging archive is buying three things
+        // direct-ship gives up: a capture that does not wait on the link, a
+        // transfer that resumes after the link dies mid-object, and — the one
+        // that matters most — an independent copy to check the replica's
+        // content against, without which no pass can honestly call it
+        // verified (ADR-0058 §8). Direct-ship remains available to a peer-only
+        // set as a stated choice, for a machine with no room for the second
+        // copy; it is not one to make on a person's behalf.
+        var directShip = command.Set.DirectShip
+            ?? existing?.DirectShip
+            ?? command.Set.Destinations.Any(name =>
+                configuration.FindDestination(name)?.Kind == DestinationKind.LocalPath);
+        if (directShip && !command.Set.Destinations.Any(name =>
+                ShipsDirectly(configuration.FindDestination(name))))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                "A direct-ship set needs at least one local-path or peer destination — a capture with "
+                + "nowhere to ship has nothing it can promise (ADR-0046).");
+        }
+
+        // Changing the shape re-homes the set's repository: the archive
+        // handle is swapped out beneath whoever holds it, so a live run must
+        // finish or be cancelled first — the delete-set rule, applied to the
+        // one edit with the same blast radius.
+        var shapeChanged = existing is not null && existing.DirectShip != directShip;
+        if (shapeChanged)
+        {
+            var lastJob = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == existing!.Id);
+            if (lastJob is not null && !JobStateStore.HasSettled(lastJob.State) && runtime.Queue.IsActive(lastJob.Id))
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"Backup set '{existing!.Name}' has a run in progress — the storage shape cannot change "
+                    + "under a live run. Cancel it or let it finish, then save again.");
+            }
+        }
+
         // The 1↔N transitions change the rule coordinate system (ADR-0040):
         // growing past one root prefixes the old root's anchored rules with
         // its new label; shrinking back strips the survivor's. Only rules the
@@ -1208,9 +1227,18 @@ public sealed partial class ServiceCommandHandler(
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
             Retention = ToRetention(command.Set.Retention, existing?.Retention),
+            // Null preserves (a pre-1.17 client cannot see the field); zero
+            // is the explicit default a 1.17 client may set back.
+            Priority = command.Set.Priority ?? existing?.Priority,
+            DirectShip = directShip,
             Destinations = [.. command.Set.Destinations.Select(name => new SetDestinationReference
             {
                 Ref = name,
+                // The per-reference priority (ADR-0047 §4) has no wire field
+                // either; preserved by name, exactly like the retention
+                // override below.
+                Priority = existing?.Destinations.FirstOrDefault(reference =>
+                    string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Priority,
                 Retention = command.Set.DestinationRetention is { } overrides
                     // A carried map is the complete truth: named entries set
                     // (empty clears), unnamed destinations carry no override.
@@ -1220,6 +1248,58 @@ public sealed partial class ServiceCommandHandler(
                         string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Retention,
             })],
         };
+
+        // The circular-capture guard (FR-DEST-011), judged on the resolved
+        // roots and the re-anchored rules — exactly what the set will walk.
+        // At the boundary and never at load: an installation already carrying
+        // the layout keeps loading, and the edit that would keep it is what
+        // gets refused.
+        var circular = CircularCapture.Defects(
+            [replacement], configuration.Destinations, ServiceStorage());
+        if (circular.Count > 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
+        }
+
+        // The condition of choosing a local destination (ADR-0051,
+        // FR-DEST-017): it must sit on a different volume than every root —
+        // and a different physical drive where the platform can say — or the
+        // backup dies with the files it protects. Judged only for bindings
+        // this edit chooses: a newly referenced destination, or every local
+        // reference when the roots change. A standing binding in an older
+        // configuration keeps loading and keeps its status warnings
+        // (ADR-0035); it is the choosing that is gated.
+        var rootPaths = resolvedRoots.Select(root => root.Path).ToList();
+        var rootsChanged = existing is null
+            || existing.Roots.Count != resolvedRoots.Count
+            || existing.Roots.Zip(resolvedRoots).Any(pair =>
+                !string.Equals(pair.First.Path, pair.Second.Path, StringComparison.Ordinal));
+        foreach (var name in command.Set.Destinations)
+        {
+            if (configuration.FindDestination(name) is not
+                { Kind: DestinationKind.LocalPath, Path: { Length: > 0 } destinationPath })
+            {
+                continue;
+            }
+
+            var newlyChosen = existing is null || !existing.Destinations.Any(reference =>
+                string.Equals(reference.Ref, name, StringComparison.Ordinal));
+            if (!newlyChosen && !rootsChanged)
+            {
+                continue;
+            }
+
+            if (LocalDestinationPlacement.Judge(
+                    rootPaths, destinationPath, runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
+                    + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
+                    + "Choose a local destination on a different drive (ADR-0051).");
+            }
+        }
+
 
         // Replace in place: the first set is the default RunBackupCommand
         // runs, and status renders declaration order — an edit must not
@@ -1247,13 +1327,90 @@ public sealed partial class ServiceCommandHandler(
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        if (shapeChanged)
+        {
+            // The cached handle still speaks the old shape; evicted, the next
+            // open reads the flag fresh — and a staging set flipped on
+            // migrates there and then, in this process, no restart needed.
+            await runtime.EvictArchiveAsync(replacement.Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        var now = DateTimeOffset.Now;
+        var nowMs = (ulong)now.ToUnixTimeMilliseconds();
+
+        if (shapeChanged && directShip)
+        {
+            // Seed at once rather than at the next scheduler pass: a flipped
+            // set's next capture refuses until a destination holds its full
+            // history (the sink's scope rule), and a person who just flipped
+            // will press "Back up now" before any pass has run. The gained-
+            // destination path queues its seed immediately for the same
+            // reason (ADR-0047).
+            FanOut.EnqueueAll(runtime, replacement, now, userInitiated: true);
+        }
+
+        if (existing is null)
+        {
+            // Saving a new set IS asking for its first backup (ADR-0047): the
+            // capture queues now and the fan-out follows it, so the
+            // destinations populate without waiting for a schedule or a
+            // person remembering to run one.
+            foreach (var reference in replacement.Destinations)
+            {
+                runtime.DestinationSync.RecordNeedsFull(replacement.Id, reference.Ref, nowMs);
+            }
+
+            var first = Scheduler.Enqueue(runtime, replacement, now, userInitiated: true);
+            _ = first.ContinueWith(
+                completed =>
+                {
+                    if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
+                    {
+                        FanOut.EnqueueAll(runtime, replacement, now, userInitiated: true);
+                    }
+                },
+                TaskScheduler.Default);
+
+            return new ConfigurationChangeResult(
+            [
+                $"Backup set '{replacement.Name}' created.",
+                $"First backup queued as job {Scheduler.LatestJobFor(runtime, replacement.Id) ?? "(pending)"}; "
+                    + "its destinations receive the archive when it completes.",
+            ]);
+        }
+
+        // The destinations this edit newly references owe a full copy
+        // (ADR-0047): flagged in the ledger, and seeded now rather than at
+        // the next pass — referencing a destination IS asking it to hold the
+        // set.
+        var gained = replacement.Destinations
+            .Where(reference => !existing.Destinations.Any(before =>
+                string.Equals(before.Ref, reference.Ref, StringComparison.Ordinal)))
+            .Select(reference => reference.Ref)
+            .ToList();
+
+        var seeded = new List<string>();
+        foreach (var name in gained)
+        {
+            runtime.DestinationSync.RecordNeedsFull(replacement.Id, name, nowMs);
+            if (runtime.ArchiveExists(replacement.Id))
+            {
+                _ = FanOut.Enqueue(runtime, replacement, name, now, userInitiated: true);
+                seeded.Add($"Destination '{name}' is newly referenced; seeding its full copy was queued and runs now.");
+            }
+            else
+            {
+                seeded.Add($"Destination '{name}' is newly referenced; it receives its first copy when this set first backs up.");
+            }
+        }
+
         // A material edit — the root or the rules — changes what the next
         // snapshot will hold, so it is answered with what changed and, when
         // there is a last backup to compare with, a rescan is queued whose
         // finding stands as a notice until that next backup completes
         // (ADR-0038). Schedule and retention edits change when and how long,
         // not what, and stay a plain acknowledgement.
-        if (existing is not null && IsMaterialChange(existing, replacement))
+        if (IsMaterialChange(existing, replacement))
         {
             var lines = new List<string>();
             var oldRoots = existing.Roots.Select(root => root.Path).ToHashSet(StringComparer.Ordinal);
@@ -1299,10 +1456,11 @@ public sealed partial class ServiceCommandHandler(
                 lines.Add("This set has not backed up yet; its first backup captures under these settings.");
             }
 
+            lines.AddRange(seeded);
             return new ConfigurationChangeResult(lines);
         }
 
-        return new AcknowledgedResult();
+        return seeded.Count > 0 ? new ConfigurationChangeResult(seeded) : new AcknowledgedResult();
     }
 
     /// <summary>
@@ -1444,12 +1602,12 @@ public sealed partial class ServiceCommandHandler(
         // durable stamp goes through ToUnixTimeMilliseconds, which is
         // offset-aware — the instant is identical to UtcNow's.
         var now = DateTimeOffset.Now;
-        var (jobId, outcome) = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
+        var job = Scheduler.Enqueue(runtime, set, now, userInitiated: true, command.Full);
 
         // A committed snapshot starts its fan-out promptly rather than waiting
         // for the next pass (ADR-0034 §3); the pass still catches up anything
         // this misses, so this is responsiveness, never correctness.
-        _ = outcome.ContinueWith(
+        _ = job.ContinueWith(
             completed =>
             {
                 if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
@@ -1459,19 +1617,9 @@ public sealed partial class ServiceCommandHandler(
             },
             TaskScheduler.Default);
 
-        // The id Enqueue itself produced — a live job for the set joins that
-        // job rather than starting a second, and the caller tracks whichever
-        // one is actually doing the work.
-        return new JobAcceptedResult(jobId);
+        return new JobAcceptedResult(Scheduler.LatestJobFor(runtime, set.Id) ?? string.Empty);
     }
 
-    /// <summary>
-    /// Converges destinations on demand (FR-DEST-002, ADR-0034 §3): one
-    /// transfer-lane sync per matching pair, awaited here so the answer
-    /// reflects the refreshed ledger. Deliberately NOT on the writer lane —
-    /// fan-out reads staging and runs on the transfer lane; a pair whose
-    /// sync is already queued or running is reported, not doubled.
-    /// </summary>
     /// <summary>
     /// Re-reads the named destinations' stored objects and reports what no
     /// longer matches its seal (FR-VER-002, FR-VER-004).
@@ -1598,6 +1746,15 @@ public sealed partial class ServiceCommandHandler(
         }
     }
 
+    /// <summary>
+    /// Converges destinations on demand (FR-DEST-002, ADR-0034 §3): one
+    /// transfer-lane sync per matching pair, awaited here so the answer
+    /// reflects the refreshed ledger. Deliberately NOT on the writer lane —
+    /// fan-out reads the set's archive (staging, or a direct-ship set's
+    /// replicas through the sink, ADR-0046) and runs on the transfer lane;
+    /// a pair whose sync is already queued or running is reported, not
+    /// doubled.
+    /// </summary>
     private async ValueTask<ServiceResult> SyncAsync(SyncCommand command, CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;
@@ -1699,12 +1856,32 @@ public sealed partial class ServiceCommandHandler(
         _ => record.State.ToString(),
     };
 
-    private ServiceResult CancelJob(CancelJobCommand command) =>
-        runtime.Queue.Cancel(command.JobId)
-            ? new AcknowledgedResult()
-            : new ServiceError(
-                ServiceErrorReason.NotFound,
-                $"No job '{command.JobId}' is queued or running. A finished job cannot be cancelled.");
+    private ServiceResult CancelJob(CancelJobCommand command)
+    {
+        if (runtime.Queue.Cancel(command.JobId))
+        {
+            return new AcknowledgedResult();
+        }
+
+        // A journal row the queue no longer knows is a run that is not
+        // running — a fault outside the runner's catch list orphans one on a
+        // live service (ADR-0049). Cancel is the operator's remedy for the
+        // stuck card it renders, so it settles the record rather than
+        // refusing into a dead end.
+        var orphan = runtime.Jobs.Jobs.FirstOrDefault(job => job.Id == command.JobId);
+        if (orphan is not null && !Application.JobStateStore.HasSettled(orphan.State))
+        {
+            runtime.Jobs.Transition(
+                orphan.Id, Domain.Jobs.JobState.Cancelled,
+                (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                "cancelled by request — the run was no longer live");
+            return new AcknowledgedResult();
+        }
+
+        return new ServiceError(
+            ServiceErrorReason.NotFound,
+            $"No job '{command.JobId}' is queued or running. A finished job cannot be cancelled.");
+    }
 
     private JobsResult ListJobs(ListJobsCommand command)
     {
@@ -1714,10 +1891,279 @@ public sealed partial class ServiceCommandHandler(
             jobs = jobs.Where(job => runtime.Queue.IsActive(job.Id));
         }
 
+        if (command.Limit is { } limit && limit > 0)
+        {
+            // The newest rows, in the same oldest-first order the unbounded
+            // form documents — a history view wants the recent past, not the
+            // installation's first week.
+            jobs = jobs.TakeLast(limit);
+        }
+
         return new JobsResult(
             [.. jobs.Select(job => new JobDescriptor(
-                job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail))]);
+                job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail,
+                job.Stats?.FilesSeen, job.Stats?.FilesDone, job.Stats?.FilesReused, job.Stats?.FilesFailed,
+                job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes))]);
     }
+
+    /// <summary>The failure listing's default and ceiling (ADR-0050): counts stay exact; the listing is bounded well under the frame cap.</summary>
+    private const int DefaultFailureSampleLimit = 100;
+
+    private const int MaxFailureSampleLimit = 1000;
+
+    /// <summary>
+    /// Resolves a drill-down ask to its journal row and the archive holding
+    /// its snapshot. Every refusal is stated: an unknown job, a run that
+    /// committed nothing, an archive no set owns any more.
+    /// </summary>
+    private async ValueTask<(JobRecord? Job, byte[]? SnapshotId, RestoreContext? Context, ServiceError? Error)>
+        ResolveJobSnapshotAsync(string jobId, CancellationToken cancellationToken)
+    {
+        var job = runtime.Jobs.Jobs.FirstOrDefault(row => row.Id == jobId);
+        if (job is null)
+        {
+            return (null, null, null, new ServiceError(
+                ServiceErrorReason.NotFound, $"No job '{jobId}' is in the journal."));
+        }
+
+        if (job.SnapshotId is null)
+        {
+            return (job, null, null, new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Job '{jobId}' committed no snapshot — a {job.State} run has nothing in the repository to report."));
+        }
+
+        byte[] snapshotId;
+        try
+        {
+            snapshotId = Convert.FromHexString(job.SnapshotId);
+        }
+        catch (FormatException)
+        {
+            return (job, null, null, new ServiceError(
+                ServiceErrorReason.NotFound, $"Job '{jobId}' names '{job.SnapshotId}', which is not a snapshot identifier."));
+        }
+
+        var (context, _) = await ResolveRestoreContextAsync(
+            sourceId: null, snapshotId, job.SnapshotId, cancellationToken).ConfigureAwait(false);
+        return context is null
+            ? (job, snapshotId, null, new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No archive holds snapshot '{job.SnapshotId}' — its set may have been deleted since the run."))
+            : (job, snapshotId, context, null);
+    }
+
+    private string SetNameOf(string backupSetId) =>
+        runtime.Configuration.BackupSets.FirstOrDefault(set => set.Id == backupSetId)?.Name ?? backupSetId;
+
+    /// <summary>An exact count with a bounded, first-encountered sample — the SetChangeScan shape.</summary>
+    private sealed class DiffBucket(int limit)
+    {
+        private readonly List<string> _sample = [];
+
+        public long Count { get; private set; }
+
+        public void Add(string path)
+        {
+            Count++;
+            if (_sample.Count < limit)
+            {
+                _sample.Add(path);
+            }
+        }
+
+        public ChangeBucketDescriptor Describe() => new(Count, _sample);
+    }
+
+    /// <summary>
+    /// The run diff (ADR-0050): the committed snapshot against the set's
+    /// previous one, entirely from the catalogue — equal recorded object ids
+    /// are the exact "unchanged" (the ListDirectory badges' own rule), so
+    /// this agrees with the browser by construction. Reader lane: it walks
+    /// two whole leaf listings.
+    /// </summary>
+    private async ValueTask<ServiceResult> JobChangesAsync(JobChangesCommand command, CancellationToken cancellationToken)
+    {
+        var (job, snapshotId, context, error) = await ResolveJobSnapshotAsync(command.JobId, cancellationToken)
+            .ConfigureAwait(false);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var sampleLimit = Math.Clamp(
+            command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
+
+        using var catalogue = context!.OpenCatalogue();
+        var rows = catalogue.EnumerateSnapshots();
+        var current = rows.FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId!));
+        if (current is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"The catalogue no longer knows snapshot '{job!.SnapshotId}'.");
+        }
+
+        // The predecessor is the next same-set row after this one —
+        // EnumerateSnapshots is newest first, and this is the same derivation
+        // the snapshot browser's change badges use.
+        var previous = rows
+            .SkipWhile(row => !row.SnapshotId.Span.SequenceEqual(snapshotId!))
+            .Skip(1)
+            .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(current.BackupSetId.Span));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        long unchanged = 0;
+        var added = new DiffBucket(sampleLimit);
+        var changed = new DiffBucket(sampleLimit);
+        var removed = new DiffBucket(sampleLimit);
+
+        var after = catalogue.EnumerateLeaves(snapshotId!);
+        if (previous is null)
+        {
+            foreach (var entry in after)
+            {
+                added.Add(entry.Path);
+            }
+        }
+        else
+        {
+            var before = catalogue.EnumerateLeaves(previous.SnapshotId.Span)
+                .ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+
+            foreach (var entry in after)
+            {
+                if (!before.Remove(entry.Path, out var prior))
+                {
+                    added.Add(entry.Path);
+                }
+                else if (prior.ObjectId == entry.ObjectId)
+                {
+                    unchanged++;
+                }
+                else
+                {
+                    changed.Add(entry.Path);
+                }
+            }
+
+            // What was not claimed by the run's own listing is what the
+            // predecessor alone held.
+            foreach (var path in before.Keys.Order(StringComparer.Ordinal))
+            {
+                removed.Add(path);
+            }
+        }
+
+        return new JobChangesResult(
+            SetNameOf(job!.BackupSetId),
+            job.SnapshotId!,
+            previous is null ? null : Convert.ToHexStringLower(previous.SnapshotId.Span),
+            previous?.CapturedAt,
+            unchanged,
+            added.Describe(),
+            changed.Describe(),
+            removed.Describe(),
+            sampleLimit);
+    }
+
+    /// <summary>
+    /// The failure listing (ADR-0050): the snapshot's error manifest read
+    /// back on demand — path, typed reason, and the scanner's own words.
+    /// Paths flow to any authenticated caller, the list_directory precedent;
+    /// the raw name bytes stay in the manifest and the rendering substitutes
+    /// where they have no faithful decoding. Reader lane: it opens the
+    /// repository's blob footers to reach two records.
+    /// </summary>
+    private async ValueTask<ServiceResult> JobFailuresAsync(JobFailuresCommand command, CancellationToken cancellationToken)
+    {
+        var (job, snapshotId, context, error) = await ResolveJobSnapshotAsync(command.JobId, cancellationToken)
+            .ConfigureAwait(false);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var sampleLimit = Math.Clamp(
+            command.SampleLimit ?? DefaultFailureSampleLimit, 1, MaxFailureSampleLimit);
+        var setName = SetNameOf(job!.BackupSetId);
+
+        Domain.Identifiers.ObjectId recordId;
+        using (var catalogue = context!.OpenCatalogue())
+        {
+            var current = catalogue.EnumerateSnapshots()
+                .FirstOrDefault(row => row.SnapshotId.Span.SequenceEqual(snapshotId!));
+            if (current is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.NotFound, $"The catalogue no longer knows snapshot '{job.SnapshotId}'.");
+            }
+
+            recordId = current.ObjectId;
+        }
+
+        using var reader = new RepositoryReader(context.RepositoryId, context.Keys, context.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var manifestRead = await reader.ReadSegmentAsync(recordId, cancellationToken).ConfigureAwait(false);
+        if (manifestRead.Outcome != Repository.Packing.RecordReadOutcome.Ok || manifestRead.Plaintext is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Snapshot '{job.SnapshotId}' would not read back ({manifestRead.Outcome}) — run `check`.");
+        }
+
+        try
+        {
+            var decoded = Repository.Format.Manifests.SnapshotManifestCodec.Decode(manifestRead.Plaintext);
+            if (decoded.Manifest.ErrorManifest is not { } errorManifestId)
+            {
+                return new JobFailuresResult(setName, job.SnapshotId!, Failures: 0, [], sampleLimit);
+            }
+
+            var errorRead = await reader.ReadSegmentAsync(errorManifestId, cancellationToken).ConfigureAwait(false);
+            if (errorRead.Outcome != Repository.Packing.RecordReadOutcome.Ok || errorRead.Plaintext is null)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed,
+                    $"The error manifest of snapshot '{job.SnapshotId}' would not read back ({errorRead.Outcome}) — run `check`.");
+            }
+
+            var manifest = Repository.Format.Manifests.ErrorManifestCodec.Decode(errorRead.Plaintext);
+            return new JobFailuresResult(
+                setName,
+                job.SnapshotId!,
+                manifest.Failures.Count,
+                [.. manifest.Failures.Take(sampleLimit).Select(failure => new CaptureFailureDescriptor(
+                    string.Join('/', failure.PathComponents.Select(component =>
+                        System.Text.Encoding.UTF8.GetString(component.Span))),
+                    FailureReasonLabel(failure.Reason),
+                    failure.Detail))],
+                sampleLimit);
+        }
+        catch (FormatException exception)
+        {
+            // Includes ManifestValidationException: damage is reported, never
+            // rethrown across the wire as a stack trace.
+            return new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Snapshot '{job.SnapshotId}' carries a manifest that does not validate: {exception.Message}");
+        }
+    }
+
+    /// <summary>The documented kebab vocabulary for <see cref="CaptureFailureDescriptor.Reason"/>.</summary>
+    private static string FailureReasonLabel(CaptureFailureReason reason) => reason switch
+    {
+        CaptureFailureReason.Permission => "permission",
+        CaptureFailureReason.NotFound => "not-found",
+        CaptureFailureReason.IoError => "io-error",
+        CaptureFailureReason.ChangedDuringRead => "changed-during-read",
+        CaptureFailureReason.UnsupportedType => "unsupported-type",
+        CaptureFailureReason.TooLarge => "too-large",
+        CaptureFailureReason.ExcludedByLimit => "excluded-by-limit",
+        CaptureFailureReason.NameNotRepresentable => "name-not-representable",
+        _ => reason.ToString().ToLowerInvariant(),
+    };
 
     private async ValueTask<ServiceResult> ListSnapshotsAsync(CancellationToken cancellationToken)
     {
@@ -1923,7 +2369,23 @@ public sealed partial class ServiceCommandHandler(
     private async ValueTask<ServiceResult> GetStatusAsync(CancellationToken cancellationToken)
     {
         var configuration = runtime.Configuration;
-        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // One clock read, used for all three answers below. It was two —
+        // DateTimeOffset.UtcNow for ObservedAt and a separate .Now for each
+        // set's NextRun — and nothing depended on them agreeing until the
+        // background window arrived (ADR-0069): a status saying "shut" from
+        // one instant and "opens at 06:00" from another can contradict itself
+        // across a boundary, at exactly the moment somebody is looking.
+        //
+        // It is a LOCAL instant on purpose, and the reason is invisible from
+        // here: BackgroundWindow.IsOpen reads the wall clock of the offset it
+        // is handed, so UtcNow would answer for UTC's clock face and the
+        // status would disagree with the pass by this machine's offset —
+        // silently, and never on a machine that happens to run UTC. The
+        // millisecond stamp is the same number either way; a Unix timestamp
+        // names an instant and not a zone.
+        var observed = DateTimeOffset.Now;
+        var now = (ulong)observed.ToUnixTimeMilliseconds();
         var sets = new List<BackupSetStatusDescriptor>();
 
         foreach (var set in configuration.BackupSets)
@@ -1942,7 +2404,7 @@ public sealed partial class ServiceCommandHandler(
                 findings = catalogue.Findings().Count;
             }
 
-            var (inputs, rows) = DescribeDestinations(configuration, set);
+            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
@@ -1956,22 +2418,38 @@ public sealed partial class ServiceCommandHandler(
             if (!string.IsNullOrWhiteSpace(set.Schedule) && Schedule.TryParse(set.Schedule, out var schedule, out _))
             {
                 var anchor = runtime.Jobs.ScheduleAnchor(set.Id);
-                nextRun = schedule!.NextRun(anchor, DateTimeOffset.Now).ToString("u");
+                nextRun = schedule!.NextRun(anchor, observed).ToString("u");
             }
 
-            sets.Add(new BackupSetStatusDescriptor(set.Name, status, nextRun, rows));
+            sets.Add(new BackupSetStatusDescriptor(
+                set.Name, status, nextRun, rows,
+                LastCompletedAt: lastCompleted == 0 ? null : lastCompleted));
+        }
+
+        // From the parsed window, never from the presence of the text: a window
+        // that is SET is not a window that is SHUT, and reading the string's
+        // presence as the state is the mistake that looks right on a fixture
+        // and wrong every morning.
+        BackgroundWindowDescriptor? window = null;
+        if (configuration.EffectiveBackgroundWindow is { } configured)
+        {
+            var open = configured.IsOpen(observed);
+            var changes = open ? configured.NextClose(observed) : configured.NextOpen(observed);
+            window = new BackgroundWindowDescriptor(
+                configured.Text, open, (ulong)changes.ToUnixTimeMilliseconds());
         }
 
         return new StatusResult(
             Environment.MachineName, sets, now,
-            [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")]);
+            [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")],
+            window);
     }
 
     /// <summary>
     /// One set's destination matrix, twice over: the derivation's inputs and
     /// the client's rows, built together so they cannot disagree.
     /// </summary>
-    private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows)
+    private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows, ulong LastCompleted)
         DescribeDestinations(ClientConfiguration configuration, BackupSetConfiguration set)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
@@ -1982,36 +2460,43 @@ public sealed partial class ServiceCommandHandler(
         foreach (var reference in set.Destinations)
         {
             var destination = configuration.FindDestination(reference.Ref);
+            var ledger = runtime.DestinationSync.Find(set.Id, reference.Ref);
             var input = DestinationStatus.Describe(
                 reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
-                runtime.DestinationSync.Find(set.Id, reference.Ref),
-                lastCompleted, nowMs, DeviceIdOf);
+                ledger, lastCompleted, nowMs, runtime.VolumeIdOf);
 
             inputs.Add(input);
             rows.Add(new DestinationStatusDescriptor(
                 input.Name, destination is null ? "?" : KindLabel(input.Kind), StateLabel(input.Sync),
                 input.LastSuccessAt, input.Detail, StatusDeriver.DomainLabel(input.Domain),
-                StatusDeriver.VerificationLabel(input)));
+                StatusDeriver.VerificationLabel(input),
+                BaselineCompletedAt: ledger?.BaselineCompletedAt,
+                NeedsFull: ledger?.NeedsFull ?? false,
+                Reason: ReasonLabel(input.Cause),
+                HeldBytes: ledger?.HeldBytes ?? 0,
+                OwedBytes: ledger?.OwedBytes ?? 0,
+                MeasuredAt: ledger?.MeasuredAt,
+                DrilledAt: ledger?.DrilledAt,
+                DrillFiles: ledger?.DrillFiles ?? 0,
+                DrillFailure: ledger?.DrillFailure,
+                DrillLimit: ledger?.DrillLimit,
+                VerifiedSealed: ledger?.VerifiedSealed ?? 0,
+                VerifiedDigest: ledger?.VerifiedDigest ?? 0,
+                VerifiedChunk: ledger?.VerifiedChunk ?? 0));
         }
 
-        return (inputs, rows);
+        return (inputs, rows, lastCompleted);
     }
 
-    /// <summary>
-    /// The volume a path sits on, or null when the platform will not say —
-    /// the one piece of <see cref="DestinationStatus.Describe"/> that has to
-    /// be supplied from outside the use-case layer (architecture 11 §2).
-    /// </summary>
-    private static ulong? DeviceIdOf(string path) => DeviceProbe.DeviceOf(path);
-
-    /// <summary>
-    /// The seam is <see cref="Filesystem.IFileSystemSource.DeviceOf"/> being
-    /// an interface member — a test double answers it like any other
-    /// filesystem question. The field's own type is concrete because a
-    /// private field assigned exactly one implementation gains nothing from
-    /// interface typing, and the analyzer (CA1859) is right to say so.
-    /// </summary>
-    private static readonly Filesystem.Local.LocalFileSystemSource DeviceProbe = new();
+    /// <summary>The documented kebab vocabulary for <see cref="DestinationStatusDescriptor.Reason"/>; null when there is nothing to explain.</summary>
+    private static string? ReasonLabel(SyncCause cause) => cause switch
+    {
+        SyncCause.CatchingUp => "catching-up",
+        SyncCause.AwaitingSeed => "awaiting-seed",
+        SyncCause.NeverSynced => "never-synced",
+        SyncCause.Reported => "reported",
+        _ => null,
+    };
 
     /// <summary>
     /// The destination's failure domain (FR-SNP-007): the declaration wins —
@@ -2041,8 +2526,15 @@ public sealed partial class ServiceCommandHandler(
         _ => "not-supported",
     };
 
-    private ServiceDescriptionResult Describe() =>
-        new ServiceDescriptionResult(
+    private ServiceDescriptionResult Describe()
+    {
+        // The public half of the installation's derivation (contract 1.28):
+        // the same three facts every archive's descriptor records, plus the
+        // verifier, so a client holding the passphrase can derive a grant
+        // without holding an archive. Nothing here opens anything.
+        using var provisioning = runtime.InstallationCredential.TryLoad();
+
+        return new ServiceDescriptionResult(
             ContractVersion.Current.ToString(),
             "fallbackplan-agent/0.1",
             Environment.MachineName,
@@ -2056,8 +2548,14 @@ public sealed partial class ServiceCommandHandler(
             runtime.Options.Logging is { } logging
                 ? Domain.Diagnostics.LogLevels.NameOf(logging.Levels.Current.Default)
                 : null,
-            runtime.KitConfirmation.Status,
-            runtime.KitConfirmation.ConfirmedAtUnixMilliseconds);
+            KdfSalt: provisioning is null ? null : Convert.ToHexStringLower(provisioning.KdfSalt),
+            KdfMemoryKib: provisioning?.KdfParameters.MemoryKiB,
+            KdfIterations: provisioning?.KdfParameters.Iterations,
+            KdfParallelism: provisioning?.KdfParameters.Parallelism,
+            SealingPublicKey: provisioning is null
+                ? null
+                : Convert.ToHexStringLower(provisioning.Credential.SealingPublicKey));
+    }
 }
 
 /// <summary>
@@ -2077,6 +2575,7 @@ public enum CallerScope
 
     /// <summary>Over the remote binding — a paired device elsewhere (ADR-0028 §6).</summary>
     Remote,
+
 }
 
 /// <summary>Whether this service's remote binding is on, and why not when it is not.</summary>

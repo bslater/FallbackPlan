@@ -40,7 +40,9 @@ BUILT = re.compile(r"^\*\*Built:\*\* .+$", re.M)
 
 # Paths that are prose or documentation rather than a code citation. Documented
 # links are already resolved by check-links.py, so they are skipped here.
-NOT_CODE = re.compile(r"^(LICENSE|LICENSING\.md|CONTRIBUTING\.md|nuget\.config|external/|specifications/|eng/)")
+NOT_CODE = re.compile(
+    r"^(LICENSE|LICENSING\.md|CONTRIBUTING\.md|nuget\.config|Directory\.Packages\.props"
+    r"|external/|specifications/|eng/)")
 
 
 def adrs_on_disk() -> set[str]:

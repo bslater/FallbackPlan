@@ -4,7 +4,7 @@
 
 ---
 
-Thirty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Sixty-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -32,28 +32,28 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0005](adr/0005-aead-suite-and-nonce-construction.md) | AEAD suite and nonce construction | **Built** | `Repository.Crypto/RecordCipher`, `Repository.Crypto/BlobKeyDeriver` · six requirements, all traced |
 | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Built** | `Repository/DedupTrustGate` · [notes](#0006--the-integrity-guard-is-built-and-one-thing-is-deliberately-not) |
 | [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*`, `Repository.Format/Manifests/SourceIdentityHint`, `Repository/SourceIdentityLookup` · `Repository.Tests/Index/IndexPrecedenceTests`, `Repository.Tests/Format/SourceIdentityHintCodecTests` · [notes](#0007--device-specific-facts-live-outside-the-manifest-and-one-of-the-two-is-built) |
-| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence` |
-| [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Partly built** | `Repository.Index/Journal/IntentLifecycle`, `Retention/StagingSweep` · `Retention.Tests/RetentionCycleTests` · [notes](#0009--the-collector-is-built-compaction-is-not) |
+| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence`, `Repository.Index/ObservedHead` — the watermarks the decision put in checkpoints are now also read back as a rollback witness, so a writer whose allocation state fell behind its own published history adopts the repository's head at archive open (`Hosts.Tests/ObservedHeadAdoptionTests`); and where the whole state directory rolled back, the destination's journal keys are the witness ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md), `Hosts.Tests/DirectoryRollbackTests`) |
+| [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Built** | `Repository.Index/Journal/IntentLifecycle`, `Retention/StagingSweep`, `Retention/CollectionPlanner` · `Retention.Tests/RetentionCycleTests`, `InterruptionTests/CompactionInterruptionTests` · [notes](#0009--the-collector-is-built-and-now-so-is-compaction) |
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
-| [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local` · `Storage.ContractTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
-| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Built** | `FallbackPlan.Recovery`, [`specifications/recovery-kit/`](../specifications/recovery-kit/README.md) · `Repository.ConformanceTests/RecoveryKitConformanceTests` |
-| [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture | **Built** | `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests` |
+| [0012](adr/0012-storage-provider-contract.md) | Storage provider contract | **Partly built** | `Storage.Abstractions`, `Storage.Local`, `Repository/StoreAdmission`, `Repository/RepositoryLifecycle`, `Agent/DestinationShipSink` · `Storage.ContractTests`, `Repository.Tests/StoreAdmissionTests`, `Retention.Tests/EventualListingTests`, `Storage.ContractTests/CapabilityIntersectionTests`, `Hosts.Tests/ShipSinkCapabilityTests` · [notes](#0012--the-contract-is-real-it-has-one-provider) |
+| [0013](adr/0013-recovery-kit.md) | Recovery kit contents and format | **Applied** | Superseded by [ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md): no kit exists to be built. What the record set in motion and still stands is the standalone tool, `Recovery/RecoverySession`, which now opens from the passphrase and the descriptor; [notes](#0060--the-passphrase-is-the-recovery-credential) |
+| [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture; format 1 withdrawn before freeze (Amendment 1) | **Built** | `Domain/FormatLimits` · `Repository.Format/Descriptor/RepositoryDescriptorCodec` · `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests` · [notes](#0014--one-format-and-a-refusal-by-name) |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated | **Built** | `Domain/Identifiers/BlobId`, `Domain/IBlobCounterAllocator` · `InterruptionTests/SequenceRollbackTests` holds the refusal when an identifier is ever reused |
 | [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence | **Built** | `Repository.Index/IndexEntry`, `Repository.Index/IndexLoader` · `Repository.Tests/Index/IndexPrecedenceTests` |
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains | **Built** | `Application/StatusModel` · `Repository.Tests/EndToEnd/ApplicationServiceTests` · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
 | [0019](adr/0019-third-party-dependency-policy.md) | Third-party dependency policy | **Applied** | `ArchitectureTests/DependencyRuleTests` — the policy is a test, not a promise |
 | [0020](adr/0020-ed25519-signing-key-semantics.md) | Ed25519 signing key semantics | **Built** | `Repository.Crypto/RepositorySigner` · `Repository.ConformanceTests/Ed25519ConformanceTests` |
-| [0021](adr/0021-consume-bodu-via-committed-package-feed.md) | Bodu from a committed local feed | **Applied** | [`external/packages/`](../external/packages/README.md), [`nuget.config`](../nuget.config) |
+| [0021](adr/0021-consume-bodu-via-committed-package-feed.md) | Bodu as prebuilt packages — from nuget.org since Amendment 2 | **Applied** | [`nuget.config`](../nuget.config), [`Directory.Packages.props`](../Directory.Packages.props), [`external/packages/`](../external/packages/README.md) |
 | [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) | Standalone records and index identifiers | **Built** | `Repository.Format/Records/*`, `Repository.Index/IndexDeltaCodec` · `Repository.FuzzTests/ParserFuzzTests`, `Repository.Tests/Index/IndexPlaneTests` |
 | [0023](adr/0023-cdc-v1-rabin-parameters.md) | cdc-v1 Rabin fingerprint parameters | **Built** | `Repository.Segmentation/RabinFingerprint` · `Repository.FuzzTests/CdcPropertyTests` |
 | [0024](adr/0024-include-exclude-rule-dialect.md) | Include/exclude rule dialect | **Built** | `Domain/PathRules` · `Repository.ConformanceTests/PathRulesConformanceTests` |
-| [0025](adr/0025-compaction-reseals-records.md) | Compaction re-seals records | **Specified only** | [notes](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
+| [0025](adr/0025-compaction-reseals-records.md) | Compaction re-seals records | **Built** | `Repository/BlobCompactor`, `Repository/CompactionPublication`, `Repository/CompactionPass`, `Retention/CompactionPolicy` — but as [0067](#0067--the-rewrite-that-holds-no-key)'s keyless rewrite, not as this record's re-sealing, which format 3 superseded and format 2 never reached · `Repository.Tests/Index/CompactionIndexTests`, `InterruptionTests/CompactionInterruptionTests`, `Hosts.Tests/CompactionRetentionTests` · [notes](#0025--decrypt-and-reseal-superseded-for-format-3) |
 | [0026](adr/0026-phase-1-capture-shapes.md) | Phase-1 capture shapes | **Partly built** | `Filesystem.Local/LocalFileSystemSource`, `Filesystem.Local/PosixInterop`, `Filesystem.Local/PosixHandleInterop`, `Filesystem.Local/PosixDirectoryScope` · `Filesystem.Tests/LocalScanTests` · [notes](#0026--the-shapes-are-captured-the-posix-traversal-is-handle-relative-and-one-gap-is-left) |
-| [0027](adr/0027-services-scheduling-status-telemetry.md) | Scheduling, job state, status, telemetry | **Built** | `FallbackPlan.Agent`, `Application/JobStateStore` · `Hosts.Tests/*` |
-| [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary | **Partly built** | `FallbackPlan.Api`, `Cli/OperationGateway` · [ADR §Implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) |
-| [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency | **Built** | `Repository/ArchiveSession` · [ADR §Implementation status](adr/0029-pipeline-and-service-concurrency.md#implementation-status-2026-08) |
+| [0027](adr/0027-services-scheduling-status-telemetry.md) | Scheduling, job state, status, telemetry | **Built** | `FallbackPlan.Agent`, `Application/JobStateStore`, `Domain/Diagnostics/EngineDiagnostics` · `Hosts.Tests/*`, `ArchitectureTests/TelemetrySilenceTests`, `Hosts.Tests/DefaultBuildSilenceTests` |
+| [0028](adr/0028-service-boundary-and-deployment-topologies.md) | The service boundary | **Partly built** | `FallbackPlan.Api`, `Cli/OperationGateway` · [ADR §Implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) · `Hosts.Tests/ClientModeTests` — §3's rule holds for writes as well as reads: a backup naming a set and no repository is run by the local service, and a missing one is refused naming both ways forward |
+| [0029](adr/0029-pipeline-and-service-concurrency.md) | Pipeline and service concurrency | **Built** | `Repository/ArchiveSession` · `Domain/Configuration/CapturePolicy` (its concurrency bound — the only configured limit the product has) · [ADR §Implementation status](adr/0029-pipeline-and-service-concurrency.md#implementation-status-2026-08) · [ADR §Amendment (2026-09)](adr/0029-pipeline-and-service-concurrency.md#amendment-2026-09-the-cpu-cap-this-record-anticipated-was-never-built) |
 | [0030](adr/0030-peer-identity-and-pairing.md) | Peer identity and pairing | **Partly built** | `FallbackPlan.Protocol`, `Protocol/PairingInvite.cs` · [notes](#0030--the-socket-exists) |
 | [0031](adr/0031-exception-messages-are-resources.md) | Exception messages are resources | **Built** | `Domain/Resources/Strings.g.cs`, `Repository.Format/Resources/Strings.g.cs`, [`eng/generate-resources.py`](../eng/generate-resources.py) · CI: accessors match their resx |
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework | **Built** | `TestSupport/PlatformFacts.cs`, `TestSupport/PropertyCheck.cs`, `TestSupport/SequenceAssert.cs` · 966 tests, count verified identical across the move |
@@ -65,15 +65,39 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
-| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
-| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Packing/SealedContentKey` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
-| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
-| [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for) |
+| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval — its targeted blob load is no longer what a restore uses ([0068](adr/0068-the-catalogue-directed-restore-read.md)) | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
+| [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) — since 2026-09 the only format | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Packing/SealedContentKey` · `Repository/RepositoryLifecycle` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
+| [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Domain/Diagnostics/LogLevels`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests`, `ArchitectureTests/TelemetrySilenceTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
+| [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for). The ceremony ends at the passphrase and the first account: the recovery-kit step, its confirmation and the public-parameters record that let a kit be rebuilt are withdrawn with the kit (ADR-0060), and the installation's public derivation parameters ride the describe verb (contract 1.28) from `Agent/ServiceCommandHandler` instead |
 | [0045](adr/0045-client-authentication.md) | Client authentication: username, password, session | Built | `Repository.Crypto/PasswordHash` · `Agent/UserStore` · `Agent/SessionRegistry` · `Agent/AuthenticatingService` · `Cli/SessionCache` · `Repository.Tests/PasswordHashTests`, `Hosts.Tests/UserStoreTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/UnattendedWorkTests`, `Cli.Tests/SessionVerbTests`, `Web.Tests/SessionRelayTests` · [notes](#0045--the-product-can-say-who-is-acting) |
-| [0046](adr/0046-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Specified only** | [notes](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
-| [0047](adr/0047-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Specified only** | [notes](#0047--recovering-the-data-was-only-half-of-it) |
-| [0048](adr/0048-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0048--the-two-things-live-capture-cannot-do) |
-| [0049](adr/0049-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
+| [0046](adr/0046-direct-to-destination-publication.md) | Direct-to-destination publication: the ship sink, no staging archive | **Partly built** | `Agent/DestinationShipSink` · `Agent/ArchiveHandle` · `Agent/ServiceRuntime` · `Agent/BackupRunner` · `Hosts.Tests/DirectShipTests`, `Hosts.Tests/DirectShipMigrationTests` — the write path, run scoping, sibling catch-up, the no-destination refusal, the destination-backed read paths, and the migration (flip, seed, retire_staging); the direct-ship is the default for new local-path sets (contract 1.23, retention drill run through `Hosts.Tests/DirectShipRetentionTests`); Amendment 1's converge spare keeps a narrow sibling from trimming the last copy of history a wide destination is still owed (`Retention.Tests/DestinationConvergenceTests`, `Hosts.Tests/DirectShipConvergeSpareTests`); the peer write adapter is the remaining tail. The hardened round (`Hosts.Tests/DirectShipFaultSweepTests`) runs the 04 §5.1 kill matrix through a two-destination sink and pins behind-exclusion, per-destination seeding drops, the capacity floor, and seed-recorded-as-behind. `Web/ConsoleRestoreGate` resolves repositories through one root list for all three of its ceremonies, so the recovery-kit rebuild and write-only adoption see a direct-ship set's metadata store as the restore gate already did (`Web.Tests/FirstRunSetupTests`, `Web.Tests/WriteOnlyCeremonyTests`), and a direct-ship restore source is named rather than called staging |
+| [0047](adr/0047-backup-pool-and-priorities.md) | The backup pool: concurrency, priorities, a pass that never waits for transfers — preemption (Amendments 1–2): a higher-priority arrival suspends the lowest-ranked running backup at a file boundary and resumes it when a slot frees, escalating past an unresponsive victim, with generation-stamped expiry and pause/resume on the progress stream — and one run per set enforced atomically at the enqueue for every trigger door (Amendment 3) | Built | `Agent/JobScheduler` · `Agent/Scheduler` · `Agent/PauseGate` · `Domain/Jobs/IPauseGate` · `Application/ClientConfiguration` (schema 5) · `Application/DestinationSyncStore` (schema 2) · `Hosts.Tests/JobSchedulerPoolTests`, `Hosts.Tests/SchedulerStarvationTests`, `Hosts.Tests/PreemptionTests`, `Hosts.Tests/JobSchedulerPreemptionTests`, `Hosts.Tests/StatusBaselineTests` (contract 1.19's full-backup facts on the status matrix), `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/BackupConcurrencyTests`, `Application.Tests/DestinationSyncStoreTests`  The ledger also carries how much of what each destination is owed it holds (`Application/DestinationSyncStore`, contract 1.24): counted by the sync pass, which lists both sides anyway, rather than by the status read, and reported as uncounted rather than zero where no pass has reached a destination (`Hosts.Tests/DestinationCompletenessTests`); for a peer, which the pass cannot list, counted only under the peer's signed replication receipt ([ADR-0064](adr/0064-replication-receipts.md), `Hosts.Tests/PeerReplicationTests`) |
+| [0048](adr/0048-determinate-backup-progress.md) | Determinate backup progress: a backup counts its work before archiving, the plan rides every report (contract 1.20), the hub replays each live job's latest snapshot to a new subscriber, a hung-up watcher is reaped at once, and the console divides by the plan with a time estimate on the jobs page and overview | Built | `Repository/PublicationOrchestrator` (the counting pass and coalesced incremental reporting) · `Domain/Jobs/JobProgress` · `Agent/ProgressHub` · `Api/Transport/ServiceConnectionPump` · `Repository.Tests/SnapshotPublicationTests`, `Hosts.Tests/ProgressHubTests`, `Api.Tests/AbandonedCommandTests`, `Web.Tests/ConsoleProgressScriptTests`, `Web.Tests/EventStreamTests` |
+| [0049](adr/0049-service-lifecycle-hygiene.md) | Service lifecycle hygiene: the journal reconciled at start with a notice, cancel settling a run the queue no longer knows, deletion deferring only to queue-active runs, the Owner-only in-process `restart_service` (contract 1.21) on the console and CLI, and the startup configuration record with provenance | Built | `Application/JobStateStore` · `Agent/ServiceRuntime` · `Agent/AgentHost` (the recycle loop and events 3760–3763) · `Agent/AuthenticatingService` · `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AgentServiceLifetimeTests`, `Hosts.Tests/AgentHostTests`, `Web.Tests/ConsoleAdminScriptTests` |
+| [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
+| [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
+| [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives — and, with [ADR-0065](adr/0065-merkle-commitment-and-chunk-possession.md), the index commits to a blob in a form a party with neither the blob nor a key can check | **Partly built** | `Domain/FormatVersions` · `Repository.Crypto/RecordKeyDeriver` · `Repository.Packing/SealedRecordKey`, `Repository.Packing/RecordFraming`, `Repository.Packing/SealedContentKeyOpener` · `Repository.Packing/BlobWriter`, `Repository.Packing/BlobReader` · `Repository.Tests/Packing/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` · [notes](#0052--the-record-blob-and-index-planes-are-built-and-the-compactor-they-were-for) |
+| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
+| [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, (Amendment 1) an interrupted drill recording nothing at all, and (Amendment 3) a peer drilled on a cadence its source's operator states, never by default, under a byte cap | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Application/DestinationConfiguration` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Hosts.Tests/PeerRecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
+| [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/RepositoryWriteCredential` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
+| [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
+| [0057](adr/0057-resumable-object-transfer.md) | A peer transfer cut inside an object resumes: the destination declares what it part holds with a digest of exactly those bytes, the source verifies that claim against its own copy before skipping anything, and the staged prefix is keyed, quota-counted and swept | Built | `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/PartialSpool` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Hosts.Tests/PeerResumeTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0057--what-resuming-trusts) |
+| [0058](adr/0058-peer-write-adapter.md) | A direct-ship set ships to a peer over one replication session held open for the run: the inventory answers what is already there, the acknowledged count must equal what was sent, reads travel a lazily dialled retrieval session, a set with no independent copy of its content is proved by reading the replica back instead — its sealed data plane by the digest tier, which a rebuilt catalogue feeds — and a peer-only set still defaults to staging for reasons the record names | Built | `Agent/PeerShipStore` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Replication/ReplicaVerifier` · `Repository.Catalogue/Catalogue` · `Hosts.Tests/DirectShipPeerTests`, `Hosts.Tests/DirectShipTests`, `Hosts.Tests/PeerReadBackVerificationTests`, `Hosts.Tests/DirectShipVerificationTests`, `Replication.Tests/ReplicaVerifierTests`; [notes](#0058--what-the-adapter-does-not-carry) |
+| [0059](adr/0059-session-bound-deletion-authority.md) | A retention instruction is signed over the session it is sent in, and the requirement to sign is gated on the reclaim key the spoke recorded rather than on a feature the sender chooses to offer | Built | `Protocol/SessionBinding` · `Protocol/PeerAuthenticator` · `Protocol/PeerSessionDriver` · `Protocol/PeerReplicationMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/FanOut` · `Hosts.Tests/PeerRetentionReplayTests`, `Protocol.Tests/PeerWireTests`, `Protocol.Tests/ReplicationMessageTests`; [notes](#0059--the-hole-under-the-hole) |
+| [0061](adr/0061-adopt-a-destinations-archives.md) | Adopt a destination's archives: the policy manifest records the set's shape, `discover_archives` / `adopt_archive` take an archive back under its original repository and set ids with the passphrase, the writer identity is resumed, the next backup is incremental; console, CLI and peers; contract 1.30 | Built | `Repository.Format/Manifests/PolicyManifest` · `Agent/ServiceCommandHandler.Adoption.cs` · `Application/LocalState` · `Web/ConsoleRestoreGate` · `Cli/CliApplication` · `Cli/OperationGateway` · `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests`, `Cli.Tests/AdoptVerbValidationTests`, `Repository.Tests/ManifestCodecTests` · [notes](#0061--the-rebuilt-machine-resumes) |
+| [0062](adr/0062-the-destination-is-the-rollback-witness.md) | The destination is the rollback witness: a fan-out pass reads the destination's journal head for this writer — a local path's by listing, a peer's from the inventory every push already declares (Amendment 1) — moves the sequence past it, deletes nothing there on the sync pass or the granted collection run, and heals the set in place from the destination — a direct-ship set's metadata store and catalogue, a staging set's content as well, bounded by the closure of the history it lacks (Amendment 2) — over the retrieval session for a peer, one chunk at a time | Built | `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceRuntime` · `Agent/PeerRetrievalObjectStore` · `Repository.Index/ObservedHead` · `Agent/CatalogueRebuild` · `Hosts.Tests/DirectoryRollbackTests`, `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/ObservedHeadTests` · [notes](#0062--the-destination-is-the-witness) |
+| [0063](adr/0063-deletion-receipts.md) | Deletion receipts: a destination that deletes on a retention instruction answers with a statement signed under its own device key — the session, the commander, each page as accepted, the keys removed and the count never held — carried in the acknowledgement, verified by the commander against what it sent, filed by both parties and read back by a file-direct verb | Built | `Protocol/DeletionReceipt` · `Protocol/DeletionReceiptStore` · `Protocol/DeletionReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/RemoteServiceListener` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/AgentHost` · `Cli/CliApplication` · `Protocol.Tests/DeletionReceiptStoreTests`, `Hosts.Tests/DeletionReceiptVerificationTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests`, `Cli.Tests/ReceiptsVerbValidationTests`; [notes](#0063--the-peer-planes-audit-record) Since the amendment the pile is bounded by a stated rule swept from file names alone, at filing and at service start (`Protocol/ReceiptRetentionPolicy`, `Protocol/PeerReceiptFiles`, `Agent/ServiceRuntime`, `Protocol.Tests/ReceiptSweepTests`), and a listing is priced by what was asked for rather than by what has accumulated |
+| [0064](adr/0064-replication-receipts.md) | Replication receipts: a destination that takes a push answers with a statement signed under its own device key — the session, the commander, the keys it committed and the count, and what it holds for the repository afterwards — carried in the acknowledgement, verified by the commander against what it sent and what the inventory declared, filed by both parties, and the one thing the ledger ever counts a peer complete on; both kinds of receipt read by `receipts --kind`, `list_receipts` (contract 1.33) and the console's Receipts card | Built | `Protocol/ReplicationReceipt` · `Protocol/PeerReceiptFiles` · `Protocol/ReplicationReceiptStore` · `Protocol/ReceiptReport` · `Protocol/PeerReplicationMessages.cs` · `Agent/ReplicationResponder` · `Agent/ReplicationInitiator` · `Agent/FanOut` · `Agent/ServiceCommandHandler.Receipts.cs` · `Agent/AgentHost` · `Cli/CliApplication` · the console's Receipts card · `Protocol.Tests/ReplicationReceiptStoreTests`, `Hosts.Tests/ReplicationReceiptVerificationTests`, `Hosts.Tests/PeerReplicationTests`, `Hosts.Tests/ReceiptsCommandTests`, `Web.Tests/ConsoleReceiptsScriptTests`; [notes](#0064--the-peer-counted-on-its-own-word) Since the amendment the direct-ship run verifies, files and counts the receipt its own acknowledgement carries rather than waiting for a sync pass (`Agent/PeerShipStore`, `Agent/DestinationShipSink`, `Hosts.Tests/DirectShipPeerTests`) |
+| [0065](adr/0065-merkle-commitment-and-chunk-possession.md) | The Merkle commitment and the chunk possession challenge: a sealed blob gains an RFC 6962 root over one-mebibyte leaves beside its flat digest, bound to the preimage's length and published as index-delta key 11 by a format-3 writer only; a peer is then asked for one leaf and its authentication path instead of the blob, and the leaf's **bytes** are what the source checks against the root the writer signed | Built | `Repository.Packing/BlobMerkle` · `Repository.Packing/BlobWriter` · `Repository.Index/IndexDeltaCodec` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Catalogue` · `Protocol/PeerRetrievalMessages.cs` · `Protocol/PeerSessionNegotiation` · `Agent/RetrievalResponder` · `Agent/PeerRetrievalClient` · `Replication/ReplicaVerifier` · `Agent/FanOut` · `Application/DestinationSyncStore` (schema 4) · `Api/ContractVersion` (1.34) · `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`; [notes](#0065--one-leaf-instead-of-the-blob) |
+| [0066](adr/0066-the-format-upgrade-record.md) | The format-upgrade record: a repository moves to a newer format by an appended signed object rather than by a rewritten descriptor — which no copy would accept — so the move rides every ordinary replication path, takes effect at the next sealed object, and leaves everything already sealed exactly as it is; format 3 is what the product creates, and an existing format-2 set is upgraded on request and never pushed | Built | `Repository.Format/Lifecycle/FormatUpgradeRecord` · `Repository/RepositoryLifecycle` · `Domain/FormatLimits` · `Agent/ServiceRuntime` · `Agent/ServiceCommandHandler.Configuration.cs` · `Agent/ReplicationResponder` · `Agent/AgentHost` · `Recovery/RecoverySession`, `Recovery/RecoveryHost` · `Api/ContractVersion` (1.36) · the console's notice control · `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Hosts.Tests/FormatUpgradeTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`; [notes](#0066--two-objects-carry-one-version) |
+| [0067](adr/0067-the-keyless-compactor.md) | The keyless compactor: a blob holding a live minority is rewritten by copying its live records' sealed bytes verbatim into a fresh blob — no content key is held, because at format 3 a record's key is its object's and its nonce rides its own prefix — and the pass publishes supersessions and deletes nothing, leaving the collector to condemn the drained blob on its own terms once every record it held resolves elsewhere | Built | `Retention/CompactionPolicy` · `Retention/CollectionPlanner` · `Retention/RetentionRunner` · `Repository.Packing/BlobReader` · `Repository.Packing/BlobWriter` · `Repository/BlobCompactor` · `Repository/CompactionPublication` · `Repository/CompactionPass` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`; [notes](#0067--the-rewrite-that-holds-no-key) |
+| [0068](adr/0068-the-catalogue-directed-restore-read.md) | The catalogue-directed restore read: a restore loads nothing, reads each record straight from the location the catalogue holds, opens a blob through its footer only when a fast read fails, and coalesces neighbouring records into one ranged read whose first run reaches down to the envelope — 11 GETs over 11 blobs where the same restore cost 93 | Built | `Repository/PrefetchPolicy` · `Repository/RepositoryReader` · `Repository/RestoreEngine` · `Repository.Packing/BlobReader` · `Repository.Packing/RecordFraming` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreBreadthTests`; [notes](#0068--a-restore-fetches-what-it-needs) |
+| [0069](adr/0069-the-background-window.md) | The background window: the first of NFR-PERF-013's four named limits to exist. `HH:mm-HH:mm` in local time, installation-wide in the configuration file, absent meaning always open; it gates exactly what the scheduler starts with nobody waiting and never gates a person. A capture running when the window shuts parks through ADR-0047's own pause gate and the pool holds every background run down until it opens — the suspension reused whole, not rebuilt | Built | `Application/BackgroundWindow` · `Application/ClientConfiguration` · `Agent/Scheduler` · `Agent/JobScheduler` · `Agent/PauseGate` · `Agent/Log` · `Agent/ServiceCommandHandler` · `Api/Results.cs` · `Api/ContractVersion.cs` · `Cli/CliApplication` · `Application.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundHoldTests`, `Web.Tests/ConsoleBackgroundWindowScriptTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`; [notes](#0069--one-of-four) |
+| [0060](adr/0060-the-passphrase-is-the-recovery-credential.md) | The passphrase is the recovery credential: the recovery kit withdrawn, the recovery tool opening from the passphrase and the archive's own descriptor, first-run setup ending at the passphrase and the first account, contract 1.29 | Built | `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Repository.Crypto/WriteOnlyDerivation` · `Agent/AgentHost` · `Agent/ServiceRuntime` · `Web/ConsoleRestoreGate` · `Api/ContractVersion` · `Hosts.Tests/RecoveryHostTests`, `Repository.Tests/PassphraseDrillTests`, `Hosts.Tests/FirstRunSetupTests`, `Web.Tests/SetupWizardScriptTests` · [notes](#0060--the-passphrase-is-the-recovery-credential) |
+| [0070](adr/0070-replica-claim-after-total-loss.md) | Disaster recovery: the passphrase claims a peer's replica | **Applied** | Superseded by [ADR-0053](adr/0053-peer-claim-and-configuration-recovery.md) Amendment 2: the same property was reached independently on this branch and built there, with `Hosts.Tests/PeerClaimTests` and the claim cases in `Protocol.Tests/ReplicationMessageTests` establishing it. The implementation this record describes was removed in the merge rather than carried across; [notes](#0070--the-disaster-recovery-path-is-written-down-and-not-yet-built) |
+| [0071](adr/0071-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Applied** | Superseded by [ADR-0061](adr/0061-adopt-a-destinations-archives.md), which carries the set's shape in the policy manifest and is established by `Hosts.Tests/DestinationAdoptionTests`. The implementation this record describes was removed in the merge rather than carried across; [notes](#0071--recovering-the-data-was-only-half-of-it) |
+| [0072](adr/0072-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0072--the-two-things-live-capture-cannot-do) |
+| [0073](adr/0073-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
 
 ---
 
@@ -103,15 +127,15 @@ A renamed file no longer pays for its move in reads either. `PriorManifestSource
 
 The **placement hint** ([06 §10](../specifications/repository-format/06-manifests.md#10-placement-hint)) is specified and not built. It is a `MAY`, and the thing it accelerates — single-file emergency recovery without an index — has no implementation to accelerate yet; it is worth writing alongside that path rather than before it.
 
-### 0009 — the collector is built; compaction is not
+### 0009 — the collector is built, and now so is compaction
 
 The half that protects data came first: write-intent journal records, the intent lifecycle, and the rule that any component creating a blob publishes an intent first — including the collector, per [PT-3](review/2026-08-fix-pressure-test.md). Leases are advisory, as decided.
 
-The collector now exists and reclaims space (`FallbackPlan.Retention`): `StagingMark` walks the protected closure, `StagingSweep` runs the signed-tombstone → grace-by-publication → revalidate → delete cycle, and `StagingTrim` drops historic data blobs every entitled destination verifiably holds — see [0034](#0034--the-hub-fans-out-ages-and-trims) for the whole engine. Every deletion honours the intent survey, so the safety machinery finally protects against a process that runs. What remains of this decision is **compaction** (architecture 07 steps 6–9): partially-live blobs are kept whole and reported as the stated backlog, and nothing re-packs them — that is still phase 4.
+The collector now exists and reclaims space (`FallbackPlan.Retention`): `StagingMark` walks the protected closure, `StagingSweep` runs the signed-tombstone → grace-by-publication → revalidate → delete cycle, and `StagingTrim` drops historic data blobs every entitled destination verifiably holds — see [0034](#0034--the-hub-fans-out-ages-and-trims) for the whole engine. Every deletion honours the intent survey, so the safety machinery finally protects against a process that runs. **Compaction** (architecture 07 steps 6–9) is built too, as [0067](#0067--the-rewrite-that-holds-no-key): the partially-live blobs the planner used to report as a stated backlog are now named rather than counted, and a `retention --apply` pass rewrites the ones worth rewriting. The intent discipline above is what makes that safe — a half-written compaction blob is covered by the collector's own step 4, so the thing that would delete it is the thing that protects it. For direct-ship sets ([ADR-0046](adr/0046-direct-to-destination-publication.md)) the retention traversal reads through the ship sink and per-destination convergence is the deleting half; the staging trim applies only while a staging archive exists.
 
 ### 0011, 0018 — commit is per-replica, and there are now many replicas
 
-The decision that a snapshot commits per destination rather than globally is in the publication model, and everything that makes it *matter* has since arrived with the hub-and-spoke arc: a set declares several destinations, the sync ledger (`Application/DestinationSyncStore`) carries per-`(set, destination)` state, and failure domains are compared by device identity (`Application/StatusModel`) rather than assumed — the PT-8 placeholder replaced. `Protected` is earned only by an in-sync destination outside the source's failure domain, which is ADR-0018's rule in force. What has no dedicated test yet is `FR-SNP-007`'s full five-state per-destination snapshot lifecycle; the ledger's coarser states stand in for it and the traceability matrix says so.
+The decision that a snapshot commits per destination rather than globally is in the publication model, and everything that makes it *matter* has since arrived with the hub-and-spoke arc: a set declares several destinations, the sync ledger (`Application/DestinationSyncStore`) carries per-`(set, destination)` state, and failure domains are compared by device identity (`Application/StatusModel`) rather than assumed — the PT-8 placeholder replaced. `Protected` is earned only by an in-sync destination outside the source's failure domain, which is ADR-0018's rule in force. Direct-ship sets ([ADR-0046](adr/0046-direct-to-destination-publication.md)) sharpen the same rule: each destination is a whole repository from its first byte, and the run-scope rules refuse to hand a destination a snapshot without its closure. What has no dedicated test yet is `FR-SNP-007`'s full five-state per-destination snapshot lifecycle; the ledger's coarser states stand in for it and the traceability matrix says so.
 
 ### 0012 — the contract is real; it has one provider
 
@@ -119,15 +143,57 @@ The decision that a snapshot commits per destination rather than globally is in 
 
 It is still one provider. A contract with a single implementation has not yet been tested by the thing it exists for — the second implementation that disagrees with it. Azure and S3 are phase 3, and `NFR-PORT-002` is traced against the architecture tests and the contract suite rather than against a provider that proves portability by being different.
 
+**The capabilities are read now**, which they were not. Every reader of `StoreCapabilities` in the product asked for the maximum object size, and `ListingConsistency` was read by nothing at all — so two behaviours this record promised for a degraded provider (`Repository/StoreAdmission` Amendment 3 withdraws them) had never been built, and a store declaring no conditional create would have been admitted and would have answered `Created` to a put that overwrote. `Repository/StoreAdmission` now refuses by name at `Repository/RepositoryLifecycle`, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to reason from absence against a listing that may lag.
+
+**And a store standing in front of others now answers for them.** `Agent/DestinationShipSink` forwarded the local metadata store's capabilities for a store whose blob reads and writes the destinations answer; `Storage.Abstractions/StoreCapabilities.Intersect` is the rule it uses instead — the weakest answer its targets give, with the archival-tier hazard the one member **or**ed rather than **and**ed. That change immediately found `Agent/PeerShipStore` and `Agent/PeerRetrievalObjectStore` declaring a zero maximum object size, by leaving the member at its struct default, which had every direct-ship run to a peer validating its capture policy against a ceiling of nought the moment anything read it. It is the second declaration of that shape this contract has caught in two slices, and both say the same thing: a capability nobody reads is a capability nobody has to get right.
+
+**What that is worth, stated precisely, because a gate no provider can trip is easy to overrate.** The only provider promises everything the engine asks, so both refusals are reachable today only through `TestSupport/LaggingObjectStore` and `TestSupport/DegradedObjectStore`. What has changed is not that a bad provider is stopped — there is none — but that the contract's claims are now falsifiable, and one of them turned out to be false: a collection pass against a lagging snapshot listing condemned the newest backup's blobs and wrote the tombstones. Two obligations are recorded rather than closed: `Agent/DestinationShipSink` forwards the local metadata store's capabilities instead of intersecting them with its destinations', and collection on an eventually-consistent store needs a completeness witness the repository does not have.
+
+
+### 0014 — one format, and a refusal by name
+
+Format 1 was withdrawn before any freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), with no installed base
+to migrate: the one live installation went through setup and only ever wrote
+format 2. `Domain/FormatLimits` named one format version when this was written and now
+names two — **3 at creation** and 2 still accepted, both readable
+([0052](#0052--the-record-blob-and-index-planes-are-built-and-the-compactor-they-were-for)) —
+and `Repository.Format/Descriptor/RepositoryDescriptorCodec` refuses a
+descriptor stamped `1` as its own finding — *refuse, never misread* — naming
+re-seeding as the remedy; `Repository.Tests/EndToEnd/RepositoryLifecycleTests` and
+`Repository.Tests/Format/RepositoryDescriptorCodecTests` hold both halves.
+Since [Amendment 2](adr/0014-format-versioning-and-stability.md#amendment-2-2026-09--a-repositorys-version-is-carried-by-two-objects)
+a repository's version is carried by **two** objects rather than one — the
+descriptor says what it was created at and a signed format-upgrade record says
+what it writes ([0066](#0066--two-objects-carry-one-version)) — and the freeze
+gate reads against every version a repository may hold, which after an upgrade
+is both of them in one repository.
+
+One fact is recorded because it looks like an error until it is explained:
+format 2's symmetric containers — metadata blobs and standalone records —
+still stamp `1` in their envelopes and associated data. (A format-3
+repository stamps its metadata blobs `3`; its standalone records stay `1`,
+because a standalone record is never inside a blob and so is never relocated.
+`Domain/FormatVersions.ContainerVersion` is the one place that arithmetic
+lives.) The symmetric
+construction is the one format 1 defined and format 2 kept byte for byte, and
+the stamp is authenticated data over bytes already on disk, so
+`Domain/FormatLimits` carries it as `SymmetricFormatVersion` beside the format
+version proper. The committed `fixture-repository-v2` is the guard: change
+either and it stops opening.
+
 ### 0015 — the seam is the decision, and the seam is built
 
 ADR-0015's decision was to isolate a legacy importer behind a boundary, not to write one. `FallbackPlan.Import.Abstractions` is that boundary, and phase 0's exit criteria proved it with a synthetic adapter feeding an arbitrary byte stream through the same pipeline ([roadmap](roadmap.md#phase-0--archive-engine-vertical-slice)).
 
 No legacy reader exists and none should yet: it is phase 5 and gated on a legal review that has not happened. The row reads "partly built" rather than "built" so that nobody reads the seam's existence as the feature's.
 
-### 0025 — nothing compacts yet, so nothing re-seals yet
+### 0025 — decrypt-and-reseal, superseded for format 3
 
-The decision is sound and unexercised because the collector, though built, deliberately stops before compaction (architecture 07 steps 6–9): deletion-only GC never moves a record, so nothing re-seals. What *is* built is the constraint the decision protects — the record ordinal stays in the AAD, and `Repository.Tests/Index/IndexPrecedenceTests` holds the supersession rules a compaction would rely on.
+**The constraint this record protects is built and the mechanism it decided is not, which is why the row says Built and this section says which.** For format 2 the record ordinal stays in the AAD; `Repository.Tests/Index/IndexPrecedenceTests` holds the supersession rules, and `Repository.Tests/Index/CompactionIndexTests` is now the first thing in the product ever to *write* one.
+
+What compacts is [0067](#0067--the-rewrite-that-holds-no-key)'s keyless rewrite over `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync`, not this record's decrypt-and-reseal. Format 3 superseded that decision ([0052](#0052--the-record-blob-and-index-planes-are-built-and-the-compactor-they-were-for)), and at format 2 it was never reachable in the first place: a service holds the structure key and not the content key, so re-sealing there needs a passphrase nobody is present to type. A format-2 set is therefore refused by name and pointed at `upgrade_set_format`.
+
+**Amendment 2's twelve exit criteria are answered**, each by a named case: 1, 2, 3, 5, 6, 8, 9, 10 and 11 in `Repository.Tests/Index/CompactionIndexTests`; 4 and 12 in `InterruptionTests/CompactionInterruptionTests`; 7 in `Repository.Tests/EndToEnd/CompactedRestoreTests` and `Retention.Tests/CompactionCollectionTests`. Criterion 9 was not a formality — it caught `ForensicRebuilder` filing one delta per record against a ledger unique on `(writer, sequence)`, which dropped every record after a blob's first.
 
 ### 0026 — the shapes are captured, the POSIX traversal is handle-relative, and one gap is left
 
@@ -143,7 +209,7 @@ The **decision** that half of it depended on is now made rather than pending: wh
 
 ### 0028 — the local binding, not the remote one
 
-Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, keystore unlock, per-job progress, and a CLI that asks a running service and falls back to direct mode. The remote binding — once a terminal refusal that bound nothing — now binds a real socket once an administrator names an interface; see [0030](#0030--the-socket-exists) for the transport it waited on.
+Recorded in the ADR's own [implementation status](adr/0028-service-boundary-and-deployment-topologies.md#implementation-status-2026-08) and not duplicated here. In short: writer-role exclusion, the versioned command contract, status aggregation, per-job progress, and a CLI that asks a running service and falls back to direct mode. The keystore unlock of §9 is retired ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the service holds the write credential setup stores and nothing else. The remote binding — once a terminal refusal that bound nothing — now binds a real socket once an administrator names an interface; see [0030](#0030--the-socket-exists) for the transport it waited on.
 
 The [restore pipeline review](review/2026-08-restore-pipeline-review.md) closed the gap that "falls back to direct mode" had hidden: the direct-mode restore was a second, uncontained implementation of the read path, and it now routes through the same `RestorePlanner`/`RestoreExecutor` the service uses — so ADR-0028 §3's "the same operation performs identically through either path" is enforced rather than asserted. The service also now carries the restore outcome across the contract and namespaces each run's displaced store.
 
@@ -172,6 +238,8 @@ Built, in `FallbackPlan.Agent`: the agent now behaves as a service the operating
 Not built, and honestly so: the Windows SCM and launchd *lifecycles* cannot run on this Linux CI, so their live Start/Stop is verified manually while their testable parts — the generation, and the Windows adapter's cancel path — are unit-tested. Self-contained publishing and signed installers remain a Phase 4 concern; the generated artifacts reference whatever executable path is deployed.
 
 ### 0034 — the hub fans out, ages and trims
+
+> **Scope note:** this section describes the staging architecture — capture locally, fan out, age, trim. A set flagged `direct_ship` ([ADR-0046](adr/0046-direct-to-destination-publication.md), [see 0046 below](#0046--the-set-that-never-stages)) replaces the WRITE path: publication ships straight to the destinations and the agent keeps a metadata store, while the fan-out below remains its catch-up pump and the retention machinery reads through the sink.
 
 The arc is built end to end; the sections below walk it in the order it landed. **Configuration schema v2** (`Application/ClientConfiguration.cs`, `Application/DestinationConfiguration.cs`): named destinations (the cloud kinds schema-reserved), per-set destination references with optional retention overrides; refuses a destination-less set, a dangling reference, and the v1 schema — the last with the migration in the message. Pinned by `ClientConfigurationTests`.
 
@@ -207,16 +275,294 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 
 **Every declaration is called, and that is now a build rule.** Phase 2 declared 107 `[LoggerMessage]` messages and wired 46 of them; the other 61 read exactly like messages the engine emits while emitting nothing. They were frozen in `ArchitectureTests/LoggingShapeTests` as a register that could only shrink, and it has since been emptied — twelve declarations deleted with their reasons recorded in ADR-0043, several more reshaped where the declared message promised a count nothing computes or named something the code does not do, and the rest wired with a logger threaded from the host to the call site. The register and the "or is a known debt" half of the test are gone with it: the rule is simply that every declaration is called. Because a declaration having a call site does not prove a logger reaches it, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests` and the retention drill assert by event id that records arrive through real publications, copies and passes.
 
+**And a sink that reaches the network was never covered.** `ArchitectureTests/LoggingShapeTests` proves only `FallbackPlan.Diagnostics` takes the concrete logging package, which stops a sink arriving as a dependency; it says nothing about a sink that posts records somewhere, because `System.Net.Http` needs no package reference. `ArchitectureTests/TelemetrySilenceTests` closes it, and in doing so closed a gap in the guard beside it: `DependencyRuleTests.AllSourceAssemblies` named twenty-one of the twenty-four `src` projects, omitting `Diagnostics`, `Replication` and `Retention` — the three with no `AssemblyMarker` — under a comment warning that a hand-picked subset is how an unguarded reference got in last time. The logging sinks were the assembly a telemetry rule most needed to cover and the one the list could not see.
+
+### 0046 — the set that never stages
+
+Everything the row names is held by tests, including the 04 §5.1 kill matrix through a two-destination sink (`Hosts.Tests/DirectShipFaultSweepTests`). The gate has since been discharged for local-path sets (ADR-0046 Decision 7's amendment): `direct_ship` rides the contract (1.23) and the console's set editor, a shape flip migrates in-process with its seed queued at once, the retention-with-trimming drill ran (`Hosts.Tests/DirectShipRetentionTests` — and caught the sink stopping sweep deletes at the metadata store, now fanned to the destinations under the replication gate's licence), and a **new set referencing a local-path destination is born direct-ship**. Verification was corrected in 2026-09 on two counts, both of which bit the default shape of a new local-path set. It never ran: challenges live in the sync path and `Agent/Scheduler` queues a pair only when there is something to copy, and a direct-ship set has nothing to copy the moment it converges — so a destination was challenged once and then never again. And what would have run proved nothing: the verifier compared the replica against `Agent/DestinationShipSink`, whose blob reads the destinations themselves answer, so with one destination it was a replica against itself. Challenges are now due on the age of the last proof, and a sampled blob is proved by being *opened* at the replica — its footer and a record's AEAD tag, evidence the destination never held the key to forge (`Hosts.Tests/DirectShipVerificationTests`). Retirement's gate was regated in 2026-09 (Amendment 2) after a live install could not use it: it demanded every non-lifecycle object staging held be present at a destination, and nothing carries an object no live snapshot reaches, so the archive was refused for ever and its disk space held. It now refuses only over a blob the live history reaches that no destination has, or a non-blob object the flip's migration never carried across, and names example keys instead of a bare count. What keeps the row at **Partly built** is one tail: the peer write adapter (a declared peer is a stated `NotSupported` ledger row for direct-ship; peer-only sets default to staging until it lands).
+
+### 0052 — the record, blob and index planes are built, and the compactor they were for
+
+Under [ADR-0025](adr/0025-compaction-reseals-records.md) a record's key comes
+from its blob, its nonce is its position in that blob, and its AAD binds that
+position again — so a record cannot be moved without being opened, and
+compaction is decrypt-and-reseal. Format 3 reverses all three: the key is
+`HKDF-Expand(class_key, "fbp/record/v3" ‖ u8(object_type) ‖ object_id)`, the
+nonce is drawn per record and carried in the record's prefix, and the AAD is
+51 bytes without the ordinal. `Repository.Tests/Packing/RelocatableBlobTests`
+copies a sealed record into another blob under a different salt, writer and
+derived blob key, at a different ordinal, and reads it back;
+`Repository.ConformanceTests/FixtureRepositoryV3Tests` does the same against
+bytes frozen in the repository, which is the only version of that claim a
+future reader can check.
+
+**What is built.** `Domain/FormatVersions` holds the questions the code asks
+of a version — including `ContainerVersion`, since a repository's version and
+a blob's stamp are different numbers — and `Domain/FormatLimits` carries
+`LatestFormatVersion` beside the creation default.
+`Repository.Format/Descriptor/RepositoryDescriptorCodec` implements feature
+`0x0003` and the rule that a format-3 descriptor must list it and a format-2
+one must not. `Repository.Crypto/RecordKeyDeriver`,
+`Repository.Packing/SealedRecordKey` and `Repository.Packing/RecordFraming`
+are the record primitives; `Repository.Packing/BlobWriter` and `BlobReader`
+are the blob plane, `AppendSealedRecordAsync` included. `Repository/ArchiveSession`
+and `Repository/ManifestBuilder` stamp what the repository's effective version
+says. **Format 3 is what the product creates**: `Domain/FormatLimits`'s
+creation default moved to it and `Agent/ServiceRuntime.ArchiveFormatVersion`
+stopped being a test-only seam ([0066](#0066--two-objects-carry-one-version)),
+so `Cli/CliApplication`'s `init --format-version 2` is now the way to ask for
+the older one rather than the newer. The one live installation is still format
+2 and stays there until someone upgrades it — both formats are supported and
+nothing pushes.
+
+The index plane followed as
+[ADR-0065](#0065--one-leaf-instead-of-the-blob): a format-3 delta publishes a
+Merkle root per covered blob, which is what lets a peer be challenged for one
+leaf rather than read back whole.
+
+**And the compactor the whole design was for** is built over
+`AppendSealedRecordAsync` as [ADR-0067](#0067--the-rewrite-that-holds-no-key),
+with [ADR-0025](#0025--decrypt-and-reseal-superseded-for-format-3)'s twelve
+exit criteria answered one by one. **What is not.** Nothing compacts a
+format-2 repository, and nothing will: a service holds no content key, so
+re-sealing there is not expensive but impossible. Format-2 repositories are
+read in place forever, so there is no migration waiting to be run — the
+remedy for a set that wants the compactor is the append-only upgrade
+([ADR-0066](#0066--two-objects-carry-one-version)).
+
+### 0053 — the claim is built, the shape is not
+
+**Decisions 1–3 are built**, and building them changed two of them; ADR-0053's
+[Amendment 1](adr/0053-peer-claim-and-configuration-recovery.md) is the record.
+`Hosts.Tests/PeerClaimTests` is the drill: archive, configuration, state
+directory, installation credential and device keypair all destroyed, a fresh
+install paired afresh, and the replica claimed back and read from the
+passphrase alone.
+
+Two things the attempt found, worth keeping because they are the kind of thing
+that gets re-derived:
+
+**The claim key could not be what §1 said it was.** It derived from the
+repository's master key, and a claimant that has lost the repository holds an
+installation kit — no repository id, no key object, every key re-derived from
+the passphrase and the kit's public salt. So the key is the *installation's*,
+`fbp/claim/v2`. (`fbp/claim/v1`, off a format-1 repository's master key, went
+with format 1 — [ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze).)
+
+**And then the kit went too** ([Amendment 2](adr/0053-peer-claim-and-configuration-recovery.md#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else)),
+which took the salt with it. The ceremony is two phases in one session: the
+claimant opens with an empty `ReplicationClaimOpen`, the destination answers
+`ReplicationClaimParameters` — the distinct KDF salts and costs behind every
+replica here whose attribution carries a claim key, read from each replica's
+descriptor and never the repository id or the sealing public key — and the
+claimant sends one `ReplicationClaim` entry per pair. Argon2id runs in the
+`claim` verb after the dial. A wrong passphrase at a peer reads as "nothing
+claimable", by design.
+
+**The claim can name no repository either**, for the same reason, and the owner
+inventory cannot tell it one because that path is itself gated on attribution.
+The claim public key is the selector: `Agent/ClaimResponder` re-attributes
+every repository recorded against it and names them in its answer.
+
+**§3's operator re-attribution is built** ([Amendment 3](adr/0053-peer-claim-and-configuration-recovery.md#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)),
+for a replica attributed before the claim key existed by a machine that then
+died — it self-heals on one more offer from an updated source, and otherwise
+needs the destination's operator. `list_replica_attributions` and
+`reattribute_replica` (contract 1.31), `fallbackplan-agent reattribute`, and
+the console's Re-point control share `Agent/ReplicaReattribution`; the ledger
+is the runtime's and the listener borrows it, so the re-point is served
+without a restart. Refused by name for a replica that carries a claim key,
+Owner-only, local callers only. §4, the set's shape in the kit, **will not
+be**: there is no kit, and the shape travels in the archive itself
+([ADR-0061](adr/0061-adopt-a-destinations-archives.md)), which is how a
+claimed replica is adopted back under its original ids.
+
+An earlier latent trap this record closed still stands:
+`Repository.Format/RecoveryKit` decided "is this an installation kit" by
+`version >= 2`, so the version number meant both how new a kit is and which of
+the two shapes it has. The test is an equality, pinned in
+`Repository.Tests/InstallationKitCodecTests`.
+
+**A defect the seventh member found in the sixth.** Adding the claim public key
+to `Repository.Crypto/RepositoryWriteCredential` turned up two live faults the
+reclaim key had left behind. The credential's two containers —
+`Agent/WriteOnlyServiceState`'s stored provisioning and
+`Repository.Crypto/WriteOnlyProvisioning`'s sealed envelope — each pinned one
+exact total length, so widening the credential had made every bundle an older
+build wrote unreadable; an installation would have reported its own credential
+as damage, with no way back, because saving deliberately never overwrites. And
+`ToBytes` always wrote the current shape with an absent member left zero, so a
+round trip — which `RepositoryWriteCredential.Clone` performs on every open — turned
+"no reclaim key" into 32 bytes of zeros, which a peer would have recorded
+permanently and then demanded signatures under. Both are fixed: the containers
+ask the credential how long it is, and a credential writes the shape it holds.
+
+### 0054 — what the scheduled drill does not prove
+
+Built, and deliberately narrower than the operator drill it sits beside. The
+scheduled one restores a sampled file from a destination's own replica through
+the same guided-restore verbs a person would use — its own store, its own
+repository open, a catalogue rebuilt from its own index plane — so it proves
+the read path is open for that destination, repeatedly, without anybody
+remembering to ask.
+
+It does **not** exercise the standalone recovery tool's dependency closure,
+and cannot delete the state directory it is running out of. Both remain
+[the committed recovery drill](../eng/recovery-drill.sh)'s, which is not
+superseded ([ADR-0054](adr/0054-scheduled-restore-drills.md) §5) and which,
+since [ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md),
+recovers from the destination and the passphrase alone.
+
+Nor, on a write-only set, does it read content: the service holds no content
+key, so the scheduled drill proves the road back as far as the sealed content
+— the replica opens, its index and catalogue rebuild, every sampled file's
+manifest and segment records are found — and records that as a pass with a
+stated limit, on the ledger and the status matrix as `drill_limit` (contract
+1.27), never as a failure ([Amendment 2](adr/0054-scheduled-restore-drills.md#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09)).
+Damage before the content plane still fails and still raises the notice.
+`Agent/RecoveryDrillJob`, `Hosts.Tests/RecoveryDrillTests`.
+
+A peer destination is drilled only on a cadence its source's operator writes
+down for it, never by default, and under a byte cap ([Amendment 3](adr/0054-scheduled-restore-drills.md#amendment-3--a-peer-is-drilled-on-a-stated-cadence-and-under-a-byte-cap-2026-09)):
+the read path across the protocol already existed — the drill opens its
+source by destination name, which dispatches to the peer over the retrieval
+session — and only the scheduler's kind filter kept peers out. The consent
+question is answered on the source side, since a cadence is a standing cost
+on somebody else's link; a file over the cap is left unsampled and said, not
+blamed. `Agent/Scheduler`, `Agent/RecoveryDrillJob`,
+`Hosts.Tests/PeerRecoveryDrillTests`.
+
+A fourth answer was added by [Amendment 1](adr/0054-scheduled-restore-drills.md#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09),
+and it is silence: a drill interrupted because the service is stopping records
+nothing. It was written the other way first, and the cost of that was a false
+"a restore drill could not bring back a file" notice every time a drill was in
+flight at shutdown — the loudest thing the product says, about the most
+ordinary thing it does. `Agent/RecoveryDrillJob` now translates a cancelled
+command answer back into the cancellation it was, `Agent/AgentPass` waits for
+the drill phase before tearing the runtime down, and `Agent/JobScheduler`
+refuses work once it has stopped rather than posting to disposed semaphores.
+
+### 0055 — what the split defends, and what it does not
+
+Built on both planes. A tombstone signs under a reclaim key on its own
+derivation domain; a write-only service's write credential is deliberately not
+given that domain, so a service that can publish for ever cannot author a
+deletion. Such a set still collects, under a grant sealed to the service and
+zeroed with the run — a service compromised between runs holds nothing that
+deletes. On the wire, the repository's reclaim **public** key is published on
+the `ReplicationOffer` and recorded beside the attribution (recorded once,
+never replaceable by a later offer), and each `RetentionOffer` page carries a
+signature the destination checks against it.
+
+Three limits, stated because the alternative is a reader inferring more:
+
+- **The limit ADR-0055 §3 stated — an ordinary format-1 service gains
+  nothing, because it holds the master key — has closed** with format 1
+  ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): no service derives the reclaim key now, and the split defends
+  every repository. The destination retention floor stays the safeguard that
+  holds against a compromised *grant*.
+- **A page signature does not bind the session.** Forgery and editing are
+  closed; replay of a page captured inside an authenticated session is not, and
+  [06 §4.1](../specifications/peer-protocol/06-retention.md#41-retentionoffer)
+  says so rather than leaving it to be assumed.
+- ~~**A destination keeps no signed record of what it deleted**, only the count
+  it acknowledges.~~ Closed by [ADR-0063](adr/0063-deletion-receipts.md): the
+  destination answers every instruction with a deletion receipt under its own
+  device key, and both parties file it beside the tombstone's repository-plane
+  record.
+
+The headless operator has the same grant the console sends, without building
+it by hand: `fallbackplan-agent retention --apply --passphrase-env <VAR>` on a
+set-up installation re-derives the reclaim sub-root from the passphrase under
+the installation's own salt, proves the passphrase against the stored
+credential before anything is authored — a fresh archive holds no tombstone
+for the sweep's own proof to disagree with — seals it to the service's
+recipient key and sends it with the command (`Agent/AgentHost`,
+`Hosts.Tests/RetentionTrimVerbTests`). Without the passphrase, `--apply` is
+refused naming what it needs; a dry run needs nothing.
+
+The same run is where a write-only set's **peers** converge ([Amendment 2](adr/0055-reclaim-authority.md#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant)): the scheduled sync holds no authority to delete, so it pushes whole copies and raises a notice naming the grant, and the granted retention run pushes and instructs each peer under rules with pages signed by the grant — `Agent/FanOut` (`ConvergePeersAsync`), inside the run, before the grant is zeroed. Found when the peer retention fixtures moved onto a set-up installation: the scheduled sync had been sending the instruction unsigned, and the spoke refused it whole on every pass.
+
+Two compatibility rules carry the migration, and both are the load-bearing
+part rather than politeness. A repository written before the decision has
+tombstones signed under the publication key and keeps verifying them that way;
+the descriptor decides, so the choice cannot be downgraded per object. And a
+spoke whose attribution carries no reclaim key cannot manufacture a verdict
+from an absence, so it proceeds as it always did — which is why the
+requirement is a negotiated feature rather than an assumption.
+
+### 0056 — what a skip claims, and what checks it
+
+Built. A pass over a pair the last one left level costs the publication
+sequence read that establishes it: no listing of either side, where before it
+listed the whole source namespace once per dependency phase and the whole
+destination once more. A pass with work lists each phase under that phase's own
+prefix, and releases the phase's key set when the phase ends.
+
+A skip is a claim about a destination made without looking at it, so what
+bounds it matters more than what it saves:
+
+- **It expires.** Only a pass that read both inventories through stamps
+  `last_reconciled_at`, and the stamp is good for a day. A destination that
+  loses an object can therefore be wrong for up to that long, where every pass
+  used to find it.
+- **It is not the only thing watching.** Verification reads bytes at the
+  destination on its own cadence and the drill restores a file from it. A pair
+  that fails either stops claiming to be level, and a pair that is not level is
+  never skipped — which is what actually caught the deleted blob in the test
+  written to prove the expiry.
+- **It cannot hide a migration.** A direct-ship set still carrying the staging
+  archive it migrated from reads through on every pass, because its runs speak
+  only for the objects they shipped.
+
+Two inputs move without anything being published, and both are fingerprinted
+rather than assumed: a retention window expiring with the clock, and a spare
+released when the sibling it was held for catches up.
+
+The reconciliation age is recorded and is **not** on the status contract, so no
+surface yet says when a destination was last read through. That is an additive
+contract change nobody has made.
+
+### 0057 — what resuming trusts
+
+Built. A transfer cut inside an object now costs its tail rather than the whole
+object, which on a domestic uplink is the difference between a large blob
+eventually arriving and never arriving at all.
+
+The trust question is the only interesting one, and the answer is that the
+destination's claim binds nothing. It declares what it part holds and a digest
+of exactly those bytes; the source hashes its own prefix of the same object and
+compares; a mismatch sends the object whole. The destination cannot perform
+that check itself — it holds no repository keys, and a store key is a keyed
+rendering of an identifier rather than of the bytes — so the side that has the
+object is the side that decides. A peer therefore cannot talk a source into
+skipping bytes it has not proved it holds, and every disagreement lands on the
+behaviour that existed before.
+
+Three limits worth stating:
+
+- **It is the peer wire only.** A local-path destination re-copies from local
+  disk, where a restart costs seconds. Peers are served for staging sets
+  today; a direct-ship set's peer destination is still refused until the peer
+  write adapter lands ([ADR-0046](adr/0046-direct-to-destination-publication.md)).
+- **Staged bytes are charged to the peer's quota**, so a peer near its ceiling
+  can be refused for an object it would previously have been admitted for.
+  Uncounted bytes would be a ceiling that does not hold.
+- **A resumed commit is assembled from two sessions' bytes.** The prefix is
+  checked by digest and the tail by the session, so no part is unchecked — but
+  the object is no longer the product of one uninterrupted read.
+
 ## By phase
 
 | Phase | State |
 |-------|-------|
-| [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — with one stated qualifier: the compaction criterion is discharged by its preconditions (nothing physical decodes; supersession converges), the compactor itself being phase 4 |
+| [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — the compaction criterion discharged by the compactor itself since [0067](#0067--the-rewrite-that-holds-no-key), rather than by its preconditions alone |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
 | [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
-| [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims) |
+| [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims). For a `direct_ship` set the staging half of this arc is replaced by the direct-to-destination row below |
+| Direct-to-destination arc | Partly built ([ADR-0046](adr/0046-direct-to-destination-publication.md), [ADR-0047](adr/0047-backup-pool-and-priorities.md)): the ship sink and metadata store, destination-backed restore/verify/retention reads, migration and staging retirement, the pool with priorities and true suspend/resume, and the kill sweep — the trimming drill run, the flag on the contract and console, and new local-path sets born direct-ship — the peer write adapter landed as [ADR-0058](adr/0058-peer-write-adapter.md), and a rebuilt machine adopts a destination's archives back under their original ids ([ADR-0061](adr/0061-adopt-a-destinations-archives.md)), and a whole state directory rolled back is witnessed, protected and healed from the destination ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md)); see [0046](#0046--the-set-that-never-stages) |
 | 3 — Cloud object stores | Not started; reframed as destination kinds behind the arc's fan-out |
-| 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--nothing-compacts-yet-so-nothing-re-seals-yet) |
+| 4 — Retention, GC, compaction | Retention pulled forward into the hub-and-spoke arc; compaction and healing remain here — see [0025](#0025--decrypt-and-reseal-superseded-for-format-3) |
 | 5 — Legacy archive import | Not started, gated on legal review |
 
 ---
@@ -225,6 +571,100 @@ The client half landed too. Contract **1.15** — not the 1.13 the ADR named, si
 
 [`eng/check-adr-status.py`](../eng/check-adr-status.py) refuses a build where an ADR is missing from the table above, where a row names an ADR that does not exist, where a state is not one of the four in the legend, or — the one that matters — **where a cited project, directory or type is not on disk.** It is the same discipline `eng/check-requirements.py` applies to the traceability matrix, adopted for the same reason: a status page nobody verifies becomes a status page nobody can trust, and the failure is invisible until someone acts on it.
 
+
+### 0058 — what the adapter does not carry
+
+Built. A direct-ship set ships to a paired peer over one replication session
+held open for the run, which discharges [ADR-0046](adr/0046-direct-to-destination-publication.md)'s
+last stated tail. A set whose backups live at a friend's house and nowhere
+else no longer has to keep a staging copy of them on the machine they exist to
+survive.
+
+Three things it deliberately does not do, so nobody reads the row as more than
+it is.
+
+**It does not challenge.** A challenge is answered by the peer and judged
+against bytes this side reads for itself, and a set shipping only to a peer
+has none — the sink can offer the metadata plane it keeps locally and no
+content at all. Sampling that population would prove nine small objects and
+stamp the pair verified, which is the emptiness the verification-independence
+work already found once. So the pass challenges nothing and **reads the
+replica back** instead (§8 as amended): a sample of the blobs the spoke
+declared, opened over the retrieval session, each proved by a record's AEAD
+tag where the service can open one and by the **digest tier** where it cannot
+— a write-only set's sealed data plane, hashed whole against the digest the
+writer signed into the index. The ledger says which tier proved what
+(contract 1.32). The read-back rotates through the peer's declared inventory
+on the same cursor the local path walks, under a peer byte budget of its own.
+A digest challenge on the wire, in which the peer hashes its own copy, was
+considered and refused as a self-report the source cannot verify — the
+answer is one the peer could have cached at receipt — so the bytes crossing
+the wire stay the proof. The commitment that makes a cheaper challenge sound
+was then built as [ADR-0065](#0065--one-leaf-instead-of-the-blob): at format 3
+the index carries a Merkle root, the peer is asked for one **leaf** and its
+authentication path, and the leaf's bytes — which a cached path cannot
+supply — are what the source checks. A format-2 blob at a peer is still read
+back whole.
+
+**It does not read a peer outside a run.** A peer shipment is a live session,
+not a directory, so `ReadOrder` still resolves local paths only. A catch-up
+copy that would source bytes from a peer therefore has nothing to read; for a
+mixed set the local sibling answers, and for a peer-only set there is nothing
+to catch up to. Restores go the restore-source path, which is where a peer's
+replica has always been read.
+
+**It does not become the default for a peer-only set.** The boundary stops
+refusing such a set for having a peer where a local path was demanded, and the
+default stays staging, because for a set with one peer destination the staging
+archive buys a capture that does not wait on the link, a resumable transfer,
+and the second copy the paragraph above is about. Direct-ship is now a choice
+that set can make, with three stated costs.
+
+**It does not resume.** The ship session withholds `partial-object-resume`
+([ADR-0057](adr/0057-resumable-object-transfer.md)) on purpose: a run holds no
+object it could resume, because a run cut mid-blob seals a differently
+identified blob the next time. Offering it would park prefixes against the
+peer's quota for a week awaiting a second half that never comes. The fan-out's
+own push still resumes, because it reads from a store that keeps its objects.
+
+### 0059 — the hole under the hole
+
+Built, and it closed two things rather than one.
+
+The expected half was replay: a signed retention page covered its own bytes,
+which say who authorised an instruction and never when, so a page recorded from
+one session verified in the next. It now covers the session identifier as well,
+and that identifier cost nothing to obtain — every session already built the
+material to authenticate with and threw it away.
+
+The unexpected half was found writing the test for the first. The requirement
+to sign was gated on a **negotiated feature**, and negotiation is an
+intersection of what two sides offer, and a listener cannot require a feature.
+So the party the check defends against decided whether it applied: a source
+that omitted `signed-retention` from its hello had an unsigned, freshly
+composed drop-list obeyed. That is forgery rather than replay, needing no
+captured page and no reclaim key — only the device key a compromised
+write-only service holds.
+
+The fix is the durable fact the spoke wrote down for itself at first
+attribution. If it holds a reclaim public key for a repository, it requires a
+signature, whatever the hello said. [ADR-0055](adr/0055-reclaim-authority.md)
+§4 had already made this argument on the repository plane and had not carried
+it to the wire; [02 §6](../specifications/peer-protocol/02-session.md#6-feature-negotiation)
+now states it as a rule of the protocol, because it is not about retention.
+
+**What this costs.** An older commander signs the unbound encoding and a
+current spoke will not accept it — accepting both encodings is accepting the
+replayable one — so its retention is refused by name until it is upgraded. That
+is a deletion not made, never a backup not taken, and it is the right way round
+for a backup product.
+
+**What was still not met, and now is.** `FR-GC-008` also promises signed audit
+records, and this note used to say a destination kept no signed record of what
+it deleted — that a receipt would be a different artefact under the
+destination's own device key, with its own lifetime and reader. It is, and it
+exists ([ADR-0063](adr/0063-deletion-receipts.md)): filed under
+`<state>/receipts/deletions` at both ends, read by `receipts`.
 
 ### 0045 — the product can say who is acting
 
@@ -236,23 +676,313 @@ Three things the build corrected in the decision, each recorded as an ADR amendm
 
 The key-material canary caught six new contract members and was right to; they are carved out by exact name in the shape ADR-0042 established, with a second test that each carved-out name still exists and is still a string.
 
+### 0060 — the passphrase is the recovery credential
+
+Built, as the last slice of the format-1 withdrawal, and the register's
+shortest way to say what changed is what a person must now keep: **the
+passphrase, and knowing where the backups are.** Nothing else.
+
+The recovery tool opens an archive from the passphrase and the archive's own
+descriptor — `Recovery/RecoverySession` through
+`Repository.Crypto/WriteOnlyDerivation`'s `TryDeriveVerified`, the one
+derive-and-compare gate the engine, the console and the tool now share, placed
+in Crypto because the tool deliberately links no engine. Its usage is
+`open | snapshots | restore --repo --passphrase-env`; `--kit` is refused by
+name. Event 3100 records the descriptor read.
+
+Everything the kit touched is gone rather than dormant: the kit format, codec
+and text form in `Repository.Format`, the factory, the conformance vectors and
+fuzz seeds, `specifications/recovery-kit`, the CLI's `key-export`, the setup
+verb's `--kit-output`, the console's kit step, rebuild endpoint and
+Maintenance card, `confirm_recovery_kit`, `kit_status`, `kit_confirmed_at`,
+the `kit_required` state, `recovery-kit.confirmed` and
+`installation-public.json`. Contract 1.29 admits the removals under the
+pre-release rule.
+
+`eng/recovery-drill.sh` is rewritten to the sequence the record describes —
+setup, two direct-ship sets, the machine destroyed, each archive opened,
+enumerated and restored byte-identically from the destination and the
+passphrase, a wrong passphrase and a foreign passphrase refused, a `--kit`
+refused by name — and is green on the Release binaries.
+`Hosts.Tests/RecoveryHostTests` and `Repository.Tests/PassphraseDrillTests`
+are the in-process halves; `Hosts.Tests/PeerClaimTests` is the peer half,
+through [ADR-0053 Amendment 2](adr/0053-peer-claim-and-configuration-recovery.md).
+
+**The follow-up the record named is built as [ADR-0061](adr/0061-adopt-a-destinations-archives.md):**
+a rebuilt machine pointed at an existing destination discovers what it holds
+and adopts each archive under its original ids, resuming rather than
+re-seeding — see [0061](#0061--the-rebuilt-machine-resumes). What a person
+must still know is *where* the backups are: a forgotten destination is a
+passphrase that opens nothing they can find.
+
+### 0061 — the rebuilt machine resumes
+
+Built, over six commits, and the drill is the shortest way to say what it
+does: `eng/recovery-drill.sh` step 8 destroys the machine, sets it up again
+under the same passphrase and a new salt, points it at the vault with no sets
+declared, and the service discovers both archives by descriptor, adopts each
+under its original ids from the shape the archive records, and backs both
+sets up again — fourteen kilobytes into the same two archives, not the
+history.
+
+The archive carries the set's shape since this record: policy-manifest keys
+10 `roots`, 11 `set_name` and 12 `schedule`
+(`Repository.Format/Manifests/PolicyManifest`), optional, with the nine-key
+form byte-identical for every archive written before. Adoption
+(`Agent/ServiceCommandHandler.Adoption.cs`) proves the envelope's derivation
+against the descriptor before it writes anything, rebuilds the catalogue at
+the runtime's real path over the replica, copies the metadata, resumes the
+archive's writer identity when nothing here has published
+(`Application/LocalState`), stores the credential, appends the set as
+direct-ship and seeds the ledger at the replica's own head. The console
+derives in its own process against the discovered row
+(`Web/ConsoleRestoreGate`); the CLI's `discover` and `adopt` speak to the
+service, and its routed restore derives the grant per set
+(`Cli/OperationGateway`), because an adopted set keeps the salt its archive
+was born under. At a peer the owner inventory is the enumerator and the
+retrieval session the store; nothing below the resolve step changed for it.
+
+Not recorded, on purpose: retention, priority and destinations
+(FR-DEST-006). Not guessed at: a recorded root missing on this machine is
+reported and left for the person to edit.
+
+
+### 0062 — the destination is the witness
+
+Built over four commits. The row this closes had been Unproved since the
+proof-obligation table was written: for a direct-ship set the catalogue, the
+sequence file, the sync ledger and the metadata store all live in the state
+directory, so a rollback of the whole directory rolled the witness slice 3.2
+built back with it. The destination did not roll back, and its journal keys
+carry this writer's sequence in the clear.
+
+The allocator is the detector (`Agent/FanOut`): once the replica store
+exists, the pass reads the destination's journal head for this writer
+(`Repository.Index/ObservedHead`'s `JournalHeadAsync` — one listing, no
+reads, no key) and offers it to the writer sequence, which only ever rises
+and answers `Adopted` only for a number the writer has not yet allocated.
+Per writer, so a second device's progress never reads as this one's
+rollback; before the reconciliation gate, whose ledger rolled back too. A
+detecting pass computes no keep-set — so nothing is converged or spared —
+reads through, and raises `destination-ahead:<set>:<destination>`, never
+auto-resolved.
+
+A direct-ship set is then healed in place (`Agent/ServiceRuntime`'s
+`HealFromDestinationAsync`): the destination's metadata copied back with the
+if-absent copy adoption uses, the catalogue rebuilt over the live handle
+(`Agent/CatalogueRebuild`, whose every write is an upsert), and the writer
+moved past what the healed archive attests. The trigger is the metadata
+plane — the destination's journal head above the local store's — so a heal
+that failed is retried on every pass, which a trigger keyed on the
+already-moved sequence never would be. A staging set was protected and told,
+not healed, until [Amendment 2](adr/0062-the-destination-is-the-rollback-witness.md#amendment-2--a-staging-set-is-healed-too-bounded-by-the-history-it-lacks-2026-09):
+what it lacks is content, and the next converging pass would have trimmed
+the destination to a keep-set the rolled-back archive could see. It is now
+healed too — `ServiceRuntime.CopyBackAsync` copies the destination's newer
+history in publication order, blobs before the manifests that reference
+them, every put if-absent, and the staging arm admits exactly the data
+blobs the closure of the snapshots the archive lacks lives in (walked at
+the destination with the same `StagingMark` convergence uses) plus every
+metadata blob, so what staging retirement shed never comes back. A
+destination snapshot that will not decode fails the heal rather than
+narrowing it, which keeps the pass from converging. Over a peer the same
+copy rides the retrieval session, and `Agent/PeerRetrievalObjectStore` now
+serves any read one chunk at a time, which restore inherits.
+`Hosts.Tests/DirectoryRollbackTests` holds the heal, the bound and the
+ordering; `Hosts.Tests/PeerRollbackTests` the same over the wire with a
+blob longer than one chunk, byte for byte.
+
+`Hosts.Tests/DirectoryRollbackTests` is the drill, with the state directory
+copied aside between two backups and put back; one fixture fact is worth
+keeping — a backup run stamps the ledger with its scheduled time, so a sync
+stamped with the real clock records an earlier success and the sink refuses
+the destination as one that missed a run.
+
+A peer is witnessed too, and more cheaply than the record expected
+([Amendment 1](adr/0062-the-destination-is-the-rollback-witness.md#amendment-1--the-peer-is-a-witness-too-from-the-inventory-it-already-declares-2026-09)):
+every push already reads the peer's complete inventory, journal keys
+included, so the head is a fold over keys in hand. What mattered was the
+order inside a push — the retention instruction is decided before the
+inventory arrives — so `Agent/ReplicationInitiator` takes a hook invoked
+between the inventory and the first filtered object, and a pass that adopts
+the head withholds convergence for the session on the scheduled sync and on
+the granted collection run alike. The harm on this path is a shared blob
+dropped by a granted run under a rolled-back keep-set on a mixed set, and a
+journal that silently diverges; `Hosts.Tests/PeerRollbackTests` holds both.
+The heal dials the retrieval session and hands `HealFromDestinationAsync` a
+`PeerRetrievalObjectStore`; a dial failure is a failed pass, retried, never a
+finding.
+
+### 0063 — the peer plane's audit record
+
+Built over four commits, one seam at a time. The statement first
+(`Protocol/DeletionReceipt`): a fixed encoding under its own label, parsed
+as its exact inverse so that trailing bytes are refused, capped at 4096
+listed keys and 4096 page digests with the count and the digests standing
+for the rest; two additive keys on the `RetentionAck` (present together or
+not at all; no feature, because an absence can only mean less); and a
+store (`Protocol/DeletionReceiptStore`) in the protocol library, since the
+CLI must reach it and does not reference the agent, whose every read
+re-checks the signature so that a file edited after filing reads as
+unverified rather than as something the peer attested.
+
+Then the destination (`Agent/ReplicationResponder`): it hashes each page's
+signed bytes as it validates them, deletes as before, keeps the keys it
+actually removed and counts the ones it never held, signs under the device
+key the listener already holds, files first and acks second. The session
+it names is the real identifier whatever the pages' signatures were bound
+to. A copy it cannot write is a warning (event 3725), never a refusal — the
+deletion has happened, and the commander's copy is the commander's.
+
+Then the commander (`Agent/ReplicationInitiator`, `Agent/FanOut`): the
+push digests each page as it goes out, and `VerifyReceipt` holds the
+answer against the pinned identity, the session, the repository, its own
+key, the digests in order, the acknowledged count and the drop list — in
+that order, stopping at the first failure and naming it. A verified receipt
+is filed with the set and destination names; a rejected one raises
+`deletion-receipt-invalid:<set>:<destination>`, never auto-resolved, and is
+logged (3726); a verified one that could not be written is logged (3727)
+and said in the report. The granted run's line per peer now reads
+"converged under the grant: N object(s) deleted, receipt <file>", or says
+that nothing was to delete, that the receipt was rejected and why, or that
+the peer predates receipts.
+
+Then the reader: `receipts` on both hosts, file-direct, rendered by one
+routine (`Protocol/DeletionReceiptReport`) so they print the same thing from
+the same bytes, and refusing a mistyped state directory by path rather than
+answering "no deletion receipts" — the one answer the verb must never give
+by accident.
+
+The commander's checks are held at their pure seam
+(`Hosts.Tests/DeletionReceiptVerificationTests`) rather than over a live
+listener, because a dishonest destination cannot be built from this
+repository's own responder without teaching it to lie; the honest path is
+held end to end by `Hosts.Tests/PeerRetentionReplayTests` off a real
+listener and by `Retention.Tests/PeerRetentionTests` off a granted run.
+One test found the row's v1 exception stale rather than unproved: format 1
+being withdrawn, no service derives the reclaim key, so proof row 69 goes
+to Proved with nothing left in it that is "not true".
+
+Since the 2026-09 amendment the pile has an end. One receipt is filed per
+instruction at both ends and nothing removed one, so a pair exchanging on a
+schedule filed for ever. The rule is three numbers and not one — the newest 8
+whatever their age, at most 4096 per repository, 365 days between the two —
+because a count alone discards a year of history from a busy pair and an age
+alone leaves a quiet one with nothing recent, which is when its last receipts
+matter most. The sweep reads file names only, so a pile that has gone
+unreadable is still bounded and a copied state directory still ages by the
+issue time the names carry rather than by stamps the copy rewrote; it runs at
+filing, which keeps a live pair bounded between restarts, and at service start,
+which is what reaches a pair that has stopped filing
+(`Protocol/ReceiptRetentionPolicy`, `Protocol/PeerReceiptFiles`,
+`Agent/ServiceRuntime`; `Protocol.Tests/ReceiptSweepTests`). The reader is
+bounded by the same names, which turned out to be a property rather than an
+economy: a receipt tampered with cannot drop out of a bounded window by
+becoming unreadable, as it could when the newest rows were taken after reading
+(`Protocol.Tests/DeletionReceiptStoreTests`).
+
+### 0064 — the peer counted on its own word
+
+The deletion receipt's three choices carried to the push, and one
+question the deletion receipt never had: what the ledger may do with a
+peer's signed count. Built over four commits. The statement
+(`Protocol/ReplicationReceipt`): the session, the repository, the
+commander, what the push created (the count, and up to 4096 keys in
+commit order) and what the replica holds afterwards (objects and bytes),
+under its own label, parsed as its exact inverse; two additive keys on
+the `ReplicationAck`; and the filing both receipt stores share
+(`Protocol/PeerReceiptFiles`), each envelope naming its kind so a file
+of one kind found among the other is reported rather than misread, and a
+kind-less envelope from before this record still reading as a deletion.
+
+Then the destination (`Agent/ReplicationResponder`): the inventory walk
+it already makes counts objects and bytes as it lists, the receive loop
+keeps the keys it commits, and "held after" is the walk plus this
+session's creates with no third pass over the replica. A receipt is
+issued on every push, an empty one included; a copy this side cannot
+keep composes with the deletion receipt's problem on the outcome and is
+a warning (3725), never a refusal.
+
+Then the commander (`Agent/ReplicationInitiator`, `Agent/FanOut`): the
+push loop keeps the keys it sent and sums what the peer is owed, and
+`VerifyReplicationReceipt` holds the answer — before the exchange goes on
+to anything else, because most pushes end there — against the pinned
+identity, the session, the repository, its own key, the acknowledged
+count, the sent keys, and a held figure no smaller than declared plus
+committed. A verified receipt is filed with the set and destination
+names and the ledger's completeness figures are written for the peer —
+held equals owed — which is the **first time they are written for a peer
+at all**; the record calls the figure attested and never possession. A
+rejected receipt raises `replication-receipt-invalid:<set>:<destination>`
+(3778), never auto-resolved, and counts nothing; a peer that sends none
+stays uncounted, which `Hosts.Tests/PeerReplicationTests` pins with a
+destination served as every build before receipts served it — the real
+accept, session and responder, handed no issuer.
+
+Then the readers: `receipts --kind` on both hosts over one report;
+`list_receipts` at contract 1.33 (`Agent/ServiceCommandHandler.Receipts.cs`)
+answering facts and the service's own verdict on each signature, no path
+and no signed or key bytes crossing, to any signed-in role and any caller
+scope; and the console's Receipts card on the Maintenance view, fetched
+on entering the view and never by the pollers, three states rendered
+distinctly and never derived from the absence of a problem string.
+
+Done since the 2026-09 amendment, and left undone by the four commits above:
+a direct-ship set shipping to a peer through the write adapter
+([ADR-0058](adr/0058-peer-write-adapter.md)) used to receive the receipt with
+the run's acknowledgement and read only its count, leaving the pair uncounted
+until a sync pass over the same peer fell due. The run now verifies through
+`Agent/ReplicationInitiator`'s own seam, files its copy and counts the pair
+(`Agent/PeerShipStore`, `Agent/DestinationShipSink`;
+`Hosts.Tests/DirectShipPeerTests`) — which matters for when the statement is
+made rather than for tidiness, a source being unable to list a peer's replica
+cheaply enough to learn the same thing later. A replication receipt is kept
+under the same shape of rule as a deletion receipt and for less time — 8 /
+1024 / 90 days — because one is issued on every push, including one that
+committed nothing, and each is superseded by the next.
+
 ### 0044 — the ceremony that two requirements have been waiting for
 
-Built, and both gaps it originally scoped out are now closed.
+Built. The passphrase half: a service with no passphrase says so on
+`describe_service`, and the first client to connect walks the operator through
+choosing one. What made a passphrase-only ceremony possible is that the
+passphrase was never per-set — `WriteOnlyDerivation` takes no repository
+identifier, so one `(passphrase, salt, params)` triple stamps every archive an
+installation will ever create. Setup provisions the installation; each set's
+archive is created from that credential on its first backup.
 
-The passphrase half: a service with no passphrase says so on `describe_service`, and the first client to connect walks the operator through choosing one. What made a passphrase-only ceremony possible is that the passphrase was never per-set — `WriteOnlyDerivation` takes no repository identifier, so one `(passphrase, salt, params)` triple stamps every archive an installation will ever create. Setup provisions the installation; each set's staging archive is created from that credential on its first backup, replacing the silent format-1 fallthrough in `ServiceRuntime.ArchiveForAsync`.
+**FR-SNP-007** lands on `validate_set_draft`, which the console already calls
+live while editing, so a set whose every destination sits inside its source's
+failure domain is warned at the moment it is chosen. It warns on every edit
+rather than only at first run, since the belief the requirement guards against
+can form at any point.
 
-**FR-KIT-004** was blocked by the kit *format*, not by the product: a kit demanded a repository id, which demanded an archive, a set and a destination. Kit format v2 drops it ([ADR-0013](adr/0013-recovery-kit.md)'s amendment), so the kit is generated inside the ceremony that already holds the passphrase — one Argon2id pass produces both it and the provisioning envelope — and setup stays in a `kit_required` state until the operator confirms saving it. Backups run in that state deliberately: stopping them over an unsaved kit would lose data to enforce a habit.
+**The ceremony ends at the passphrase and the first account.** For a year it
+ended at a saved recovery kit: a `kit_required` state, a `confirm_recovery_kit`
+verb recording the kit's checksum, a kit status on every describe, a console
+step handing the kit over in two forms, a rebuild endpoint for a ceremony
+closed before saving, and a public-parameters file so the rebuild could
+happen before the first backup. All of it went with the kit
+([ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md), contract
+1.29): the passphrase is the whole recovery credential, so there is nothing
+to save and nothing for the ceremony to wait for. `setup_state` is
+`setup_required` or `ready`, the wizard is three steps, and `--kit-output` is
+refused by name. FR-KIT-004 and FR-KIT-005, which the kit step existed to
+meet, are deleted rather than left unmet.
 
-**FR-SNP-007** lands on `validate_set_draft`, which the console already calls live while editing, so a set whose every destination sits inside its source's failure domain is warned at the moment it is chosen. It warns on every edit rather than only at first run, since the belief the requirement guards against can form at any point.
+Contract 1.13 carries `provision_installation`, the setup state and device
+identity on `describe_service`, and the draft's roots and destinations.
+`CallerScope` is new and is the fact the code was missing — one handler
+served both listeners and `RemoteBindingState` said only whether the remote
+binding was on. Q14 is answered: a floor plus a modest estimate — twelve at
+decision, sixteen with composition rules since ADR-0044's second amendment —
+enforced where a passphrase is chosen and never in `Passphrase.Create`, which
+is on the restore path.
 
-Contract 1.14 carries `provision_installation`, `confirm_recovery_kit`, the setup state and device identity on `describe_service`, and the draft's roots and destinations. `CallerScope` is new and is the fact the code was missing — one handler served both listeners and `RemoteBindingState` said only whether the remote binding was on; the pending ADR-0043 diagnostics work reuses it. Q14 is answered: a floor of twelve plus a modest estimate, enforced where a passphrase is chosen and never in `Passphrase.Create`, which is on the restore path.
-
-Proven by drill rather than by test alone: setup writes both kit forms, two sets back up, the **entire state directory is deleted**, and the recovery tool opens each archive from the kit and the passphrase alone — restoring byte-identical files, and opening a second archive the kit was never generated against.
-
-**One requirement remains unmet and says so in its own traceability row.** FR-KIT-003: the transcribable text form is built and fixtured, the QR half is not — [recovery-kit §5](../specifications/recovery-kit/README.md#5-qr-form) pins the parameters and defers the rendering.
-
-**FR-KIT-005 is now met, with its third state recorded as inapplicable.** Kit status rides `describe_service` at contract 1.15 and shows on the console's Maintenance card whenever it is open, which is what "surfaced continuously" asks — as against surfacing it only inside a ceremony the operator saw once. It has **two** values rather than three, and the open question from the previous entry is answered rather than left to omission: an installation kit carries no destinations, so the requirement's staleness trigger cannot fire, and its salt, Argon2id parameters and sealing public key are fixed for the life of the installation — that is what makes one passphrase open every archive — so nothing else can stale it either. Regenerating one differs only in `issued_at`, which makes a checksum comparison meaningless and a freshness indicator theatre ([ADR-0013 amendment](adr/0013-recovery-kit.md#an-installation-kit-cannot-go-stale)).
+Proven by drill rather than by test alone: setup runs, two sets back up, the
+**entire state directory is deleted**, and the recovery tool opens each
+archive from the passphrase alone — restoring byte-identical files from two
+archives the passphrase was never told about.
 
 ### 0035 — a destination has to earn being relied on
 
@@ -417,9 +1147,9 @@ reopen, second root, wall, save, backup, labelled browse.
 Contract 1.11, receipt schema 4. Restore became a guided wizard — passphrase,
 source, effective date, files, target, run — and every step landed as engine
 or contract surface rather than page logic. The passphrase gate runs **in the
-console process** against the staging archive's own key files
-(`Web/ConsoleRestoreGate.cs`, a real KEK derivation), so NFR-SEC-009's wall
-stands untouched; the console dependency rule gained exactly one named
+console process** against the archive's own descriptor
+(`Web/ConsoleRestoreGate.cs`, a real Argon2id derivation compared against the
+sealing public key), so NFR-SEC-009's wall stands untouched; the console dependency rule gained exactly one named
 exception for that class. Restore **sources** are server-side handles
 (`open_restore_source`): the staging archive, a local-path destination's
 replica, or a **paired peer's replica over the wire** — the latter via the
@@ -434,11 +1164,18 @@ finally reach the wire: `target: original` maps label slices back onto the
 set's configured roots, `existing: rename` is the new `WriteBeside` policy
 (`name (restored 2026-08-18).ext`, existing file untouched), `overwrite` is
 `Replace`, and absent options reproduce the old behaviour byte for byte. The
-receipt persists to `<state>/receipts/<run>.json` on every run. Runs against
-a source load only the plan's own blobs — a restore-sized transfer, not a
-repository-sized one. Proven live: a Playwright walk of all six steps,
-wrong-passphrase refusal included, ending on restored bytes and the receipt
-path.
+receipt persists to `<state>/receipts/<run>.json` on every run. Proven live: a
+Playwright walk of all six steps, wrong-passphrase refusal included, ending on
+restored bytes and the receipt path.
+
+The targeted blob load this record added — open the plan's own blobs rather
+than every footer in the store — was the right half of the answer and was
+reached by one of the three restore paths. It is no longer what a restore
+uses at all: [ADR-0068](adr/0068-the-catalogue-directed-restore-read.md) opens
+no blob on the happy path, because opening one costs three ranged reads before
+a byte of payload. `LoadBlobsAsync(blobStoreKeys, …)` stays, and its callers
+are now the two that genuinely want a footer in hand —
+`Replication/ReplicaVerifier` and `Agent/CatalogueRebuild`.
 
 ### 0042 — the hub that cannot read what it keeps
 
@@ -458,9 +1195,8 @@ ceremonies as sealed envelopes to the service's published recipient key
 — the one permitted transit shape (NFR-SEC-009 as amended, fenced both
 ways by `KeyMaterialConfinementTests`) — and the service starts without
 a passphrase when its sets are provisioned. The CLI creates with
-`init --write-only --acknowledge-loss` and derives its direct-mode
-authority from `--passphrase-env`; the console runs both ceremonies in
-its own process. Proven by the end-to-end drills in
+`init --acknowledge-loss` and derives its direct-mode authority from
+`--passphrase-env`; the console runs both ceremonies in its own process. Proven by the end-to-end drills in
 `WriteOnlyRepositoryTests` (repository), `WriteOnlySetTests` (service —
 including the machine-migration adoption: metadata unreadable on the new
 machine until the passphrase re-enters, wrong passphrase refused by
@@ -468,10 +1204,31 @@ public-key mismatch), `WriteOnlyCommandTests` (CLI),
 `WriteOnlyCeremonyTests` (console), the committed
 `fixture-repository-v2` read contract, and a live Playwright walk from
 the provisioning dialog to byte-identical restored files. Losing the
-passphrase loses the backup, acknowledged at setup; v2 has no
+passphrase loses the backup, acknowledged at setup; there is no
 passphrase change (03 §7).
 
-### 0046 — the disaster-recovery path is written down and not yet built
+**Since 2026-09 this is the only format.** Format 1 was withdrawn before any
+freeze ([ADR-0014 Amendment 1](adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the opt-in at creation is gone, `Domain/FormatLimits`
+names one format version, `Repository/RepositoryLifecycle` has one create
+from a credential, one create from a passphrase, one open with the credential
+and one open for reading, and `Repository.Crypto/RepositoryWriteCredential` is
+the hierarchy — `KeyHierarchy` and the master-key half of `Repository.Crypto`
+are deleted. The service's passphrase mode, its keystore and the
+`unlock`/`lock` verbs went with the only archive they could open;
+`Repository.Tests/EndToEnd/RepositoryLifecycleTests` holds the refusal of a
+format-1 descriptor by name.
+
+A restore routed through a set-up service — the CLI's `restore` in
+client mode and over `--connect` — runs the same ceremony the console
+does, from the shell: `describe_service` publishes the installation's
+public derivation parameters and sealing public key (contract 1.28), the
+CLI derives the authority from `--passphrase-env`, proves it against the
+published key before sending anything, opens a restore source under the
+sealed grant and restores through it (`Cli/OperationGateway`,
+`Hosts.Tests/ClientModeTests`, `Hosts.Tests/RemoteConsoleTests`). Without
+the passphrase the verb is refused naming the flag rather than restoring
+nothing.
+### 0070 — the disaster-recovery path is written down and not yet built
 
 Specified only, and deliberately filed as such rather than folded into
 0041's "built": the decision, the peer-protocol exchange and the
@@ -502,11 +1259,11 @@ held. `Agent/RetrievalResponder.cs` and
 What remains to build: the claim key derivation, the claim frames and
 their negotiated feature, the ledger's token and public-key fields, the
 `claim_replicas` verb, and the drill that destroys both stores and
-recovers over the wire. The requirements it owes — FR-DR-001 through
-FR-DR-005 — carry honest untested markers in the
+recovers over the wire. The one requirement it still owes — FR-DR-005 —
+carries an honest unbuilt marker in the
 [traceability matrix](requirements/traceability.md) until then.
 
-### 0048 — the two things live capture cannot do
+### 0072 — the two things live capture cannot do
 
 Specified only. Written after the adverse-I/O coverage pass put numbers on
 live capture's limits, and it has two of them. A file that is written
@@ -530,9 +1287,9 @@ and the usual managed wrapper is unmaintained on an end-of-life target
 framework. Nothing here is testable on this project's CI and the ADR says so
 plainly rather than implying otherwise.
 
-### 0047 — recovering the data was only half of it
+### 0071 — recovering the data was only half of it
 
-Specified only, alongside [0046](#0046--the-disaster-recovery-path-is-written-down-and-not-yet-built),
+Specified only, alongside [0070](#0070--the-disaster-recovery-path-is-written-down-and-not-yet-built),
 and filed separately because the two are separable: a claim is useful on its
 own, for a restore. Neither finishes the disaster alone.
 
@@ -545,7 +1302,7 @@ no way to tell whether anything is protecting them again.
 
 The answer is a **set-configuration object** — type `0x10` at
 `/config/<backup-set-id>/…`, [specification 11
-§5](../specifications/repository-format/11-lifecycle-objects.md#5-set-configuration-object)
+§5](adr/0071-recovering-operation-after-total-loss.md)
 — written on every publication and on every configuration change, with its
 payload **sealed to an asymmetric recipient** so only the passphrase opens it.
 That second seal is the load-bearing part: a v2 service is granted the whole
@@ -573,7 +1330,7 @@ Recorded as [ADR-0009 Amendment
 What remains to build: the `fbp/recovery/v1` derivation, the object codec, the
 publication and configuration-change write paths, the reconstruction verb, and
 the console step that confirms recovered paths rather than capturing from them.
-FR-DR-006 through FR-DR-009 carry honest untested markers in the
+FR-DR-009 carries an honest unbuilt marker in the
 [traceability matrix](requirements/traceability.md) until then.
 
 What the checker cannot do is judge whether "built" is generous. That is a reading, and it is repeated whenever a phase closes. It also deliberately does not compare these states against each ADR's `Status:` line: that line records whether a *decision* was accepted, which is a different question from whether the code does it, and collapsing the two would lose both.
@@ -581,3 +1338,249 @@ What the checker cannot do is judge whether "built" is generous. That is a readi
 ---
 
 **See also:** [Abandoned choices](decisions-abandoned.md) — what was considered and rejected, and why · [Traceability](requirements/traceability.md) — requirements to tests · [Roadmap](roadmap.md)
+
+### 0065 — one leaf instead of the blob
+
+A source with no second copy proved a peer held a sealed blob by pulling the
+whole blob back and hashing it. The cheaper message —  the peer hashes its own
+copy and answers — was refused by
+[ADR-0058](#0058--what-the-adapter-does-not-carry) as a self-report, because a
+bare digest is an answer the peer may have cached at receipt and kept after
+discarding the bytes.
+
+**What is built.** `Repository.Packing/BlobMerkle` is the commitment: an RFC
+6962 tree over one-mebibyte leaves of the flat digest's own preimage, with the
+preimage's length hashed into the published root under a prefix of its own.
+`BlobMerkleAccumulator` rides the calls that already feed the blob's digest, so
+the tree costs no second pass, and the spool resume hands it over as it hands
+over the hash. `Repository.Index/IndexDeltaCodec` carries it as delta key 11,
+parallel to `covered_blob_ids` and never alone; `Repository/SnapshotPublication`
+publishes it only at repository format 3 or above, because an unknown key in a
+delta is refused rather than skipped and a format-2 repository must stay
+readable to builds that predate the key. `Repository.Catalogue/Catalogue` keeps
+it at schema 7 beside the digest, upserted by its own statement so a later
+digest-only delta cannot erase it.
+
+On the wire, `Protocol/PeerRetrievalMessages.cs` types 278–279 under the
+`chunk-possession` feature: `Agent/RetrievalResponder` streams its own copy,
+hashes every leaf and answers with the challenged leaf's bytes and its path;
+`Replication/ReplicaVerifier` checks the bytes against the signed root and
+counts the proof as its own tier, ahead of the whole-blob digest tier and
+falling through to it. `Application/DestinationSyncStore` schema 4 and contract
+1.34 carry the count apart from the digest tier's, because a chunk proof
+samples the blob where a digest proof reads all of it.
+
+**The binding is the part worth remembering.** Plain RFC 6962 takes the tree
+size from its caller, and a four-leaf tree's first path verifies under a
+claimed size of three. At a peer the size comes from the length the destination
+declares for its own copy, so without the length in the root a destination
+could understate its copy by a leaf and exempt that leaf from ever being drawn.
+
+**What is not.** The service still creates format 2, so no live installation
+publishes a root. Since [0066](#0066--two-objects-carry-one-version) that is
+every set the product creates, so this tier is reachable by an ordinary
+installation rather than only through a test-only seam on
+`Agent/ServiceRuntime`; a set still at format 2 publishes no root and is
+proved by reading the whole blob back. A local-path destination is not challenged this way
+— there is no link to spare — and a chunk proof establishes one leaf, never the
+blob.
+
+### 0066 — two objects carry one version
+
+Two slices built format 3 and nothing live wrote it: the only creation surface
+was `init --format-version 3`, which the service never calls, so no repository
+published a Merkle root and no peer could be challenged for one leaf. The
+creation default moved — `Domain/FormatLimits` and
+`Agent/ServiceRuntime.ArchiveFormatVersion`, which stopped being a test-only
+seam — and the other half of the question is what happens to a repository that
+already exists.
+
+**Not a rewritten descriptor, and this was established by reading rather than
+argued.** `Agent/DestinationShipSink` seeds a destination with the descriptor
+if absent and never again, a peer commits an object it lacks and keeps the one
+it has, and `repository-format` may not be named by a retention instruction —
+so a rewrite moves the source alone and leaves every copy claiming the older
+format over newer blobs. An append-only signed record under `format-upgrade/`
+needs none of that, and propagation turned out to cost nothing: there are no
+accept lists to widen. `Replication/StoreToStoreCopier` keeps a deny list with
+a catch-all phase, `Agent/ReplicationResponder` validates that a committed key
+parses and nothing else, and `Agent/DestinationShipSink` branches on `blobs/`
+and forwards the rest.
+
+**What is built.** `Repository.Format/Lifecycle/FormatUpgradeRecord` is the
+record, its encoding and `EffectiveVersion` — the pure decision the engine and
+the recovery tool share, each doing its own listing, so
+`FallbackPlan.Recovery`'s dependency closure does not widen.
+`Repository/RepositoryLifecycle` reads it on every open and writes it under
+the repository's **signing** key, not the reclaim key: an upgrade changes what
+the writer emits and destroys nothing, so a set-up installation upgrades
+without the passphrase. `Agent/ServiceRuntime.UpgradeSetFormatAsync` writes
+the record to the set's own store and evicts the cached archive handle in one
+method, because the effective version is fixed at open and a write without the
+eviction would leave the service sealing the older format until it restarted.
+`Agent/ReplicationResponder` refuses an instruction that names the record —
+the one real work item, and the one that stops a commander reverting a
+replica's format claim. The way in is contract 1.36 `upgrade_set_format`, the
+`upgrade-format` agent verb and a console control on the notice the service
+raises at archive open.
+
+**What is not, and what it costs.** There is no downgrade.
+An older build meets an upgraded repository at its **first newer blob** rather
+than at the door, because the descriptor's feature list is unchanged — it
+refuses, so *refuse, never misread* holds, but it reports damage rather than a
+format it does not know
+([0014](#0014--one-format-and-a-refusal-by-name)). And a destination holds
+newer blobs before it holds the record that explains them, until the next
+reconciling pass: a capture ships what it wrote, and the record is an ordinary
+immutable object no capture produces. That costs nothing, because every blob
+declares its own container, and `Hosts.Tests/FormatUpgradeTests` pins both
+sides of the window rather than hiding it behind a sync.
+
+### 0067 — the rewrite that holds no key
+
+**Built end to end**, in five commits, and the backlog it acts on had been
+printed by the planner since the planner was written. `Retention/CollectionPlanner`
+now names the partly-live blobs rather than counting them;
+`Retention/CompactionPolicy` prices them by what a rewrite *reads* — live
+bytes plus dead — and picks the ones past a dead fraction and a reclaim floor,
+under a per-pass byte budget; `Repository/BlobCompactor` copies each live
+record's sealed bytes through `Repository.Packing/BlobWriter`'s
+`AppendSealedRecordAsync`, re-framing only the header;
+`Repository/CompactionPublication` publishes the supersessions with the
+covered digests and Merkle roots, split at blob boundaries because
+`Repository.Index/IndexDeltaCodec` is the one metadata codec with no size
+guard; `Repository/CompactionPass` orders the whole thing — intent, seal,
+upload under extensions, publish, retire last — and
+`Agent/ServiceCommandHandler` runs it as the third phase of `retention --apply`,
+beside the peer convergence and inside the set gate.
+
+**The compactor holds no content key**, which is the claim the record is named
+for and is asserted rather than argued: `Repository.Tests/Packing/BlobCompactionTests`
+constructs it with nothing that could decrypt and watches it complete, and the
+relocated ciphertext is byte-identical to the source's.
+`Repository.Packing/BlobReader`'s `ReadSealedRecordAsync` is the one read in
+the product with no key path at all — it shares the header/table cross-check,
+so a compactor cannot faithfully relocate corruption.
+
+**The pass deletes nothing.** `Retention/CollectionPlanner` learned the one
+thing that makes the space come back: a record whose location the index has
+moved is dead where its bytes still are — guarded so that a supersession into
+a blob nobody holds condemns nothing, which is the inverse of
+[0025](#0025--decrypt-and-reseal-superseded-for-format-3)'s exit criterion 12
+and the half that loses data if it is got wrong. The tombstone, the grace and
+the sweep are the collector's, unchanged, so the reclaim lands two passes
+after the rewrite rather than one.
+
+**What is not.** A format-2 set is refused by name and told the remedy, and
+quietly when there was nothing worth rewriting anyway. A peer's replica is
+never compacted: outside a run `Agent/DestinationShipSink`'s read order takes
+local paths only, so the limit is stated rather than coded, and a set whose
+destinations are all peers — or all away — plans nothing rather than failing.
+
+**And the tombstone now says which of the two it was.** This record's first
+named follow-up was withdrawn rather than deferred: it claimed the collector
+"does not know provenance", and `Retention/CollectionPlanner` was already
+computing the distinction, because separating an object nothing reaches from
+one the index has moved is what decides condemnation at all. Deriving the
+reason needed no coupling, no durable state and no message from the compactor.
+Looking for it found that the reason had never carried information at all —
+both of `Retention/StagingSweep`'s call sites hard-coded *unreferenced*, so
+three of specification 11 §3's four values were declared, encoded, decoded and
+round-tripped by tests while nothing wrote them. The reason is inside the
+signed bytes, which makes it the repository plane's half of FR-GC-008's audit
+record rather than an annotation.
+A drained blob is tombstoned with reason *unreferenced* although specification
+[11 §3](../specifications/repository-format/11-lifecycle-objects.md#3-tombstone)
+defines a *compacted* reason for exactly this: the collector condemns by plan
+and does not know provenance.
+
+### 0068 — a restore fetches what it needs
+
+NFR-PERF-009 budgets a restore at 1.2× the distinct blobs holding the segments
+it needs, and had never been met. Three terms, and the arithmetic says all
+three were needed: the load was proportional to the **repository** rather than
+to the restore; each blob it read from was opened through its locator and
+footer, which is three GETs before a byte of payload; and every manifest and
+every segment was a ranged read of its own, although a file's records sit next
+to each other in the blob they were written into. Coalescing alone reaches
+`2(B + M)`, which does not fit `1.2B` either, so the first run of a blob
+reaches down to offset 0 and takes the envelope with it — the fold is required
+rather than an optimisation.
+
+`Repository.Catalogue/Catalogue.ResolveLocation` answers every field a ranged
+record read wants, so `Repository/RepositoryReader` reads from there and opens
+a blob's footer only when that fails. It is safe because it fails **closed**:
+a record is sealed with its identity in the AAD, so a wrong offset produces a
+tag failure and never silent corruption, and the catalogue was already a
+disposable cache ([ADR-0010](adr/0010-local-store-separation.md)) rather than
+an authority. What it gives up is the footer as a *second* statement of where
+a record is, and with it the sharper diagnosis — which the lazy fallback hands
+back on the one path that wants it, which is damage.
+
+Two findings the design turned on. A read takes its key and its AAD from the
+record's **own** header, so a location pointing at a different but perfectly
+valid record in the same blob decrypts, authenticates and content-verifies —
+the object-id comparison is the whole of what stops a neighbour's bytes being
+served under the requested object's name, and it is held on the coalesced path
+as well as the dedicated one. And prefetching only the file being restored
+costs one read per *(file, blob)* pair, because consecutive files share the
+blob they were written into — so runs outlive the call that fetched them and
+`Restore/RestoreExecutor` reads ahead in bounded waves.
+
+Measured: **11 GETs over 11 blobs holding 60 records, against a budget of 14**,
+where the same restore cost 93. What is **not** covered is stated rather than
+absorbed: a sparse restore of one small record out of large blobs cannot fold
+the envelope, so it costs two reads a blob; and the plan verb's reachability
+probe (`Restore/RestoreBlobSet`, FR-RST-003) still opens each metadata blob
+through its footer, which is a different question asked before anything moves.
+
+### 0069 — one of four
+
+NFR-PERF-013 promises that background activity observes configured CPU, disk,
+network and **time-window** limits, and until this record none of the four
+existed. The round that filled the last unmeasured performance rows went
+looking for the CPU cap to measure and found nothing to measure, so the row
+was corrected from *unmeasured* to **unbuilt**; it was the only **Unproved**
+row on the [proof page](proof-obligations.md). This is the first of the four,
+and it is the one a person actually asks for — *don't back up while I'm
+working* — and the one a container can settle deterministically, CPU being
+exactly the figure NFR-PERF-007 already discounts as container measurement.
+
+**The keystone is that the suspension already existed and already did the
+right thing.** [ADR-0047](adr/0047-backup-pool-and-priorities.md) Amendment 1's
+preemption pauses a running job through `Agent/PauseGate`, waits for it to
+park at a file boundary, and bounds the park with a max-pause cap whose own
+doc comment describes self-cancelling "to the interruption-safe re-run path".
+That is precisely what a window closing over a running capture needs, and it
+was already built and already tested. The window needed somewhere to ask —
+and one rule that is the least obvious part of the design.
+
+**The hold is a standing state of the pool, not a per-job ask.**
+`Agent/JobScheduler`'s writer pump resumes the best-ranked parked run *the
+moment a worker frees*, which is exactly what a park does — so a one-shot
+`Pause()` from the pass would be undone within milliseconds by the worker the
+park itself released. `HoldBackgroundAsync`/`ReleaseBackground` stand instead,
+and while the hold stands the pump neither resumes a parked background run nor
+starts a queued one. The queued half costs one peek: the lane's key sorts
+user-initiated first, so a background head means every entry behind it is
+background too.
+
+Two live defects surfaced while building it and were fixed here. A person's
+pass **deadlocked against the hold it had just placed** — `RunPassAsync`
+hard-coded `userInitiated: false` at every enqueue site, so `agent run --once`
+inside a shut window was rightly let through the gate and then refused by the
+pool it had itself held; the pass's initiation now travels to the work it
+queues. And the journal's park reason was **about to become a lie**:
+`PauseGate` hard-coded *"suspended for a higher-priority run"* into the row a
+park writes, which is the sentence a person reads the next morning to answer
+why their backup stopped at ten. The reason is carried per ask now, first ask
+winning it.
+
+What is **not** built, and stays named: the other three limits. And two limits
+of the window itself — only a capture parks, because only writer-lane jobs
+carry a pause gate, so a fan-out or a drill already in flight runs to
+completion; and the window is enforced to the granularity of a pass tick. The
+window is **reported** on `get_status` (contract 1.37), the CLI and the
+console, and **edited in the configuration file only**, as
+`max_concurrent_backups` is; the console control is owed rather than smuggled
+in behind a status field.

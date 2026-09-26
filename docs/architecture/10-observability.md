@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
-**Built:** Partly — the status model, job states and instrumentation are implemented; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
+**Built:** Partly — the status model, job states and instrumentation are implemented; §5's silence is held by test rather than by nobody having broken it; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -16,25 +16,56 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 | Next scheduled run | Schedule |
 | Files awaiting backup | Scan queue depth |
 | Destination health, **per destination** | Replication state ([`04-concurrency-and-publication.md` §6.1](04-concurrency-and-publication.md#61-the-distinction)) |
+| Full-backup standing, **per destination** — when its baseline completed, and whether it is still owed its seed | Sync ledger schema 2 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by contract 1.19 |
+| Completeness, **per destination** — the bytes it holds of what it is owed, and when they were counted | Sync ledger (contract 1.24): counted by the pass at a local path, which lists both sides; at a peer, only under the peer's signed replication receipt ([ADR-0064](../adr/0064-replication-receipts.md)) — the peer's attestation, never possession; uncounted, and drawn as uncounted, where neither has happened |
 | Last verified restore point | Verification coverage ([`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification)) |
-| Warnings requiring action | Damage reports, quota exhaustion, stale recovery kit, unusual deletion rates |
-| Recovery-kit status | Never generated / saved / stale |
+| Warnings requiring action | Damage reports, quota exhaustion, unusual deletion rates |
 
 ### 1.1 States must be distinguishable
 
-The status vocabulary is normative, because collapsing any two of these is how a user comes to believe they are protected when they are not:
+The status vocabulary is normative, because collapsing any two of these is how a user comes to believe they are protected when they are not. It has two layers: the **derived states** the service computes and every surface carries, and the console's **glance words** — a five-word grouping for the collapsed overview row, with the derived state one expand away.
+
+> **Amendment (2026-08).** `replicated` and `policy-compliant` were retired from the derived vocabulary: neither was ever emitted — `replicated` said nothing the `captured`/`protected` failure-domain distinction does not say more precisely, and `policy-compliant` presupposed a durability policy the product does not have (it may return with one). Their wire numbers stay reserved (`ProtectionState`). The glance layer was added at the same time.
+
+**Derived states** (`ProtectionState` — the wire's words, exhaustively):
 
 | State | Meaning |
 |-------|---------|
-| `captured` | Snapshot committed to a replica, but only within the source's own failure domain — real, and **not** a defence against losing the machine |
-| `protected` | Durable at a replica **outside** the source's failure domain ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain)) |
-| `replicated` | Durable at a named destination |
+| `never backed up` | No committed snapshot exists for the set |
+| `captured` | Snapshot committed to a replica — the staging archive, or a same-volume destination — but only on the drive the files live on: real, and **not** a defence against losing that drive ([ADR-0051](../adr/0051-local-destination-placement.md): such a destination can no longer be newly chosen) |
+| `protected` | Durable at a replica **separate from the drive the source lives on** — a second drive, a same-site machine, or an independent store, the best copy's residual risk always named beside the badge ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) as amended by [ADR-0051](../adr/0051-local-destination-placement.md)) |
 | `verified` | Independently confirmed at that destination, with coverage and age |
-| `policy-compliant` | The backup set's durability policy is satisfied |
 | `degraded` | Recoverable, but below policy — an offline destination, failed verification, or quota exhaustion |
 | `unrecoverable` | Required objects are missing or damaged with no replica able to heal them |
 
+**Glance words** (the console's collapsed row; every grouping below respects the never-merge rules):
+
+| Glance | Derived states it covers | Meaning at a glance |
+|--------|--------------------------|---------------------|
+| ○ Never backed up | `never backed up` | No recoverable backup has ever completed |
+| ● Healthy | `protected`, `verified` | Current and recoverable at a replica that survives losing the drive the files live on |
+| ◐ Backing up · N% | any, while a run is live | A backup is actively running — the meter rides the glance line |
+| ▲ Needs attention | `captured`, `degraded` | Recoverable, but something is below what protection requires — the expanded card says exactly what |
+| ✖ Unrecoverable | `unrecoverable` | Required data is missing or damaged with no replica able to restore it |
+
+`captured` sits under **Needs attention**, never under **Healthy**: a copy that dies with the source's own drive reading "Healthy" would be [PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)'s false confidence verbatim. The expanded card always leads with the derived state and its meaning.
+
+**Destination rows** (per set × destination — the matrix the badge is derived from):
+
+| Row state | Meaning |
+|-----------|---------|
+| `in-sync` | Held everything the archive held, as of the last attempt |
+| `behind` | The archive has moved on since this destination's last success. Carries a reason: `catching-up` (a backup completed after its last sync — the self-healing window, rendered as a `syncing` chip), `awaiting-seed`, `never-synced`, or `reported` (the ledger's own words) |
+| `awaiting seed` | Owed its first full backup (`needs_full` — [ADR-0047 §5](../adr/0047-backup-pool-and-priorities.md)): deliberately skipped by incrementals and being seeded by catch-up. Not `behind` — nothing it was ever sent is missing — and not `degraded` |
+| `unavailable` | Could not be reached — a gap that closes itself when it returns (FR-DEST-003) |
+| `failed` | Reached, and the attempt failed anyway |
+| `not-supported` | The kind is accepted by configuration and not yet served — a stated incapacity, never a failure (FR-DEST-005) |
+
 `degraded` and `unrecoverable` are materially different and are never merged into a single "problem" indicator. The first means act soon; the second means data is already gone.
+
+`awaiting seed` and `behind` are not merged either: "has not yet received its first full copy" and "has fallen behind on copies it held" call for different patience and different alarm. The console renders the former as its own chip for exactly this reason.
+
+`behind` inside the post-backup catch-up window is not `degraded` either ([ADR-0050](../adr/0050-completed-run-record-and-drill-down.md)'s amendment): what the destination holds is the previous backup, present and restorable, so the set keeps the badge that copy earns while the row still reads behind and says why (`catching-up`, rendered as a `syncing` chip). `degraded` stays what its definition says — a fault, not the minute a successful backup itself opens.
 
 `captured` and `protected` are likewise never merged. A repository sitting on the same disk as the source is a real safeguard against deleting a file by mistake and no safeguard at all against the disk failing — and the most common consumer configuration produces exactly that state. Reporting it as `protected` would be the false-confidence failure this project names as a major risk ([PT-8](../review/2026-08-fix-pressure-test.md#pt-8--protected-does-not-require-a-replica-outside-the-sources-failure-domain)).
 
@@ -59,6 +90,17 @@ Exported via OpenTelemetry. These exist to make the performance targets in [`../
 
 **Peers** — connectivity path (direct or relayed) · relay bytes · per-set fairness share · resumed-transfer count.
 
+**Jobs and the pool** ([ADR-0047](../adr/0047-backup-pool-and-priorities.md)) — pool occupancy · queue depth and time-to-slot by priority band · preemption count · pause age against the max-pause bound · resumes versus expiries.
+
+**Background limits** ([ADR-0069](../adr/0069-the-background-window.md)) — whether the configured time
+window is open, and when it next changes · runs the window parked, and runs it held out of starting ·
+parks that expired against the max-pause bound while the window stayed shut, which is the figure that
+says a window is set wider than the work it is holding. NFR-PERF-013 names four limits and this is the
+first to exist; its CPU, disk and network counterparts have nothing to report because there is nothing
+configured to observe. The window's state is not only a metric: it is on `get_status` from contract 1.37
+and on the console and CLI, because "why did nothing run last night" is a question a window creates and
+answering it should not require reading the service's log.
+
 The emphasised metrics are the ones tied directly to NFR-PERF thresholds. Without them, "object-store request amplification" — a named major risk with packing as its mitigation — has no way of being detected when the mitigation stops working.
 
 ## 3. Job state machine
@@ -73,18 +115,26 @@ Pending
   → Publishing
   → Verifying
   → Complete
+  → CompletedWithFailures   (terminal; committed, but not everything could be read)
 
 Any active state
-  → Paused
   → Retrying
   → Cancelled
   → FailedRecoverable
   → FailedPermanent
+
+Any active state ⇄ Paused    (live, not an exit:)
+  Paused → Publishing         (resumed — a pool slot freed)
+  Paused → Cancelled          (shutdown, or the max-pause age)
 ```
 
 Every transition and checkpoint is durable and idempotent. `Segmenting` replaces the original `Chunking` per the terminology rule in [`01-domain-model.md` §2](01-domain-model.md#2-terms-we-do-not-use).
 
 `FailedRecoverable` and `FailedPermanent` are separated because the user action differs: the first resolves itself or resumes, the second needs intervention and should say what kind.
+
+`Paused` is deliberately **not** terminal ([ADR-0047 Amendment 1](../adr/0047-backup-pool-and-priorities.md#amendment-1--preemption-true-suspendresume-2026-08)): a run suspended for a higher-priority one holds its in-memory state, resumes unattended when a slot frees, and finishes — so a client awaiting the job keeps waiting, the console keeps it in the live list, and the one-run-per-set rule counts it as running. Its two exits are resumption (back to `Publishing`, detail "resumed") and cancellation, which shutdown and the max-pause age both take.
+
+`CompletedWithFailures` is terminal and distinct from `Complete` because "backed up your 40 000 files" and "backed up 39 998 of them" are different outcomes a caller must tell apart without parsing English; the snapshot is committed and anchors the schedule, but the surface never reports it as a clean success.
 
 ### 3.1 How a client learns any of this
 
@@ -101,7 +151,7 @@ Three channels, deliberately distinct:
 |---|---|---|---|
 | Answers | "am I protected?" (§1) | "what is happening right now?" | "what happened while I was not looking?" |
 | Shape | Queried, derived on demand | Streamed while a job runs | Durable records, held until acknowledged |
-| Carries | The §1.1 vocabulary, per set and per destination | Job identity, §3 state, counts of files and bytes | The event and its consequence: a peering ended, terms narrowed, a quota was hit, a removed destination still holds data |
+| Carries | The §1.1 vocabulary, per set and per destination, plus each destination's baseline facts (contract 1.19) | Job identity, §3 state, counts of files and bytes — a paused job's card says why it is suspended and that it resumes by itself | The event and its consequence: a peering ended, terms narrowed, a quota was hit, a removed destination still holds data, a migrated set's staging archive awaits retirement |
 | Survives a restart | Yes — derived from durable state | No — a job restarted is a new stream | Yes — that is the point |
 
 Notices exist because hub-and-spoke ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
@@ -123,6 +173,19 @@ The §3 states are what progress reports. A pipeline that announces `Scanning`
 and then says nothing for ten hours is the failure this state machine was
 specified to prevent, so a state that is never emitted is a state that is not
 implemented.
+
+Since [ADR-0048](../adr/0048-determinate-backup-progress.md), a backup's
+reports also carry the run's **counted plan**: the publication walks the
+source once, under the capture's own rules, before archiving begins, and
+every report thereafter states `total_files` and `total_bytes` (contract
+1.20) — the fixed denominator a client divides for a percentage and a time
+estimate. The counting tally is itself reported while the walk runs, so the
+determinate meter costs no silent stretch; the totals are null from
+producers that never count (the single-stream path, sweeps) and a client
+seeing null falls back to an indeterminate meter. The progress hub replays
+each live job's latest report to a subscriber arriving mid-run — never the
+missed sequence, nothing for settled jobs — and a watcher that disconnects
+releases its subscription immediately.
 
 **A console watching several machines** ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §8)
 aggregates only by derivation: a machine's summary is computed from its per-set,
@@ -147,6 +210,10 @@ The boundary that decides this is the one the record **crosses**, not the one it
 No telemetry is transmitted off the device without explicit opt-in. When enabled, what is collected is enumerated in the UI, and it never includes paths, filenames, repository identifiers, destination endpoints, or anything derived from file content (NFR-PRIV-001..003).
 
 A backup product is trusted with the shape of a person's entire life. The default is that it tells nobody anything.
+
+That sentence used to rest on the absence of a commit. It now rests on two tests, which answer different questions and are both needed ([ADR-0027](../adr/0027-services-scheduling-status-telemetry.md) §3, amended 2026-09). **The build contains no means**: no assembly under `src/` references an HTTP client, outbound capability is confined to the five that are the peer protocol and the loopback IPC, nothing attaches a listener to §2's in-box instruments — publishing to a `Meter` nobody subscribes to tells nobody anything, and a listener is the line that would change that with no package reference appearing anywhere — and the packages the product ships are pinned as a set, because what an update check, a crash reporter and a usage beacon have in common is not a name but a new dependency. **And a default run is captured**: an installation set up, backing up to a local path, answering for its status and snapshots, restoring a file and planning a retention pass, all through the loopback transport a terminal and this console use, while the runtime's own network instrumentation records everything that crossed a socket — and nothing reached an IP address, resolved a name or made a request.
+
+The limit is stated rather than left to be found: that capture observes one process. It is not a packet capture on the host and it cannot see a child process, which is why the build-level half is what makes one observed run worth generalising from, and why the proof obligation is recorded as partly proved.
 
 ## 6. Logging
 

@@ -1,0 +1,230 @@
+using System.Collections.Concurrent;
+using FallbackPlan.Agent;
+using FallbackPlan.Application;
+using FallbackPlan.Domain.Jobs;
+using FallbackPlan.Repository.Crypto;
+
+namespace FallbackPlan.Hosts.Tests;
+
+/// <summary>
+/// True suspend/resume under priority pressure (ADR-0047's preemption
+/// slice): when every writer worker is busy and a higher-priority backup
+/// arrives, the lowest-priority running job PAUSES at its next file
+/// boundary — its in-memory state held, its worker freed — the incomer
+/// runs, and the freed slot resumes the paused run exactly where it
+/// stopped. Shutdown degrades a paused run to the ordinary cancelled →
+/// re-run path. Establishes FR-SVC-014.
+/// </summary>
+[TestClass]
+[DoNotParallelize]
+public sealed class PreemptionTests : IDisposable
+{
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
+
+    private CancellationToken Timeout => _timeout.Token;
+
+    public void Dispose() => _timeout.Dispose();
+
+    [TestMethod]
+    public async Task AHigherPriorityArrival_PausesTheRunningJob_RunsAndThenResumesIt()
+    {
+        await using var queue = new JobScheduler(writerWorkers: 1);
+        var order = new ConcurrentQueue<string>();
+
+        var gate = new PauseGate();
+        var lowStarted = Tcs();
+        var lowMayFinish = Tcs();
+        var lowDone = Tcs();
+        queue.Enqueue(new QueuedJob(
+            "low", JobLane.Writer, UserInitiated: false, "low-priority run",
+            async token =>
+            {
+                order.Enqueue("low-start");
+                lowStarted.SetResult();
+
+                // The file loop: a pause point per iteration, exactly as the
+                // capture pipeline checks between scan events.
+                for (var i = 0; i < 3; i++)
+                {
+                    await gate.WaitWhilePausedAsync(token);
+                    if (i == 0)
+                    {
+                        await lowMayFinish.Task.WaitAsync(token);
+                    }
+                }
+
+                order.Enqueue("low-end");
+                lowDone.SetResult();
+            },
+            Priority: 0,
+            PauseGate: gate));
+
+        await lowStarted.Task.WaitAsync(Timeout);
+
+        var highDone = Tcs();
+        queue.Enqueue(new QueuedJob(
+            "high", JobLane.Writer, UserInitiated: false, "high-priority run",
+            token =>
+            {
+                order.Enqueue("high");
+                highDone.SetResult();
+                return ValueTask.CompletedTask;
+            },
+            Priority: 9));
+
+        // The incomer preempts: low parks at its barrier, high runs whole.
+        lowMayFinish.SetResult();
+        await highDone.Task.WaitAsync(Timeout);
+        await lowDone.Task.WaitAsync(Timeout);
+
+        CollectionAssert.AreEqual(new[] { "low-start", "high", "low-end" }, order.ToArray());
+    }
+
+    [TestMethod]
+    public async Task ShutdownWhileAJobIsPaused_CancelsItCleanly()
+    {
+        var queue = new JobScheduler(writerWorkers: 1);
+        var gate = new PauseGate();
+        var started = Tcs();
+        var observedCancel = Tcs();
+
+        queue.Enqueue(new QueuedJob(
+            "parked", JobLane.Writer, UserInitiated: false, "will be paused",
+            async token =>
+            {
+                started.SetResult();
+                try
+                {
+                    while (true)
+                    {
+                        await gate.WaitWhilePausedAsync(token);
+                        await Task.Delay(10, token);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    observedCancel.SetResult();
+                    throw;
+                }
+            },
+            Priority: 0,
+            PauseGate: gate));
+        await started.Task.WaitAsync(Timeout);
+
+        queue.Enqueue(new QueuedJob(
+            "pressure", JobLane.Writer, UserInitiated: false, "forces the pause",
+            async token => await Task.Delay(50, token),
+            Priority: 5));
+
+        // Disposal reaches the parked job through its own token: the paused
+        // in-memory state degrades to the ordinary cancelled → re-run path.
+        await queue.DisposeAsync();
+        await observedCancel.Task.WaitAsync(Timeout);
+    }
+
+    [TestMethod]
+    public async Task ARealBackup_PausedByAHigherPriorityRun_ResumesAndCommitsWhole()
+    {
+        // End to end through the capture pipeline: the pause gate is checked
+        // between scan events, so a many-file source yields thousands of
+        // park opportunities while the trivial high-priority job jumps in.
+        using var harness = new HostHarness();
+        for (var i = 0; i < 1500; i++)
+        {
+            harness.WriteSourceFile($"many/file-{i:d5}.txt", $"contents of file {i}");
+        }
+
+        harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(harness.StateDirectory, "vault"));
+        await harness.CreateRepositoryAsync();
+
+        await harness.SetupAsync();
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions
+            {
+                ArchivesRoot = harness.ArchivesRoot,
+                StateDirectory = harness.StateDirectory,
+                MaxConcurrentBackupsOverride = 1,
+            },
+            Timeout);
+
+        var set = runtime.Configuration.BackupSets.Single();
+
+        // A watcher on the progress stream: a suspension must be visible to
+        // it, not only to the journal (ADR-0047 Amendment 2).
+        var progressStates = new System.Collections.Concurrent.ConcurrentBag<JobProgress>();
+        using var watchDone = new CancellationTokenSource();
+        var watcher = Task.Run(async () =>
+        {
+            await foreach (var progressEvent in runtime.Progress.WatchAsync(watchDone.Token))
+            {
+                progressStates.Add(progressEvent.Progress);
+            }
+        });
+
+        var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
+
+        // Wait until the capture is genuinely mid-scan — the journal active
+        // AND at least one file counted, so the paused report provably
+        // carries live counts — then outrank it. The incomer HOLDS its slot
+        // so the suspension window is observable.
+        while (!runtime.Jobs.Jobs.Any(job =>
+                job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing)
+            || !progressStates.Any(progress => progress.FilesSeen > 0))
+        {
+            Assert.IsFalse(backup.IsCompleted, "the backup finished before the test could preempt it");
+            await Task.Delay(10, Timeout);
+        }
+
+        var highRan = Tcs();
+        var releaseHigh = Tcs();
+        runtime.Queue.Enqueue(new QueuedJob(
+            "priority-visitor", JobLane.Writer, UserInitiated: false, "outranks the capture",
+            async token =>
+            {
+                highRan.SetResult();
+                await releaseHigh.Task.WaitAsync(token);
+            },
+            Priority: 50));
+
+        await highRan.Task.WaitAsync(Timeout);
+        Assert.IsFalse(
+            backup.IsCompleted,
+            "the high-priority job must have run while the backup was suspended, not after it");
+
+        // The journal says Paused — a live state the run resumes out of.
+        while (!runtime.Jobs.Jobs.Any(job => job.BackupSetId == set.Id && job.State == JobState.Paused))
+        {
+            Assert.IsFalse(backup.IsCompleted, "the backup finished before it ever reported Paused");
+            await Task.Delay(10, Timeout);
+        }
+
+        // One run per set holds THROUGH the suspension: a pass ticking while
+        // the run is parked reports already-running, never double-queues.
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddHours(2), Timeout);
+        Assert.AreEqual(
+            "already-running",
+            Assert.ContainsSingle(pass.Sets.Where(outcome => outcome.SetName == set.Name)).Outcome);
+
+        releaseHigh.SetResult();
+        var outcome = await backup.WaitAsync(Timeout);
+        Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+
+        var final = runtime.Jobs.Jobs.Single(job => job.BackupSetId == set.Id && job.State == JobState.Complete);
+        Assert.IsNotNull(final.Detail);
+        Assert.AreNotEqual(
+            "resumed", final.Detail,
+            "the suspension's transient detail must not survive onto the terminal record");
+        Assert.Contains("file(s)", final.Detail, StringComparison.Ordinal);
+
+        watchDone.Cancel();
+        await watcher.WaitAsync(Timeout).ContinueWith(_ => { }, TaskScheduler.Default);
+        var paused = progressStates.Where(progress => progress.State == JobState.Paused).ToList();
+        Assert.IsTrue(paused.Count > 0, "the suspension must reach progress watchers, not only the journal");
+        Assert.IsTrue(
+            paused.Any(progress => progress.FilesSeen > 0),
+            "a paused report must keep the run's counts — a zeroed card would wipe the live meter");
+    }
+
+    private static TaskCompletionSource Tcs() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+}

@@ -122,10 +122,10 @@
     <value>Verifying a destination runs on the hub — the sweep resumes from a cursor in the service's ledger, so a direct-mode pass would re-read the same objects forever and never record that it had. Connect to it with --connect, or run `fallbackplan-agent verify-destination` there.</value>
   </data>
   <data name="DirectGateway_SyncNeedsTheService" xml:space="preserve">
-    <value>Syncing destinations is the service's job — its scheduler, ledger and staging archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.</value>
+    <value>Syncing destinations is the service's job — its scheduler, ledger and per-set archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.</value>
   </data>
   <data name="DirectGateway_ChangesNeedsTheService" xml:space="preserve">
-    <value>Previewing changes is the service's job — the rescan reads a staging catalogue the running service holds open. Connect to it with --connect.</value>
+    <value>Previewing changes is the service's job — the rescan reads a set's catalogue the running service holds open. Connect to it with --connect.</value>
   </data>
   <data name="ServiceGateway_ServiceAnsweredBackupWith" xml:space="preserve">
     <value>The service answered a backup with {0}.</value>

@@ -149,8 +149,7 @@ public sealed class InvitePairingCommandTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(HostHarness harness)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+        await harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -158,7 +157,6 @@ public sealed class InvitePairingCommandTests : IDisposable
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 }

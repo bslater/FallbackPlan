@@ -81,6 +81,56 @@ public sealed class SessionRelayTests
     }
 
     [TestMethod]
+    public async Task ARefusedResume_AnswersTheRefusalWithoutSendingTheCommand()
+    {
+        // The service's resume refusal says exactly what to do ("log in
+        // again"); the command's own refusal, sent blind afterwards, says
+        // less and costs a second round trip. A browser sleeping through its
+        // session's idle timeout retries every few seconds, so relaying the
+        // doomed command doubles the traffic of an already-failing loop —
+        // this is the wedge the 2026-08-25 service log recorded at 94
+        // connections a minute.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ResumeSessionCommand
+            ? new ServiceError(ServiceErrorReason.Refused, "That session is not current — log in again.")
+            : new AcknowledgedResult();
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        request.Headers.Add(WebConsoleHost.SessionHeader, new string('d', 64));
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.IsInstanceOfType<ResumeSessionCommand>(
+            Assert.ContainsSingle(harness.Clients.Client.Received),
+            "A refused resume must be the end of the exchange — the command it was presented for must not be sent.");
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("not current", body, StringComparison.Ordinal);
+        Assert.Contains("\"result\":\"error\"", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task AnOlderServicesResumeComplaint_DoesNotBlockTheCommand()
+    {
+        // A service that predates contract 1.16 answers resume_session itself
+        // with InvalidArgument through its catch-all. That was always shrugged
+        // off, and must stay so: only Refused — "that session is not current"
+        // — ends the exchange.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ResumeSessionCommand
+            ? new ServiceError(ServiceErrorReason.InvalidArgument, "resume_session is not a command")
+            : new AcknowledgedResult();
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        request.Headers.Add(WebConsoleHost.SessionHeader, new string('g', 64));
+        using var response = await harness.Http.SendAsync(request);
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.HasCount(2, harness.Clients.Client.Received);
+        Assert.IsInstanceOfType<GetStatusCommand>(harness.Clients.Client.Received[1]);
+    }
+
+    [TestMethod]
     public async Task TheLoginVerb_RelaysLikeAnyOther()
     {
         // The console enumerates no commands, so signing in needs no server

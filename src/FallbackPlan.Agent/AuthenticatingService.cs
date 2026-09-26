@@ -108,6 +108,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
         {
             if (Current is not { } session)
             {
+                Log.CommandRefusedUnauthenticated(_log, command.GetType().Name);
                 return new ServiceError(
                     ServiceErrorReason.Refused,
                     "This connection has not signed in. Log in first — `fallbackplan login`, or the "
@@ -118,6 +119,23 @@ public sealed class AuthenticatingService : IFallbackPlanService
             {
                 return await ManageAsync(command, session, cancellationToken).ConfigureAwait(false);
             }
+
+            // The second Owner-only privilege after account management
+            // (ADR-0049): a restart interrupts everyone's runs and signs
+            // everybody out, which is not an operator's call to make.
+            if (command is RestartServiceCommand && !_users.MayManageAccounts(session.User))
+            {
+                return NotTheOwner("restart the service");
+            }
+
+            // The third (ADR-0053 §3): re-pointing which paired device owns
+            // a replica stored here hands somebody's backup to a device.
+            // The listing beside it is any account's — it names owners and
+            // labels, which the pairings verb already does.
+            if (command is ReattributeReplicaCommand && !_users.MayManageAccounts(session.User))
+            {
+                return NotTheOwner("re-point a replica stored here");
+            }
         }
         else if (command is ListUsersCommand or CreateUserCommand or DeleteUserCommand or ChangePasswordCommand)
         {
@@ -127,6 +145,24 @@ public sealed class AuthenticatingService : IFallbackPlanService
             // pairing (ADR-0045 §1) — this is not an unguarded door, it is the
             // only door through which the first account can arrive.
             return await ManageAsync(command, session: null, cancellationToken).ConfigureAwait(false);
+        }
+        else if (command is RestartServiceCommand)
+        {
+            // Deliberately NOT in the bootstrap window: it admits exactly the
+            // verbs that create the first account, and an unset-up
+            // installation is not restartable by whoever can reach the socket.
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "The installation has no accounts yet, so nobody owns a restart. Finish setup — the "
+                + "first account is the owner — and restart as that account.");
+        }
+        else if (command is ReattributeReplicaCommand)
+        {
+            // Same rule, same reason: an Owner-only verb has no owner yet.
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "The installation has no accounts yet, so nobody owns the replicas stored here. Finish "
+                + "setup — the first account is the owner — and re-point the replica as that account.");
         }
 
         return await _inner.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -184,6 +220,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
     {
         if (_sessions.Resolve(resume.Token) is not { } session)
         {
+            Log.SessionResumeRefused(_log);
             return new ServiceError(
                 ServiceErrorReason.Refused,
                 "That session is not current — it expired, was signed out, or did not survive a "
@@ -195,6 +232,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
             _token = session.Token;
         }
 
+        Log.SessionResumed(_log, session.User);
         return Describe(session);
     }
 
@@ -312,7 +350,8 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 $"An account name must be 1 to {UserStore.MaximumNameLength} characters with no spaces "
                 + "and no control characters — one that could carry a line break could forge a log line.",
             UserStoreOutcome.PasswordRefused =>
-                $"A password must be at least {UserStore.MinimumPasswordLength} characters.",
+                $"A password must be at least {UserStore.MinimumPasswordLength} characters, with an "
+                + "uppercase letter, two digits and a special character.",
             UserStoreOutcome.WrongPassword or UserStoreOutcome.Throttled =>
                 "That password was not accepted.",
             UserStoreOutcome.OwnerIsPermanent =>
@@ -347,9 +386,9 @@ public sealed class AuthenticatingService : IFallbackPlanService
             SignedInRole = session?.Role.ToString(),
 
             // Only when the installation is otherwise finished: an installation
-            // still owing a passphrase or a recovery kit has a more urgent
-            // state to report, and stacking this on top would send the operator
-            // to the wrong screen.
+            // still owing a passphrase has a more urgent state to report, and
+            // stacking this on top would send the operator to the wrong
+            // screen.
             SetupState = !_users.HasAccounts && description.SetupState is null or "ready"
                 ? UsersRequiredState
                 : description.SetupState,

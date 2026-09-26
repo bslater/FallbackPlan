@@ -7,8 +7,17 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 
 /// <summary>
 /// Exercises the object-identifier deriver's validation and keying rules
-/// (specification 02 §3; NFR-SEC-004).
+/// (specification 02 §3; NFR-SEC-001, NFR-SEC-004).
 /// </summary>
+/// <remarks>
+/// The keying is NFR-SEC-001's subject, not only NFR-SEC-004's: an object
+/// identifier is an HMAC under a repository-scoped key rather than a bare
+/// hash of the plaintext, which is what keeps a raw content hash from
+/// reaching a stored object at all. The requirement was traced here and to
+/// the conformance suite from the start; neither said so, so
+/// <c>check-requirements.py --audit</c> reported it as cited by classes that
+/// never declared it.
+/// </remarks>
 [TestClass]
 public sealed class ObjectIdDeriverTests
 {

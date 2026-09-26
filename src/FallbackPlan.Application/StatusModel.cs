@@ -95,14 +95,52 @@ public static class DestinationStatus
                 Sync = DestinationSyncState.Failed,
                 Domain = FailureDomain.SameVolume,
                 Detail = "no longer declared",
+                Cause = SyncCause.Reported,
             };
         }
 
+        // Every demotion states its cause (ADR-0027 §4: "the per-destination
+        // reason carried, not summarised away"). The ledger's own words win
+        // where it wrote any; the demotions below are decided here, so only
+        // here can they be explained.
         var sync = record?.State ?? DestinationSyncState.Behind;
+        var cause = SyncCause.None;
+        var detail = record?.LastError;
+        if (record is null)
+        {
+            cause = SyncCause.NeverSynced;
+            detail = "never synced — no sync has been attempted for this destination yet";
+        }
+
+        if (sync == DestinationSyncState.InSync && record is { NeedsFull: true })
+        {
+            // A pair owed its seeding full holds nothing restorable yet: its
+            // fresh ledger row defaults to InSync as an artefact of the blank
+            // row (ADR-0047 §5). Checked BEFORE the catch-up comparison —
+            // a NeedsFull row has no success stamp, so under a set with a
+            // completed backup the comparison below also matches it, and an
+            // owed seed labelled "catching up" would read as held protection
+            // under the derivation's amendment when the pair holds nothing.
+            sync = DestinationSyncState.Behind;
+            cause = SyncCause.AwaitingSeed;
+            detail ??= "owed its full backup — incrementals skip this destination until the seed lands";
+        }
+
         if (sync == DestinationSyncState.InSync && (record!.LastSuccessAt ?? 0) < lastCompletedAt)
         {
             // In sync as of an older snapshot: the staging archive moved on.
+            // The one origin of `behind` that used to carry no reason at all
+            // — LastError is nulled by every success — so minutes after a
+            // successful backup the console read "behind." full stop, for a
+            // state that heals unaided on the next sync pass.
             sync = DestinationSyncState.Behind;
+            cause = SyncCause.CatchingUp;
+            detail = "a backup completed after this destination's last sync — it catches up on the next sync pass";
+        }
+
+        if (cause == SyncCause.None && detail is not null)
+        {
+            cause = SyncCause.Reported;
         }
 
         return new DestinationStatusInput
@@ -113,12 +151,15 @@ public static class DestinationStatus
             Domain = DomainOf(declared, setRoots, deviceIdOf),
             RequiresVerification = declared.RequiresVerification,
             LastSuccessAt = record?.LastSuccessAt,
-            Detail = record?.LastError,
+            Detail = detail,
+            Cause = cause,
             SyncedSequence = record?.SyncedSequence ?? 0,
             VerifiedAt = record?.VerifiedAt,
             VerifiedSequence = record?.VerifiedSequence ?? 0,
             VerifiedObjects = record?.VerifiedObjects ?? 0,
             VerifiedPopulation = record?.VerifiedPopulation ?? 0,
+            VerifiedSealed = record?.VerifiedSealed ?? 0,
+            VerifiedDigest = record?.VerifiedDigest ?? 0,
             VerificationAgeDays = AgeInDays(record?.VerifiedAt, nowUnixMilliseconds),
             VerificationBoundDays = BoundFor(declared.Kind),
             AddressDefect = declared.AddressDefect,
@@ -187,6 +228,33 @@ public static class DestinationStatus
 }
 
 /// <summary>
+/// Why a destination row is not in sync (ADR-0050; contract 1.22's
+/// <c>reason</c>): the machine cause beside the prose, decided in
+/// <see cref="DestinationStatus.Describe"/> — the one place the demotions
+/// happen, so the one place they can be explained.
+/// </summary>
+public enum SyncCause
+{
+    /// <summary>Nothing to explain — the row is in sync, or no cause is known.</summary>
+    None = 0,
+
+    /// <summary>
+    /// A backup completed after this destination's last sync; the next sync
+    /// pass heals it unaided. The self-healing window, not a fault.
+    /// </summary>
+    CatchingUp = 1,
+
+    /// <summary>The destination is owed its seeding full backup (ADR-0047 §5).</summary>
+    AwaitingSeed = 2,
+
+    /// <summary>No sync has ever been attempted for this pair.</summary>
+    NeverSynced = 3,
+
+    /// <summary>The ledger recorded its own reason; <see cref="DestinationStatusInput.Detail"/> carries those words.</summary>
+    Reported = 4,
+}
+
+/// <summary>
 /// One destination's observed facts, as the derivation consumes them
 /// (ADR-0027 amendment): plain values gathered by the host — the sync ledger
 /// supplies the state, the platform supplies the failure-domain comparison,
@@ -208,9 +276,10 @@ public sealed record DestinationStatusInput
     /// <summary>
     /// Where the destination sits relative to the source (FR-SNP-007):
     /// declared in configuration or derived by kind (ADR-0018 Amendment 2).
-    /// <see cref="FailureDomain.SameVolume"/> and <see cref="FailureDomain.SameMachine"/>
-    /// die with the machine, so they cap what the destination can earn at
-    /// <see cref="ProtectionState.Captured"/> (PT-8) — and the staging
+    /// Only <see cref="FailureDomain.SameVolume"/> dies with the source's
+    /// own drive, so it alone caps what the destination can earn at
+    /// <see cref="ProtectionState.Captured"/> (ADR-0051's boundary; PT-8's
+    /// same-disk false confidence stays impossible) — and the staging
     /// archive never appears here at all: it is a cache, not a destination
     /// (ADR-0018 Amendment 1).
     /// </summary>
@@ -219,8 +288,29 @@ public sealed record DestinationStatusInput
     /// <summary>When this pair last synced, Unix milliseconds; null when never.</summary>
     public ulong? LastSuccessAt { get; init; }
 
-    /// <summary>What the last failure said, for the warning to repeat verbatim.</summary>
+    /// <summary>
+    /// Why the row is not simply in sync, for the warning to repeat verbatim
+    /// (ADR-0027 §4): the ledger's own failure words, or the demotion's
+    /// stated cause. Null on a healthy row — a state that needs no excuse.
+    /// </summary>
     public string? Detail { get; init; }
+
+    /// <summary>
+    /// The machine form of <see cref="Detail"/> (contract 1.22): which kind
+    /// of not-in-sync this is, so a client can distinguish the self-healing
+    /// catch-up window from a reported fault without parsing prose.
+    /// </summary>
+    public SyncCause Cause { get; init; }
+
+    /// <summary>
+    /// Whether this row is behind only because a newer backup awaits its
+    /// next sync pass while the previously delivered backup is still held —
+    /// the self-healing window a successful run itself opens (ADR-0050
+    /// amendment). The recorded success is the load-bearing guard: a row
+    /// that never converged holds nothing, whatever its cause claims.
+    /// </summary>
+    public bool HoldsPreviousBackup =>
+        Sync == DestinationSyncState.Behind && Cause == SyncCause.CatchingUp && LastSuccessAt is not null;
 
     /// <summary>
     /// The highest publication sequence the last successful sync delivered —
@@ -247,6 +337,12 @@ public sealed record DestinationStatusInput
 
     /// <summary>Objects eligible when that sample was drawn — the coverage denominator.</summary>
     public int VerifiedPopulation { get; init; }
+
+    /// <summary>Of <see cref="VerifiedObjects"/>, how many a record's AEAD tag proved.</summary>
+    public int VerifiedSealed { get; init; }
+
+    /// <summary>Of <see cref="VerifiedObjects"/>, how many the signed whole-blob digest proved.</summary>
+    public int VerifiedDigest { get; init; }
 
     /// <summary>
     /// Whether this destination is required to prove possession (FR-VER-006),
@@ -396,7 +492,11 @@ public static class StatusDeriver
         // The matrix, one row per destination — the truth every roll-up is
         // computed from, never invented beside (ADR-0028 §8).
         var protectedByAny = false;
-        var independentInSync = false;
+        var bestProtectingDomain = FailureDomain.SameVolume;
+
+        // "In sync" here includes a held previous backup during the catch-up
+        // window: the independent destination IS in sync with the backup it
+        // holds, which is precisely the claim the roll-up makes.
         var capturedOnlyByAny = false;
         var supportedButNotInSync = false;
         DestinationStatusInput? verifiedBy = null;
@@ -431,13 +531,18 @@ public static class StatusDeriver
 
             switch (destination.Sync)
             {
-                // Protected asks one question: if this machine is destroyed,
-                // does a copy survive (FR-SNP-007, ADR-0018)? Same-site and
-                // independent answer yes; same-volume and same-machine die
-                // with it, however healthy their sync is.
-                case DestinationSyncState.InSync when destination.Domain >= FailureDomain.SameSite:
+                // Protected asks one question: if the drive the files live
+                // on is destroyed, does a copy survive (FR-SNP-007,
+                // ADR-0018 as amended by ADR-0051)? A second drive, a
+                // same-site machine and an independent store all answer yes
+                // — with the residual risk of the best of them named below —
+                // and only same-volume dies with it, however healthy its
+                // sync is.
+                case DestinationSyncState.InSync when destination.Domain >= FailureDomain.SameMachine:
                     protectedByAny = true;
-                    independentInSync |= destination.Domain == FailureDomain.Independent;
+                    bestProtectingDomain = destination.Domain > bestProtectingDomain
+                        ? destination.Domain
+                        : bestProtectingDomain;
 
                     // Verified current: proven bytes at least as new as the
                     // sync's own claim (peer-protocol 04). A destination whose
@@ -475,13 +580,44 @@ public static class StatusDeriver
                 case DestinationSyncState.InSync:
                     capturedOnlyByAny = true;
                     warnings.Add(
-                        $"'{destination.Name}' shares the source's failure domain ({DomainLabel(destination.Domain)}) — a safeguard against mistakes, none against losing the machine.");
+                        $"'{destination.Name}' shares the source's volume ({DomainLabel(destination.Domain)}) — a safeguard against mistakes, none against losing the drive.");
                     break;
 
                 case DestinationSyncState.NotSupported:
                     // A stated incapacity, never a failure (FR-DEST-005) —
                     // but no protection comes from it either.
                     warnings.Add($"'{destination.Name}' is not served yet: {destination.Detail ?? "kind not supported"}.");
+                    break;
+
+                // The catch-up window keeps the badge (ADR-0050 amendment):
+                // a destination behind only because a newer backup awaits its
+                // next sync pass still holds the previous backup — present
+                // and restorable — so the set keeps exactly the tier that
+                // held copy earned yesterday. Never a `verifiedBy` candidate:
+                // the proof may not cover the run now replicating; Verified
+                // returns with in-sync. No time bound, deliberately — a sync
+                // attempt that fails reports itself (RecordFailure writes the
+                // ledger, the next poll reads a fault and degrades), the
+                // catch-up predicate never backs off, this derivation takes
+                // no clock, and LastAttemptAt moves only at attempt
+                // completion, so any bound would false-alarm midway through
+                // a long legitimate replication. Every other cause — a
+                // reported fault, a never-synced pair, an owed seed — and
+                // every harder state still degrades below.
+                case DestinationSyncState.Behind when destination.HoldsPreviousBackup
+                    && destination.Domain >= FailureDomain.SameMachine:
+                    protectedByAny = true;
+                    bestProtectingDomain = destination.Domain > bestProtectingDomain
+                        ? destination.Domain
+                        : bestProtectingDomain;
+                    warnings.Add(
+                        $"'{destination.Name}' holds the previous backup; the newest is still replicating — it catches up on the next sync pass.");
+                    break;
+
+                case DestinationSyncState.Behind when destination.HoldsPreviousBackup:
+                    capturedOnlyByAny = true;
+                    warnings.Add(
+                        $"'{destination.Name}' holds the previous backup; the newest is still replicating — it catches up on the next sync pass.");
                     break;
 
                 default:
@@ -494,10 +630,17 @@ public static class StatusDeriver
 
         if (protectedByAny)
         {
-            if (!independentInSync)
+            // Honest about the residue (ADR-0018, ADR-0051): the best
+            // protecting copy's own boundary is named, informational rather
+            // than alarming — the owner chose the placement, and what it
+            // does not survive should stay in front of them.
+            if (bestProtectingDomain == FailureDomain.SameMachine)
             {
-                // Honest about the residue (ADR-0018): a same-site copy
-                // answers the machine question, not the site one.
+                warnings.Add(
+                    "Protection rests on a second drive in this machine — it survives drive failure, not fire, theft, or losing the machine.");
+            }
+            else if (bestProtectingDomain == FailureDomain.SameSite)
+            {
                 warnings.Add(
                     "Protection rests on same-site destination(s) — a copy at the same site survives losing this machine, not losing the site.");
             }

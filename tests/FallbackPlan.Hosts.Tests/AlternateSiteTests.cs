@@ -19,7 +19,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// possession proven by the wire challenge, never assumed; and the claim that
 /// justifies all of it — the source machine's archive can be destroyed and the
 /// data still comes back, byte-identical and point-in-time, from the other
-/// site plus the recovery kit alone.
+/// site plus the passphrase alone.
 /// </summary>
 /// <remarks>
 /// One long test rather than nine small ones, deliberately: "an alternative
@@ -50,7 +50,6 @@ public sealed class AlternateSiteTests : IDisposable
         _siteOne.WriteSourceFile("notes.txt", originalNotes);
         _siteOne.WriteSourceFile("nested/data.bin", new string('é', 4_096) + "binary-ish payload");
         _siteOne.WriteSourceFile("photos/beach.jpg", new string('p', 64_000));
-        var kit = await _siteOne.ExportKitAsync();
 
         // ---- Site B: the other household — a full live service, its listener
         // serving invites, commands and replication on one socket.
@@ -91,15 +90,18 @@ public sealed class AlternateSiteTests : IDisposable
                 Fingerprint: paired.Fingerprint, Endpoint: $"127.0.0.1:{listener.Endpoint.Port}")),
             _timeout.Token));
 
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, Schedule: null, [], [], ["site-b"])),
             _timeout.Token));
 
-        // ---- Backup №1. No sync command follows, deliberately: a completed
-        // backup fans out to its destinations on its own, and the alternative
-        // site claim includes that nobody has to remember to push.
-        await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+        // ---- Backup №1 is the save itself (ADR-0047): creating the set
+        // queued its first capture, and no sync command follows either — a
+        // completed backup fans out to its destinations on its own. The
+        // alternative-site claim includes that nobody has to remember to do
+        // any of this.
+        await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+            job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
         await WaitForAsync(() =>
             runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b") is
             {
@@ -145,14 +147,14 @@ public sealed class AlternateSiteTests : IDisposable
         await AssertReplicaMatchesAsync(replicaPath);
 
         // ---- The drill that justifies the feature: site A is gone. Its
-        // runtime stops and its archive is deleted; what remains is the kit
-        // and the other site.
+        // runtime stops and its archive is deleted; what remains is the
+        // passphrase and the other site.
         await runtimeOne.DisposeAsync();
         Directory.Delete(_siteOne.ArchivesRoot, recursive: true);
 
         var listing = await HostHarness.RunAsync(
             RecoveryHost.RunAsync,
-            "snapshots", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _siteOne.PassphraseVariable);
+            "snapshots", "--repo", replicaPath, "--passphrase-env", _siteOne.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         var snapshots = listing.Output
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -162,8 +164,8 @@ public sealed class AlternateSiteTests : IDisposable
 
         // Newest first or oldest first — decide from the content itself:
         // restore both and let notes.txt say which snapshot each one is.
-        var restoredA = await RestoreFromReplicaAsync(replicaPath, kit, snapshots[0], "recovered-a");
-        var restoredB = await RestoreFromReplicaAsync(replicaPath, kit, snapshots[1], "recovered-b");
+        var restoredA = await RestoreFromReplicaAsync(replicaPath, snapshots[0], "recovered-a");
+        var restoredB = await RestoreFromReplicaAsync(replicaPath, snapshots[1], "recovered-b");
         var (latest, earliest) = File.Exists(FindFile(restoredA, "added-later.txt"))
             ? (restoredA, restoredB)
             : (restoredB, restoredA);
@@ -227,12 +229,15 @@ public sealed class AlternateSiteTests : IDisposable
             new UpsertDestinationCommand(new DestinationDescriptor(
                 null, "site-b", "peer", null, paired.Fingerprint, $"127.0.0.1:{listener.Endpoint.Port}")),
             _timeout.Token));
-        Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, null, [], [], ["site-b"])),
             _timeout.Token));
 
-        await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+        // The save queued the first capture itself (ADR-0047); wait for it
+        // and for its fan-out to land.
+        await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+            job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
         await WaitForAsync(() =>
             runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b")?.State == DestinationSyncState.InSync);
 
@@ -249,6 +254,12 @@ public sealed class AlternateSiteTests : IDisposable
             && row.State != DestinationSyncState.InSync);
         var offline = runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b")!;
         Assert.IsNotNull(offline.LastError, "an outage is a named failure, not a silent gap");
+
+        // The failed sync recorded its outcome a moment before its job left
+        // the queue; the on-demand sync below would be coalesced away
+        // ("already syncing") if it caught that tail. Deterministic, not a
+        // sleep: wait until the pair's job identity is free.
+        await WaitForAsync(() => !runtimeOne.Queue.IsActive(FanOut.JobIdFor(_siteOne.DocsSetId, "site-b")));
 
         // ---- Site B returns on the same address; an on-demand sync converges
         // the backlog — nothing is re-commanded, nothing re-backed-up.
@@ -346,12 +357,12 @@ public sealed class AlternateSiteTests : IDisposable
         return objects;
     }
 
-    private async Task<string> RestoreFromReplicaAsync(string replicaPath, string kit, string snapshot, string name)
+    private async Task<string> RestoreFromReplicaAsync(string replicaPath, string snapshot, string name)
     {
         var output = Path.Combine(_siteOne.WorkPath, name);
         var restore = await HostHarness.RunAsync(
             RecoveryHost.RunAsync,
-            "restore", "--repo", replicaPath, "--kit", kit, "--passphrase-env", _siteOne.PassphraseVariable,
+            "restore", "--repo", replicaPath, "--passphrase-env", _siteOne.PassphraseVariable,
             "--snapshot", snapshot, "--output", output);
         Assert.AreEqual(0, restore.ExitCode, restore.Error);
         return output;
@@ -387,8 +398,7 @@ public sealed class AlternateSiteTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(HostHarness harness)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(harness.PassphraseVariable)!);
+        await harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -396,7 +406,6 @@ public sealed class AlternateSiteTests : IDisposable
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 }

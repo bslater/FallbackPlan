@@ -39,9 +39,18 @@ public sealed class RestoreWizardDomTests
         var archive = Path.Combine(_archives, Wire.SetId);
         Directory.CreateDirectory(archive);
         using var right = Passphrase.Create(RightPassphrase);
+
+        // Re-homed onto the credential-taking CreateAsync this branch settled
+        // on: the passphrase overload went with KeyHierarchy. The salt is
+        // fixed so the archive these tests gate against is reproducible.
+        var salt = Enumerable.Repeat((byte)0x5A, KekDerivation.SaltLength).ToArray();
+        using var authority = WriteOnlyDerivation.Derive(
+            right, RepositoryCreationSettings.Default.KdfParameters, salt,
+            KdfValidationMode.CreateRepository);
         (await RepositoryLifecycle.CreateAsync(
-            new LocalFileSystemObjectStore(archive), right, RepositoryCreationSettings.Default,
-            1_722_700_000_000UL, CancellationToken.None)).Dispose();
+            new LocalFileSystemObjectStore(archive), authority.Credential,
+            salt, RepositoryCreationSettings.Default.KdfParameters,
+            createdBy: "dom-tests", 1_722_700_000_000UL, CancellationToken.None)).Dispose();
     }
 
     [ClassCleanup]

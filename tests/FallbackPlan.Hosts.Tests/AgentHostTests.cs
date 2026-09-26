@@ -62,6 +62,36 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AgentHost_AtStart_RecordsTheEffectiveConfigurationItOperatesAgainst()
+    {
+        // FR-SVC-010's startup record: what the service RESOLVED, not what
+        // was typed — the directories with their provenance, the operating
+        // posture, and each set — so a diagnostic log alone can reconstruct
+        // what the service was operating against.
+        _harness.WriteConfiguration("every 1h");
+        var logs = Path.Combine(_harness.StateDirectory, "logs");
+
+        var result = await RunAsync(
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--once");
+        Assert.AreNotEqual(1, result.ExitCode, result.Error);
+
+        var file = Path.Combine(logs, "fallbackplan-current.log");
+        for (var attempt = 0; attempt < 100 && !File.Exists(file); attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        var log = await File.ReadAllTextAsync(file);
+        Assert.Contains(_harness.StateDirectory, log, StringComparison.Ordinal);
+        Assert.Contains(_harness.ArchivesRoot, log, StringComparison.Ordinal);
+        Assert.Contains("named by flag", log, StringComparison.Ordinal);
+        Assert.Contains("backup pool", log, StringComparison.Ordinal);
+        Assert.Contains("docs", log, StringComparison.Ordinal);
+        Assert.Contains("every 1h", log, StringComparison.Ordinal);
+        Assert.Contains("vault", log, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task AgentHost_ALogLevelNobodyRecognises_IsRefusedNamingTheOnesThatExist()
     {
         // Refused rather than ignored: silently falling back to Information
@@ -124,22 +154,16 @@ public sealed class AgentHostTests : IDisposable
         Assert.Contains("config.json", result.Error, StringComparison.Ordinal);
     }
 
+    // No-arguments behavior moved: a bare invocation now STARTS the service
+    // on the default locations (FR-SVC-016) rather than printing help —
+    // AgentDefaultLocationsTests owns that pin. The help flags above stay the
+    // way to ask for usage. Path-less invocations stopped being incomplete
+    // for the same reason, so the one refusal left to pin is a verb that
+    // does not exist.
     [TestMethod]
-    public async Task AgentHost_NoArguments_PrintsHelpRatherThanFailing()
+    public async Task AgentHost_AVerbNobodyRecognises_RefusesWithTheUsage()
     {
-        var result = await RunAsync();
-
-        Assert.AreEqual(0, result.ExitCode);
-        Assert.Contains("usage", result.Output, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [TestMethod]
-    [DataRow("walk")]                                  // not a command
-    [DataRow("run")]                                   // no options at all
-    [DataRow("run", "--archives", "/tmp/nowhere")]     // missing state and passphrase
-    public async Task AgentHost_CommandLineIsIncomplete_RefusesWithTheUsage(params string[] args)
-    {
-        var result = await RunAsync(args);
+        var result = await RunAsync("walk");
 
         Assert.AreEqual(1, result.ExitCode);
         Assert.Contains("usage", result.Error, StringComparison.OrdinalIgnoreCase);
@@ -149,16 +173,37 @@ public sealed class AgentHostTests : IDisposable
     public async Task AgentHost_PassphraseVariableIsUnset_RefusesNamingTheVariable()
     {
         var result = await RunAsync(
-            "run",
+            "retention",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET");
+            "--passphrase-env", "FBP_VARIABLE_THAT_IS_NOT_SET", "--apply");
 
         Assert.AreEqual(1, result.ExitCode);
 
         // The message must name the variable and must not carry the secret.
         Assert.Contains("FBP_VARIABLE_THAT_IS_NOT_SET", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("   at ", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [DataRow("run")]
+    [DataRow("sync")]
+    [DataRow("verify-destination")]
+    public async Task AgentHost_AVerbThatHoldsNoPassphrase_RefusesTheFlagNamingWhereItBelongs(string verb)
+    {
+        // The service never holds the passphrase (ADR-0042 §5). A flag that
+        // used to mean "hold this for the run" is refused rather than
+        // ignored, so nobody believes the service holds what it does not.
+        var result = await RunAsync(
+            verb,
+            "--archives", _harness.ArchivesRoot,
+            "--state", _harness.StateDirectory,
+            "--passphrase-env", _harness.PassphraseVariable);
+
+        Assert.AreEqual(1, result.ExitCode);
+        Assert.Contains("takes no --passphrase-env", result.Error, StringComparison.Ordinal);
+        Assert.Contains("setup", result.Error, StringComparison.Ordinal);
+        Assert.Contains("retention --apply", result.Error, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -172,7 +217,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         Assert.AreEqual(0, result.ExitCode);
@@ -191,7 +235,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // An empty schedule means manual-only: nothing runs, and that is a
@@ -212,7 +255,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once",
         ];
 
@@ -237,7 +279,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--archives", _harness.ArchivesRoot,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // A failed set is exit code 2 — distinct from a usage error (1), so a
@@ -247,36 +288,28 @@ public sealed class AgentHostTests : IDisposable
     }
 
     [TestMethod]
-    public async Task AgentHost_PassphraseIsWrong_FailsTheSetWithoutAStackTrace()
+    public async Task AgentHost_NoCredentialOpensASet_FailsTheSetNamingSetupWithoutAStackTrace()
     {
-        await _harness.CreateRepositoryAsync();
+        // No setup, no provisioning: the service holds nothing that opens or
+        // creates this set's archive, and it never holds a passphrase
+        // (ADR-0042 §5).
         _harness.WriteSourceFile("notes.txt", "agent host");
         _harness.WriteConfiguration("every 4h");
 
-        const string variable = "FBP_HOST_TEST_WRONG_PASSPHRASE";
-        Environment.SetEnvironmentVariable(variable, "not the passphrase");
-        try
-        {
-            var result = await RunAsync(
-                "run",
-                "--archives", _harness.ArchivesRoot,
-                "--state", _harness.StateDirectory,
-                "--passphrase-env", variable,
-                "--once");
+        var result = await RunAsync(
+            "run",
+            "--archives", _harness.ArchivesRoot,
+            "--state", _harness.StateDirectory,
+            "--once");
 
-            // Archives open lazily, one per set on first use (ADR-0034), so a
-            // wrong passphrase surfaces where it is discovered: the set whose
-            // existing archive refused to unwrap fails permanently — exit 2, a
-            // failed set — rather than the whole invocation being refused up
-            // front. Still no stack trace: it is an operator message, not a
-            // crash.
-            Assert.AreEqual(2, result.ExitCode);
-            Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(variable, null);
-        }
+        // Archives open lazily, one per set on first use (ADR-0034), so the
+        // refusal surfaces where it is discovered: the set fails — exit 2, a
+        // failed set — rather than the whole invocation being refused up
+        // front. It names the remedy, and it is an operator message, not a
+        // crash.
+        Assert.AreEqual(2, result.ExitCode);
+        Assert.Contains("setup", result.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -286,7 +319,6 @@ public sealed class AgentHostTests : IDisposable
             "run",
             "--repo", _harness.RepositoryPath,
             "--state", _harness.StateDirectory,
-            "--passphrase-env", _harness.PassphraseVariable,
             "--once");
 
         // Pre-1.0 breaks are sanctioned but never silent (ADR-0034): the old
@@ -320,9 +352,13 @@ public sealed class AgentHostTests : IDisposable
             Assert.Contains("diagnostics are not being written", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("diagnostics are not being written", result.Output, StringComparison.Ordinal);
 
-            // It got past composing logging and reached the verb, which is the
-            // half that used to be an access-denied stack trace.
-            Assert.Contains("usage is", result.Error, StringComparison.Ordinal);
+            // It got past composing logging and reached the verb, which then
+            // refuses the unopenable state directory with a stated reason —
+            // the half that used to be an access-denied stack trace. (Before
+            // paths gained defaults, an incomplete command line masked this
+            // with a usage error instead.)
+            Assert.AreEqual(1, result.ExitCode);
+            Assert.Contains("error:", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("   at ", result.All, StringComparison.Ordinal);
         }
         finally

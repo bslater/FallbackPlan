@@ -174,15 +174,68 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
-          "Bodu.Text.Encoding": "[0.2.0, )",
+          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Text.Encoding": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.repository.catalogue": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
+          "Microsoft.Data.Sqlite": "[10.0.10, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.repository.crypto": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Security.Cryptography": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.repository.format": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
+          "System.Formats.Cbor": "[10.0.10, )",
+          "ZstdSharp.Port": "[0.8.8, )"
+        }
+      },
+      "fallbackplan.repository.index": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Format": "[1.0.0, )",
+          "FallbackPlan.Repository.Packing": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
+        }
+      },
+      "fallbackplan.repository.packing": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "FallbackPlan.Domain": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Format": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
       },
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[1.0.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -190,7 +243,7 @@
       "fallbackplan.storage.local": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[0.2.0, )",
+          "Bodu.Core": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )"
         }
@@ -198,6 +251,9 @@
       "fallbackplan.testsupport": {
         "type": "Project",
         "dependencies": {
+          "FallbackPlan.Repository.Catalogue": "[1.0.0, )",
+          "FallbackPlan.Repository.Crypto": "[1.0.0, )",
+          "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
           "FsCheck": "[3.3.4, )",
           "MSTest": "[3.11.0, )",
@@ -206,17 +262,46 @@
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "oGM1KMjlzU7EDYzvpbZcj7d+nfFxUBuOP1rpgOLnkICbEEast51OeRxwzIMtaOocAPYz04aUj4Cybu4nJBYV1Q=="
+        "requested": "[1.0.0, )",
+        "resolved": "1.0.0",
+        "contentHash": "3O189QLbaDEiA5UN0ATfKugtalS3g8CTbjEjsPdPNv9AHz1VSX28WEippwqSLd2k14ELfHSSJTu/zIurB42WlQ=="
+      },
+      "Bodu.Security.Cryptography": {
+        "type": "CentralTransitive",
+        "requested": "[1.0.0, )",
+        "resolved": "1.0.0",
+        "contentHash": "Qd5I8c76hWWDnrNSxs/vM1bqk1o5HHtILDI8nWPaooUXpH6bV7kh08huXKBtuQd3g2aIcf5F6UhZtCwLP6gp2w==",
+        "dependencies": {
+          "Bodu.Core": "1.0.0"
+        }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, )",
-        "resolved": "0.2.0",
-        "contentHash": "11rZJ70vk21ZSadBFrLVOacL/QkPWxbqmxdpfv8Y7/A4/l51SIqwUwrPsjavym4sHCsMnwvVBElBBgx3aMqznQ==",
+        "requested": "[1.0.0, )",
+        "resolved": "1.0.0",
+        "contentHash": "428j1DCm/iFZDtkA4FZv+VO+IxYIxCn4NolmFQUms4CqOtuIDT0YS7wM0DTTxfa/oNyBLhr9AcaF2QCC54CyJQ==",
         "dependencies": {
-          "Bodu.Core": "0.2.0"
+          "Bodu.Core": "1.0.0"
+        }
+      },
+      "Microsoft.Data.Sqlite": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "58JwZ39lCvRXHfV5O6RQfbHEDu8ZsXI7weRoVRR4jrGRxxkS+qyeuGrN2xD+9VYEICApYr0iTSL6PuU+DdsvPg==",
+        "dependencies": {
+          "Microsoft.Data.Sqlite.Core": "10.0.10",
+          "SQLitePCLRaw.bundle_e_sqlite3": "2.1.11",
+          "SQLitePCLRaw.core": "2.1.11"
+        }
+      },
+      "Microsoft.Data.Sqlite.Core": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "TPCs0ldm7AWqcKmp6f/Xr+14sat7hx4rHfRlS4RgCURBH2thEWbAKEyX7cCWr63zVJVOJIJZTg2cBiUXa8ys6g==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "2.1.11"
         }
       },
       "Microsoft.Extensions.Logging.Abstractions": {
@@ -227,6 +312,58 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
+      },
+      "SQLite": {
+        "type": "CentralTransitive",
+        "requested": "[3.53.4, )",
+        "resolved": "3.53.4",
+        "contentHash": "KN7jeWqgUPeBRe1FlcpZURzxomuKKEKHmBBQfg+Nx7NkY1LjKhzHvH+3ASkNvhayESE34nMBinL9CV21JfPRJw=="
+      },
+      "SQLitePCLRaw.bundle_e_sqlite3": {
+        "type": "CentralTransitive",
+        "requested": "[3.0.5, )",
+        "resolved": "3.0.5",
+        "contentHash": "SW8iASIyWMrLzqabUHYQRvALhvD4ylSBsj4PgEVGwc36kQjc9xT5kSV/XQ9rU7nIpBWD+LPyX3Hlw5FzyUzGeQ==",
+        "dependencies": {
+          "SQLite": "3.53.4",
+          "SQLitePCLRaw.config.e_sqlite3": "3.0.5"
+        }
+      },
+      "SQLitePCLRaw.config.e_sqlite3": {
+        "type": "CentralTransitive",
+        "requested": "[3.0.5, )",
+        "resolved": "3.0.5",
+        "contentHash": "aSk8WE5tF2MybESMgtZAEyMVCAWA0nBqOMc48HFoa9UoSdtm3goDXVzNRnefeKIwE6bV9NaNXptn1F9ReMQI0Q==",
+        "dependencies": {
+          "SQLitePCLRaw.provider.e_sqlite3": "3.0.5"
+        }
+      },
+      "SQLitePCLRaw.core": {
+        "type": "CentralTransitive",
+        "requested": "[3.0.5, )",
+        "resolved": "3.0.5",
+        "contentHash": "k81AYXXRCw3Zj8rOhyBoCsx/U97KYDFI2CSKr/ijl5BwpsW/hX/4kBiDmerFaoust8nxBwa0IHQFw8MmSHRtnQ=="
+      },
+      "SQLitePCLRaw.provider.e_sqlite3": {
+        "type": "CentralTransitive",
+        "requested": "[3.0.5, )",
+        "resolved": "3.0.5",
+        "contentHash": "um8YSWduhhuskTG2bHfZrBqMNQOydfU8pcseT+cu5RivOGyoUbCrGXxgoRNTmRYw2VbMWnEZVVFcneZT/5dsBg==",
+        "dependencies": {
+          "SQLitePCLRaw.core": "3.0.5"
+        }
+      },
+      "System.Formats.Cbor": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "V8XZBZsORS+NMhM5hc7doU0wKgDe0lJaaUkZGlAgpbYqN5Pd11I3pxwoRQgEyUVbDri/+qm7YCp49gCTYcbqJQ=="
+      },
+      "ZstdSharp.Port": {
+        "type": "CentralTransitive",
+        "requested": "[0.8.8, )",
+        "resolved": "0.8.8",
+        "contentHash": "UIDFkA5DC3en3tOJ3Mof11yBx9kUQLsaeo/oFdvN6Bbkr9E9+VCqfIadHci8cu+I51K2Sl7XYWVl2R/mA75NBQ=="
       }
     }
   }

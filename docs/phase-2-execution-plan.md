@@ -1,6 +1,6 @@
 # Phase 2 — Execution plan: the service boundary and pipeline concurrency
 
-**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and peer replication (specs 03–05) is what remains of Phase 2 · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
+**Status:** the service boundary is built on both bindings; the remote binding carries a paired console over a real socket, and the peer-protocol documents this phase owed (03–06) are written and implemented — what remains is the direct-to-destination tail ([ADR-0046](adr/0046-direct-to-destination-publication.md): the peer write adapter, the retention-with-trimming drill, and the default flip) and the reference-machine measurement H1 still owes · **Scope:** the service-boundary half of [Phase 2](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) · **Predecessor:** [Phase 1 plan](phase-1-execution-plan.md) · **Decisions:** [ADR-0028](adr/0028-service-boundary-and-deployment-topologies.md), [ADR-0029](adr/0029-pipeline-and-service-concurrency.md)
 
 ---
 
@@ -224,6 +224,17 @@ restated here with the test that will prove each:
 The next round starts here. Everything below is in priority order, and each item
 says what "done" looks like so it does not have to be re-derived.
 
+**The lead item is the direct-to-destination tail
+([ADR-0046](adr/0046-direct-to-destination-publication.md)).** Mostly
+discharged: the trimming drill has run destination-side
+(`Hosts.Tests/DirectShipRetentionTests` — and fixed the sink's deleting
+half), the flag rides the contract (1.23) and the console, and new
+local-path sets are born direct-ship with staging the explicit opt-out.
+What remains is the peer write adapter (a declared peer is a stated
+`NotSupported` in the ledger today; peer-only sets default to staging until
+it lands). Done looks like: a set shipping to a peer destination through
+the sink, and the staging machinery retiring behind it.
+
 F1 is done and off this list, and it has now been measured — what it decided is
 recorded under Wave F above, what it bought in
 [phase-2-benchmarks.md](phase-2-benchmarks.md).
@@ -416,16 +427,23 @@ reports rotted citations). What both reviews deliberately left is below.
 12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
     a maintainer decision between implementing sparse write-out and amending
     FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
-13. **The restore GET budget** (NFR-PERF-009) — architecturally unmet: the
-    read path opens every blob in the repository at load (three range reads
-    each, proportional to repository size) and issues one uncoalesced range
-    read per manifest and per segment.
-    `RestoreBreadthTests.Restore_GetRequests_AreCharacterisedAgainstTheDistinctBlobBudget`
-    pins the exact current counts so the shortfall cannot be mistaken for
-    met. Done when the reader learns catalogue-directed blob loading and
-    range coalescing and the characterization becomes the compliance test —
-    real read-path engine work, sensibly co-scheduled with the first remote
-    provider, where a GET has a price.
+13. ✅ **The restore GET budget** (NFR-PERF-009) — done
+    ([ADR-0068](adr/0068-the-catalogue-directed-restore-read.md)), and it took
+    all three terms the item named plus one it did not. The load became
+    proportional to the restore; the read stopped opening the blob, because
+    opening one costs three ranged reads before a byte of payload and no
+    amount of coalescing reaches the budget while it does; and the coalescing
+    folds the envelope into the run that fetches a blob's first record, since
+    paying it separately is two requests a blob and does not fit either. The
+    term the item did not anticipate: prefetching one file at a time costs one
+    read per *(file, blob)* pair, because consecutive files share the blob
+    they were written into, so the runs outlive the call and the executor
+    reads ahead in bounded waves. **11 GETs over 11 blobs holding 60 records,
+    against a budget of 14, where the same restore cost 93**, and the
+    characterisation is now the compliance test its own comment asked it to
+    become. One case stays over budget and is named in the requirement rather
+    than absorbed: a sparse restore of one small record out of large blobs
+    cannot fold the envelope.
 
 ### 3. NFR-PERF-007 on the reference machine
 

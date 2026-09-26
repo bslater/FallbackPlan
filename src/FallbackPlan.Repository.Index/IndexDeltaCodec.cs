@@ -55,6 +55,22 @@ public sealed record IndexDelta
     /// signed.
     /// </remarks>
     public IReadOnlyList<ReadOnlyMemory<byte>> CoveredBlobDigests { get; init; } = [];
+
+    /// <summary>
+    /// The Merkle commitment over each covered blob's sealed bytes, parallel
+    /// to <see cref="CoveredBlobIds"/> (key 11; 07 §2.3). Empty when the
+    /// writer published none, which is every writer below repository
+    /// format 3.
+    /// </summary>
+    /// <remarks>
+    /// What it buys over <see cref="CoveredBlobDigests"/> is a check by a
+    /// party that holds neither the blob nor any key: the flat digest can
+    /// only be compared by someone with all the bytes, whereas the root
+    /// admits one leaf and its authentication path. It never travels alone —
+    /// a delta carrying roots carries digests too, so a reader that cannot
+    /// afford a tree still has the cheaper commitment.
+    /// </remarks>
+    public IReadOnlyList<ReadOnlyMemory<byte>> CoveredBlobMerkleRoots { get; init; } = [];
 }
 
 /// <summary>A decoded delta: the value, the exact signed bytes, and the signature to verify against the derived signing key for <see cref="IndexDelta.Generation"/>.</summary>
@@ -118,6 +134,7 @@ public static class IndexDeltaCodec
         ushort? shard = null;
         List<BlobId> covered = [];
         List<ReadOnlyMemory<byte>> digests = [];
+        List<ReadOnlyMemory<byte>> merkleRoots = [];
         List<IndexEntry> entries = [];
         bool? isVoid = null;
         byte[]? signature = null;
@@ -169,6 +186,16 @@ public static class IndexDeltaCodec
 
                     reader.ReadEndArray();
                     break;
+                case 11:
+                    var rootCount = reader.ReadStartArray(maxCount: 65_536);
+                    merkleRoots = new List<ReadOnlyMemory<byte>>(rootCount);
+                    for (var rootIndex = 0; rootIndex < rootCount; rootIndex++)
+                    {
+                        merkleRoots.Add(reader.ReadFixedByteString(32));
+                    }
+
+                    reader.ReadEndArray();
+                    break;
                 default:
                     throw new IndexFormatException(Strings.IndexDeltaCodec_DeltaCarriesUnknownKeySpecification);
             }
@@ -198,6 +225,7 @@ public static class IndexDeltaCodec
             Entries = entries,
             IsVoid = isVoid == true,
             CoveredBlobDigests = digests,
+            CoveredBlobMerkleRoots = merkleRoots,
         };
 
         Validate(delta);
@@ -225,6 +253,31 @@ public static class IndexDeltaCodec
             if (digest.Length != 32)
             {
                 throw new IndexFormatException(Strings.IndexDeltaCodec_CoveredBlobDigestByteSHA);
+            }
+        }
+
+        // The same rule for key 11, and one more besides: the Merkle root is
+        // the stronger commitment and never the only one, so a reader that
+        // will not walk a tree still has the flat digest to check against
+        // (specification 07 §2.3).
+        if (delta.CoveredBlobMerkleRoots.Count > 0
+            && delta.CoveredBlobMerkleRoots.Count != delta.CoveredBlobIds.Count)
+        {
+            throw new IndexFormatException(
+                Strings.FormatIndexDeltaCodec_CoveredBlobMerkleRootsElementsAgainst(
+                    delta.CoveredBlobMerkleRoots.Count, delta.CoveredBlobIds.Count));
+        }
+
+        if (delta.CoveredBlobMerkleRoots.Count > 0 && delta.CoveredBlobDigests.Count == 0)
+        {
+            throw new IndexFormatException(Strings.IndexDeltaCodec_MerkleRootsWithoutDigests);
+        }
+
+        foreach (var root in delta.CoveredBlobMerkleRoots)
+        {
+            if (root.Length != 32)
+            {
+                throw new IndexFormatException(Strings.IndexDeltaCodec_CoveredBlobMerkleRootByte);
             }
         }
 
@@ -305,7 +358,8 @@ public static class IndexDeltaCodec
             + (delta.Shard is not null ? 1 : 0)
             + (delta.IsVoid ? 1 : 0)
             + (signature is not null ? 1 : 0)
-            + (delta.CoveredBlobDigests.Count > 0 ? 1 : 0);
+            + (delta.CoveredBlobDigests.Count > 0 ? 1 : 0)
+            + (delta.CoveredBlobMerkleRoots.Count > 0 ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -351,9 +405,10 @@ public static class IndexDeltaCodec
             writer.WriteByteString(signature);
         }
 
-        // Key 10 sorts after the signature and is nonetheless signed: the
-        // signature covers every key except itself (07 §2), which is what
-        // lets a later key be signed without renumbering an established one.
+        // Keys 10 and 11 sort after the signature and are nonetheless
+        // signed: the signature covers every key except itself (07 §2),
+        // which is what lets a later key be signed without renumbering an
+        // established one.
         if (delta.CoveredBlobDigests.Count > 0)
         {
             writer.WriteKey(10);
@@ -361,6 +416,18 @@ public static class IndexDeltaCodec
             foreach (var digest in delta.CoveredBlobDigests)
             {
                 writer.WriteByteString(digest.Span);
+            }
+
+            writer.WriteEndArray();
+        }
+
+        if (delta.CoveredBlobMerkleRoots.Count > 0)
+        {
+            writer.WriteKey(11);
+            writer.WriteStartArray(delta.CoveredBlobMerkleRoots.Count);
+            foreach (var root in delta.CoveredBlobMerkleRoots)
+            {
+                writer.WriteByteString(root.Span);
             }
 
             writer.WriteEndArray();

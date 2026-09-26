@@ -15,6 +15,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// ADR-0030): a paired console authenticates and opens a session over a real
 /// TCP+TLS socket, an unpaired one is refused, and neither touches the local
 /// binding — which is always present and answers regardless.
+/// Establishes FR-SVC-004.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -153,7 +154,11 @@ public sealed class RemoteBindingTests : IDisposable
         // exit criterion, over a real socket.
         var destination = Path.Combine(_harness.WorkPath, "service-side-restore");
         Assert.IsInstanceOfType<RestoreResult>(
-            await console.ExecuteAsync(new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token),
+            await console.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshot.SnapshotId, null, destination,
+                    Source: (await _harness.OpenGrantedSourceAsync(console.ExecuteAsync, "docs", null, _timeout.Token)).SourceId),
+                _timeout.Token),
             out var restored);
 
         Assert.AreEqual(1, restored.Restored);
@@ -166,6 +171,61 @@ public sealed class RemoteBindingTests : IDisposable
         Assert.AreEqual(
             "hello from the service",
             await File.ReadAllTextAsync(Path.Combine(restored.OutputDirectory, "notes.txt"), _timeout.Token));
+    }
+
+    [TestMethod]
+    public async Task RemoteWatch_ByAPairedConsole_StreamsProgress()
+    {
+        // The remote watch path — its own connection, its own full peer
+        // handshake — driven over a real TCP+TLS socket for the first time:
+        // FR-SVC-005's progress half. The service reports through its hub;
+        // the paired console's watch receives it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        using var serviceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        var serviceGrants = PeerGrantStore.Open(_harness.StateDirectory);
+        serviceGrants.Pin(new PeerGrant(
+            _console.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+        var consoleGrants = PeerGrantStore.Open(Path.Combine(_harness.WorkPath, "console"));
+        consoleGrants.Pin(new PeerGrant(
+            serviceKeypair.Identity, "service", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+
+        await using var remote = RemoteServiceListener.Start(
+            serviceKeypair, serviceGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test");
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.On(remote.Endpoint.ToString()));
+        remote.Bind(handler);
+
+        await using var console = await Cli.RemoteServiceClient.ConnectAsync(
+            remote.Endpoint.Address.ToString(), remote.Endpoint.Port,
+            _console, consoleGrants, serviceKeypair.Identity, "console", _timeout.Token);
+
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
+        var events = console.WatchAsync(stopping.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progressEvent in events)
+                {
+                    return progressEvent;
+                }
+
+                return null;
+            },
+            stopping.Token);
+
+        while (!watching.IsCompleted)
+        {
+            runtime.Progress.Report(new Domain.Jobs.JobProgress(
+                "job-remote", Domain.Jobs.JobState.Packing, 7, 3, 1, 0, 1024, 512));
+            await Task.Delay(50, stopping.Token);
+        }
+
+        var received = await watching;
+        Assert.IsNotNull(received, "the paired console's watch must stream the service's progress");
+        Assert.AreEqual("job-remote", received.Progress.JobId);
+        await stopping.CancelAsync();
     }
 
     private async Task ThrowIfSessionOpensAsync(
@@ -187,8 +247,7 @@ public sealed class RemoteBindingTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -196,7 +255,6 @@ public sealed class RemoteBindingTests : IDisposable
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 

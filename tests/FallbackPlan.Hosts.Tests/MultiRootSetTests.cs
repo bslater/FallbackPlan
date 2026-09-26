@@ -250,16 +250,18 @@ public sealed class MultiRootSetTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                // The placement condition (ADR-0051) judges by volume, and the
+                // fixture's every path shares one real volume — the vaults are
+                // told apart by name, the compliant install's shape.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
             _timeout.Token);
     }
 }

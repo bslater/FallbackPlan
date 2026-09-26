@@ -206,6 +206,44 @@ public sealed class WriteOnlyDerivationTests
     }
 
     [TestMethod]
+    public void OpenProvision_AnEnvelopeCarryingAPreReclaimCredential_StillOpens()
+    {
+        // The envelope crosses a process boundary — a console seals it, a
+        // service opens it — so the two ends are not always the same build.
+        // The credential reads its own older shape; the payload around it
+        // must not insist on the newer length, or provisioning from an older
+        // console is refused as tampering.
+        var recipientPrivate = Enumerable.Repeat((byte)0x61, 32).ToArray();
+        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
+        var salt = Salt(0x44);
+        var credential = new byte[168];
+        "FBPWCRD1"u8.CopyTo(credential);
+        RandomNumberGenerator.Fill(credential.AsSpan(8));
+
+        var payload = new byte[8 + credential.Length + KekDerivation.SaltLength + 9];
+        "FBPPROV1"u8.CopyTo(payload);
+        credential.CopyTo(payload, 8);
+        salt.CopyTo(payload, 8 + credential.Length);
+        var kdf = 8 + credential.Length + KekDerivation.SaltLength;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(kdf), TinyParameters.MemoryKiB);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+            payload.AsSpan(kdf + 4), TinyParameters.Iterations);
+        payload[kdf + 8] = TinyParameters.Parallelism;
+
+        var sealedBytes = ContentSealing.SealPayload(recipientPublic, payload, "fbp/provision/v2"u8.ToArray());
+        var (opened, openedSalt, openedParameters) =
+            WriteOnlyProvisioning.OpenProvision(recipientPrivate, sealedBytes);
+        using (opened)
+        {
+            SequenceAssert.AreEqual(credential.AsSpan(8, 32).ToArray(), opened.SealingPublicKey.ToArray());
+            Assert.IsTrue(opened.ReclaimPublicKey.IsEmpty);
+        }
+
+        SequenceAssert.AreEqual(salt, openedSalt);
+        Assert.AreEqual(TinyParameters.MemoryKiB, openedParameters.MemoryKiB);
+    }
+
+    [TestMethod]
     public void OpenProvision_AWellSealedEnvelopeHidingGarbage_IsRefusedIndistinguishably()
     {
         // The outer envelope opens and its magic and length are right, but
@@ -223,51 +261,5 @@ public sealed class WriteOnlyDerivationTests
 
         Assert.ThrowsExactly<SealedContentException>(
             () => WriteOnlyProvisioning.OpenProvision(recipientPrivate, sealedBytes));
-    }
-
-    [TestMethod]
-    public void ClaimRoot_SealedToTheRecipient_OpensBackToTheSameBytes()
-    {
-        var recipientPrivate = Enumerable.Repeat((byte)0x61, 32).ToArray();
-        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
-        var root = Enumerable.Repeat((byte)0x7C, KekDerivation.KekLength).ToArray();
-
-        var opened = WriteOnlyProvisioning.OpenClaimRoot(
-            recipientPrivate, WriteOnlyProvisioning.SealClaimRoot(recipientPublic, root));
-
-        SequenceAssert.AreEqual(root, opened);
-    }
-
-    [TestMethod]
-    public void ClaimRoot_OfTheWrongLength_IsRefusedBeforeItIsSealed()
-    {
-        var recipientPublic = ContentSealing.PublicKeyOf(Enumerable.Repeat((byte)0x62, 32).ToArray());
-
-        Assert.ThrowsExactly<ArgumentException>(
-            () => WriteOnlyProvisioning.SealClaimRoot(recipientPublic, new byte[31]));
-    }
-
-    [TestMethod]
-    public void ClaimRootAndRestoreGrant_AreNotInterchangeable_EvenForTheSameRecipient()
-    {
-        // The two envelopes carry the same 32 bytes to the same recipient and
-        // authorise entirely different things: a grant reads one repository's
-        // content, while a claim root can re-point that repository's
-        // attribution at a new device on somebody else's disk. Only the
-        // associated data separates them, so this is the test that the
-        // separation is real rather than intended (ADR-0046).
-        var recipientPrivate = Enumerable.Repeat((byte)0x63, 32).ToArray();
-        var recipientPublic = ContentSealing.PublicKeyOf(recipientPrivate);
-        var material = Enumerable.Repeat((byte)0x7D, KekDerivation.KekLength).ToArray();
-
-        var asClaimRoot = WriteOnlyProvisioning.SealClaimRoot(recipientPublic, material);
-        var asGrant = WriteOnlyProvisioning.SealGrant(recipientPublic, material);
-
-        Assert.ThrowsExactly<SealedContentException>(
-            () => WriteOnlyProvisioning.OpenGrant(recipientPrivate, asClaimRoot),
-            "a claim root must not open as a restore grant");
-        Assert.ThrowsExactly<SealedContentException>(
-            () => WriteOnlyProvisioning.OpenClaimRoot(recipientPrivate, asGrant),
-            "a restore grant must not open as a claim root");
     }
 }

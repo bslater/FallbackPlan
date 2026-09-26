@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §11 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
 
-**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. Compaction (steps 6–9) is not built — see [implementation status](../implementation-status.md).
+**Built:** The deletion-only collector for staging archives (`FallbackPlan.Retention`): the policy planner with stated reasons (§2), the replication gate (§2.1), the mark over the protected closure, the intent-covered sweep plan with its mandatory dry-run report, and the signed-tombstone → grace-by-publication → revalidate → delete cycle (§3, steps 1–5 and 10–13). Destination convergence (§3.0.1) is built for local-path destinations: fan-out and retention are one filtered convergence, so a destination under an override holds exactly its keep-set's closure. Peer replicas converge the same way on the hub's instruction, floor-bounded at the spoke's edge ([peer-protocol 06](../../specifications/peer-protocol/06-retention.md)). The staging trim (§2.1) is built: each retention pass plans it, and `--apply` deletes historic data blobs every entitled destination verifiably holds. For direct-ship sets ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) the retention traversal is proven through the ship sink — the report walks closures out of destination-held metadata — with convergence as the deleting half and a full retention-with-trimming drill on aged direct-ship snapshots still outstanding before the flag's default flips. Compaction (steps 6–9) is built for format-3 repositories at local paths, as a keyless rewrite rather than the re-sealing the original design assumed (`Retention/CompactionPolicy`, `Repository/BlobCompactor`, `Repository/CompactionPublication`, `Repository/CompactionPass`, run as the third phase of `retention --apply`; [ADR-0067](../adr/0067-the-keyless-compactor.md)) — with the one ordering difference §3.3 records. A format-2 set is refused by name, and a peer's replica is never compacted. Deletion receipts on the peer plane ([ADR-0063](../adr/0063-deletion-receipts.md)) are built: the destination signs and files, the commander verifies and files, and the `receipts` verb reads.
 
 ---
 
@@ -49,7 +49,9 @@ Consider a set keeping hourly snapshots for 7 days locally, replicating to a pee
 
 The rule is therefore: **retention shall not expire a snapshot that has not reached the destinations its own policy requires**, unless a configured bound on that deferral is exceeded — at which point the resulting history gap is raised as a warning requiring action, never applied silently.
 
-The set's staging archive is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default. The same gate, run to completion, is what makes staging *trimmable*, and that trim is built (`StagingTrim`, run inside every retention pass): once every destination entitled to a historic data blob verifiably holds it — a reachable local-path replica probed key by key, a peer through its sync-ledger claim — staging drops it under `--apply`. Only history leaves: the newest snapshot's closure stays as the dedup cache, all metadata stays so every derivation still sees the full history, and restoring a trimmed snapshot from staging is reported honestly by the restore plan while the destination replica remains the real restore path ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+For a staging set, the set's staging archive is allowed to grow past its retention window while a destination is behind. Holding extra snapshots costs disk; expiring them costs history that cannot be recovered. The cheaper failure is the right default. The same gate, run to completion, is what makes staging *trimmable*, and that trim is built (`StagingTrim`, run inside every retention pass): once every destination entitled to a historic data blob verifiably holds it — a reachable local-path replica probed key by key, a peer through its sync-ledger claim — staging drops it under `--apply`. Only history leaves: the newest snapshot's closure stays as the dedup cache, all metadata stays so every derivation still sees the full history, and restoring a trimmed snapshot from staging is reported honestly by the restore plan while the destination replica remains the real restore path ([ADR-0034 §6](../adr/0034-hub-and-spoke-destinations.md#6-the-costs-accepted)).
+
+A **direct-ship set** has no staging copy and therefore nothing to trim: per-destination convergence is the deleting half, under exactly this section's gate — the deferral rule holds unchanged, and reclaiming any last copy still rests on proof of possession (FR-GC-009). The sink ignores staging-trim blob deletes by design; a migrated set's leftover archive is retired whole by `retire_staging`, never trimmed ([ADR-0046](../adr/0046-direct-to-destination-publication.md)).
 
 Deleted-file history is separately configured because it answers a different question. "How far back can I go?" is about snapshot age; "can I still get the file I deleted last spring?" is about how long tombstoned content survives, and users reason about the two independently.
 
@@ -87,17 +89,31 @@ That is permanent loss of live data reachable from protected snapshots: the exac
 
 ### 3.0.1 Where the collector runs under hub-and-spoke
 
-Every step above executes against a set's **staging archive**, on the hub,
-where the keys and the writer role live ([ADR-0009 Amendment 4](../adr/0009-garbage-collection-safety.md#amendment-4-2026-08--where-the-collector-runs-under-hub-and-spoke)).
-Destinations are never collected; they are **converged**: the hub computes what
-a destination should hold — that destination's keep-set closure, under its
+Every step above executes **on the hub, where the keys and the writer role
+live** ([ADR-0009 Amendment 4](../adr/0009-garbage-collection-safety.md#amendment-4-2026-08--where-the-collector-runs-under-hub-and-spoke)):
+against a set's staging archive for unflagged sets, and for a direct-ship set
+against the metadata store **through the ship sink** — the keep-set and its
+closure walked out of destination-held metadata blobs, a traversal proven in
+that shape ([ADR-0009 Amendment 6](../adr/0009-garbage-collection-safety.md#amendment-6-2026-08--marking-without-a-staging-archive),
+[ADR-0046](../adr/0046-direct-to-destination-publication.md)). Destinations
+are never collected; they are **converged**: the hub computes what a
+destination should hold — that destination's keep-set closure, under its
 policy override if it has one — and executes the difference as plain store
 operations against a local-path destination, or as deletion instructions to a
 peer, who deletes exactly what it is told and nothing else, bounded below by
 its own granted floor. A destination's local reachability is never an input,
 because a replica's view is exactly the partial view this algorithm exists to
-distrust. Compaction likewise runs only in staging and reaches destinations as
-ordinary replication ([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates)).
+distrust. For a direct-ship set, convergence is also the only deletion there
+is — §2.1's note. Compaction runs on the hub like everything else above, and the
+question ADR-0009 Amendment 6 deferred is answered: a staging set compacts
+its own archive and its output reaches destinations as ordinary replication
+([ADR-0025 Amendment 1](../adr/0025-compaction-reseals-records.md#amendment-1-2026-08--compaction-runs-in-staging-and-propagates)),
+while a **direct-ship** set reads its candidates back through the ship sink —
+which outside a run resolves local paths only — and writes its replacement
+blobs through the same sink. A peer is therefore never compacted, without a
+guard written for the purpose: compacting one would mean pulling a whole blob
+over a domestic uplink and pushing a new one back to reclaim space on someone
+else's disk ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
 ### 3.1 Step 4 is the one that matters
 
@@ -110,6 +126,24 @@ Intent coverage is a *durable, self-describing* statement of what is in flight. 
 Compaction moves records between blobs, which changes their physical location. It is safe to do that without rewriting history *only* because manifests reference segments by object identifier and never by blob and offset ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 
 Had physical location stayed in the manifest as originally specified, step 7 would have required rewriting immutable objects — which is to say, it would not have been possible at all.
+
+### 3.3 What the built pass does differently, and why
+
+The thirteen steps above describe one pass that compacts in the middle of its
+own deletion cycle. The built pass runs steps 6–9 **after** step 13, as a
+phase of its own, and lets the *next* pass condemn what it drained
+([ADR-0067](../adr/0067-the-keyless-compactor.md)). Nothing in the safety
+argument moves: the intent of step 6 is still published before a replacement
+blob exists and retired last, so §3.0's window stays closed; and step 10's
+tombstone is still the collector's, reached by steps 3 and 5 on the following
+pass because every record the drained blob holds now resolves elsewhere.
+
+The cost is one pass of latency — the space comes back two passes after the
+rewrite rather than one. What it buys is that step 12 never revalidates
+against a world the same pass has just written into, and that step 11's grace
+clock is not recomputed past the compaction's own journal records. On a
+maintenance operation that runs on a schedule, a day is worth less than
+either.
 
 ## 4. Why leases are not load-bearing
 
@@ -135,10 +169,10 @@ Ransomware and accidental mass deletion look identical to a backup system: a lar
 - **Destination-side retention floors** that a source device cannot reduce. A compromised source cannot instruct a destination to drop history below its floor.
 - **Repository-server policy locks** where a server mediates access.
 - **Provider object lock** in a later phase, for destinations that support WORM retention.
-- **Stronger authorisation** for retention reduction and bulk snapshot deletion than for ordinary backup.
-- **Signed audit records** for every destructive action.
+- **Stronger authorisation** for retention reduction and bulk snapshot deletion than for ordinary backup — built as the **reclaim key** ([ADR-0055](../adr/0055-reclaim-authority.md)): a derivation domain of its own, withheld from a write-only service's write credential, granted to a collection run and zeroed with it, and carried to a peer as a signature its keyless destination can check — over the session it is sent in, and required by any destination holding the repository's reclaim public key rather than by a feature the sender may decline to offer ([ADR-0059](../adr/0059-session-bound-deletion-authority.md)).
+- **Signed audit records** for every destructive action — the tombstone is one, and since ADR-0055 it is signed by an authority narrower than the publisher's, so a deletion is attributable to whoever held the reclaim key rather than to anyone who could write. **And on the peer plane** since [ADR-0063](../adr/0063-deletion-receipts.md): a destination that deletes on a retention instruction answers with a **deletion receipt** signed under its own device key — the session, the commander, each page as accepted, the keys removed and the count never held — which the commander verifies against what it sent and both parties file under their state directories; `receipts` reads them back without the service, every fact from the signed bytes. The record is kept under a stated rule rather than for ever (NFR-OPS-008): the newest few survive whatever their age, so the bound never empties the trail, and a deletion receipt is kept longer than a replication one because it attests a distinct irreversible act.
 
-The retention floor is the most valuable of these, because it is the only one that holds when the source device is fully compromised — which is the case that matters. Under hub-planned retention it is enforced at the destination's own edge: a deletion instruction that would take a peer below its granted floor is refused with a stated reason, and the hub records the refusal rather than retrying it (FR-GC-010). The floor is expressed in generations and the policy in wall-clock rules; where they disagree, the destination keeps the union — everything its floor requires *and* everything the policy selects.
+The retention floor is the most valuable of these, and ADR-0055 does not displace it. The reclaim split defends every repository now that format 1 is withdrawn ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): every service holds a write credential and no reclaim key. What the split does not defend against is a compromised *grant* — a collection run's authority is still a run's — and there the floor is still the only measure that holds, which is the case that matters. Under hub-planned retention it is enforced at the destination's own edge: a deletion instruction that would take a peer below its granted floor is refused with a stated reason, and the hub records the refusal rather than retrying it (FR-GC-010). The floor is expressed in generations and the policy in wall-clock rules; where they disagree, the destination keeps the union — everything its floor requires *and* everything the policy selects.
 
 None of this substitutes for endpoint security ([`00-overview.md` §4.3](00-overview.md#43-explicit-non-goals-for-the-first-release)), and historical snapshots may contain the malware itself. Restore defaults to a quarantine path for exactly that reason ([`08-restore-and-recovery.md` §3](08-restore-and-recovery.md#3-restore-verification)).
 
@@ -154,6 +188,8 @@ Healing is:
 - **bounded** — damage that cannot be healed from any replica is reported with the affected snapshots and file versions named, rather than retried indefinitely.
 
 Rebuild never repairs ([`02-repository-format.md` §8.3](02-repository-format.md#83-rebuild-never-repairs)). Diagnosis and repair stay separate so that a damage report is always a statement about the repository as it is, not as some automatic process has already altered it.
+
+The rollback heal of [ADR-0062](../adr/0062-the-destination-is-the-rollback-witness.md) is a different thing and is not an exception to the rule above. It repairs no damage: when a destination turns out to be *ahead* of a state directory restored from an older copy, the fan-out pass makes its own source of truth current again from that destination — a direct-ship set's metadata, a staging set's metadata and the content its missing snapshots need — invoked by the detection, reported by a notice that is never withdrawn, bounded by the closure of the history restored (never what staging retirement shed), and with every copied blob's footer and every manifest's signature authenticated by the rebuild that follows. What it copies is what this machine published; what it finds damaged, it reports.
 
 ## 7. Storage-class awareness
 

@@ -29,7 +29,20 @@ offset  size   field
   54+N     16  tag                AEAD authentication tag
 ```
 
-Fixed header size: **54 bytes**. Total record size: `54 + stored_length + 16`.
+Fixed header size: **54 bytes**. Total record size: `54 + stored_length + 16` in a format-2 container.
+
+**Format 3** ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) inserts a **prefix** between the header and the ciphertext, so that everything a record needs to be opened travels with its bytes:
+
+```text
+offset  size   field                      present when
+------  -----  -------------------------- ---------------------------------------
+    54     12  nonce                      every format-3 record (§3)
+    66     80  sealed_record_key          a data-class record in the sealed data
+                                          plane (05 §2.2): ephemeral_public[32]
+                                          ‖ ciphertext[32] ‖ tag[16]
+```
+
+A format-3 metadata record is therefore `54 + 12 + stored_length + 16` bytes and a format-3 sealed data record `54 + 12 + 80 + stored_length + 16`. The prefix length is a function of the container's format version and class alone, never of the record, so a reader sizes one range read from the envelope and the header. The prefix is cleartext framing: the nonce is authenticated by the AEAD it selects (a wrong nonce opens nothing), and the sealed share is authenticated by its own tag under associated data that names the object (05 §2.2).
 
 The header is cleartext. It has to be: a reader scanning a blob for recovery must be able to walk records without first knowing which key to use, and must be able to find a specific `object_id` without decrypting everything before it. The header contains no plaintext content, no path, and no unkeyed content hash — `object_id` is already keyed ([02 §3](02-identifiers.md#3-object-identifier)).
 
@@ -40,7 +53,7 @@ The header is **not** unauthenticated, however. It is bound into the AEAD associ
 | Field | Constraint |
 |-------|-----------|
 | `record_marker` | MUST be `0x52`. A reader scanning for records uses it as a cheap first filter, never as proof. |
-| `ordinal` | MUST equal the record's zero-based position in the blob. MUST be strictly increasing. MUST NOT exceed 65 535. |
+| `ordinal` | MUST equal the record's zero-based position in the blob. MUST be strictly increasing. MUST NOT exceed 65 535. In format 3 it is framing only — a relocated record is re-framed with its destination ordinal — and the reader checks it against the footer's record table (05 §3.1), never against the AEAD. |
 | `logical_length` | For a segment, the plaintext byte count. MUST be ≥ 1 — a zero-length file produces no segments and no records at all ([09 §2](09-segmentation.md#2-fixed-v1)), so a record with `logical_length` 0 cannot exist and a reader MUST treat one as a damage finding. |
 | `stored_length` | MUST be ≤ 64 MiB ([00 §8](00-conventions.md#8-lengths-and-limits)). |
 | `compression_profile` | `0x0000` = none. When none, `stored_length` equals `logical_length`. |
@@ -53,9 +66,11 @@ A reader MUST validate `stored_length` against the limit **before allocating**, 
 nonce = 12-byte big-endian encoding of `ordinal`
 ```
 
-Format version 1 has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
+The format has one record AEAD and one nonce width ([03 §6](03-keys.md#6-aead-suites)). A draft of this document also described a 24-byte form for the withdrawn extended-nonce profile — ordinal in the last 12 bytes, first 12 zero — which is recorded here only so that a reader of that draft can tell the two apart. It is not part of this format.
 
-Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track. In a format-v2 data blob the record key is the blob's random sealed content key rather than a derived one ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); everything else in this document — nonce, AAD, framing, the read sequence — applies to it unchanged.
+Because every blob has its own key ([03 §5](03-keys.md#5-per-blob-keys)), and exactly one writer owns a blob's ordinal sequence, `(blob_key, nonce)` is unique by construction with no coordination between writers and no probabilistic budget to track. In a data blob the record key is the blob's random sealed content key rather than a derived one ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); everything else in this document — nonce, AAD, framing, the read sequence — applies to it unchanged.
+
+**Format 3: the nonce is carried.** A format-3 record's nonce is the 12 random bytes in its prefix (§2), drawn from a CSPRNG when the record is sealed, under a key that is the record's own ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)). It is **not** zero, and an implementer MUST NOT make it so: the object identifier is computed over the plaintext (§5 steps 1–2) while the sealed bytes are the stored form after compression (step 3), so two writers — or one writer whose compression decision differs between runs — can seal different bytes under one object identifier and therefore one derived key. A fixed nonce would then reuse a `(key, nonce)` pair, which for AES-GCM is keystream reuse and tag forgery, with no hash collision involved. A random nonce makes that pair unique with overwhelming probability under a key that sees at most a handful of messages in its life. The footer's all-ones nonce (05 §3) is reserved under the **blob** key, which no format-3 record uses, so the reservation and the random draw cannot collide.
 
 ## 4 Associated data
 
@@ -64,6 +79,16 @@ AAD = repository_id ‖ u16(format_version) ‖ u8(object_type) ‖ object_id �
 ```
 
 Total: 16 + 2 + 1 + 32 + 4 = **55 bytes**.
+
+**Format 3** drops the trailing ordinal:
+
+```text
+AAD = repository_id ‖ u16(3) ‖ u8(object_type) ‖ object_id
+```
+
+Total: 16 + 2 + 1 + 32 = **51 bytes**. The record's position is framing (§2.1), and in-blob reordering is caught by the footer's record table, which is sealed as a unit under the blob key and names each record's object identifier at each offset (05 §3.1): a record presented at another entry's offset opens under neither that entry's object key nor its own AAD. Records in a format-3 container ARE relocatable byte for byte — a compactor copies `prefix ‖ ciphertext ‖ tag` into a blob of the same key generation, re-frames the header with the new ordinal, and republishes the index entry as a supersession ([07 §3](07-index.md#3-precedence)) without holding any content key ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md) §6). The paragraph that follows describes formats 1 and 2, whose records are not.
+
+`format_version` here is the **container's** stamp, not the descriptor's: a sealed data blob carries `2`, and a symmetric container — a metadata blob, or a standalone record ([ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) Decision 1) — carries `1`, because the symmetric construction is the one format 1 defined and format 2 kept byte for byte. The stamp is authenticated data, so this is a fact about bytes already on disk rather than a choice: a reader deriving the other value opens nothing.
 
 This binds each record to its exact context. A record cannot be moved to a different ordinal, a different object type, a different repository, or replayed under a different format version without authentication failing. It is what defends against the substitution and splicing attacks in [T-3](../../docs/threat-model.md#t-3-object-substitution-and-splicing).
 
@@ -110,6 +135,8 @@ Steps 3 → 5 are ordered: **compression happens before encryption**. Reversing 
 6. Decompress per `compression_profile`.
 7. Verify `H(plaintext)` matches the `content_id` implied by `object_id`.
 
+In a **format-3** container steps 3 and 4 read instead: derive the record key from the header's object type and identifier under the blob's generation, or open the prefix's sealed share with the sealing scalar ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)); take the nonce from the prefix and build the 51-byte AAD. A reader holding the write credential but no sealing scalar reports a sealed data record as refused for want of a grant, never as damage, exactly as for a format-2 data blob ([05 §2.1](05-blob.md#21-format-v2-data-blobs-the-sealed-content-key)); a sealed share that does not open fails **that record** and no other.
+
 Step 7 is not redundant with step 5. The AEAD tag proves the record was written by someone holding the blob key and has not been altered since. It does **not** prove that the writer's claimed `object_id` matches what the plaintext actually hashes to — a writer with a bug, or a malicious member, can produce a perfectly authentic record whose content identifier is a lie. Step 7 is what catches that, and it is the reason verify-on-reuse exists at all. → [T-10](../../docs/threat-model.md#t-10-malicious-repository-member-poisons-deduplication)
 
 A reader that skips step 7 will restore corrupt data and report success.
@@ -129,13 +156,13 @@ It MUST NOT substitute zeroes, skip the segment silently, or emit a partial file
 
 ## 8 Records are never split
 
-A record MUST be wholly contained in one blob in format version 1. When the open blob cannot accommodate a complete record within its maximum size, the writer seals it and starts the record in a new blob ([05 §5](05-blob.md#5-sealing)).
+A record MUST be wholly contained in one blob. When the open blob cannot accommodate a complete record within its maximum size, the writer seals it and starts the record in a new blob ([05 §5](05-blob.md#5-sealing)).
 
 This costs some blob-size variance and buys a great deal: recovery scanning never has to reassemble a record across objects, and a single fetched blob is always self-sufficient for the records it contains.
 
 ## 9 Test vectors
 
-Record framing vectors, including header layouts and AAD construction, are in [`conformance/vectors/records.json`](conformance/vectors/records.json).
+Record framing vectors, including header layouts and AAD construction, are in [`conformance/vectors/records.json`](conformance/vectors/records.json) for format 2 and [`conformance/vectors/records-v3.json`](conformance/vectors/records-v3.json) for format 3 — the same record under both formats: the object-scoped key and its separation checks, the carried nonce, the 51-byte AAD and the writer's seed derivation ([03 §5.4](03-keys.md#54-format-v3-the-key-is-the-records)).
 
 **There are no AEAD ciphertext vectors.** Producing them independently requires an AES-GCM implementation the vector generator deliberately does not depend on, and generating them from the reference implementation would prove only that a future build matches today's build. The gap is stated rather than filled with self-certifying values — see [`conformance/README.md`](conformance/README.md).
 

@@ -138,6 +138,11 @@ Every account has equal rights over backup, restore and configuration. What the
 owner has is a floor: **it cannot be deleted and cannot be locked out**, and
 initially only the owner may create or remove accounts.
 
+> **Amended 2026-08 ([ADR-0049](0049-service-lifecycle-hygiene.md)):**
+> restarting the service joined account management as the owner's second
+> exclusive privilege — a restart interrupts every run and signs everybody
+> out, which is not an operator's call to make.
+
 The role field exists from the first release even though there is only one
 role's worth of behaviour, so that per-account rights later are a value change
 rather than a file-format migration. A stored account written today reads
@@ -277,9 +282,71 @@ and is still a string, so the list cannot silently become a hole a future field
 falls into.
 
 
+## Amendment (2026-08): a lapsed session is answered once, not retried forever
+
+A day of real service log showed what §5 left unsaid: what a client must *do*
+when the session it holds lapses. A machine slept through the eight-hour idle
+timeout; on wake, the console page kept its dead token, kept its pollers, and
+kept its `EventSource` — 581 doomed `resume_session` presentations and a fresh
+progress watch every two seconds, for sixteen minutes, with the sign-in screen
+already on display. Four rules close that loop, none changing the contract:
+
+**The console ends an exchange at a refused resume.** The refusal names the fix
+("log in again") where the command's own refusal, sent blind afterwards, would
+not — and forwarding the command doubled the traffic of an already-failing
+loop. `Refused` specifically: a pre-1.16 service answers `resume_session`
+itself with `InvalidArgument`, and that stays the shrug it always was.
+
+**The event stream presents the session too.** `EventSource` cannot set a
+header, so the session rides the query as the console's own token already does
+(ADR-0036 §4). Without it every watch on an installation with accounts is
+anonymous, and the gate's empty answer plus the browser's redial is the
+two-second loop above. A refused stream session is answered honestly: a named
+`session` event the page reacts to, a thirty-second retry hint for a page that
+does not, then the stream ends.
+
+**The page forgets a dead token.** On a "not current" refusal it drops the
+stored session, closes the stream, and stands the sign-in screen up; the data
+pollers pause behind that screen, and a thirty-second `describe_service`
+heartbeat — answerable without a session — is what keeps the page noticing the
+service while nobody is signed in.
+
+**The gate says why, in its own log.** The whole incident was reconstructed
+from generic "answered ServiceError" listener lines, because the gate refused
+silently. A refused resume, a successful resume, and a command refused for
+want of a session now log by name (3755–3757; the token, like the password,
+has no parameter to ride in).
+
+## Amendment (2026-08): the password policy gains composition, and the ceremony creates the owner
+
+The password floor rises from eight to ten, and the passphrase's composition
+rules join it: at least one uppercase letter, two digits, and one special
+character. The policy lives in `Domain/Configuration/PasswordPolicy` and is
+enforced at the one chokepoint every creation path crosses —
+`UserStore.Create` and `ChangePasswordAsync` — so the console's bootstrap
+`create_user`, the headless setup verb's `--password-env`, and any future
+caller answer identically. Like the passphrase policy it applies where a
+password is *chosen*, never where one is presented: a login verifies against
+the stored hash whatever rules were in force when the password was set, so
+tightening strands nobody outside their account. The original rationale for
+the floor sitting below the passphrase's stands — a password is changeable
+and throttled where a passphrase is neither — the number is just no longer
+eight.
+
+The console's first account also moved: it is now the setup ceremony's final
+step (ADR-0044's second amendment) rather than a bare sign-in gate the
+operator lands on afterwards, with the account policy rendered live as a
+checklist and a rule the store cannot check — the password must not be the
+installation passphrase — enforced client-side by hash comparison, since the
+service never holds the passphrase to compare. The sign-in gate's
+create-first-account mode remains for a service that reaches
+`users_required` outside the ceremony.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Proposed | Written with the storage location, client scope, session mechanism, owner rule, failure policy and session lifetime all fixed by the user: service state directory, console and CLI both, a service-minted token, first user is the owner, throttle but never lock, and sessions that live only in the process. Build sequenced as the primitive → the store and its policy → contract 1.16 with the per-connection gate → setup captures the first account → the clients → drills |
 | 2026-08 | Accepted | Built end to end: the password primitive in Repository.Crypto, the account store with the owner rules and a throttle that never locks, contract 1.16's seven verbs behind a per-connection decorator, setup capturing the first account, and the CLI and console signing in. Three amendments above record where implementation corrected the decision — the session is presented by a connection rather than owned by one, enforcement engages only once an installation has accounts, and the browser rather than the console holds a viewer's session |
+| 2026-08 | Amended | A lapsed session is answered once: the console short-circuits a refused resume, the event stream presents (and reports) the session, the page forgets a dead token and pauses its pollers behind sign-in, and the gate logs its refusals (3755–3757). Driven by a real wedge — 581 doomed resumes and a watch every two seconds across sixteen minutes of service log |
+| 2026-08 | Amended | The password policy gains composition — a floor of ten with an uppercase letter, two digits and a special character, enforced in `UserStore` where every creation path converges and never at login — and the first account becomes the setup ceremony's final step, with a hash-compared must-not-be-the-passphrase rule the service itself cannot check |

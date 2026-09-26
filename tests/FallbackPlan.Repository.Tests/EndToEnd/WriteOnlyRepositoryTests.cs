@@ -2,7 +2,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Recovery;
 using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Format.RecoveryKit;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Restore;
 using FallbackPlan.Storage.Abstractions;
@@ -19,8 +19,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// anywhere in the store, backed up through the real publication pipeline
 /// with the write bundle alone, browsed and planned write-only, honest about
 /// sealed content without a grant, restored byte-identically with the
-/// re-derived authority — and recovered on a clean machine from a kit that
-/// carries no key material at all.
+/// re-derived authority — and recovered on a clean machine from the
+/// passphrase and the archive alone.
 /// </summary>
 [TestClass]
 public sealed class WriteOnlyRepositoryTests : IDisposable
@@ -37,10 +37,12 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
 
     private LocalFileSystemObjectStore CreateStore() => new(Path.Combine(_root, "repo"));
 
-    private static RepositoryCreationSettings Settings => RepositoryCreationSettings.Default with
-    {
-        CreatedBy = "write-only-tests/1.0",
-    };
+    private static RepositoryCreationSettings SettingsFor(ushort formatVersion) =>
+        RepositoryCreationSettings.Default with
+        {
+            CreatedBy = "write-only-tests/1.0",
+            FormatVersion = formatVersion,
+        };
 
     private static Passphrase Right() => Passphrase.Create(PassphraseText);
 
@@ -62,11 +64,13 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
     };
 
     private async Task<(OpenedRepository Opened, RepositoryReadAuthority Authority, CatalogueDb Catalogue, Dictionary<string, byte[]> Files)>
-        CreateAndBackUpAsync(LocalFileSystemObjectStore store)
+        CreateAndBackUpAsync(
+            LocalFileSystemObjectStore store, ushort formatVersion = FormatVersions.SealedDataPlane)
     {
         using var passphrase = Right();
-        var (opened, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
-            store, passphrase, Settings, createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        var (opened, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+            store, passphrase, SettingsFor(formatVersion), createdAtUnixMilliseconds: 1_722_600_000_000,
+            CancellationToken.None);
 
         var random = new Random(51);
         var files = new Dictionary<string, byte[]>
@@ -87,9 +91,10 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         var catalogue = CatalogueDb.Open(Path.Combine(_root, "catalogue.db"), opened.RepositoryId);
 
         var orchestrator = new PublicationOrchestrator(
-            SmallPolicy, opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            SmallPolicy, opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            opened.Descriptor.FormatVersion, observer: null, catalogue);
 
         var published = await orchestrator.PublishAsync(
             new SnapshotJob
@@ -156,7 +161,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // the restore ceremony — and the same plan restores byte-identically
         // (FR-WOR-004).
         using var again = Right();
-        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
             store, again, CancellationToken.None);
         using (readOpened)
         using (readAuthority)
@@ -209,7 +214,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // hostile replica object cannot take reading everything else down
         // with it (ADR-0042 §7).
         using var passphrase = Right();
-        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+        var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
             store, passphrase, CancellationToken.None);
         using (readOpened)
         using (readAuthority)
@@ -243,10 +248,10 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         // remedy named — never left to degrade silently (ADR-0042 §7).
         var refused = Assert.ThrowsExactly<ArgumentException>(() => new PublicationOrchestrator(
             SmallPolicy with { DedupTrustDomain = DedupTrustDomain.Repository },
-            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Hierarchy, store,
+            opened.RepositoryId, Writer, KeyGeneration.Zero, opened.Keys, opened.Credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(_root, "refused-sequence.txt"))),
-            Path.Combine(_root, "refused-spool")));
-        Assert.Contains("write-only", refused.Message, StringComparison.Ordinal);
+            Path.Combine(_root, "refused-spool"),
+            FormatVersions.SealedDataPlane));
         Assert.Contains("device", refused.Message, StringComparison.Ordinal);
 
         // The exact sealed population, from the structure plane: every
@@ -317,7 +322,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
             Assert.Contains("no damage", unchecked_.Detail!, StringComparison.Ordinal);
 
             using var passphrase = Right();
-            var (readOpened, readAuthority) = await RepositoryLifecycle.OpenWriteOnlyForReadAsync(
+            var (readOpened, readAuthority) = await RepositoryLifecycle.OpenForReadAsync(
                 store, passphrase, CancellationToken.None);
             using (readOpened)
             using (readAuthority)
@@ -344,7 +349,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         using (var wrong = Passphrase.Create("not the passphrase at all!!"))
         {
             await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(async () =>
-                await RepositoryLifecycle.OpenWriteOnlyForReadAsync(store, wrong, CancellationToken.None));
+                await RepositoryLifecycle.OpenForReadAsync(store, wrong, CancellationToken.None));
         }
 
         // A credential from another repository (a wrong passphrase's shape)
@@ -353,26 +358,14 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         {
             var salt = Enumerable.Repeat((byte)0x11, KekDerivation.SaltLength).ToArray();
             using var foreign = WriteOnlyDerivation.Derive(
-                other, Settings.KdfParameters, salt, KdfValidationMode.OpenRepository);
+                other, SettingsFor(FormatVersions.SealedDataPlane).KdfParameters, salt, KdfValidationMode.OpenRepository);
             await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.OpenWriteOnlyAsync(store, foreign.Credential, CancellationToken.None));
-        }
-
-        // The v1 open paths name what this is instead of failing confusingly.
-        using (var passphrase = Right())
-        {
-            var openRefusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None));
-            Assert.Contains("write-only", openRefusal.Message, StringComparison.Ordinal);
-
-            var exportRefusal = await Assert.ThrowsExactlyAsync<RepositoryOpenException>(async () =>
-                await RepositoryLifecycle.ExportVerifiedKeyObjectAsync(store, passphrase, CancellationToken.None));
-            Assert.Contains("write-only", exportRefusal.Message, StringComparison.Ordinal);
+                await RepositoryLifecycle.OpenAsync(store, foreign.Credential, CancellationToken.None));
         }
     }
 
     [TestMethod]
-    public async Task RecoveryKit_AWriteOnlyRepository_CarriesNoKeyMaterialAndStillRestoresEverything()
+    public async Task RecoverySession_AWriteOnlyRepository_RestoresEverythingFromThePassphraseAlone()
     {
         var store = CreateStore();
         var (opened, authority, catalogue, files) = await CreateAndBackUpAsync(store);
@@ -381,25 +374,18 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         using var db = catalogue;
 
         using var passphrase = Right();
-        var kit = await RecoveryKitFactory.BuildAsync(
-            store, passphrase, Enumerable.Repeat((byte)0x22, 16).ToArray(),
-            issuedAt: 1_722_600_000_002, destinations: [], CancellationToken.None);
 
-        // The kit is pure "where and how to derive": no key object, the
-        // public key as the verifier — and it survives its own text form,
-        // which is what a printed page holds (ADR-0042 §8).
-        Assert.IsTrue(kit.KeyObject.IsEmpty);
-        Assert.AreEqual(32, kit.SealingPublicKey.Length);
-        var reparsed = RecoveryKitCodec.Parse(
-            RecoveryKitText.ParseToFramed(RecoveryKitText.Render(RecoveryKitCodec.Serialize(kit))));
-
+        // The archive's descriptor is the whole of "where and how to
+        // derive": the salt, the parameters, and the public key as the
+        // verifier. Nothing else has to be kept (ADR-0042 §8; ADR-0060).
         using (var wrong = Passphrase.Create("not the passphrase at all!!"))
         {
             var wrongPassphrase = wrong;
-            Assert.ThrowsExactly<KeyUnwrapFailedException>(() => RecoverySession.Open(reparsed, wrongPassphrase, store));
+            await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
+                async () => await RecoverySession.OpenAsync(wrongPassphrase, store, CancellationToken.None));
         }
 
-        using var session = RecoverySession.Open(reparsed, passphrase, store);
+        using var session = await RecoverySession.OpenAsync(passphrase, store, CancellationToken.None);
         var (blobs, notes) = await session.LoadBlobsAsync(CancellationToken.None);
         Assert.IsTrue(blobs > 0);
         Assert.IsEmpty(notes);
@@ -407,7 +393,7 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         var snapshot = Assert.ContainsSingle(await session.ListSnapshotsAsync(CancellationToken.None));
         Assert.IsTrue(snapshot.SignatureVerified, "the v2 signing seed derives from the bundle and must verify");
 
-        var output = Path.Combine(_root, "kit-out");
+        var output = Path.Combine(_root, "recovered");
         var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, output, CancellationToken.None);
         Assert.AreEqual(0, report.Failed);
         Assert.AreEqual(files.Count, report.Restored);
@@ -415,6 +401,269 @@ public sealed class WriteOnlyRepositoryTests : IDisposable
         {
             SequenceAssert.AreEqual(
                 content, File.ReadAllBytes(Path.Combine(output, path.Replace('/', Path.DirectorySeparatorChar))));
+        }
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_AtFormatThree_BacksUpAndRestoresThroughTheRealPipeline()
+    {
+        // The whole pipeline over format 3, with nothing about the test
+        // reaching below the engine: the descriptor decides, the sessions
+        // stamp what it decides, and the bytes come back.
+        var store = CreateStore();
+        var (opened, authority, catalogue, files) =
+            await CreateAndBackUpAsync(store, FormatVersions.RelocatableRecords);
+        using var _ = opened;
+        using var __ = authority;
+        using var db = catalogue;
+
+        Assert.AreEqual(FormatVersions.RelocatableRecords, opened.Descriptor.FormatVersion);
+
+        // Metadata blobs are stamped 3 here, where a format-2 repository
+        // stamps them 1 — the mapping FormatVersions.ContainerVersion owns,
+        // read back off the disk rather than asserted on the constant.
+        using (var structural = new RepositoryReader(opened.RepositoryId, opened.Keys, store))
+        {
+            await structural.LoadBlobsAsync(CancellationToken.None);
+            Assert.IsEmpty(structural.SkippedBlobs);
+            Assert.IsNotEmpty(structural.AllRecords);
+        }
+
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var snapshotId = Enumerable.Repeat((byte)0x77, 16).ToArray();
+        var plan = RestorePlanner.Plan(db, snapshotId, string.Empty, target);
+        Assert.IsEmpty(plan.Conflicts);
+
+        using var reader = new RepositoryReader(opened.RepositoryId, opened.Keys, store, authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var outputRoot = Path.Combine(_root, "v3-out");
+        var restored = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, outputRoot,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "v3",
+                NowUnixMilliseconds = 1_722_700_000_000,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
+        foreach (var (path, content) in files)
+        {
+            SequenceAssert.AreEqual(
+                content,
+                await File.ReadAllBytesAsync(
+                    Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)), CancellationToken.None));
+        }
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_UpgradedBetweenPublications_SealsTheNewerFormatAndLeavesTheOlderAlone()
+    {
+        // The upgrade record earning its keep (11 §5.1). The descriptor still
+        // says 2 and always will — no destination would accept a replacement
+        // — so what the writer must consult is the EFFECTIVE version, and the
+        // proof is that blobs of both stamps end up in one repository and
+        // every file still comes back.
+        var store = CreateStore();
+        var (opened, authority, catalogue, files) = await CreateAndBackUpAsync(store);
+        using var db = catalogue;
+
+        Assert.AreEqual(FormatVersions.SealedDataPlane, opened.EffectiveFormatVersion);
+        var beforeUpgrade = await DataBlobVersionsAsync(store);
+        Assert.IsNotEmpty(beforeUpgrade);
+        Assert.IsTrue(
+            beforeUpgrade.All(version => version == FormatVersions.SealedDataPlane),
+            "the first publication wrote something other than format 2");
+
+        await RepositoryLifecycle.WriteFormatUpgradeAsync(
+            store, opened.Descriptor, opened.Credential, FormatVersions.RelocatableRecords,
+            Writer.ToArray(), upgradedAtUnixMilliseconds: 1_722_650_000_000, CancellationToken.None);
+        opened.Dispose();
+        authority.Dispose();
+
+        // Re-opened, because that is when the record is read: the descriptor
+        // is untouched and the effective version has moved.
+        using var passphrase = Right();
+        var (reopened, reauthority) = await RepositoryLifecycle.OpenForReadAsync(
+            store, passphrase, CancellationToken.None);
+        using var _1 = reopened;
+        using var _2 = reauthority;
+
+        Assert.AreEqual(FormatVersions.SealedDataPlane, reopened.Descriptor.FormatVersion);
+        Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.EffectiveFormatVersion);
+
+        var second = new byte[70_000];
+        new Random(52).NextBytes(second);
+        files["after-the-upgrade.bin"] = second;
+        var source = new FakeFileSystemSource();
+        foreach (var (path, content) in files)
+        {
+            source.AddFile(path, content);
+        }
+
+        var spool = Path.Combine(_root, "spool");
+        var snapshotId = Enumerable.Repeat((byte)0x78, 16).ToArray();
+        var orchestrator = new PublicationOrchestrator(
+            SmallPolicy, reopened.RepositoryId, Writer, KeyGeneration.Zero, reopened.Keys, reopened.Credential,
+            store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
+            spool,
+            reopened.EffectiveFormatVersion, observer: null, db);
+
+        var published = await orchestrator.PublishAsync(
+            new SnapshotJob
+            {
+                Source = source,
+                Roots = [new ScanRoot("/")],
+                DeviceId = Enumerable.Repeat((byte)0x22, 16).ToArray(),
+                BackupSetId = Enumerable.Repeat((byte)0x33, 16).ToArray(),
+                SnapshotId = snapshotId,
+                NowUnixMilliseconds = 1_722_700_000_001,
+                DeclaredMaxDurationMs = 3_600_000,
+                ExpiryGeneration = 5,
+                ClientVersion = "write-only-tests/1.0",
+            },
+            CancellationToken.None);
+        Assert.IsEmpty(published.Failures);
+
+        // Both stamps, in one repository. The format-2 blobs are exactly the
+        // ones that were there before: an upgrade rewrites nothing.
+        var afterUpgrade = await DataBlobVersionsAsync(store);
+        Assert.HasCount(
+            beforeUpgrade.Count,
+            afterUpgrade.Where(version => version == FormatVersions.SealedDataPlane).ToList());
+        Assert.IsNotEmpty(afterUpgrade.Where(version => version == FormatVersions.RelocatableRecords).ToList());
+
+        // The delta the upgraded publication wrote carries the Merkle
+        // commitment; the one from before it does not. Nothing had to reason
+        // about which blobs are old — a delta covers only what its own
+        // publication wrote, so the parallel-or-absent rule holds for free.
+        using var loader = new FallbackPlan.Repository.Index.IndexLoader(
+            store, reopened.RepositoryId, reopened.Credential);
+        var state = await loader.LoadAsync(
+            currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+            blobState: null, CancellationToken.None);
+        Assert.IsEmpty(state.Findings);
+
+        var deltas = state.Deltas.Select(entry => entry.Delta).OrderBy(delta => delta.Sequence).ToList();
+        Assert.HasCount(2, deltas);
+        Assert.IsEmpty(deltas[0].CoveredBlobMerkleRoots);
+        Assert.IsNotEmpty(deltas[1].CoveredBlobIds);
+        Assert.HasCount(deltas[1].CoveredBlobIds.Count, deltas[1].CoveredBlobMerkleRoots);
+
+        // And the whole of it restores: the newest snapshot spans records
+        // sealed under two different constructions, and the reader dispatches
+        // on the envelope it finds rather than on anything it was told.
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        var plan = RestorePlanner.Plan(db, snapshotId, string.Empty, target);
+        Assert.IsEmpty(plan.Conflicts);
+
+        using var reader = new RepositoryReader(reopened.RepositoryId, reopened.Keys, store, reauthority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var outputRoot = Path.Combine(_root, "mixed-out");
+        var restored = await new RestoreExecutor(reader, target).ExecuteAsync(
+            plan, outputRoot,
+            new RestoreExecutionOptions
+            {
+                DestinationMode = RestoreDestinationMode.InPlace,
+                RunId = "mixed",
+                NowUnixMilliseconds = 1_722_700_000_002,
+            },
+            CancellationToken.None);
+
+        Assert.AreEqual(RestoreOutcome.Complete, restored.Outcome);
+        foreach (var (path, content) in files)
+        {
+            SequenceAssert.AreEqual(
+                content,
+                await File.ReadAllBytesAsync(
+                    Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)), CancellationToken.None));
+        }
+    }
+
+    /// <summary>The stamped container version of every data blob in the store, read off the disk.</summary>
+    private static async Task<List<ushort>> DataBlobVersionsAsync(LocalFileSystemObjectStore store)
+    {
+        var versions = new List<ushort>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/data/"), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(
+                entry.Key, new ObjectRange(0, BlobEnvelope.MaxLength), CancellationToken.None);
+            Assert.AreEqual(OpenReadOutcome.Found, read.Outcome);
+
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory, CancellationToken.None);
+            versions.Add(BlobEnvelope.Parse(memory.ToArray()).FormatVersion);
+        }
+
+        return versions;
+    }
+
+    [TestMethod]
+    public async Task WriteOnlyRepository_TheIndexDelta_CarriesMerkleRootsOnlyAtFormatThree()
+    {
+        // The publication gate, at the engine rather than at a frozen
+        // fixture (07 §2.3). A reader that predates key 11 refuses a delta
+        // carrying it outright, so the repository's declared format version
+        // — not a policy, not a flag — is what decides, and a format-2
+        // archive an older build may read never contains one.
+        foreach (var version in new[] { FormatVersions.SealedDataPlane, FormatVersions.RelocatableRecords })
+        {
+            var store = new LocalFileSystemObjectStore(
+                Path.Combine(_root, $"roots-{version}"));
+            var (opened, authority, catalogue, _) = await CreateAndBackUpAsync(store, version);
+            using var _1 = opened;
+            using var _2 = authority;
+            using var _3 = catalogue;
+
+            using var loader = new FallbackPlan.Repository.Index.IndexLoader(store, opened.RepositoryId, opened.Credential);
+            var state = await loader.LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 2, isSequenceAccountedAsync: null,
+                blobState: null, CancellationToken.None);
+            Assert.IsEmpty(state.Findings);
+
+            var delta = Assert.ContainsSingle(state.Deltas).Delta;
+            Assert.IsNotEmpty(delta.CoveredBlobIds);
+            Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
+
+            if (version == FormatVersions.SealedDataPlane)
+            {
+                Assert.IsEmpty(delta.CoveredBlobMerkleRoots);
+                continue;
+            }
+
+            Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobMerkleRoots);
+
+            // And each root is the tree over that blob's own bytes, read
+            // back from the store rather than taken from the publisher.
+            using var storeKeys = new StoreBlobKeyDeriver(opened.Credential.KeyIdKey.ToArray());
+            for (var i = 0; i < delta.CoveredBlobIds.Count; i++)
+            {
+                var derived = storeKeys.Derive(delta.CoveredBlobIds[i]);
+                var key = BlobStoreKeys.ForBlob(BlobClass.Data, derived);
+                var metadata = await store.GetMetadataAsync(key, CancellationToken.None);
+                if (metadata.Metadata is null)
+                {
+                    key = BlobStoreKeys.ForBlob(BlobClass.Metadata, derived);
+                    metadata = await store.GetMetadataAsync(key, CancellationToken.None);
+                }
+
+                Assert.IsNotNull(metadata.Metadata);
+                var bytes = new byte[metadata.Metadata.Length];
+                using (var content = await store.OpenReadAsync(key, null, CancellationToken.None))
+                {
+                    Assert.AreEqual(OpenReadOutcome.Found, content.Outcome);
+                    await content.Content!.ReadExactlyAsync(bytes, CancellationToken.None);
+                }
+
+                SequenceAssert.AreEqual(
+                    BlobMerkle.Root(bytes.AsSpan(0, bytes.Length - FooterLocator.Length)),
+                    delta.CoveredBlobMerkleRoots[i].ToArray());
+            }
         }
     }
 

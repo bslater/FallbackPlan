@@ -38,11 +38,6 @@ public sealed class WriteOnlyFuzzTests
     private static readonly byte[] GrantEnvelopeSeed =
         WriteOnlyProvisioning.SealGrant(RecipientPublic, Authority.SealingPrivateKey);
 
-    private static readonly byte[] ClaimRoot = [.. Enumerable.Repeat((byte)0x7C, KekDerivation.KekLength)];
-
-    private static readonly byte[] ClaimRootEnvelopeSeed =
-        WriteOnlyProvisioning.SealClaimRoot(RecipientPublic, ClaimRoot);
-
     private static readonly byte[] CredentialSeed = SerializeCredential();
 
     private static RepositoryReadAuthority DeriveAuthority()
@@ -102,7 +97,7 @@ public sealed class WriteOnlyFuzzTests
     public static void SealedOpeners_GivenMutatedSealedBytes_RefuseOnlyWithTheirDeclaredTypesProperty(
         int seedIndex, (int Offset, byte Mask)[]? mutations, int resize)
     {
-        var (name, seed, open) = ((uint)seedIndex % 5) switch
+        var (name, seed, open) = ((uint)seedIndex % 4) switch
         {
             0u => ("content-key-open",
                 SealedContentKeySeed,
@@ -113,12 +108,9 @@ public sealed class WriteOnlyFuzzTests
             2u => ("provision-open",
                 ProvisionEnvelopeSeed,
                 bytes => WriteOnlyProvisioning.OpenProvision(RecipientPrivate, bytes).Credential.Dispose()),
-            3u => ("grant-open",
+            _ => ("grant-open",
                 GrantEnvelopeSeed,
                 bytes => WriteOnlyProvisioning.OpenGrant(RecipientPrivate, bytes)),
-            _ => ("claim-root-open",
-                ClaimRootEnvelopeSeed,
-                bytes => WriteOnlyProvisioning.OpenClaimRoot(RecipientPrivate, bytes)),
         };
 
         var mutated = Mutate(seed, mutations, resize);

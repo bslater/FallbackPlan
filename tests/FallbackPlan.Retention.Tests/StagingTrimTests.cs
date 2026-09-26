@@ -36,6 +36,7 @@ public sealed class StagingTrimTests : IDisposable
     public StagingTrimTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         Directory.CreateDirectory(VaultPath);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day one content");
@@ -145,9 +146,9 @@ public sealed class StagingTrimTests : IDisposable
         await BackUpThreeDaysAsync();
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        using (var passphrase = Passphrase.Create(PassphraseText))
-        using (var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None))
+        using (var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None))
         {
+            var repository = opened.Repository;
             var surveyed = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
             var oldest = surveyed.Snapshots.MinBy(snapshot => snapshot.Fact.PublicationSequence)!;
             await store.DeleteAsync(oldest.StoreKey, DeleteConditions.None, CancellationToken.None);
@@ -172,11 +173,11 @@ public sealed class StagingTrimTests : IDisposable
         await BackUpThreeDaysAsync();
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Fabricate the collector's view: one live intent covering every
@@ -439,11 +440,11 @@ public sealed class StagingTrimTests : IDisposable
         await BackUpThreeDaysAsync();
         var store = new LocalFileSystemObjectStore(RepoPath);
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var sealing = Math.Max(
@@ -451,7 +452,7 @@ public sealed class StagingTrimTests : IDisposable
         IReadOnlyList<FallbackPlan.Repository.Index.Journal.JournalRecord> records;
         int unparseable;
         using (var journal = new FallbackPlan.Repository.Index.Journal.JournalReader(
-            store, repository.RepositoryId, repository.Hierarchy))
+            store, repository.RepositoryId, repository.Credential))
         {
             (records, unparseable, _) = await journal.LoadAsync(sealing, CancellationToken.None);
         }
@@ -519,8 +520,8 @@ public sealed class StagingTrimTests : IDisposable
     /// <summary>A pass where the vault has NO rules — entitled to everything.</summary>
     private async Task<RetentionReport> RunAsyncWithoutRules(LocalFileSystemObjectStore store, DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
@@ -532,7 +533,7 @@ public sealed class StagingTrimTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply: true,
             (ulong)now.ToUnixTimeMilliseconds(),
-            CancellationToken.None);
+            CancellationToken.None, reclaim: opened.Reclaim);
     }
 
     private async Task<RetentionReport> RunAsync(
@@ -542,8 +543,8 @@ public sealed class StagingTrimTests : IDisposable
         DateTimeOffset now,
         SetDestinationReference? extraDestination = null)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(store, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var destinations = new List<SetDestinationReference>
         {
@@ -564,7 +565,7 @@ public sealed class StagingTrimTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply,
             (ulong)now.ToUnixTimeMilliseconds(),
-            CancellationToken.None);
+            CancellationToken.None, reclaim: opened.Reclaim);
     }
 
     private async Task BackUpThreeDaysAsync()
@@ -579,20 +580,20 @@ public sealed class StagingTrimTests : IDisposable
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
     private static async Task AssertWalksCleanAsync(LocalFileSystemObjectStore replica, int expectedSnapshots)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(replica, passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(replica, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
 
         var survey = await StagingMark.SurveyAsync(replica, repository, CancellationToken.None);
         Assert.HasCount(expectedSnapshots, survey.Snapshots);
         Assert.IsEmpty(survey.Undecodable);
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica);
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, replica, opened.Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         var (_, unwalkable) = await StagingMark.MarkAsync(reader, survey.Snapshots, CancellationToken.None);
         Assert.IsEmpty(unwalkable);

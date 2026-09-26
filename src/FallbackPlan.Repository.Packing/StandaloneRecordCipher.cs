@@ -78,8 +78,13 @@ public static class StandaloneRecordCipher
         var buffer = new byte[StandaloneRecordFraming.PrefixLength + RecordHeader.Length + payload.Length + RecordCipher.TagLength];
         var span = buffer.AsSpan();
 
+        // Format 1, in every repository including a format-3 one, and not an
+        // oversight now that blobs have moved on (ADR-0052 Amendment 1): a
+        // standalone record is never inside a blob and so is never relocated,
+        // and it already has one key per message. There is nothing for
+        // format 3 to give it and a stamp it is AAD-bound to to lose.
         StandaloneRecordFraming.WritePrefix(
-            FormatLimits.FormatVersion, keyGeneration, salt, writerId, counter, span);
+            FormatLimits.SymmetricFormatVersion, keyGeneration, salt, writerId, counter, span);
         header.WriteTo(span.Slice(StandaloneRecordFraming.PrefixLength, RecordHeader.Length));
 
         var recordKey = new byte[BlobKeyDeriver.BlobKeyLength];
@@ -91,7 +96,7 @@ public static class StandaloneRecordCipher
             Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
             RecordNonce.Write(0, nonce);
             Span<byte> aad = stackalloc byte[RecordAad.Length];
-            RecordAad.Write(repositoryId, FormatLimits.FormatVersion, objectType, objectId, 0, aad);
+            RecordAad.Write(repositoryId, FormatLimits.SymmetricFormatVersion, objectType, objectId, 0, aad);
 
             RecordCipher.Seal(
                 recordKey,

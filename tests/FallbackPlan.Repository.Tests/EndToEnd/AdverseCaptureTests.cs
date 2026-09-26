@@ -1,3 +1,4 @@
+using FallbackPlan.Repository.Format;
 using System.Text;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -38,8 +39,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class AdverseCaptureTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task AnOpenThatIsRefused_LandsTheRightReasonForEachKindOfRefusal()
     {
@@ -58,9 +57,9 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         Assert.HasCount(3, published.Failures);
@@ -73,7 +72,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         Assert.AreEqual("good.bin", captured.RelativePath);
         Assert.IsNotNull(published.ErrorManifestObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         SequenceAssert.AreEqual(wanted, await RestoreAsync(reader, captured.ObjectId));
         Assert.AreEqual(2, await CaptureStatusAsync(reader, published));
@@ -95,9 +94,9 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         var failure = Assert.ContainsSingle(published.Failures);
@@ -111,7 +110,7 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
         // attempt reserved but never wrote.
         Assert.AreEqual(1, source.OpenedPaths.Count(path => path == "restless.bin"));
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var calm = Assert.ContainsSingle(published.Files);
@@ -137,9 +136,9 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         var failure = Assert.ContainsSingle(published.Failures);
@@ -166,15 +165,15 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var file = Assert.ContainsSingle(published.Files);
@@ -198,15 +197,15 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var file = Assert.ContainsSingle(published.Files);
@@ -239,15 +238,15 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
         Assert.IsEmpty(published.Failures);
         Assert.IsNull(published.ErrorManifestObjectId);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var file = Assert.ContainsSingle(published.Files);
@@ -285,12 +284,12 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(
             Job(source), CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var errors = await ReadErrorManifestAsync(reader, published);
@@ -339,17 +338,18 @@ public sealed class AdverseCaptureTests : ArchiveTestHarness
     }
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential) =>
         new(
             SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.RelocatableRecords,
             observer: null);
 
     private static SnapshotJob Job(FakeFileSystemSource source) => new()

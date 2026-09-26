@@ -67,6 +67,7 @@ public static class CatalogueSchema
             record_count   INTEGER NOT NULL,
             length         INTEGER NOT NULL,
             digest         BLOB,
+            merkle_root    BLOB,
             state          INTEGER NOT NULL DEFAULT 1
         ) WITHOUT ROWID;
 

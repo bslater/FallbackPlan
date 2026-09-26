@@ -62,6 +62,15 @@ The architecture document's `<index-id>` spelling is an erratum for `<delta-id>`
 
 ## Decision 3 — Key-object discovery
 
+> **Amended 2026-09.** Moot: there is no key object to discover. Format 1
+> was withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) and a format-2 repository stores no key
+> material — the descriptor's salt, parameters and public key plus the
+> passphrase reproduce everything ([03 §2](../../specifications/repository-format/03-keys.md#2-the-root)).
+> The listing dependency this decision worked around, and the deferred
+> descriptor field that would have removed it, both went with the format.
+> Kept as written because it is the record of why creation once wrote the
+> key object first.
+
 **The gap.** Discovery step 3 (01 §6) says "Fetch and unwrap `/keys/<key-id>`", but nothing tells a reader the key-id: the descriptor body (01 §3.2) has no key-id field, and 01 §1 explicitly refuses to assume listing consistency.
 
 **The resolution, for phase 0.** A reader **lists `/keys/`** and attempts to unwrap each object found; in a phase-0 repository there is exactly one. Creation order closes most of the listing-consistency window: `CreateAsync` writes `/keys/<key-id>` **before** `/repository-format`, so a store that shows the descriptor has already acknowledged the key object. On a store whose listing still lags, an empty `/keys/` listing under a present descriptor is a **transient open failure** — retry — not a damage finding: 01 §5's missing-object rule ("MUST report it as a damage finding") applies to references from live objects, and a listing is not a reference.
@@ -75,6 +84,13 @@ The durable fix — a key-id field in the descriptor body — is a format change
 **The resolution.** Key 5 is **optional**. Present, it asserts the delta's entries all fall in that one shard (a reader MAY verify and MUST treat a mismatch as a damage finding). Absent, the delta's shard coverage is exactly the set `{ top 16 bits of entry.object_id }` implied by its entries. The phase-0 writer always omits it. Checkpoints are unaffected: `shard_set` (07 §5 key 4) already enumerates coverage explicitly and is computed from the checkpoint's entries.
 
 ## Decision 5 — "Current generation"
+
+> **Amended 2026-09.** The key bundle went with format 1
+> ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), so the definition below loses its first two terms: the
+> repository's current generation is the highest generation directory
+> observed under `/index/…`, and a repository opens at generation zero.
+> The bound's direction is unchanged — it can only delay expiry, never
+> hasten it.
 
 **The gap.** Intent expiry condition 1 ("the repository's current generation exceeds `expiry_generation`", 08 §7) and generation precedence (07 §3) both consume a repository-wide "current generation" that no document defines — the key bundle carries `current_data_generation` and `current_metadata_generation` (03 §3.1) but nothing says which, or what role store state plays.
 
@@ -179,3 +195,5 @@ One engine-side property is recorded here so it is not rediscovered as a surpris
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Phase-0 resolutions for the specification gaps blocking 06/07/08 implementation |
+| 2026-09 | Amended | Decision 3 is moot and Decision 5 loses its key-bundle terms: format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
+| 2026-09 | Amended | The policy manifest gains optional keys 10 `roots`, 11 `set_name` and 12 `schedule` ([ADR-0061](0061-adopt-a-destinations-archives.md)); key 10's inner map is assigned in [06 §7](../../specifications/repository-format/06-manifests.md#7-policy-manifest) directly rather than pinned here as Decision 6 pins keys 2 and 6 |

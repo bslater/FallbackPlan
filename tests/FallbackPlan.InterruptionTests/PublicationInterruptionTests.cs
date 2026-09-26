@@ -21,24 +21,24 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     private async Task<byte[]> PublishBaselineAsync(
         Storage.Local.LocalFileSystemObjectStore store,
         RepositoryKeySet keys,
-        Repository.Crypto.KeyHierarchy hierarchy)
+        Repository.Crypto.RepositoryWriteCredential credential)
     {
         var baseline = BuildFile(seed: 1);
         using var source = new MemoryStream(baseline);
-        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xA1), CancellationToken.None);
         return baseline;
     }
 
     private async Task<PublicationKilledException> KillSecondPublicationAsync(
         Storage.Local.LocalFileSystemObjectStore store,
         RepositoryKeySet keys,
-        Repository.Crypto.KeyHierarchy hierarchy,
+        Repository.Crypto.RepositoryWriteCredential credential,
         byte[] data,
         PublicationStep killAfter)
     {
         using var source = new MemoryStream(data);
         return await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-            await CreateOrchestrator(store, keys, hierarchy, new KillAfter(killAfter))
+            await CreateOrchestrator(store, keys, credential, new KillAfter(killAfter))
                 .PublishAsync(Job(source, snapshotSeed: 0xB2), CancellationToken.None));
     }
 
@@ -74,12 +74,12 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        var baseline = await PublishBaselineAsync(store, keys, hierarchy);
+        var baseline = await PublishBaselineAsync(store, keys, credential);
         var second = BuildFile(seed: 2);
 
-        await KillSecondPublicationAsync(store, keys, hierarchy, second, killAfter);
+        await KillSecondPublicationAsync(store, keys, credential, second, killAfter);
 
         // The load-bearing claim of the whole matrix (04 §5.1): no
         // interruption at any step makes the committed snapshot unreadable.
@@ -90,7 +90,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         // interrupted job is a new publication, not a resumed identity.
         using (var retry = new MemoryStream(second))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(baseline, await RestoreSnapshotAsync(store, keys, 0xA1));
@@ -102,10 +102,10 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var blobsBefore = CountUnder("blobs");
-        await KillSecondPublicationAsync(store, keys, hierarchy, BuildFile(seed: 2), PublicationStep.PublishIntent);
+        await KillSecondPublicationAsync(store, keys, credential, BuildFile(seed: 2), PublicationStep.PublishIntent);
 
         // "Intent published, no blobs": nothing collectable was written.
         Assert.AreEqual(blobsBefore, CountUnder("blobs"));
@@ -117,9 +117,9 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        await KillSecondPublicationAsync(store, keys, hierarchy, BuildFile(seed: 2), PublicationStep.UploadBlobs);
+        await KillSecondPublicationAsync(store, keys, credential, BuildFile(seed: 2), PublicationStep.UploadBlobs);
 
         // "Blobs durable, unreferenced": blobs exist, no delta, no snapshot.
         Assert.IsTrue(CountUnder("blobs") > 0);
@@ -128,7 +128,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         // "Intent keeps them reachable": every uploaded blob is covered by a
         // live intent — the survey a collector must run (08 §8).
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, currentGeneration: 0, nowMs: 1_722_600_000_000, skewMarginMs: 0);
 
@@ -153,16 +153,16 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
-        await KillSecondPublicationAsync(store, keys, hierarchy, BuildFile(seed: 2), PublicationStep.PublishIndexDeltas);
+        await KillSecondPublicationAsync(store, keys, credential, BuildFile(seed: 2), PublicationStep.PublishIndexDeltas);
 
         // "Deltas published, no snapshot": harmless index entries; blobs
         // stay intent-covered until retirement or expiry.
         Assert.IsTrue(CountUnder("index/delta") > 0);
         Assert.AreEqual(0, CountUnder("snapshots"));
 
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
         Assert.IsNotEmpty(survey.LiveIntents);
@@ -173,16 +173,16 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var second = BuildFile(seed: 2);
-        await KillSecondPublicationAsync(store, keys, hierarchy, second, PublicationStep.PublishSnapshot);
+        await KillSecondPublicationAsync(store, keys, credential, second, PublicationStep.PublishSnapshot);
 
         // "Snapshot is valid and restorable; intent retires on next run or
         // expires" — the snapshot works even though the intent never retired.
         SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xB2));
 
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
         Assert.IsNotEmpty(survey.LiveIntents);
@@ -193,14 +193,14 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
     {
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var second = BuildFile(seed: 2);
-        await KillSecondPublicationAsync(store, keys, hierarchy, second, PublicationStep.RetireIntent);
+        await KillSecondPublicationAsync(store, keys, credential, second, PublicationStep.RetireIntent);
 
         SequenceAssert.AreEqual(second, await RestoreSnapshotAsync(store, keys, 0xB2));
 
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(0, CancellationToken.None);
         var survey = IntentSurveyor.Survey(records, unparseable, 0, 1_722_600_000_000, 0);
         Assert.IsEmpty(survey.LiveIntents);
@@ -215,7 +215,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         // and, through the orchestrator, by BlobSpoolResumeTests.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // The intent put succeeds; the next put — the first blob's covering
         // extension, which precedes its blob put (08 §3.1) — dies, so no
@@ -224,7 +224,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         using var source = new MemoryStream(BuildFile(seed: 3));
         await Assert.ThrowsExactlyAsync<IOException>(async () =>
-            await CreateOrchestrator(faulting, keys, hierarchy).PublishAsync(Job(source, snapshotSeed: 0xD4), CancellationToken.None));
+            await CreateOrchestrator(faulting, keys, credential).PublishAsync(Job(source, snapshotSeed: 0xD4), CancellationToken.None));
 
         Assert.AreEqual(0, CountUnder("blobs"));
     }
@@ -240,12 +240,12 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         // job then neither finishes nor fails, which is worse than either.
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         var faulting = new FaultInjectingObjectStore(store, putBudget: 1);
 
         using var source = new MemoryStream(BuildFile(seed: 5, regions: 40));
-        var publication = CreateOrchestrator(faulting, keys, hierarchy, concurrency: 2)
+        var publication = CreateOrchestrator(faulting, keys, credential, concurrency: 2)
             .PublishAsync(Job(source, snapshotSeed: 0xD5), CancellationToken.None).AsTask();
 
         var finished = await Task.WhenAny(publication, Task.Delay(TimeSpan.FromSeconds(30)));
@@ -265,7 +265,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = CreateHierarchy();
+        using var credential = CreateCredential();
 
         // Every other row-4 test reaches the state one blob at a time, and not
         // by choice: the step-4 observer fires after FlushAsync, which is the
@@ -274,7 +274,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         // row's state at once (G3).
         var gate = new GatingObjectStore(store, Outstanding);
         var orchestrator = CreateOrchestrator(
-            gate, keys, hierarchy, new KillAfter(PublicationStep.UploadBlobs), concurrency: Outstanding);
+            gate, keys, credential, new KillAfter(PublicationStep.UploadBlobs), concurrency: Outstanding);
 
         var content = BuildFile(seed: 2, regions: 40);
         using var source = new MemoryStream(content);
@@ -289,7 +289,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
         // uploads that put them there still in flight. Coverage has to hold for
         // every one of them, because coverage is the only thing standing between
         // a blob its job has not finished with and a collector (08 §3.1, C4).
-        using (var journalReader = new JournalReader(store, Repo, hierarchy))
+        using (var journalReader = new JournalReader(store, Repo, credential))
         {
             var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
             var survey = IntentSurveyor.Survey(records, unparseable, currentGeneration: 0, nowMs: 1_722_600_000_000, skewMarginMs: 0);
@@ -323,7 +323,7 @@ public sealed class PublicationInterruptionTests : InterruptionHarness
 
         using (var retry = new MemoryStream(content))
         {
-            await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
+            await CreateOrchestrator(store, keys, credential).PublishAsync(Job(retry, snapshotSeed: 0xC3), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(content, await RestoreSnapshotAsync(store, keys, 0xC3));

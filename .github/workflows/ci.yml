@@ -222,7 +222,7 @@ jobs:
       - name: Verify committed vectors match freshly computed ones
         run: python3 specifications/repository-format/conformance/generate.py --check
 
-  # The console page in a real browser (ADR-0049): dialog modality, CSP,
+  # The console page in a real browser (ADR-0073): dialog modality, CSP,
   # focus and downloads only exist there, and the three defects that motivated
   # the suite shipped invisibly past every DOM-less gate. One Linux Chromium
   # run — the semantics under test are the browser's, not the OS's. Everywhere
@@ -270,6 +270,10 @@ jobs:
       # red when the thing it decided turns out to be half-built.
       - name: Implementation status cites code that exists
         run: python3 eng/check-adr-status.py
+      # An invariant whose proof names a class nobody wrote reads as coverage
+      # and is a belief - the exact failure the traceability matrix had.
+      - name: Proof obligations cite tests that exist
+        run: python3 eng/check-proofs.py
       # A generated accessor that has drifted from its resx compiles fine and
       # then throws the resource key at a user instead of the message.
       - name: Resource accessors match their resx

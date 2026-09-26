@@ -64,15 +64,6 @@
   <data name="BlobKeyDeriver_DestinationExactlyBytes" xml:space="preserve">
     <value>The destination is exactly {0} bytes.</value>
   </data>
-  <data name="ClaimKeyDeriver_ClaimRootExactlyBytes" xml:space="preserve">
-    <value>The claim root is exactly 32 bytes.</value>
-  </data>
-  <data name="ClaimKeyDeriver_ClaimSeedExactlyBytes" xml:space="preserve">
-    <value>The claim seed is exactly 32 bytes.</value>
-  </data>
-  <data name="ClaimKeyDeriver_ClaimTokenExactlyBytes" xml:space="preserve">
-    <value>The claim token is exactly 16 bytes.</value>
-  </data>
   <data name="HardlinkGrouper_ContentIDKeyExactlyBytes" xml:space="preserve">
     <value>The content-ID key is exactly 32 bytes.</value>
   </data>
@@ -81,9 +72,6 @@
   </data>
   <data name="KekDerivation_KDFSaltExactlyBytesGot" xml:space="preserve">
     <value>The KDF salt is exactly {0} bytes; got {1}.</value>
-  </data>
-  <data name="KeyHierarchy_MasterKeyExactlyBytes" xml:space="preserve">
-    <value>The master key is exactly {0} bytes.</value>
   </data>
   <data name="KeyedFileIdentity_DeviceIdentifierExactlyBytes" xml:space="preserve">
     <value>The device identifier is exactly 16 bytes.</value>
@@ -121,10 +109,13 @@
   <data name="WriteOnlyDerivation_RootExactlyBytes" xml:space="preserve">
     <value>The derivation root is exactly {0} bytes.</value>
   </data>
-  <data name="KeyHierarchy_NotWriteOnly" xml:space="preserve">
-    <value>This hierarchy derives from a master key; only a write-only hierarchy carries a sealing public key (ADR-0042).</value>
+  <data name="RepositoryWriteCredential_ClaimNeedsReclaim" xml:space="preserve">
+    <value>A write credential carrying a claim public key carries a reclaim public key too: the serialised shapes are nested, so a later member cannot be present while an earlier one is absent.</value>
   </data>
-  <data name="KeyHierarchy_WriteOnlyHoldsNoDataKey" xml:space="preserve">
-    <value>A write-only repository has no data-key family: content is sealed to its public key (specification 03 §9.2, ADR-0042).</value>
+  <data name="WriteOnlyDerivation_ReclaimSeedExactlyBytes" xml:space="preserve">
+    <value>A reclaim key seed is exactly {0} bytes.</value>
+  </data>
+  <data name="ReclaimAuthority_RootExactlyBytes" xml:space="preserve">
+    <value>A reclaim sub-root is exactly {0} bytes.</value>
   </data>
 </root>

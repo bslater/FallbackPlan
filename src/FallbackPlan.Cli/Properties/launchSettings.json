@@ -1,31 +1,49 @@
 {
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "init (create a repo)": {
+    "status (default installation)": {
+      "commandName": "Project",
+      "commandLineArgs": "status"
+    },
+    "snapshots (default installation)": {
+      "commandName": "Project",
+      "commandLineArgs": "snapshots"
+    },
+    "backup (default installation, named set)": {
+      "commandName": "Project",
+      "commandLineArgs": "backup --set docs"
+    },
+    "changes (default installation, named set)": {
+      "commandName": "Project",
+      "commandLineArgs": "changes --set docs"
+    },
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "status (specific state)": {
+      "commandName": "Project",
+      "commandLineArgs": "status --state C:\\fbp\\state"
+    },
+    "init (create a repo, direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "init --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     },
-    "init --write-only": {
-      "commandName": "Project",
-      "commandLineArgs": "init --write-only --acknowledge-loss --repo C:\\fbp\\repo-wo --passphrase-env FBP_PASSPHRASE",
-      "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
-      }
-    },
-    "snapshots": {
+    "snapshots (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "snapshots --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     },
-    "check": {
+    "check (direct mode)": {
       "commandName": "Project",
       "commandLineArgs": "check --level records --repo C:\\fbp\\repo --passphrase-env FBP_PASSPHRASE --state C:\\fbp\\state-cli --direct --log-level debug",
       "environmentVariables": {
-        "FBP_PASSPHRASE": "a long local dev passphrase"
+        "FBP_PASSPHRASE": "A long local Dev passphrase 42!"
       }
     }
   }

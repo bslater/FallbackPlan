@@ -42,7 +42,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 
         RecordTableEntry victim;
         string victimFile;
-        using (var probe = new RepositoryReader(Repo, keys, store))
+        using (var probe = new RepositoryReader(Repo, keys, store, Authority))
         {
             await probe.LoadBlobsAsync(CancellationToken.None);
             Assert.IsTrue(probe.TryLocateRecord(victimReference.ObjectId, out var blobStoreKey, out victim));
@@ -53,7 +53,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         stored[(long)victim.PhysicalOffset + 54 + 3] ^= 0x01;
         await File.WriteAllBytesAsync(victimFile, stored, CancellationToken.None);
 
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         // Exactly the damaged record fails; every other segment still reads.
@@ -93,7 +93,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
 
         // Corruption is local (04 §7; NFR-REL-004): the damaged blob is
         // skipped with a named finding rather than refusing the whole load.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         Assert.ContainsSingle(reader.SkippedBlobs);
@@ -112,7 +112,7 @@ public sealed class ArchiveCorruptionTests : ArchiveTestHarness
         // Post-seal append is the INV-BLOB-001 violation 05 §5.1 orders a
         // reader to report — as a finding scoped to the blob, not a refusal
         // of every other blob in the store.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         Assert.ContainsSingle(reader.SkippedBlobs);

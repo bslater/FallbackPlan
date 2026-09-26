@@ -34,6 +34,10 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
     private readonly SemaphoreSlim _exchange = new(1, 1);
     private long _nextRequestId;
 
+    // The service session the exchange most recently minted, carried by the
+    // watch's own connection; distinct from the peer transport session.
+    private volatile string? _serviceSession;
+
     private RemoteServiceClient(
         PeerTlsConnection connection,
         PeerSession session,
@@ -111,13 +115,27 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
                 .ConfigureAwait(false);
 
             var frame = await FrameCodec.ReadAsync(_session.Stream, cancellationToken).ConfigureAwait(false);
-            return frame switch
+            var result = frame switch
             {
                 ResponseFrame response when response.Id == id => response.Result,
                 ResponseFrame => throw new ServiceConnectionException("The service answered a request that was not outstanding."),
                 null => throw new ServiceConnectionException("The service closed the connection without answering."),
                 _ => throw new ServiceConnectionException("The service sent a frame that was not a response."),
             };
+
+            // Remembered for the watch, which takes its own connection and
+            // therefore its own authentication gate (contract 1.20) — the
+            // same rule as the local binding.
+            if (result is SessionResult minted)
+            {
+                _serviceSession = minted.Token;
+            }
+            else if (command is LogoutCommand)
+            {
+                _serviceSession = null;
+            }
+
+            return result;
         }
         finally
         {
@@ -138,7 +156,7 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
         await using (connection.ConfigureAwait(false))
         {
             await HelloAsync(session.Stream, "fallbackplan-cli-watch", cancellationToken).ConfigureAwait(false);
-            await FrameCodec.WriteAsync(session.Stream, new WatchFrame(), cancellationToken).ConfigureAwait(false);
+            await FrameCodec.WriteAsync(session.Stream, new WatchFrame(_serviceSession), cancellationToken).ConfigureAwait(false);
 
             while (true)
             {

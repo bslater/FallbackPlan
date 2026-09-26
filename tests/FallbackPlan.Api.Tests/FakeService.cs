@@ -21,6 +21,13 @@ internal sealed class FakeService : IFallbackPlanService
 
     public Func<ServiceCommand, ServiceResult> Respond { get; set; } = _ => new AcknowledgedResult();
 
+    /// <summary>
+    /// When set, answers instead of <see cref="Respond"/> — for the tests that
+    /// need to see the token the transport hands a command, or to hold an
+    /// answer back while something happens to the connection.
+    /// </summary>
+    public Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>>? RespondAsync { get; set; }
+
     public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
     {
         lock (Received)
@@ -28,15 +35,33 @@ internal sealed class FakeService : IFallbackPlanService
             Received.Add(command);
         }
 
-        return ValueTask.FromResult(Respond(command));
+        return RespondAsync?.Invoke(command, cancellationToken) ?? ValueTask.FromResult(Respond(command));
     }
+
+    /// <summary>Set when the transport begins enumerating a watch, if a test cares.</summary>
+    public TaskCompletionSource? WatchStarted { get; set; }
+
+    /// <summary>
+    /// Set when the transport lets go of a watch enumeration — cancellation
+    /// or disposal alike. The lifecycle tests hang on this: a dead client
+    /// whose watch is never released is exactly the leak they pin against.
+    /// </summary>
+    public TaskCompletionSource? WatchEnded { get; set; }
 
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var progress in _progress.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        WatchStarted?.TrySetResult();
+        try
         {
-            yield return progress;
+            await foreach (var progress in _progress.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return progress;
+            }
+        }
+        finally
+        {
+            WatchEnded?.TrySetResult();
         }
     }
 

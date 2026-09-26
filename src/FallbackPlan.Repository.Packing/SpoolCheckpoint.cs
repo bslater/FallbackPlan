@@ -120,9 +120,9 @@ public sealed class SpoolCheckpoint
         SpoolPinnedConfiguration pinned,
         ReadOnlyMemory<byte>? contentKey = null)
     {
-        // Empty is "none" — the shape a v1 writer's null byte[] arrives in
-        // through the implicit ReadOnlyMemory conversion — so only a PRESENT
-        // key of the wrong length is a caller defect.
+        // Empty is "none" — the shape a symmetric writer's null byte[] arrives
+        // in through the implicit ReadOnlyMemory conversion — so only a
+        // PRESENT key of the wrong length is a caller defect.
         if (contentKey is { Length: not (0 or 32) })
         {
             throw new ArgumentException(
@@ -165,11 +165,15 @@ public sealed class SpoolCheckpoint
     public SpoolPinnedConfiguration Pinned { get; }
 
     /// <summary>
-    /// A v2 data blob's in-flight content key (ADR-0042 §3) — resume must
-    /// authenticate the spooled records, and for a sealed blob only this key
-    /// can. Held for the blob under construction only, on a machine that
-    /// holds the same bytes as plaintext files; destroyed with the sidecar
-    /// at seal. Null for every v1 blob and every metadata blob.
+    /// A data blob's in-flight key material (ADR-0042 §3, ADR-0052
+    /// Amendment 1) — resume must authenticate the spooled records, and for
+    /// a sealed blob only this can. In a format-2 blob it is the blob's one
+    /// content key; in a format-3 blob it is the <b>record-key seed</b> from
+    /// which each record's key is derived by its object identifier
+    /// (03 §5.4), because a format-3 blob has no one content key to pin.
+    /// Held for the blob under construction only, on a machine that holds
+    /// the same bytes as plaintext files; destroyed with the sidecar at
+    /// seal. Null for every metadata blob.
     /// </summary>
     public ReadOnlyMemory<byte>? ContentKey { get; }
 
@@ -257,7 +261,7 @@ public sealed class SpoolCheckpoint
         var sidecarVersion = BinaryPrimitives.ReadUInt16BigEndian(data[8..]);
         var sidecarClass = (BlobClass)BinaryPrimitives.ReadUInt16BigEndian(data[10..]);
         var contentKeyLength =
-            sidecarVersion >= FormatLimits.SealedFormatVersion && sidecarClass == BlobClass.Data ? 32 : 0;
+            FormatVersions.SealsContent(sidecarVersion, sidecarClass == BlobClass.Data) ? 32 : 0;
 
         var codecLength = BinaryPrimitives.ReadUInt16BigEndian(data[(FixedPrefix - 2)..]);
         var total = FixedPrefix + codecLength + contentKeyLength + 32;

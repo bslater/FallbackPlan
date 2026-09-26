@@ -14,7 +14,6 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 
 ```text
 /repository-format
-/keys/<key-id>
 /blobs/data/<shard>/<store-blob-key>
 /blobs/meta/<shard>/<store-blob-key>
 /index/delta/<generation>/<delta-id>
@@ -24,6 +23,7 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /leases/<scope>/<lease-id>
 /tombstones/<object-type>/<object-id>
 /audit/<period>/<record-id>
+/format-upgrade/<to-version>
 /hints/placement/<snapshot-id>
 /hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
 /config/<backup-set-id>/<recorded-at>/<config-id>
@@ -31,11 +31,11 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 
 `<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).
 
-A set-configuration object's `<recorded-at>` follows the same zero-padded rule as `<generation>` below, so listing `/config/<backup-set-id>/` in key order yields oldest to newest and the last entry is current ([11 §5](11-lifecycle-objects.md#5-set-configuration-object)). `<config-id>` is 16 CSPRNG bytes rendered as 26 lowercase base32 characters.
+`<to-version>` under `/format-upgrade/` is a format version as four lowercase hexadecimal digits ([11 §5](11-lifecycle-objects.md#5-format-upgrade-record)).
 
 `<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` and a source-identity hint's `<captured-at>` ([06 §11](06-manifests.md#11-source-identity)) follow the same rule; that hint's `<shard>` is the first four base32 characters of its `<source-key>`, sharded for the reason blobs are — one child per file in the repository is exactly the listing prefix this rule exists to bound.
 
-> **Erratum (phase 0).** This specification never defines how `<delta-id>`, `<checkpoint-id>`, or `<key-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6); the key identifier is likewise 16 opaque bytes, and readers discover it by listing `/keys/` (see the erratum at §6).
+> **Erratum (phase 0).** This specification never defines how `<delta-id>` or `<checkpoint-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6). The `/keys/<key-id>` entry that used to sit beside them belonged to format 1 and went with it ([03 §3](03-keys.md#3-the-key-object)).
 
 ### 2.1 What keys must not reveal
 
@@ -78,9 +78,19 @@ The magic string is checked first. An object that does not begin with it is not 
 | 6 | u64 | `created_at` — informational only |
 | 7 | text | `created_by` — implementation name and version, informational |
 | 8 | bool | `unstable_format` — `true` while the format is unfrozen |
-| 9 | bytes[32] | `sealing_public_key` — **format v2 only** ([03 §9](03-keys.md#9-write-only-repositories-format-v2)): the X25519 public key data-blob content keys seal to, and the derive-and-compare wrong-passphrase verifier. Not a secret, exactly like the salt. A v2 descriptor MUST carry it; a v1 descriptor MUST NOT |
+| 9 | bytes[32] | `sealing_public_key` ([03 §2](03-keys.md#2-the-root)): the X25519 public key data-blob content keys seal to, and the derive-and-compare wrong-passphrase verifier. Not a secret, exactly like the salt. Mandatory: a descriptor without it has lost its verifier and is refused |
 
-A format-v2 descriptor MUST list feature `0x0001` (`sealed-data-plane`) in `required_features`, so a reader that predates the sealed data plane refuses through the rule below with the identifier named rather than half-reading sealed blobs.
+A descriptor MUST list feature `0x0001` (`sealed-data-plane`) in `required_features`, so a reader that predates the sealed data plane refuses through the rule below with the identifier named rather than half-reading sealed blobs.
+
+The feature identifiers this specification defines:
+
+| Identifier | Name | Listed by | Means |
+|---|---|---|---|
+| `0x0001` | `sealed-data-plane` | every descriptor | Data-blob content is sealed to the sealing public key ([03 §9](03-keys.md#9-write-only-repositories-format-v2)) |
+| `0x0002` | `reclaim-authority` | every descriptor | Tombstones and retention instructions are signed under the reclaim key ([11 §3](11-lifecycle-objects.md); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
+| `0x0003` | `relocatable-records` | a format-3 descriptor, and never a format-2 one | Records are keyed to the object, carry their nonce and omit the ordinal from their associated data ([04 §3–§4](04-record.md#3-nonce)); a reader that does not implement format 3 refuses by this name ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) |
+
+A format-3 descriptor MUST list `0x0003` and a format-2 descriptor MUST NOT; a reader MUST treat either mismatch as a format violation, because the version and the feature name one fact and a descriptor in which they disagree was not written by a conforming writer.
 
 A reader MUST refuse the repository if `required_features` contains any identifier it does not implement, naming the unimplemented identifier. It MUST NOT proceed on the assumption that an unknown feature is unimportant.
 
@@ -118,15 +128,14 @@ Both proceed by tombstone, grace period, and revalidation before the delete — 
 
 A reader bootstraps in this order:
 
-1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` and `required_features`.
-2. Derive the key-encryption key from the passphrase using `kdf_parameters`.
-3. Fetch and unwrap `/keys/<key-id>` ([03](03-keys.md)).
+1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` — it MUST be 2 or 3; a reader that meets 1 refuses by name, naming re-seeding as the remedy — and `required_features`.
+2. Derive the root from the passphrase using `kdf_parameters`, expand the sealing scalar, and compare its public key with key 9 ([03 §2](03-keys.md#2-the-root)). A holder of the write credential instead compares the credential's public key with key 9; either way nothing is fetched and nothing is unwrapped.
+3. There is no third fetch: the derivation is the whole of the key material ([03 §3](03-keys.md#3-the-key-object)).
 4. Enumerate `/snapshots/…` to establish a stable snapshot set.
 5. Load the index generation needed to resolve that set ([07](07-index.md)).
 
 Step 4 precedes step 5 deliberately. A snapshot is published only after every object it references is durable, so a reader that fixes the snapshot set first and then loads the index can never observe a snapshot whose objects are unresolvable. Doing it the other way round exposes the reader to a partially published view. → [`04-concurrency-and-publication.md` §5](../../docs/architecture/04-concurrency-and-publication.md#5-publication-order)
 
-> **Erratum (phase 0).** Step 3 names `/keys/<key-id>` but nothing tells the reader the key identifier: the descriptor body (§3.2) has no key-id field. Pending a normative fix, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 3 applies: the reader lists `/keys/` and attempts to unwrap what it finds; creation writes the key object before the descriptor, so a visible descriptor implies the key object is durable, and a lagging listing is a transient open failure to retry — not a damage finding.
 
 ---
 

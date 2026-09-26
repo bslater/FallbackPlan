@@ -28,6 +28,16 @@ Restore-time verification (FR-RST-002) catches this at the moment the user needs
 
 ### Trust domains — new
 
+> **Amended 2026-09.** The default is `device`, and `repository` is
+> refused at configuration time rather than merely not chosen. With format
+> 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) every writer holds the write credential and no
+> content key ([ADR-0042 §7](0042-write-only-repositories.md)), so the
+> fetch-decrypt-confirm that verify-on-reuse rests on cannot be performed
+> by any writer at all; a domain that would silently answer "unavailable"
+> on every check is refused by name with the device domain as the remedy.
+> `repository-unverified` keeps its acknowledgement and its behaviour. The
+> three-domain model and the identifiers are unchanged.
+
 | Domain | Behaviour | Default |
 |--------|-----------|---------|
 | `device` | Reuse only segments this device wrote | Opt-in (hardened) |
@@ -173,4 +183,5 @@ durable object later is a minor-version change, so nothing is foreclosed.
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted (amended) | Default changed from `device` to `repository` — the original rationale did not distinguish the two (PT-11). Writer-attribution and verification-state recovery specified (PT-12). Three-domain model itself unchanged. |
+| 2026-09 | Amended | Default `device`; `repository` refused by name for every writer, none of which holds a content key ([ADR-0042 §7](0042-write-only-repositories.md)). Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
 | 2026-08 | Accepted (amended) | Built. PT-12's open half resolved the second way: verification outcomes are catalogue state and a rebuild re-imposes the read, rather than a durable repository object designed before anything consumes it. |

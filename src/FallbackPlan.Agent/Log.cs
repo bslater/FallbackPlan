@@ -1,3 +1,4 @@
+using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
@@ -23,6 +24,27 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 internal static partial class Log
 {
+    [LoggerMessage(
+        EventId = 3764, Level = LogLevel.Warning,
+        Message = "Set {SetId}: writer sequence adopted the repository's observed head, {From} -> {To} — local allocation state was behind its own published history")]
+    internal static partial void ObservedHeadAdopted(ILogger logger, string setId, ulong from, ulong to);
+
+    [LoggerMessage(
+        EventId = 3765, Level = LogLevel.Warning,
+        Message = "Set {SetId}: the repository's observed head could not be read ({Reason}); the sequence keeps local state and the colliding-put refusal stands behind it")]
+    internal static partial void ObservedHeadUnavailable(ILogger logger, string setId, string reason);
+
+    [LoggerMessage(
+        EventId = 3771, Level = LogLevel.Information,
+        Message = "Set {SetId} adopted repository {RepositoryId} from destination {Destination}: {SnapshotCount} snapshot(s), writer identity resumed: {WriterIdentityResumed}")]
+    internal static partial void ArchiveAdopted(
+        ILogger logger, string setId, string repositoryId, string destination, int snapshotCount, bool writerIdentityResumed);
+
+    [LoggerMessage(
+        EventId = 3772, Level = LogLevel.Warning,
+        Message = "This installation now writes under the adopted archive's writer identity {WriterId}; its own never published")]
+    internal static partial void WriterIdentityResumed(ILogger logger, string writerId);
+
     [LoggerMessage(
         EventId = 3700, Level = LogLevel.Error,
         Message = "Job {JobId} ({Description}) failed past its own handler")]
@@ -68,21 +90,8 @@ internal static partial class Log
         Message = "Retrieval session served for {Fingerprint}")]
     internal static partial void RetrievalServed(ILogger logger, string fingerprint);
 
-    [LoggerMessage(
-        EventId = 3755, Level = LogLevel.Warning,
-        Message = "Peer {Fingerprint} claimed {Count} replica(s) by proving the passphrase; "
-            + "ageing them is refused until an operator acknowledges it")]
-    internal static partial void ReplicasClaimed(ILogger logger, string fingerprint, int count);
 
-    [LoggerMessage(
-        EventId = 3756, Level = LogLevel.Information,
-        Message = "Claimed {Count} replica(s) from peer {Fingerprint} by proving the passphrase")]
-    internal static partial void ReplicasClaimedFrom(ILogger logger, string fingerprint, int count);
 
-    [LoggerMessage(
-        EventId = 3757, Level = LogLevel.Warning,
-        Message = "Peer {Fingerprint} could not be asked to serve a claim: {Reason}")]
-    internal static partial void ClaimPeerUnreachable(ILogger logger, string fingerprint, string reason);
 
     [LoggerMessage(
         EventId = 3722, Level = LogLevel.Information,
@@ -102,6 +111,44 @@ internal static partial class Log
     internal static partial void Replicated(ILogger logger, long committed, string fingerprint);
 
     [LoggerMessage(
+        EventId = 3725, Level = LogLevel.Warning,
+        Message = "A receipt for {Fingerprint} was sent but could not be filed here: {Detail}")]
+    internal static partial void DeletionReceiptNotFiled(ILogger logger, string fingerprint, string detail);
+
+    [LoggerMessage(
+        EventId = 3726, Level = LogLevel.Warning,
+        Message = "Deletion receipt from peer {Destination} for set {Set} rejected: {Detail}")]
+    internal static partial void DeletionReceiptRejected(ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3727, Level = LogLevel.Warning,
+        Message = "Deletion receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
+    internal static partial void DeletionReceiptNotFiledByCommander(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3778, Level = LogLevel.Warning,
+        Message = "Replication receipt from peer {Destination} for set {Set} rejected: {Detail}")]
+    internal static partial void ReplicationReceiptRejected(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3779, Level = LogLevel.Warning,
+        Message = "Replication receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
+    internal static partial void ReplicationReceiptNotFiledByCommander(
+        ILogger logger, string destination, string set, string detail);
+
+    [LoggerMessage(
+        EventId = 3780, Level = LogLevel.Information,
+        Message = "Swept {Deletions} deletion receipt(s) and {Replications} replication receipt(s) past their retention")]
+    internal static partial void ReceiptsSwept(ILogger logger, int deletions, int replications);
+
+    [LoggerMessage(
+        EventId = 3781, Level = LogLevel.Warning,
+        Message = "Compaction did not run for set {Set}; the retention this pass did stands and the next pass retries")]
+    internal static partial void CompactionFailed(ILogger logger, string set, Exception exception);
+
+    [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
     internal static partial void LogLevelChanged(ILogger logger, string category, string level);
@@ -117,10 +164,67 @@ internal static partial class Log
         Message = "Set {SetName} is not due yet; next run {NextRun}")]
     internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
 
+    // Information rather than Debug: a window is a setting an operator chose,
+    // and "nothing ran last night" is the question it creates. A pass that
+    // held everything back says so at the tier an operator actually reads.
+    [LoggerMessage(
+        EventId = 3782, Level = LogLevel.Information,
+        Message = "Background window {Window} is shut; nothing scheduled runs until {NextOpen}")]
+    internal static partial void BackgroundWindowShut(ILogger logger, string window, string nextOpen);
+
+    // The other half of the same question: not "nothing started" but
+    // "something that was already running stopped". A capture parking at ten
+    // in the evening is the most visible thing a window does, and the least
+    // guessable without a line saying so.
+    [LoggerMessage(
+        EventId = 3783, Level = LogLevel.Information,
+        Message = "Background window {Window} shut over {Runs} running capture(s); each parks at its next file boundary")]
+    internal static partial void BackgroundWindowParked(ILogger logger, string window, int runs);
+
+    // The Information-tier half of configuration loading: the load itself is
+    // Debug (Application's 3400, once per scheduler pass); this fires on the
+    // first load and then only when the content differs from the last one, so
+    // the operator's tier records edits rather than re-reads.
+    [LoggerMessage(
+        EventId = 3742, Level = LogLevel.Information,
+        Message = "Configuration in force: schema {Schema}, {Sets} sets, {Destinations} destinations")]
+    internal static partial void ConfigurationChanged(
+        ILogger logger, int schema, int sets, int destinations);
+
     [LoggerMessage(
         EventId = 3730, Level = LogLevel.Information,
         Message = "Service listening on the local binding")]
     internal static partial void LocalBindingUp(ILogger logger);
+
+    // The startup configuration record (FR-SVC-010; ADR-0049): what the
+    // service RESOLVED to operate against, not what was typed — provenance
+    // included — so a diagnostic log alone can reconstruct its posture.
+    // Paths are honest here and redacted where records leave the machine
+    // (ADR-0043's rendering boundary), and no line carries a secret: the
+    // passphrase appears only as a posture word.
+    [LoggerMessage(
+        EventId = 3760, Level = LogLevel.Information,
+        Message = "Operating against state {StateDirectory} ({StateProvenance}) and archives {ArchivesRoot} ({ArchivesProvenance})")]
+    internal static partial void StartupLocations(
+        ILogger logger, string stateDirectory, string stateProvenance, string archivesRoot, string archivesProvenance);
+
+    [LoggerMessage(
+        EventId = 3761, Level = LogLevel.Information,
+        Message = "Posture: poll {PollSeconds}s, backup pool {PoolWidth}, remote binding {RemoteBinding}")]
+    internal static partial void StartupPosture(
+        ILogger logger, int pollSeconds, int poolWidth, string remoteBinding);
+
+    [LoggerMessage(
+        EventId = 3762, Level = LogLevel.Information,
+        Message = "Set '{Set}': {Roots} root(s), schedule {Schedule}, {Destinations} destination(s), direct-ship {DirectShip}, priority {Priority}")]
+    internal static partial void StartupSet(
+        ILogger logger, string set, int roots, string schedule, int destinations, bool directShip, string priority);
+
+    [LoggerMessage(
+        EventId = 3763, Level = LogLevel.Information,
+        Message = "Destination '{Destination}': kind {Kind}, failure domain {Domain}")]
+    internal static partial void StartupDestination(
+        ILogger logger, string destination, string kind, string domain);
 
     [LoggerMessage(
         EventId = 3731, Level = LogLevel.Information,
@@ -156,19 +260,117 @@ internal static partial class Log
         Message = "Account {User} removed; {Sessions} live session(s) ended with it")]
     internal static partial void AccountDeleted(ILogger logger, string user, int sessions);
 
+    // The refusals the gate answers were, for a long stretch of one real
+    // incident, invisible: a client with a lapsed session failed every
+    // command for sixteen minutes and a trace-level log never said why —
+    // the listener's generic "answered ServiceError" was all there was.
+    // These name the why. The token is a credential whether or not it has
+    // lapsed, so like the password above it has no parameter to ride in.
     [LoggerMessage(
-        EventId = 3758, Level = LogLevel.Trace,
-        Message = "{Command} answered {Result} in {ElapsedMilliseconds} ms")]
-    internal static partial void CommandExecuted(
-        ILogger logger, string command, string result, long elapsedMilliseconds);
+        EventId = 3755, Level = LogLevel.Debug,
+        Message = "A session resume was refused: the presented token is expired, revoked, or unknown")]
+    internal static partial void SessionResumeRefused(ILogger logger);
 
     [LoggerMessage(
-        EventId = 3760, Level = LogLevel.Debug,
-        Message = "Setup provisioning answered '{Outcome}'")]
-    internal static partial void ProvisionOutcome(ILogger logger, string outcome);
+        EventId = 3756, Level = LogLevel.Trace,
+        Message = "Session resumed for {User}")]
+    internal static partial void SessionResumed(ILogger logger, string user);
 
     [LoggerMessage(
-        EventId = 3761, Level = LogLevel.Debug,
-        Message = "Recovery-kit confirmation answered '{Outcome}'")]
-    internal static partial void RecoveryKitConfirmation(ILogger logger, string outcome);
+        EventId = 3757, Level = LogLevel.Trace,
+        Message = "{Command} refused: this connection has not signed in")]
+    internal static partial void CommandRefusedUnauthenticated(ILogger logger, string command);
+
+    // Warning: a destination leaving mid-run means this backup commits with
+    // one copy fewer than the configuration promises, and the catch-up that
+    // heals it is silent when it works.
+    [LoggerMessage(
+        EventId = 3758, Level = LogLevel.Warning,
+        Message = "Destination {Destination} dropped from this backup run: {Reason}. Its replica lags until the next catch-up")]
+    internal static partial void ShipDestinationDropped(ILogger logger, string destination, string reason);
+
+    // Warning: a queued job with no tracked cancellation cannot be run and is
+    // discarded — unreachable while identities stay fresh, and the silent
+    // version of this is an awaiter that hangs forever.
+    [LoggerMessage(
+        EventId = 3759, Level = LogLevel.Warning,
+        Message = "Job {JobId} ({Description}) was dequeued with no tracked cancellation and was discarded")]
+    internal static partial void QueuedJobUntracked(ILogger logger, string jobId, string description);
+
+    // Debug rather than Information: on a busy install this is the commonest
+    // thing a pass does, and it is the absence of work. It is here at all
+    // because "the sync did nothing and said nothing" and "the sync did not
+    // run" look identical from outside, and only one of them is a bug
+    // (ADR-0056).
+    [LoggerMessage(
+        EventId = 3766, Level = LogLevel.Debug,
+        Message = "Set {Set} is level with {Destination} at publication sequence {Sequence}; "
+            + "nothing published since it was last read through, so this pass carried nothing")]
+    internal static partial void SyncSkipped(
+        ILogger logger, string set, string destination, ulong sequence);
+
+    // Information, not Debug: this is the saving the work exists for, and an
+    // operator watching a slow uplink finish a transfer it started yesterday
+    // should be able to see that it did (ADR-0057).
+    [LoggerMessage(
+        EventId = 3767, Level = LogLevel.Information,
+        Message = "Resuming {Key} at {Offset} bytes: the destination's staged prefix matches this copy")]
+    internal static partial void ObjectResumed(ILogger logger, ObjectKey key, ulong offset);
+
+    // Information, not Warning: a replica that cannot be read back proves
+    // nothing and is accused of nothing, and the pair's row already says it is
+    // unproven. A warning here would train an operator to ignore one.
+    [LoggerMessage(
+        EventId = 3769, Level = LogLevel.Information,
+        Message = "Destination {Destination} could not be read back for proof: {Reason}. "
+            + "This pass records the sync without a verification")]
+    internal static partial void ReadBackUnavailable(ILogger logger, string destination, string reason);
+
+    // Information and not Warning, though it is a change of ownership: the
+    // claim is the recovery working, and an operator who sees this expected to
+    // see it. The peer's own ledger is the durable record of what moved.
+    [LoggerMessage(
+        EventId = 3770, Level = LogLevel.Information,
+        Message = "Peer {Fingerprint} claimed {Count} replica(s) here under its installation's claim key; "
+            + "the attribution now points at that device")]
+    internal static partial void ReplicaClaimed(ILogger logger, string fingerprint, int count);
+
+    // Warning: the bytes were staged by this pair and no longer match, so
+    // something between the two sessions damaged them. Re-sending is the right
+    // answer and a silent one would hide a destination whose disk is rotting.
+    [LoggerMessage(
+        EventId = 3768, Level = LogLevel.Warning,
+        Message = "The destination staged {Offset} bytes of {Key} that do not match this copy; "
+            + "the object is being sent whole instead")]
+    internal static partial void ObjectResumeRefused(ILogger logger, ObjectKey key, ulong offset);
+
+    [LoggerMessage(
+        EventId = 3773, Level = LogLevel.Warning,
+        Message = "Set {SetName}: destination {Destination} attests writer sequence {Attested} but local state said {Local} — "
+            + "the state directory was rolled back; the writer moved past the destination's head and this pass deletes nothing there")]
+    internal static partial void DestinationAhead(
+        ILogger logger, string setName, string destination, ulong attested, ulong local);
+
+    [LoggerMessage(
+        EventId = 3774, Level = LogLevel.Warning,
+        Message = "Set {SetName}: metadata copied back from destination {Destination} and the catalogue rebuilt in place — "
+            + "the set's local state had fallen behind what it published")]
+    internal static partial void MetadataHealedFromDestination(ILogger logger, string setName, string destination);
+
+    [LoggerMessage(
+        EventId = 3775, Level = LogLevel.Warning,
+        Message = "Set {SetName}: the heal from a destination could not copy the metadata back ({Reason}); the next pass retries")]
+    internal static partial void MetadataHealFailed(ILogger logger, string setName, string reason);
+
+    [LoggerMessage(
+        EventId = 3776, Level = LogLevel.Information,
+        Message = "Set {SetId}: catalogue rebuild during the heal reported {Finding}")]
+    internal static partial void HealRebuildFinding(ILogger logger, string setId, string finding);
+
+    [LoggerMessage(
+        EventId = 3777, Level = LogLevel.Warning,
+        Message = "Set {SetName}: {Objects} object(s), {Bytes} bytes of destination {Destination}'s newer history copied back "
+            + "into the staging archive and the catalogue rebuilt — the archive had fallen behind what it published")]
+    internal static partial void ContentHealedFromDestination(
+        ILogger logger, string setName, string destination, long objects, long bytes);
 }

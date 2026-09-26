@@ -49,7 +49,15 @@ public sealed record ResponseFrame(long Id, ServiceResult Result) : WireFrame;
 /// request/response exchange have different lifetimes, and multiplexing them
 /// buys nothing on a local socket.
 /// </summary>
-public sealed record WatchFrame : WireFrame;
+/// <param name="Session">
+/// The session token the client holds, or null when it holds none (contract
+/// 1.20). Each connection gets its own authentication gate, so the session
+/// presented on the command exchange proves nothing here — without this,
+/// every watch on an installation with accounts was anonymous and the gate
+/// answered an empty stream. Additive: a pre-1.20 service ignores it, and a
+/// pre-1.20 client's watch stays anonymous exactly as before.
+/// </param>
+public sealed record WatchFrame(string? Session = null) : WireFrame;
 
 /// <summary>One progress event travelling to a watching client.</summary>
 /// <param name="Event">The event.</param>

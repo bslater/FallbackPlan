@@ -13,6 +13,11 @@ namespace FallbackPlan.Retention.Tests;
 /// the spoke deletes exactly what it is told, and the granted floor is the
 /// one safeguard that holds when the hub is compromised — an instruction
 /// below it is refused whole, deleting nothing.
+/// Establishes FR-GC-007, and FR-GC-008's peer half (ADR-0055 §5): the spoke
+/// records the reclaim public key the offer publishes and acts on an
+/// instruction signed under it, and refuses whole — deleting nothing, exactly
+/// as a floor breach is refused — when the signature does not verify against
+/// the key it holds.
 /// </summary>
 [TestClass]
 [DoNotParallelize]
@@ -37,6 +42,7 @@ public sealed class PeerRetentionTests : IDisposable
     public PeerRetentionTests()
     {
         Directory.CreateDirectory(StateDirectory);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
         Directory.CreateDirectory(SourceRoot);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "peer retention fodder");
     }
@@ -57,19 +63,33 @@ public sealed class PeerRetentionTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
 
+        // A scheduled pass holds no authority to delete (ADR-0055 §6): the
+        // spoke received whole copies, the pass says why, and nothing was
+        // refused — an unsigned instruction was never sent.
         var replica = new LocalFileSystemObjectStore(
             Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        Assert.HasCount(3, await ListAsync(replica, "snapshots/"));
+        Assert.AreEqual(
+            DestinationSyncState.InSync, DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend")!.State);
+        Assert.Contains(
+            notice => notice.Message.Contains("reclaim grant", StringComparison.OrdinalIgnoreCase),
+            NoticeStore.Open(StateDirectory).Unacknowledged);
+
+        // The granted run is what instructs: the spoke ends holding exactly
+        // the keep-set — one snapshot — and the notice is resolved.
+        await ApplyRetentionAsync();
         Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        Assert.DoesNotContain(
+            notice => notice.Message.Contains("reclaim grant", StringComparison.OrdinalIgnoreCase),
+            NoticeStore.Open(StateDirectory).Unacknowledged);
 
         var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend");
         Assert.AreEqual(DestinationSyncState.InSync, record!.State);
 
         // The replica the spoke holds is a valid archive of exactly that
         // keep-set: it opens with the passphrase and walks clean.
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var opened = await FallbackPlan.Repository.RepositoryLifecycle.OpenAsync(
-            replica, passphrase, CancellationToken.None);
-        var survey = await StagingMark.SurveyAsync(replica, opened, CancellationToken.None);
+        using var archive = await WriteOnlyInstallation.OpenAsync(replica, PassphraseText, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(replica, archive.Repository, CancellationToken.None);
         Assert.ContainsSingle(survey.Snapshots);
         Assert.IsEmpty(survey.Undecodable);
     }
@@ -90,6 +110,7 @@ public sealed class PeerRetentionTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
 
+        await ApplyRetentionAsync();
         var replica = new LocalFileSystemObjectStore(
             Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
 
@@ -106,6 +127,95 @@ public sealed class PeerRetentionTests : IDisposable
             notice => notice.Message.Contains("floor", StringComparison.OrdinalIgnoreCase),
             NoticeStore.Open(StateDirectory).Unacknowledged);
     }
+
+    [TestMethod]
+    public async Task FanOut_TheSpokeRecordsTheReclaimKeyAndActsOnTheSignedInstruction()
+    {
+        // The peer half of ADR-0055 end to end. The spoke has no repository
+        // keys, so the only thing it can check a deletion instruction against
+        // is the reclaim public key the source published when the repository
+        // was first attributed to it.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+        await ApplyRetentionAsync();
+
+        var owner = ReplicaOwnerStore.Open(DestinationState).Find(RepositoryIdHex());
+        Assert.IsNotNull(owner);
+        Assert.IsNotNull(owner.ReclaimPublicKey, "the offer must publish the key the spoke will check against");
+        Assert.HasCount(64, owner.ReclaimPublicKey!);
+
+        // And the signed instruction was acted on, so signing did not merely
+        // fail to break anything — it went through the whole exchange.
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        Assert.AreEqual(
+            DestinationSyncState.InSync,
+            DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend")!.State);
+    }
+
+    [TestMethod]
+    public async Task FanOut_TheSpokesRecordedKeyIsNotTheRepositorys_TheInstructionIsRefusedWhole()
+    {
+        // The attack the signature closes: an instruction that did not come
+        // from the reclaim authority. Swapping the spoke's recorded key is the
+        // cheapest way to make a genuine instruction fail to verify, and what
+        // it proves is the check runs and is total — nothing is deleted.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
+
+        // The spoke holds its attribution store in memory, so the swap has to
+        // happen while it is down — which is also the honest shape of the
+        // attack: somebody with the destination's disk, not its process.
+        await _stop!.DisposeAsync();
+        _stop = null;
+
+        var ownersPath = Path.Combine(DestinationState, "replica-owners.json");
+        var recorded = await File.ReadAllTextAsync(ownersPath);
+        var real = ReplicaOwnerStore.Open(DestinationState).Find(RepositoryIdHex())!.ReclaimPublicKey!;
+        await File.WriteAllTextAsync(ownersPath, recorded.Replace(real, new string('a', 64), StringComparison.Ordinal));
+
+        RestartDestination();
+        WriteConfiguration(fingerprint);
+
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+        await ApplyRetentionAsync();
+
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+
+        // Both snapshots survive: a refusal is whole, exactly as the floor
+        // breach is, because a partially-honoured instruction whose authorship
+        // is in doubt is the worst of both answers.
+        Assert.HasCount(2, await ListAsync(replica, "snapshots/"));
+
+        var record = DestinationSyncStore.Open(StateDirectory).Find(SetId, "friend");
+        Assert.AreEqual(DestinationSyncState.Failed, record!.State);
+        Assert.Contains("reclaim", record.LastError!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RestartDestination()
+    {
+        var listenerKeypair = PeerKeypairStore.Open(DestinationState);
+        var listener = RemoteServiceListener.Start(
+            listenerKeypair, PeerGrantStore.Open(DestinationState), new IPEndPoint(IPAddress.Loopback, 0),
+            "fallbackplan-agent/test", log: null, replicationStateDirectory: DestinationState);
+        listener.Bind(new UnusedService());
+        _endpoint = listener.Endpoint;
+        _stop = new Stopper(listener, listenerKeypair);
+    }
+
+    private string RepositoryIdHex() =>
+        Path.GetFileName(Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
 
     [TestMethod]
     public async Task FanOut_AKeyOnlyTheSpokeHolds_SurvivesTheRetentionInstruction()
@@ -131,16 +241,66 @@ public sealed class PeerRetentionTests : IDisposable
             CancellationToken.None);
         Assert.AreEqual(PutOutcome.Created, put.Outcome);
 
-        // Two more passes, each pushing and instructing under the narrow
-        // policy; the spoke declares the planted key in every inventory.
+        // Two more passes pushing, then the granted run instructing under
+        // the narrow policy; the spoke declares the planted key in every
+        // inventory.
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
+        await BackUpAsync(start.AddHours(5));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
+        await BackUpAsync(start.AddHours(10));
+        await ApplyRetentionAsync();
+
+        Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
+        var metadata = await replica.GetMetadataAsync(planted, CancellationToken.None);
+        Assert.IsNotNull(metadata.Metadata, "the key only the spoke holds was condemned by a staging-computed drop-list");
+    }
+
+    [TestMethod]
+    public async Task ApplyRetention_FilesTheSpokesReceiptAndNamesItInTheReport()
+    {
+        // The audit half of FR-GC-008 on the peer plane (ADR-0063): the
+        // spoke's signed statement of what it deleted comes back in the
+        // acknowledgement, and the commander that verified it keeps its own
+        // copy beside the run's report — so what a granted run destroyed at
+        // a peer is on record here, under the peer's own signature, and not
+        // only as a count somebody once acknowledged.
+        var fingerprint = StartDestination(floorGenerations: 0);
+        WriteConfiguration(fingerprint);
+
+        var start = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
+        await BackUpAsync(start);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "second content");
         await BackUpAsync(start.AddHours(5));
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "third content");
         await BackUpAsync(start.AddHours(10));
 
-        Assert.HasCount(1, await ListAsync(replica, "snapshots/"));
-        var metadata = await replica.GetMetadataAsync(planted, CancellationToken.None);
-        Assert.IsNotNull(metadata.Metadata, "the key only the spoke holds was condemned by a staging-computed drop-list");
+        var replica = new LocalFileSystemObjectStore(
+            Directory.GetDirectories(Path.Combine(DestinationState, "replicas")).Single());
+        var before = await ListAsync(replica, "snapshots/");
+        Assert.HasCount(3, before);
+        Assert.IsEmpty(DeletionReceiptStore.Open(StateDirectory).List(), "nothing has been instructed yet");
+
+        var lines = await ApplyRetentionAsync();
+
+        var lost = before.Except(await ListAsync(replica, "snapshots/"), StringComparer.Ordinal).ToList();
+        Assert.HasCount(2, lost);
+
+        var filed = Assert.ContainsSingle(DeletionReceiptStore.Open(StateDirectory).List());
+        Assert.AreEqual(DeletionReceiptRole.Commander, filed.Role);
+        Assert.IsTrue(filed.Verified, filed.Problem);
+        Assert.AreEqual("docs", filed.Set);
+        Assert.AreEqual("friend", filed.Destination);
+        Assert.AreEqual(fingerprint, filed.SignerFingerprint);
+
+        var receipt = filed.Receipt!;
+        CollectionAssert.IsSubsetOf(lost, receipt.Deleted.ToList(), "the receipt does not name the snapshots the replica lost");
+        Assert.AreEqual((ulong)receipt.Deleted.Count, receipt.DeletedCount);
+        Assert.AreEqual(0u, receipt.NotHeld, "the instruction named only what the spoke declared");
+
+        var line = Assert.ContainsSingle(lines.Where(candidate =>
+            candidate.Contains("converged under the grant", StringComparison.Ordinal)));
+        Assert.Contains($"{receipt.DeletedCount} object(s) deleted", line, StringComparison.Ordinal);
+        Assert.Contains(Path.GetFileName(filed.Path), line, StringComparison.Ordinal);
     }
 
     private void WriteConfiguration(string fingerprint) => new ClientConfiguration
@@ -201,10 +361,37 @@ public sealed class PeerRetentionTests : IDisposable
         return destinationKeypair.Identity.Fingerprint;
     }
 
+    /// <summary>
+    /// The granted collection run (ADR-0055 §6): the same command a console
+    /// sends, with the reclaim grant the passphrase derives — which is what
+    /// instructs the spoke, since a scheduled pass holds no authority to
+    /// delete.
+    /// </summary>
+    /// <returns>The run's report lines.</returns>
+    private async Task<IReadOnlyList<string>> ApplyRetentionAsync()
+    {
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = ArchivesRoot, StateDirectory = StateDirectory },
+            CancellationToken.None);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var description = (Api.ServiceDescriptionResult)await handler.ExecuteAsync(
+            new Api.DescribeServiceCommand(), CancellationToken.None);
+        var applied = await handler.ExecuteAsync(
+            new Api.RetentionCommand(
+                Apply: true,
+                ReclaimGrant: WriteOnlyInstallation.ReclaimGrant(
+                    StateDirectory, PassphraseText, description.RestoreGrantRecipient!)),
+            CancellationToken.None);
+        Assert.IsInstanceOfType<Api.RetentionResult>(
+            applied, (applied as Api.ServiceError)?.Message ?? applied.GetType().Name);
+        return ((Api.RetentionResult)applied).Lines;
+    }
+
     private async Task BackUpAsync(DateTimeOffset now)
     {
         using var passphrase = Passphrase.Create(PassphraseText);
-        var result = await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 

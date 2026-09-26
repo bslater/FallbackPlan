@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;
@@ -71,5 +72,40 @@ public sealed class NonceUniquenessTests
         }
 
         return salts;
+    }
+
+    [TestMethod]
+    public void RecordKeystream_V3_AcrossObjectsAndRepeatedSealsOfOne_NoKeyNoncePairRepeats()
+    {
+        // Format 3 moves uniqueness from position to the pair (object key,
+        // carried nonce) (specification 03 §5.4, 04 §3): distinct objects
+        // derive distinct keys under one class key, and one object sealed
+        // again — by another writer, or with different stored bytes — draws
+        // a fresh random nonce. A zero nonce would pass the first half and
+        // fail the second, which is why the second half is here.
+        var classKey = new byte[32];
+        var seen = new HashSet<string>();
+
+        for (var index = 0; index < 512; index++)
+        {
+            var id = ObjectId.FromBytes(System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(index)));
+            var key = new byte[RecordKeyDeriver.RecordKeyLength];
+            RecordKeyDeriver.Derive(classKey, ObjectType.SegmentRecord, id, key);
+            var nonce = new byte[Repository.Format.Records.RecordNonce.AesGcmLength];
+            Repository.Format.Records.RecordNonce.DrawRandom(nonce);
+            Assert.IsTrue(seen.Add($"{Convert.ToHexStringLower(key)}:{Convert.ToHexStringLower(nonce)}"));
+        }
+
+        var one = ObjectId.FromBytes(new byte[32]);
+        var oneKey = new byte[RecordKeyDeriver.RecordKeyLength];
+        RecordKeyDeriver.Derive(classKey, ObjectType.SegmentRecord, one, oneKey);
+        for (var repeat = 0; repeat < 512; repeat++)
+        {
+            var nonce = new byte[Repository.Format.Records.RecordNonce.AesGcmLength];
+            Repository.Format.Records.RecordNonce.DrawRandom(nonce);
+            Assert.IsTrue(
+                seen.Add($"{Convert.ToHexStringLower(oneKey)}:{Convert.ToHexStringLower(nonce)}"),
+                "one object sealed twice must never reuse its key with one nonce");
+        }
     }
 }

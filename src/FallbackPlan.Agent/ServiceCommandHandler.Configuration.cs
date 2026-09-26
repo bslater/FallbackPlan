@@ -32,8 +32,13 @@ public sealed partial class ServiceCommandHandler
 
         // A set with work in flight is not deletable out from under it: the
         // job would finish against configuration that no longer names it.
-        var running = runtime.Jobs.Jobs.FirstOrDefault(job =>
-            string.Equals(job.BackupSetId, set.Id, StringComparison.Ordinal) && !HasSettled(job.State));
+        // The same rule as the enqueue guard (ADR-0047 Amendment 3):
+        // unsettled AND still in the queue — an orphaned journal row must
+        // not wedge a deletion behind a cancel that would refuse it.
+        var running = runtime.Jobs.Jobs.LastOrDefault(job =>
+            string.Equals(job.BackupSetId, set.Id, StringComparison.Ordinal)
+            && !HasSettled(job.State)
+            && runtime.Queue.IsActive(job.Id));
         if (running is not null)
         {
             return new ServiceError(
@@ -55,11 +60,15 @@ public sealed partial class ServiceCommandHandler
         }
 
         // Removal is a config edit, never an erasure — say what remains,
-        // because "deleted the set" is the dangerous misreading (ADR-0037 §4).
+        // because "deleted the set" is the dangerous misreading (ADR-0037 §4)
+        // — and what remains depends on the set's shape: a direct-ship set
+        // has no staging archive, only its local metadata store (ADR-0046).
         List<string> lines =
         [
             $"Backup set '{command.Name}' is no longer configured; no data was deleted.",
-            $"Its staging archive remains at '{runtime.ArchivePath(set.Id)}'.",
+            set.DirectShip
+                ? $"Its local metadata store remains at '{runtime.SetMetadataPath(set.Id)}'."
+                : $"Its staging archive remains at '{runtime.ArchivePath(set.Id)}'.",
         ];
         lines.AddRange(set.Destinations.Select(reference =>
             $"Destination '{reference.Ref}' keeps every copy it holds for this set."));
@@ -77,7 +86,8 @@ public sealed partial class ServiceCommandHandler
             destination.Endpoint,
             destination.FailureDomain is { } domain ? DomainName(domain) : null,
             destination.DeepVerifyIntervalDays,
-            destination.AddressDefect))]);
+            destination.AddressDefect,
+            destination.Priority))]);
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
     {
@@ -107,18 +117,66 @@ public sealed partial class ServiceCommandHandler
                 string.Equals(candidate.Id, id, StringComparison.Ordinal))
             : null;
 
+        // A relative path is pinned to an absolute one HERE, at the moment
+        // the operator can still see what it meant. Stored verbatim, it
+        // resolves against whatever working directory the service happens to
+        // run with — which is how a replica tree appeared beside the logs in
+        // the 2026-08 report while the intended folder stayed empty.
+        var declaredPath = command.Destination.Path;
+        var resolvedFromRelative =
+            kind == DestinationKind.LocalPath && declaredPath is { Length: > 0 } && !Path.IsPathRooted(declaredPath);
+        var path = resolvedFromRelative ? Path.GetFullPath(declaredPath!) : declaredPath;
+
         var replacement = new DestinationConfiguration
         {
             Id = command.Destination.Id ?? Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)),
             Name = command.Destination.Name,
             Kind = kind,
-            Path = command.Destination.Path,
+            Path = path,
             Fingerprint = command.Destination.Fingerprint,
             Endpoint = command.Destination.Endpoint,
             FailureDomain = domain,
             Verification = existing?.Verification,
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
+            // Null preserves — a pre-1.17 client cannot see the field.
+            Priority = command.Destination.Priority ?? existing?.Priority,
         };
+
+        // The circular-capture guard (FR-DEST-011), entered from this door:
+        // a destination declared inside a set's captured sources is refused
+        // unless that set's own excludes provably fence it off.
+        var circular = CircularCapture.Defects(configuration.BackupSets, [replacement], serviceStorage: []);
+        if (circular.Count > 0)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
+        }
+
+        // The placement condition, entered from this door (ADR-0051,
+        // FR-DEST-017): moving an already-referenced local destination's
+        // path onto a root's drive creates the same violation choosing it
+        // would — judged only when the path actually changes, so a standing
+        // older binding survives unrelated edits (ADR-0035).
+        if (kind == DestinationKind.LocalPath
+            && path is { Length: > 0 }
+            && existing is not null
+            && !string.Equals(existing.Path, path, StringComparison.Ordinal))
+        {
+            foreach (var set in configuration.BackupSets.Where(set => set.Destinations.Any(reference =>
+                string.Equals(reference.Ref, existing.Name, StringComparison.Ordinal))))
+            {
+                if (LocalDestinationPlacement.Judge(
+                        [.. set.Roots.Select(root => root.Path)], path,
+                        runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.InvalidArgument,
+                        $"Moving '{existing.Name}' to '{path}' would put it on "
+                        + $"{(conflict.SamePhysicalDisk ? "the same physical drive as" : "the same volume as")} "
+                        + $"root '{conflict.Root}' of backup set '{set.Name}' — a backup on the drive the files "
+                        + "live on dies with them (ADR-0051).");
+                }
+            }
+        }
 
         var destinations = configuration.Destinations.ToList();
         var index = existing is null
@@ -159,7 +217,12 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
-        return new AcknowledgedResult();
+        // The resolution is the one part of the declaration the operator did
+        // not type, so it is said back rather than silently stored.
+        return resolvedFromRelative
+            ? new ConfigurationChangeResult(
+                [$"Destination '{replacement.Name}' named the relative path '{declaredPath}'; stored as '{path}'."])
+            : new AcknowledgedResult();
     }
 
     private ServiceResult DeleteDestination(DeleteDestinationCommand command)
@@ -225,6 +288,301 @@ public sealed partial class ServiceCommandHandler
 
         return new ConfigurationChangeResult(lines);
     }
+
+    /// <summary>
+    /// Retires a migrated direct-ship set's staging archive (ADR-0046,
+    /// FR-DEST-002's spirit): the one deliberately destructive act of the
+    /// migration, refused while it would lose anything. Every object staging
+    /// holds (lifecycle objects aside — they never leave staging) must be
+    /// present in the union of the set's destination replicas.
+    /// </summary>
+    /// <summary>
+    /// Moves one set's repository to the latest format this build writes
+    /// (ADR-0066, contract 1.36) by appending a signed record. The descriptor
+    /// is not touched: a destination seeds one only if absent and a peer
+    /// keeps the copy it has, so a rewritten descriptor would move the source
+    /// alone and leave every copy claiming the older format over newer blobs.
+    /// </summary>
+    private async ValueTask<ServiceResult> UpgradeSetFormatAsync(
+        UpgradeSetFormatCommand command, CancellationToken cancellationToken)
+    {
+        var set = runtime.Configuration.FindSet(command.SetName);
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        // The eviction below swaps the archive handle out beneath whoever
+        // holds it, which is the storage-shape flip's rule applied to the one
+        // other edit with the same blast radius.
+        var lastJob = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
+        if (lastJob is not null && !JobStateStore.HasSettled(lastJob.State) && runtime.Queue.IsActive(lastJob.Id))
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' has a run in progress — the format cannot change under a live run. "
+                + "Cancel it or let it finish, then upgrade again.");
+        }
+
+        if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is not { } archive)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' holds no archive yet, so there is nothing to upgrade — a set this "
+                + $"build creates is born at format version {FormatLimits.FormatVersion}. Back it up once.");
+        }
+
+        var effective = archive.Repository.EffectiveFormatVersion;
+        if (effective >= FormatLimits.FormatVersion)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' already writes repository format version {effective}; this build "
+                + $"writes {FormatLimits.FormatVersion}, so there is nothing to move it to.");
+        }
+
+        ushort from;
+        try
+        {
+            from = await runtime.UpgradeSetFormatAsync(
+                set.Id, FormatLimits.FormatVersion, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
+        }
+
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        runtime.Notices.Resolve($"format-upgradable:{set.Id}", nowMs);
+
+        return new ConfigurationChangeResult(
+        [
+            $"Backup set '{set.Name}': repository format {from} → {FormatLimits.FormatVersion}. The record is "
+            + "signed under the repository's signing key and appended; the descriptor is unchanged.",
+            "Everything already sealed stays exactly as it is and reads as it always did; the newer format "
+            + "begins at the set's next blob.",
+            "The record reaches each destination on the next reconciling pass — until it arrives, a copy holds "
+            + "newer blobs than the record it has, which costs nothing because every blob declares its own "
+            + "container.",
+            "This cannot be undone, and a build older than this one would read the newer blobs as damage "
+            + "rather than as a format it does not know (ADR-0066).",
+        ]);
+    }
+
+    private async ValueTask<ServiceResult> RetireStagingAsync(
+        RetireStagingCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+        var set = configuration.FindSet(command.SetName);
+        if (set is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.SetName}' is configured.");
+        }
+
+        if (!set.DirectShip)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Backup set '{set.Name}' is not direct-ship; its staging archive is where its backups live.");
+        }
+
+        var stagingPath = runtime.ArchivePath(set.Id);
+        if (!File.Exists(Path.Combine(stagingPath, Repository.RepositoryLifecycle.DescriptorKey.Value)))
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused, $"Backup set '{set.Name}' holds no staging archive to retire.");
+        }
+
+        // The archive names the repository id every replica directory is
+        // keyed by — one open, outside the loop, because it answers the same
+        // for every destination.
+        var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+        if (archive is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused, $"Backup set '{set.Name}' has no archive open to compare against.");
+        }
+
+        // The union of what the destinations hold. Reachability is required
+        // of every referenced local-path destination: an absent drive might
+        // be the only holder of something staging is about to stop holding.
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reference in set.Destinations)
+        {
+            if (configuration.FindDestination(reference.Ref) is not
+                { Kind: DestinationKind.LocalPath } destination)
+            {
+                continue;
+            }
+
+            if (destination.AddressDefect is { } defect)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused, $"Destination '{destination.Name}': {defect}");
+            }
+
+            if (!Directory.Exists(destination.Path))
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"Destination '{destination.Name}' at '{destination.Path}' is not reachable; retirement "
+                    + "needs every destination present to prove nothing would be lost.");
+            }
+
+            var replica = new Storage.Local.LocalFileSystemObjectStore(
+                Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString()));
+            await foreach (var entry in replica.ListAsync(
+                Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                union.Add(entry.Key.Value);
+            }
+        }
+
+        // What retirement could actually cost is narrower than what staging
+        // happens to hold, and the difference is the whole of this gate. The
+        // flip copied every non-blob object into the metadata store
+        // (ADR-0046), so only blob content can be lost here — and only blob
+        // content that a snapshot the repository still lists can reach. An
+        // object outside that closure is not history anybody is owed, and no
+        // pass will ever carry it: the copy follows the snapshot graph and,
+        // under a per-destination policy, the keep-set closure (FR-GC-010),
+        // so a blob a policy stranded or an interrupted run left behind is
+        // invisible to it. Demanding one anyway refused retirement for ever
+        // and made the archive's disk space the hostage, which is the one
+        // thing retirement exists to release.
+        var survey = await Retention.StagingMark.SurveyAsync(
+            archive.Store, archive.Repository, cancellationToken).ConfigureAwait(false);
+        if (survey.Undecodable.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{survey.Undecodable.Count} snapshot object(s) will not decode, so what the staging archive "
+                + "still owes cannot be established; run the verify verb before retiring.");
+        }
+
+        using var reader = new Repository.RepositoryReader(
+            archive.Repository.RepositoryId, archive.Repository.Keys, archive.Store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var (reachable, unwalkable) = await Retention.StagingMark.MarkAsync(
+            reader, survey.Snapshots, cancellationToken).ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{unwalkable.Count} manifest(s) in the live history would not read, so nothing here can "
+                + "prove the archive is safe to delete; run the verify verb before retiring.");
+        }
+
+        var needed = reader.Blobs
+            .Where(blob => blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+            .Select(blob => blob.StoreKey.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // The metadata plane's own safety check. Migration is idempotent and
+        // runs at the first open after the flip, so this should hold of every
+        // set that got here — but it is the one way a non-blob object could
+        // exist in staging alone, and deleting the only copy of an index
+        // delta is not something to discover afterwards.
+        var metadata = new Storage.Local.LocalFileSystemObjectStore(runtime.SetMetadataPath(set.Id));
+        var metadataHeld = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in metadata.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            metadataHeld.Add(entry.Key.Value);
+        }
+
+        var staging = new Storage.Local.LocalFileSystemObjectStore(stagingPath);
+        var missing = new List<string>();
+        var unmigrated = new List<string>();
+        var discarded = 0L;
+        await foreach (var entry in staging.ListAsync(
+            Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            var key = entry.Key.Value;
+            if (key.StartsWith("tombstones/", StringComparison.Ordinal)
+                || key.StartsWith("leases/", StringComparison.Ordinal)
+                || union.Contains(key))
+            {
+                continue;
+            }
+
+            if (!key.StartsWith("blobs/", StringComparison.Ordinal))
+            {
+                if (!metadataHeld.Contains(key))
+                {
+                    unmigrated.Add(key);
+                }
+
+                continue;
+            }
+
+            // A blob the reader could not open is absent from `needed` by
+            // construction, and that is the right answer: damaged bytes no
+            // restore can use are not a reason to hold the archive. The
+            // count says so rather than letting it pass in silence.
+            if (needed.Contains(key))
+            {
+                missing.Add(key);
+            }
+            else
+            {
+                discarded++;
+            }
+        }
+
+        if (unmigrated.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{unmigrated.Count} metadata object(s) — {Sample(unmigrated)} — are held by the staging "
+                + "archive alone and never reached this set's metadata store; the flip's migration did not "
+                + "complete, and retiring now would delete the only copy.");
+        }
+
+        if (missing.Count > 0)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"{missing.Count} blob(s) the live history still needs — {Sample(missing)} — have reached no "
+                + "destination; run a scheduler pass (or the sync verb) to finish seeding, then retire again.");
+        }
+
+        try
+        {
+            Directory.Delete(stagingPath, recursive: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new ServiceError(ServiceErrorReason.Failed, exception.Message);
+        }
+
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        runtime.Notices.Resolve($"staging-retirable:{set.Id}", nowMs);
+
+        return new ConfigurationChangeResult(
+        [
+            $"Backup set '{set.Name}': the staging archive was retired; every blob the live history needs "
+            + "is at a destination.",
+            discarded > 0
+                ? $"{discarded} blob(s) no live snapshot reaches went with it — history a retention policy "
+                + "dropped, or bytes an interrupted run left behind. Nothing referenced them."
+                : "It held nothing beyond that.",
+            "The set publishes straight to its destinations; the agent keeps metadata only (ADR-0046).",
+        ]);
+    }
+
+    /// <summary>
+    /// Up to three keys of a refusal's evidence, so the message names
+    /// something the operator can go and look at rather than a bare count.
+    /// </summary>
+    private static string Sample(List<string> keys) =>
+        string.Join(", ", keys.Take(3)) + (keys.Count > 3 ? ", …" : string.Empty);
 
     private PairingsResult ListPairings() =>
         new([.. PeerGrantStore.Open(runtime.Options.StateDirectory).Grants
@@ -424,6 +782,26 @@ public sealed partial class ServiceCommandHandler
             defects.AddRange(ruleDefects);
         }
 
+        // The circular-capture guard, live in the editor (FR-DEST-011): a
+        // defect rather than a warning, because the save this draft previews
+        // would be refused for exactly this reason. Judged against the
+        // declared destinations whatever the draft references — any set
+        // capturing any destination's storage is the hazard.
+        if (command.Roots is { Count: > 0 } draftRoots && ConfigurationOrNull() is { } declared)
+        {
+            var draft = new BackupSetConfiguration
+            {
+                Id = new string('0', 32),
+                Name = string.Empty,
+                Roots = ClientConfiguration.DeriveLabels(
+                    [.. draftRoots.Select(path => new BackupRootConfiguration { Path = path })]),
+                IncludeRules = command.IncludeRules,
+                ExcludeRules = command.ExcludeRules,
+            };
+            defects.AddRange(CircularCapture.Defects(
+                [draft], declared.Destinations, ServiceStorage(), named: false));
+        }
+
         List<string> nextRuns = [];
         if (!string.IsNullOrWhiteSpace(command.Schedule))
         {
@@ -503,7 +881,7 @@ public sealed partial class ServiceCommandHandler
             }
 
             var input = DestinationStatus.Describe(
-                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, DeviceIdOf);
+                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, runtime.VolumeIdOf);
 
             if (input.Domain > best)
             {
@@ -538,6 +916,17 @@ public sealed partial class ServiceCommandHandler
 
         return warnings.Count == 0 ? null : warnings;
     }
+
+    /// <summary>
+    /// The service's own directories, for the circular-capture guard — a
+    /// source root over either captures the service into its own backup, and
+    /// only the agent knows where they are.
+    /// </summary>
+    private (string Description, string Path)[] ServiceStorage() =>
+    [
+        ("state directory", runtime.Options.StateDirectory),
+        ("archives root", runtime.Options.ArchivesRoot),
+    ];
 
     /// <summary>The configuration, or null when it will not load.</summary>
     /// <remarks>

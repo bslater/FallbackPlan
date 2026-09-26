@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreReadFaultTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     [TestMethod]
     public async Task Restore_AReadFailsMidRun_FailsThatItemInTheReceiptAndTheRerunCompletes()
     {
@@ -34,9 +32,9 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue();
-        await CreateOrchestrator(store, keys, hierarchy, catalogue)
+        await CreateOrchestrator(store, keys, credential, catalogue)
             .PublishAsync(Job(source, 0xE1), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -72,7 +70,7 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
         // The fault clears; the rerun completes without repair or operator
         // action, and the bytes are right.
         faulting.Heal();
-        using var freshReader = new RepositoryReader(Repo, keys, store);
+        using var freshReader = new RepositoryReader(Repo, keys, store, Authority);
         await freshReader.LoadBlobsAsync(CancellationToken.None);
 
         var rerun = await new RestoreExecutor(freshReader, target).ExecuteAsync(
@@ -89,11 +87,12 @@ public sealed class RestoreReadFaultTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, "read-fault.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue) =>
         new(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "read-fault-sequence.txt"))),
-            SpoolDirectory, observer: null, catalogue);
+            SpoolDirectory,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()
     {

@@ -15,13 +15,13 @@ public sealed class CommandTests : IDisposable
     [TestMethod]
     public async Task Init_ANewDirectory_CreatesARepositoryThatOpensAgain()
     {
-        var init = await _cli.RunWithoutStateAsync("init");
+        var init = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
 
         Assert.AreEqual(0, init.ExitCode);
         Assert.IsTrue(Directory.Exists(_cli.RepositoryPath));
 
-        // A second init must refuse rather than overwrite keys.
-        var again = await _cli.RunWithoutStateAsync("init");
+        // A second init must refuse rather than overwrite the descriptor.
+        var again = await _cli.RunWithoutStateAsync("init", "--acknowledge-loss");
         Assert.AreNotEqual(0, again.ExitCode);
     }
 
@@ -183,22 +183,6 @@ public sealed class CommandTests : IDisposable
         var snapshots = await _cli.RunAsync("snapshots");
         Assert.IsTrue(snapshots.ExitCode == 0, snapshots.All);
         Assert.IsFalse(string.IsNullOrWhiteSpace(snapshots.Output), "the rebuilt catalogue lists no snapshots");
-    }
-
-    [TestMethod]
-    public async Task KeyExport_AnOpenRepository_WritesARecoveryKit()
-    {
-        await _cli.InitAsync();
-        Directory.CreateDirectory(_cli.WorkPath);
-        var kit = Path.Combine(_cli.WorkPath, "kit.bin");
-
-        var export = await _cli.RunAsync("key-export", "--output", kit);
-
-        Assert.IsTrue(export.ExitCode == 0, export.All);
-        Assert.IsTrue(new FileInfo(kit).Length > 0, "the exported kit is empty");
-
-        // The transcribable text form is written alongside it (FR-KIT-003).
-        Assert.IsTrue(File.Exists(kit + ".txt"), "the text form of the kit was not written");
     }
 
     [TestMethod]

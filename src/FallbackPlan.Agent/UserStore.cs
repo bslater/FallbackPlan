@@ -96,16 +96,19 @@ public sealed class UserStore
     /// <summary>The longest an account name may be.</summary>
     public const int MaximumNameLength = 64;
 
-    /// <summary>The shortest a password may be.</summary>
+    /// <summary>The shortest a password may be — forwarded from the policy that owns it.</summary>
     /// <remarks>
-    /// Lower than the passphrase floor on purpose. A passphrase is the master
-    /// key for the whole installation and is unrecoverable; a password
-    /// authorises a person on a channel the operating system or a pinned
-    /// pairing has already admitted, is changeable, and is rate-limited by a
-    /// memory-hard hash and the throttle below. Holding both to the same
-    /// number would imply they carry the same weight, and they do not.
+    /// The full policy is <see cref="Domain.Configuration.PasswordPolicy"/>:
+    /// the floor plus the passphrase's composition rules (an uppercase
+    /// letter, two digits, a special character), applied where a password is
+    /// chosen and never where one is presented. The floor sits below the
+    /// passphrase's on purpose: a passphrase is the unrecoverable master key
+    /// for the whole installation, while a password authorises a person on a
+    /// channel already admitted, is changeable, and is rate-limited by a
+    /// memory-hard hash and the throttle below. Holding both floors to the
+    /// same number would imply they carry the same weight, and they do not.
     /// </remarks>
-    public const int MinimumPasswordLength = 8;
+    public const int MinimumPasswordLength = Domain.Configuration.PasswordPolicy.MinimumLength;
 
     /// <summary>The delay added after the first consecutive failure; it doubles from there.</summary>
     public static readonly TimeSpan FirstFailureDelay = TimeSpan.FromMilliseconds(250);
@@ -298,7 +301,7 @@ public sealed class UserStore
             return new UserStoreResult(UserStoreOutcome.NameRefused);
         }
 
-        if (password is null || password.Length < MinimumPasswordLength)
+        if (password is null || !Domain.Configuration.PasswordPolicy.Assess(password).IsAcceptable)
         {
             return new UserStoreResult(UserStoreOutcome.PasswordRefused);
         }
@@ -388,7 +391,7 @@ public sealed class UserStore
             return proved;
         }
 
-        if (newPassword is null || newPassword.Length < MinimumPasswordLength)
+        if (newPassword is null || !Domain.Configuration.PasswordPolicy.Assess(newPassword).IsAcceptable)
         {
             return new UserStoreResult(UserStoreOutcome.PasswordRefused);
         }

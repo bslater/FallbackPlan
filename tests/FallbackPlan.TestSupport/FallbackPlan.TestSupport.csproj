@@ -21,6 +21,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
+    <!-- TestAuthority derives the one shared key set every suite scaffolds on
+         from the conformance vectors' pinned root, so it needs the derivation
+         and nothing above it. -->
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Crypto\FallbackPlan.Repository.Crypto.csproj" />
+    <!-- CatalogueSeeding writes through the catalogue's own recording calls, so
+         the size figure the harness reports and the ceiling the suite pins
+         describe one catalogue rather than two models. Both are already in
+         every consumer's closure through FallbackPlan.Repository. -->
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Catalogue\FallbackPlan.Repository.Catalogue.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Repository.Index\FallbackPlan.Repository.Index.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -7,6 +7,7 @@ namespace FallbackPlan.Application.Tests;
 /// (FR-DEST-003). The decision lives apart from the measurement so it can be
 /// exercised without arranging a nearly-full disk — which is the only reason
 /// this rule would otherwise ship untested.
+/// Establishes FR-DEST-010's floor arithmetic.
 /// </summary>
 [TestClass]
 public sealed class DestinationCapacityTests
@@ -55,5 +56,24 @@ public sealed class DestinationCapacityTests
         // reason a healthy destination stops receiving backups, so an unknown
         // reads as room rather than as a refusal.
         Assert.IsNull(DestinationCapacity.FloorShortfall(ReplicaRoot, availableBytes: null));
+    }
+
+    [TestMethod]
+    public void ProbeRootFor_APath_NamesTheDestinationsOwnVolume()
+    {
+        // The 2026-08 defect this pins against: Path.GetPathRoot answers "/"
+        // for every absolute path on Unix, so the floor was measured on the
+        // OS volume — precisely wrong for a destination on a different
+        // volume, which is a destination's whole job. On Unix the probe asks
+        // about the replica root itself (statvfs answers for whatever volume
+        // holds it); only Windows wants the drive root.
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.AreEqual("C:\\", DestinationCapacity.ProbeRootFor("C:\\vault\\abc"));
+        }
+        else
+        {
+            Assert.AreEqual("/mnt/vault/abc", DestinationCapacity.ProbeRootFor("/mnt/vault/abc"));
+        }
     }
 }

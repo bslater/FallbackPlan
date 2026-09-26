@@ -23,8 +23,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     private const string LinkTargetText = "sibling.bin";
 
     [TestMethod]
@@ -219,7 +217,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         // manifest. The third read cancels and throws with the token — the
         // fault arrives mid-item, after alpha already landed.
         var cancelling = new CancellingObjectStore(store, cancellation, cancelOnRead: 3);
-        using var reader = new RepositoryReader(Repo, keys, cancelling);
+        using var reader = new RepositoryReader(Repo, keys, cancelling, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         cancelling.Arm();
 
@@ -250,9 +248,9 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
 
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue("pathlimit");
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, "pathlimit")
+        await CreateOrchestrator(store, keys, credential, catalogue, "pathlimit")
             .PublishAsync(Job(source, 0xCD), CancellationToken.None);
 
         var plan = RestorePlanner.Plan(
@@ -403,9 +401,9 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
     {
         var store = CreateStore();
         var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
         using var catalogue = OpenCatalogue(name);
-        await CreateOrchestrator(store, keys, hierarchy, catalogue, name)
+        await CreateOrchestrator(store, keys, credential, catalogue, name)
             .PublishAsync(Job(source, seed), CancellationToken.None);
 
         var target = RestoreTargetProfile.ForLocalPlatform() with { SupportsSymlinks = !OperatingSystem.IsWindows() };
@@ -422,7 +420,7 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         ExistingDestinationPolicy policy,
         string runId)
     {
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         return await new RestoreExecutor(reader, target).ExecuteAsync(
@@ -441,15 +439,16 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
         CatalogueDb.Open(Path.Combine(SpoolDirectory, $"catalogue-{name}.db"), Repo);
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, CatalogueDb catalogue, string spoolName)
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, CatalogueDb catalogue, string spoolName)
     {
         var spool = Path.Combine(SpoolDirectory, spoolName);
         Directory.CreateDirectory(spool);
 
         return new PublicationOrchestrator(
-            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, hierarchy, store,
+            SmallBlobPolicy, Repo, Writer, KeyGeneration.Zero, keys, credential, store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
-            spool, observer: null, catalogue);
+            spool,
+            FormatVersions.SealedDataPlane, observer: null, catalogue);
     }
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()

@@ -2,6 +2,7 @@ using Bodu;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Packing;
@@ -232,6 +233,173 @@ public sealed class RestoreExecutor(
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
+    /// <summary>
+    /// Reads ahead of the restore loop so a blob costs one GET rather than
+    /// one a file (NFR-PERF-009). A wave prefetches the manifests of a
+    /// bounded run of upcoming items, reads them, and prefetches every
+    /// segment they name — so the reader is asked for everything one blob
+    /// owes this stretch of the restore before it is asked for any of it,
+    /// and can coalesce accordingly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Bounded twice, because a plan is not: by items, so a wave never holds
+    /// more manifests than a machine should; and by the bytes the reader
+    /// reports fetching, at half its own budget, so the wave's own runs are
+    /// never evicted by its own later ones before the loop consumes them.
+    /// </para>
+    /// <para>
+    /// Each manifest is read once. The wave keeps the record it read and the
+    /// loop takes it, so looking ahead costs a decode rather than a second
+    /// decrypt — and a read the wave could not make is simply not cached,
+    /// leaving the loop to make it and to report what it finds, which is
+    /// where the receipt's account of a failure belongs.
+    /// </para>
+    /// </remarks>
+    private sealed class PrefetchWave(RepositoryReader reader, RestorePlan plan)
+    {
+        private const int MaximumItems = 1024;
+        private const int MaximumSegments = 512;
+
+        private readonly Dictionary<ObjectId, RecordReadResult> _read = [];
+        private int _through;
+
+        /// <summary>
+        /// The manifest record for <paramref name="objectId"/>, from the wave
+        /// when it has it and from the reader when it does not.
+        /// </summary>
+        public async ValueTask<RecordReadResult> ReadManifestAsync(
+            int index, ObjectId objectId, CancellationToken cancellationToken)
+        {
+            // Nothing to coalesce without a location source, so nothing to
+            // read ahead for: the footer path reads each manifest at its own
+            // turn, exactly as it did.
+            if (reader.ReadsFromLocations && index >= _through)
+            {
+                await FillAsync(index, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_read.Remove(objectId, out var cached))
+            {
+                return cached;
+            }
+
+            return await reader.ReadSegmentAsync(objectId, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async ValueTask FillAsync(int from, CancellationToken cancellationToken)
+        {
+            _read.Clear();
+
+            var last = Math.Min(plan.Items.Count, from + MaximumItems);
+            var manifests = plan.Items
+                .Take(last)
+                .Skip(from)
+                .Where(item => item.Kind != EntryKind.DirectoryPlaceholder)
+                .Select(item => item.ObjectId)
+                .ToList();
+
+            _through = from + 1;
+            if (manifests.Count == 0)
+            {
+                _through = last;
+                return;
+            }
+
+            try
+            {
+                await reader.PrefetchAsync(manifests, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // A prefetch is never the thing that fails a restore: the
+                // loop reads what it needs and reports what it finds.
+                return;
+            }
+
+            // Asked for together, not file by file: a blob holds the segments
+            // of several consecutive files, and one prefetch a file would
+            // fetch its own stretch of that blob each time.
+            var ceiling = reader.Prefetch.BudgetBytes / 2;
+            var pending = new List<ObjectId>();
+            var held = 0L;
+
+            for (var index = from; index < last && held < ceiling; index++)
+            {
+                var item = plan.Items[index];
+                if (item.Kind == EntryKind.DirectoryPlaceholder)
+                {
+                    _through = index + 1;
+                    continue;
+                }
+
+                RecordReadResult read;
+                try
+                {
+                    read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    break;
+                }
+
+                _read[item.ObjectId] = read;
+                _through = index + 1;
+
+                if (read.Outcome != RecordReadOutcome.Ok)
+                {
+                    continue;
+                }
+
+                FileVersionManifest manifest;
+                try
+                {
+                    manifest = FileVersionManifestCodec.Decode(read.Plaintext!);
+                }
+                catch (Exception decode) when (decode is FormatException or ManifestValidationException)
+                {
+                    // The loop decodes the same bytes and answers for it.
+                    continue;
+                }
+
+                pending.AddRange(manifest.SegmentReferences.Select(reference => reference.ObjectId));
+
+                // Flushed by count, because the bytes are only known once
+                // they are fetched and a wave must not ask for more than the
+                // reader can hold. At the segment size the product targets
+                // this is about half its budget.
+                if (pending.Count >= MaximumSegments)
+                {
+                    held += await FlushAsync(pending, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            await FlushAsync(pending, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async ValueTask<long> FlushAsync(List<ObjectId> pending, CancellationToken cancellationToken)
+        {
+            if (pending.Count == 0)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return await reader.PrefetchAsync(pending, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // A prefetch is never the thing that fails a restore.
+                return 0;
+            }
+            finally
+            {
+                pending.Clear();
+            }
+        }
+    }
+
     /// <summary>Runs <paramref name="plan"/> into <paramref name="outputDirectory"/>.</summary>
     public async ValueTask<RestoreReceipt> ExecuteAsync(
         RestorePlan plan,
@@ -271,8 +439,19 @@ public sealed class RestoreExecutor(
         var existingPolicy = options.ExistingDestination.ToString();
         Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), existingPolicy);
 
-        foreach (var item in plan.Items)
+        // Reads ahead of the loop so that a blob is fetched once rather than
+        // once a file (NFR-PERF-009). Prefetching only the file being
+        // restored is not enough: consecutive files share the blob they were
+        // written into, so each would fetch the stretch after the last one's
+        // — one read per (file, blob) pair, which is one read a file and not
+        // one a blob. The wave prefetches a bounded run of upcoming items'
+        // manifests and their segments together, so everything one blob owes
+        // this restore is asked for at once.
+        var wave = new PrefetchWave(reader, plan);
+
+        for (var index = 0; index < plan.Items.Count; index++)
         {
+            var item = plan.Items[index];
             // Cooperative stop, not an exception: break so the receipt is still
             // produced and Aggregate can see fewer items than planned and
             // report Cancelled (architecture 08 §3's outcome, previously
@@ -304,7 +483,7 @@ public sealed class RestoreExecutor(
             RecordReadResult read;
             try
             {
-                read = await reader.ReadSegmentAsync(item.ObjectId, cancellationToken).ConfigureAwait(false);
+                read = await wave.ReadManifestAsync(index, item.ObjectId, cancellationToken).ConfigureAwait(false);
             }
             catch (IOException exception)
             {

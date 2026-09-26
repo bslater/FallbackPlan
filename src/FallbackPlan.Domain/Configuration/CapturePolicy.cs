@@ -18,7 +18,13 @@ public sealed record CapturePolicy
     /// <summary>The current schema version of this policy shape.</summary>
     public const ushort SchemaVersion = 1;
 
-    /// <summary>The specification defaults: fixed-v1 at 1 MiB, zstd level 3 at 5%, AES-256-GCM, local blob targets.</summary>
+    /// <summary>
+    /// The specification defaults: fixed-v1 at 1 MiB, zstd level 3 at 5%,
+    /// AES-256-GCM, local blob targets, and the <b>device</b> trust domain
+    /// (ADR-0006, amended by ADR-0042 §7): the repository domain verifies
+    /// another writer's segments by reading their content, which a writer
+    /// holds no key for, so it is refused by name rather than defaulted to.
+    /// </summary>
     public static readonly CapturePolicy Default = new()
     {
         SegmentationProfile = SegmentationProfile.FixedV1,
@@ -26,7 +32,7 @@ public sealed record CapturePolicy
         Compression = CompressionSettings.Default,
         EncryptionProfile = EncryptionProfile.Aes256GcmV1,
         BlobWriteProfile = BlobWriteProfile.LocalDefault,
-        DedupTrustDomain = DedupTrustDomain.Repository,
+        DedupTrustDomain = DedupTrustDomain.Device,
         Concurrency = DefaultConcurrency,
     };
 

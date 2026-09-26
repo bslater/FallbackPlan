@@ -26,6 +26,7 @@ public static class MemoryBoundProof
         var totalBytes = gibibytes * 1024L * 1024 * 1024;
         var policy = CapturePolicy.Default with
         {
+            DedupTrustDomain = DedupTrustDomain.Device,
             SegmentationProfile = Domain.Profiles.SegmentationProfile.CdcV1,
             CdcParameters = CdcParameters.Default,
         };
@@ -33,7 +34,7 @@ public static class MemoryBoundProof
         var spool = Path.Combine(Path.GetTempPath(), "fbp-membound-spool", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(spool);
 
-        using var keys = RepositoryKeySet.FromMasterKey([.. Enumerable.Range(0, 32).Select(value => (byte)value)]);
+        using var keys = RepositoryKeySet.FromWriteCredential(TestAuthority.Shared.Credential);
         var store = new DiscardingObjectStore();
         var archiver = new FileArchiver(
             policy,
@@ -43,7 +44,8 @@ public static class MemoryBoundProof
             keys,
             store,
             new MonotonicBlobCounterAllocator(1),
-            spool);
+            spool,
+            FormatVersions.SealedDataPlane);
 
         // Two cadences: the fast sampler watches the raw heap (which includes
         // garbage not yet collected — an allocation-rate number, not a

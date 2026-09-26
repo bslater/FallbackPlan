@@ -82,12 +82,14 @@ public sealed class PeerRetrievalTests : IDisposable
                     Id: null, Name: "site-b", Kind: "peer", Path: null,
                     Fingerprint: paired.Fingerprint, Endpoint: $"127.0.0.1:{listener.Endpoint.Port}")),
                 _timeout.Token));
-            Assert.IsInstanceOfType<AcknowledgedResult>(await handlerOne.ExecuteAsync(
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(await handlerOne.ExecuteAsync(
                 new UpsertBackupSetCommand(new BackupSetDescriptor(
                     _siteOne.DocsSetId, "docs", _siteOne.SourceRoot, Schedule: null, [], [], ["site-b"])),
                 _timeout.Token));
 
-            await RunBackupAndWaitAsync(runtimeOne, handlerOne);
+            // The save queued the first capture itself (ADR-0047).
+            await WaitForAsync(() => runtimeOne.Jobs.Jobs.Any(job =>
+                job.BackupSetId == _siteOne.DocsSetId && job.State == JobState.Complete));
             await WaitForAsync(() =>
                 runtimeOne.DestinationSync.Find(_siteOne.DocsSetId, "site-b") is
                 { State: DestinationSyncState.InSync, VerifiedAt: not null });
@@ -105,7 +107,10 @@ public sealed class PeerRetrievalTests : IDisposable
         await using var recovered = await StartAsync(_siteOne);
         var handler = new ServiceCommandHandler(recovered, RemoteBindingState.Off);
 
-        var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "site-b"), _timeout.Token);
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand(
+                "docs", "site-b", Envelope: await _siteOne.RestoreGrantAsync(handler.ExecuteAsync, _timeout.Token)),
+            _timeout.Token);
         if (opened is ServiceError refusal)
         {
             Assert.Fail($"peer source refused: {refusal.Reason}: {refusal.Message}");
@@ -174,8 +179,7 @@ public sealed class PeerRetrievalTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync(HostHarness site)
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(site.PassphraseVariable)!);
+        await site.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
@@ -183,7 +187,6 @@ public sealed class PeerRetrievalTests : IDisposable
                 ArchivesRoot = site.ArchivesRoot,
                 StateDirectory = site.StateDirectory,
             },
-            passphrase,
             _timeout.Token);
     }
 }

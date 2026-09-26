@@ -1,0 +1,144 @@
+# Command contract — the client↔service surface
+
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.37
+
+---
+
+## Authority
+
+This document is the human-readable register of the command contract: the
+verbs a client may send a FallbackPlan service, the results it can be
+answered with, and the version history of both. It mirrors the
+[repository-format authority rule](../repository-format/README.md) with the
+direction reversed: the repository format's specification is normative and
+the code follows it, whereas the command contract is **defined by the code**
+— pre-1.0, the wire truth is `FallbackPlan.Api` (`Commands.cs`'s
+discriminator register, `Results.cs`, `ContractVersion.cs`) — and this
+document follows it. Where they disagree, the code wins and this document is
+wrong. Each version's entry in `ContractVersion.cs`'s remarks is the
+authoritative changelog; the history below transcribes it.
+
+The contract is versioned independently of the repository format and of the
+peer protocol ([ADR-0003](../../docs/adr/0003-canonical-metadata-encoding.md)
+anticipates exactly this). Nothing in it is durable — a contract change never
+touches a byte already written.
+
+## Shape and compatibility
+
+- Commands and results are JSON objects discriminated by a `command` /
+  `result` property (System.Text.Json polymorphism over the registers in
+  `Commands.cs` and `Results.cs`), carried over the local socket or named
+  pipe — and, when the remote binding is enabled, to paired clients
+  ([ADR-0028](../../docs/adr/0028-service-boundary-and-deployment-topologies.md)).
+- **Compatibility is by major version.** A client and service that disagree
+  on the major must refuse to proceed with **both versions named**
+  (FR-SVC-007); minor versions are additive, and an older peer simply does
+  not see fields it predates. A console managing several services degrades
+  per service rather than refusing to start.
+- Refusals are a typed `error` result with a reason code; the message is for
+  people and explicitly not for parsing.
+- Who may call what: the local binding is authenticated by the operating
+  system; the remote binding by pinned pairing; person-identity rides inside
+  either as a session ([ADR-0045](../../docs/adr/0045-client-authentication.md)).
+  Some verbs are local-only (`set_log_level`, `provision_installation`,
+  `restart_service`, `list_replica_attributions`, `reattribute_replica`) and
+  say so when refused.
+
+## Verbs, by area
+
+The register as of 1.37 — 56 commands. One line each; parameters, results
+and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
+
+**Service, setup and sessions** — `describe_service` (version, machine,
+setup/sign-in state, the installation's public derivation parameters),
+`provision_installation` (the first-run ceremony, ADR-0044; the passphrase
+is the whole of it, ADR-0060), `provision_write_only_set` (ADR-0042),
+`discover_archives` / `adopt_archive` (since 1.30 — what a declared
+destination holds, by descriptor alone, and taking one archive back under
+its original ids with the passphrase; ADR-0061; discovery holds no
+credential, so the `format_version` it reports is the version each archive
+was **created** at — an upgrade record is signed, and verifying a signature
+needs a key discovery does not have),
+`login` / `resume_session` / `logout`, `list_users` / `create_user` /
+`delete_user` / `change_password` (ADR-0045).
+
+**Configuration** — `list_backup_sets` / `upsert_backup_set` /
+`delete_backup_set`, `list_destinations` / `upsert_destination` /
+`delete_destination`, `browse_folders`, `validate_set_draft`,
+`preview_set_changes`, `export_configuration` (ADR-0037/0038/0040). Since
+1.17 a new set's upsert answers with its queued first backup; since 1.23
+the set descriptor carries `direct_ship` (null preserves — a pre-1.23
+client cannot convert a set; an explicit value sets the storage shape,
+refused mid-run and without a local-path destination, and a new local-path
+set defaults to direct-ship).
+
+**Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
+1.22 with the run's terminal numbers on each row and an optional newest-N
+bound), `job_changes` / `job_failures` (since 1.22 — one run's diff against
+its predecessor and its capture failures, read from the repository on
+demand), `get_status` (the per-set, per-destination matrix — since 1.19
+with each destination's baseline facts, since 1.22 with each demotion's
+machine cause and the set's `last_completed_at`, since 1.37 with the
+background window's state).
+
+**Snapshots and restore** — `list_snapshots`, `list_directory`,
+`plan_restore` / `run_restore`, `open_restore_source` /
+`close_restore_source` (ADR-0041).
+
+**Destinations at work** — `sync`, `verify_destination`, `verify`, `check`,
+`retention`, `retire_staging` (1.18, ADR-0046), `upgrade_set_format`
+(1.36, [ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md) — one set moved to the latest repository format this
+build writes, by an appended signed record rather than a rewritten
+descriptor).
+
+**Pairing and peers** — `list_pairings`, `create_pairing_invite` /
+`list_pairing_invites` / `revoke_pairing_invite` / `pair_with_invite`,
+`unpair` (ADR-0030/0039); `list_replica_attributions` /
+`reattribute_replica` (1.31, ADR-0053 §3 — the operator's view of the
+replicas stored here, and the override for one the passphrase cannot claim).
+
+**Notices and diagnostics** — `list_notices` / `acknowledge_notice`
+(ADR-0039), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043);
+`list_receipts` (1.33, ADR-0063/0064 — every deletion and replication
+receipt filed here, both roles, as facts with the service's verdict on each
+signature; any signed-in role, any caller scope).
+
+## Version history
+
+Transcribed from `ContractVersion.cs`; the code's remarks are authoritative.
+Versions before 1.7 built the initial surface (jobs, snapshots, restore,
+verification, status) and predate the per-version changelog convention.
+
+| Version | Carries |
+|---------|---------|
+| 1.7 | The configuration surface: set and destination CRUD, the folder browser, draft validation, pairing-invite verbs ([ADR-0037](../../docs/adr/0037-configuration-over-the-command-contract.md)) |
+| 1.8 | `preview_set_changes`; a material set edit answers `configuration_change`; `run_backup`'s full flag honoured over the service ([ADR-0038](../../docs/adr/0038-set-change-rescan-and-notice.md)) |
+| 1.9 | The operator loop: `list_notices` / `acknowledge_notice`, `unpair`; `list_directory` enriched with times, change markers and deletions ([ADR-0039](../../docs/adr/0039-console-operator-loop.md)) |
+| 1.10 | Multi-root sets: roots on the set descriptor and the preview ([ADR-0040](../../docs/adr/0040-multi-root-backup-sets.md)) |
+| 1.11 | The guided restore: restore sources over staging, replica and peer; plan conflicts; the receipt summary ([ADR-0041](../../docs/adr/0041-guided-restore-and-peer-retrieval.md)) |
+| 1.12 | Write-only repositories: `provision_write_only_set`, the sealed restore-grant envelope, the grant-recipient key ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)) |
+| 1.13 | First-run setup: `provision_installation`, setup state on `describe_service`; local callers only ([ADR-0044](../../docs/adr/0044-first-run-setup.md)) |
+| 1.14 | The ceremony finished: `confirm_recovery_kit`, the `kit_required` state, draft failure-domain warnings |
+| 1.15 | Diagnostics opened: `get_diagnostics` / `read_log` / `set_log_level`, redaction at the rendering boundary; kit status on `describe_service` ([ADR-0043](../../docs/adr/0043-structured-logging-and-diagnostics.md)) |
+| 1.16 | Who is acting: `login` / `resume_session` / `logout` and the user-management verbs; sessions in service memory only ([ADR-0045](../../docs/adr/0045-client-authentication.md)) |
+| 1.17 | The backup pool's ordering: optional priority on set and destination descriptors, null-preserving on upsert; first-backup-on-save and gained-destination seeding beside it ([ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md)) |
+| 1.18 | `retire_staging`: a migrated direct-ship set's staging archive deleted only by this explicit verb, refused while anything it holds has not reached a destination ([ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)) |
+| 1.19 | The full-backup facts on the status matrix: each destination row says when its baseline completed and whether the pair is owed its seed — additive with defaults, invisible to a pre-1.19 client ([ADR-0047](../../docs/adr/0047-backup-pool-and-priorities.md) §§5–6) |
+| 1.20 | The counted plan on the progress stream: a backup counts its work before archiving and every progress report then carries `total_files` and `total_bytes` — null until the count completes and from producers that never count, so additive with defaults; a pre-1.20 client keeps its indeterminate meter. The watch frame also carries the client's session token, so a signed-in console's event stream is authenticated — before this, every watch on an installation with accounts was answered with an empty stream ([ADR-0048](../../docs/adr/0048-determinate-backup-progress.md)) |
+| 1.21 | `restart_service`: an in-process recycle of the running service — Owner-only, local callers only, refused before setup and under `--once`; the acknowledgement is flushed before teardown and the restart signs every session out ([ADR-0049](../../docs/adr/0049-service-lifecycle-hygiene.md)) |
+| 1.22 | The completed-run record and drill-down: the job row carries the run's terminal numbers (nullable, additive — a pre-1.22 row reads "not recorded", never zero) and `list_jobs` takes an optional newest-N bound; `job_changes` and `job_failures` answer one run's diff and failure listing from the repository with exact counts and bounded samples; the progress stream names the `current_file` being processed; and the status matrix carries each demotion's `reason` plus the set's `last_completed_at` — all additive with null defaults ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)) |
+| 1.23 | The storage shape surfaced (ADR-0046): `direct_ship` on the set descriptor with null-preserve semantics; a direct-ship set must reference a local-path destination, a shape change is refused while a run is live and takes effect in-process with its seeding catch-up queued at once, and a new local-path set defaults to direct-ship |
+| 1.24 | A completion figure on each destination row: `held_bytes`, `owed_bytes` and `measured_at`, counted by the sync pass rather than by the status poll. Owed is by the destination's own retention policy, so a narrow override reads complete when it holds its own keep-set. Additive with defaults; `measured_at` is what separates "holds none of it" from "nobody has counted", and a client without it must not draw an empty gauge |
+| 1.25 | The restore drill's answer on each destination row: `drilled_at`, `drill_files` and `drill_failure` — when a drill last brought a sampled file back out of that destination's own replica, how many it restored, and why it could not when it could not. **Three states a client must keep apart:** never drilled (`drilled_at` absent), drilled and passed (a stamp, no failure), drilled and failed (a stamp **and** a failure). The first and the third both mean the destination has not been shown to restore, and only the third means something is wrong. The failure is deliberately not the destination's sync state: a destination may hold every byte it was sent and prove possession of them and still fail to restore. Additive with defaults |
+| 1.26 | `reclaim_grant` on `retention`: a collection run's authority to author deletions on a **write-only** set — the derived reclaim sub-root, sealed end-to-end to the service's recipient key and rendered as hex, the same permitted shape under NFR-SEC-009 as the restore grant. Null is correct for every v1 set, which derives the key it already holds, and for a dry run, which authors nothing. A write-only set applying without one is **refused by name**, never fallen back to the publication key. The service proves the grant against a tombstone the repository already holds before it authors anything, so a grant from another passphrase — or a restore grant sent in its place — is caught before it writes ([ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
+| 1.27 | `drill_limit` on each destination row: what a passing restore drill could not prove, in the drill's own words ([ADR-0054 Amendment 2](../../docs/adr/0054-scheduled-restore-drills.md)). A **write-only** set's replica seals its content to a key the service does not hold, so the scheduled drill proves the road back as far as the sealed content — the replica opens, its index and catalogue rebuild, every sampled file's manifest and segment records are found — and states that limit rather than reporting the passphrase's absence as damage. A limit rides beside a null `drill_failure`: it is a **pass with a stated limit**, and a client must not render it as a failure; `drill_files` counts the files proved that far. A content drill is the recovery tool with the passphrase. Additive with a default; a pre-1.27 client reads such a row as a plain pass |
+| 1.28 | The installation's public derivation parameters on `describe_service`: `kdf_salt`, `kdf_memory_kib`, `kdf_iterations`, `kdf_parallelism` and `sealing_public_key` — every one public by construction (each archive's descriptor records the same facts), null until first-run setup has run. What lets a client holding the passphrase derive the restore grant a set-up installation's restore needs ([ADR-0042 §5](../../docs/adr/0042-write-only-repositories.md)) without holding the archive: the CLI's `restore`, locally and over `--connect`, derives it from `--passphrase-env`, proves it against `sealing_public_key` before sending anything, opens a restore source under it and restores through that source. Additive with defaults |
+| 1.29 | The recovery kit withdrawn (ADR-0060): `confirm_recovery_kit` is gone, `describe_service` no longer carries `kit_status` or `kit_confirmed_at`, and `setup_state` is two-valued again — `setup_required` or `ready`. A minor with removals, admitted under the pre-release rule: the only clients are this repository's, a client reads a missing `kit_status` exactly as it read one from a pre-1.15 service, and a client that still knows `kit_required` treats it as an unfinished ceremony |
+| 1.30 | Adopting a destination's archives (ADR-0061): `discover_archives` lists what a declared destination holds by descriptor alone — `repository_id`, `format_version`, `created_at`, `created_by`, the public `kdf_salt` / `kdf_memory_kib` / `kdf_iterations` / `kdf_parallelism` and `sealing_public_key`, `snapshot_objects`, `highest_publication_sequence`, `owned_by_set` and `same_installation` — with no credential involved; `adopt_archive` takes one back under its original repository id and set id with the same sealed provisioning envelope `provision_write_only_set` carries, derived against the **discovered** archive's salt, and answers `archive_adopted`: the set as re-declared from the shape the archive records (`roots`, `set_name`, `schedule`, rules), each overridable on the command, `missing_roots` reported rather than refused, `writer_identity_resumed`, `already_adopted`. The set descriptor gains the archive's own `kdf_salt`, costs and `sealing_public_key`, so a client derives a restore grant per set — an adopted set keeps the salt its archive was born under. Additive with defaults |
+| 1.31 | The operator's re-attribution ([ADR-0053 §3](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)): `list_replica_attributions` answers every replica stored here as `replica_attributions` — `repository_id`, `owner_fingerprint`, `owner_label` and `claimable`, which says whether a claim key is on record and never carries the key — and `reattribute_replica {repository_id, fingerprint}` points one at a different paired device, answering `configuration_change`. Owner-only and local callers only, like `restart_service`; a fingerprint prefix resolves as `unpair`'s does; refused by name for a device paired only as a destination we store at, and for a replica its owner can claim with the passphrase — the override exists only for a replica recorded before the claim key was published. Additive |
+| 1.32 | The verification tiers on each destination row: `verified_sealed` and `verified_digest` say how many of the objects the last passed verification proved were proved by opening a record's AEAD tag at the destination and how many by hashing the whole sealed blob there against the digest the writer signed into the index ([07 §2.2](../repository-format/07-index.md)) — the latter being the only proof a **write-only** set's data plane has, its records being sealed to a key the service does not hold (FR-WOR-003). The digest tier reads whole blobs and is budgeted per pass; a blob above the budget is never provable by digest. Additive with zero defaults; a pre-1.32 client reads the coverage it always had |
+| 1.33 | `list_receipts` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): every receipt filed under the state directory — deletion and replication, the ones this device signed as a destination and the ones it verified as a commander — answered as `receipts_listed` rows of facts newest first: `kind`, `role`, `filed_at`, `status` (`verified` / `signature-invalid` / `unreadable`), `verified`, `problem`, `signer_fingerprint`, `set`, `destination`, `repository_id`, `issued_at`, `session_prefix`, and the kind's counts (`deleted_count` / `not_held`, `committed_count` / `held_objects` / `held_bytes`). No path and no signed or key bytes cross. Narrowed by `kind`, `set`, `repository` and `limit`. Any signed-in role, any caller scope: an audit listing of what a peer already said under its own signature. Additive |
+| 1.34 | `verified_chunk` on each destination row ([07 §3.6](../peer-protocol/07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)): of the objects the last passed verification proved, how many were proved by asking the destination for one leaf of the blob's Merkle commitment and its authentication path, checked against the root the writer signed into the index ([07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)). A **sampled** proof of the blob, counted apart from `verified_digest` — which reads every byte — so the cheaper tier cannot be rendered as the stronger one. Additive with a zero default |
+| 1.35 | `total` on `receipts_listed` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): how many receipts are on file for the `kind` and `repository` asked for, counted from file names rather than from what was read — so `limit` now bounds the **reading** as well as the answer, and a client can still say what share of the pile it is showing. Peer receipts are swept under a stated retention rule (NFR-OPS-008), and a count beside the rows is what makes a bound that is working visible. The count precedes the `set` filter, which can only be answered by reading a receipt, so a listing narrowed by set may return fewer rows than its limit while the total stands above both. Additive with a zero default |
+| 1.36 | `upgrade_set_format {set_name}` ([ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md)): one set's repository moved to the latest format this build writes, answering `configuration_change` so no result shape moves. The move is an **appended signed record**, not a rewritten descriptor: a destination seeds a descriptor only if absent and a peer keeps the copy it has, so a rewrite would carry the source alone and leave every copy claiming the older format over newer blobs. It takes no version — the service upgrades to the one version it writes, so a client cannot ask for a format this build could not read back. Refused by name for a set already at that version, for a set with no archive yet (one created here is born at the latest format), and while a run holds the set. What it changes is what the set **seals next**: everything already sealed stays exactly as it is, and the record reaches each destination on the next reconciling pass. Additive |
+| 1.37 | `background_window` on `status` ([ADR-0069](../../docs/adr/0069-the-background-window.md)): the configured window, whether background work may start right now, and when that next changes. The window is the first of NFR-PERF-013's four named limits to exist and it can hold every backup on an installation for hours; before this the only way to find out was the service's log, which is not where "why did nothing run last night" gets asked. One nullable descriptor rather than three loose fields, so a client tests "is there a window" once. Null from a service with no window configured **and** from one older than 1.37 — deliberately the same answer, because a client does nothing different in the two cases and an absent window has always meant always open. Reporting only: the window is edited in the configuration file, as `max_concurrent_backups` is, and a console control for it is owed. The state is evaluated at the instant `observed_at` names, from the same parsed window the scheduler's pass uses, so a client cannot catch the two disagreeing across a boundary. Additive |

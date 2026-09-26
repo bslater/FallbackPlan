@@ -91,4 +91,7 @@
   <data name="WebConsoleOptions_UnknownArgument" xml:space="preserve">
     <value>Unknown argument '{0}'. Pass --help for usage.</value>
   </data>
+  <data name="WebConsoleOptions_StateDirectoryMissing" xml:space="preserve">
+    <value>The state directory '{0}' does not exist. It is created by the service, not the console — start the service first, or check the path.</value>
+  </data>
 </root>

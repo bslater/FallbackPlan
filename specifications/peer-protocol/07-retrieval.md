@@ -9,10 +9,12 @@ over the same authenticated session replication pushed it through. Everything
 served is the owner's ciphertext returning home: the destination decrypts
 nothing, learns nothing new about the content, and serves nobody but the peer
 its attribution ledger says the replica belongs to. What retrieval buys is a
-restore path that needs no shared disk and no recovery kit — a hub whose
-staging archive is gone opens the replica as a repository over the wire,
-rebuilds a catalogue from its index plane, and fetches only the objects a
-restore plan actually needs.
+restore path that needs no shared disk and nothing but the passphrase — a hub with no
+local copy of the content (its staging archive lost, or a direct-ship set,
+for which that is the designed steady state —
+[ADR-0046](../../docs/adr/0046-direct-to-destination-publication.md)) opens
+the replica as a repository over the wire, rebuilds a catalogue from its
+index plane, and fetches only the objects a restore plan actually needs.
 
 ## 1 Posture
 
@@ -24,8 +26,7 @@ would be one state machine wearing two hats.
 The observable cost is stated rather than hidden: a destination serving
 retrieval learns **which objects** the owner reads and when. It already holds
 the ciphertext; access patterns are the only new information, and an owner for
-whom that is too much should restore from a local replica or the recovery kit
-instead.
+whom that is too much should restore from a local replica instead.
 
 ## 2 Feature and negotiation
 
@@ -90,9 +91,28 @@ range is fetched by further reads.
 A `retrieve_open` whose `repository_id` is all zeros opens the **owner
 inventory**: `retrieve_list` pages then answer the repository ids (lowercase
 hex, as listing keys with length 0) the destination's attribution ledger
-assigns to the dialling identity — and nothing else. This is how a hub that
-lost its staging learns what to ask for. `retrieve_read` is refused
-`malformed` in an inventory session.
+assigns to the dialling identity — and nothing else. This is how a hub with no
+local content — its staging lost, or none by design — learns what to ask for. `retrieve_read` is refused
+`malformed` in an inventory session. A rebuilt machine's new identity is assigned nothing here until it has
+claimed ([03 §6](03-replication.md#6-the-claim)), which is why the claim asks the destination which
+derivations to run rather than asking this page which repositories to name.
+
+### 3.6 `merkle_challenge` (278) / `merkle_proof` (279)
+
+Gated by the `chunk-possession` feature ([02 §6](02-session.md#6-feature-negotiation)).
+
+`merkle_challenge`: key 1 `repository_id` (bytes[16]), key 2 `key` (text), key 3 `leaf_index` (uint32).
+`merkle_proof`: key 1 `status` (uint: `0` produced, `1` cannot produce), key 2 `leaf` (bytes, 1…1 MiB), key 3 `path` (array of bytes[32], at most 32 entries).
+
+Strictly request/response, one outstanding challenge: each challenge is answered by exactly one proof, and the verifier MUST NOT send a second before the first is answered. Status `1` carrying key 2 or key 3, status `0` carrying neither, a `path` step that is not 32 bytes, a `path` longer than the bound, or a `leaf` outside 1…1 MiB is `malformed` — a step of the wrong width is the check this message exists for, arriving broken, and dropping it would turn a verification into a shrug. An **empty** `path` with status `0` is not an error: a blob of one leaf has none.
+
+The destination reads its own copy of the blob, hashes its leaves, and answers with the challenged leaf's **bytes** and the sibling hashes that carry them to the root ([repository-format 05 §5.2](../repository-format/05-blob.md#52-the-merkle-commitment)). A key it does not hold, or a `leaf_index` beyond its copy, is not an error — it is status `1`, and it is the interesting answer. A key under `tombstones/` or `leases/` is refused as it is for [04 §4.1](04-verification.md#4-messages)'s challenge.
+
+**The bytes are the proof and the path is not.** A path is public arithmetic over hashes a destination may freely cache, so producing one establishes nothing; producing the chunk it commits to establishes that the chunk is held. That is the whole difference between this message and the bare digest answer [ADR-0058](../../docs/adr/0058-peer-write-adapter.md) refuses as a self-report.
+
+**The verifier checks against the root the writer signed**, published in the index delta ([repository-format 07 §2.3](../repository-format/07-index.md#23-covered-blob-merkle-roots)) and never against anything the destination said. The tree's size comes from the length the destination declares for its own copy, which can only fail closed: the published root binds the preimage's length, so a length that disagrees with the one the writer signed produces a root that does not match, and a destination that understates its copy to exempt its last leaf is refused rather than excused.
+
+**A wrong proof is a finding, not a protocol error**, exactly as [04 §2](04-verification.md#2-the-challenge) requires: the session continues and the verifier records the failure durably.
 
 ## 4 Authorization
 
@@ -103,9 +123,15 @@ failure shapes — someone else's replica, and one never stored here — MUST
 refuse identically (`terms_refused`, one message), because which of the two it
 was is reconnaissance the requester is not owed.
 
-Within an authorised replica every key is servable, `keys/` included: the
-key objects are the owner's own passphrase-wrapped bytes, indistinguishable
-in sensitivity from every other object the destination already holds for it.
+A machine rebuilt after total loss holds a new device identity, so this gate
+refuses it — correctly, since the gate is what stops a stranger asking for a
+repository by name. The exit is the claim ([03 §6](03-replication.md#6-the-claim)),
+which re-points the attribution before retrieval is attempted; the claim
+refuses in these same identical terms and for this same reason. An attribution recorded without a claim key has no such exit here; it is re-pointed by the destination's operator through their own command contract ([ADR-0053 Amendment 3](../../docs/adr/0053-peer-claim-and-configuration-recovery.md#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)), and this gate then serves the new identity on its next open.
+
+Within an authorised replica every key is servable, the descriptor
+included: it carries only public parameters, indistinguishable in
+sensitivity from every other object the destination already holds for it.
 
 **The attribution the ledger assigns can move, and §5 is the only thing that
 moves it.** A device that has lost its durable local state is a new identity
@@ -119,8 +145,8 @@ possession of the recovery kit does not.
 ## 5 Claiming a replica
 
 **Disaster recovery.** The case is total loss — the machine is gone, not
-degraded, and the surviving copy is here. → [ADR-0046](../../docs/adr/0046-replica-claim-after-total-loss.md),
-[FR-DR-001..005](../../docs/requirements/functional.md#disaster-recovery)
+degraded, and the surviving copy is here. → [ADR-0070](../../docs/adr/0070-replica-claim-after-total-loss.md),
+[the disaster-recovery rows](../../docs/requirements/functional.md#disaster-recovery)
 
 ### 5.1 Feature
 
@@ -145,7 +171,7 @@ claim_public = Ed25519 public key of claim_seed
 
 `claim_root` is the same Argon2id output the repository format already derives
 from the passphrase — the KEK of [repository format 03
-§2](../repository-format/03-keys.md#2-key-encryption-key) for a v1 repository,
+§2](../repository-format/03-keys.md#2-the-root) for a v1 repository,
 and the root of a v2 write-only repository. Both formats therefore claim by
 one path, which is why the label carries no format-version suffix. The
 parameters and salt come from the replica's own descriptor, which the
@@ -331,3 +357,12 @@ pinned-identity authentication like every other payload. Availability is the
 honest limit: a destination can refuse or stall a retrieval exactly as it
 could withhold data at any restore — which is what verification (04) and
 multiple destinations exist to bound.
+
+A source may also use retrieval to **drill** a restore from this replica on a
+cadence, and to read whole blobs back for the digest proof of
+[04 §5.1](04-verification.md#51-what-a-source-with-no-copy-of-its-own-can-prove).
+No read budget is a term of pairing in this revision: what bounds those reads
+is the source's own policy — a drill cadence its operator states per peer,
+never a default, and a byte cap per drill and per verification pass — and a
+destination that finds them excessive has the same remedy it has for any
+retrieval, which is to refuse or stall it.

@@ -121,7 +121,7 @@ Every one of the 11 criteria in [Phase 0](roadmap.md#phase-0--archive-engine-ver
 | 6 | Resume byte-identical; restart draws a different salt | C1, F1 | `SpoolCheckpointTests` |
 | 7 | Catalogue deletable and rebuildable from checkpoint plus deltas | D2, E1 | `CatalogueRebuildTests` |
 | 8 | Forensic rebuild succeeds with all index objects removed | C2, E2 | `ForensicRebuildTests` |
-| 9 | Compaction relocates records without modifying any manifest | D1, D4 | `ManifestCodecTests` (nothing physical decodes), `IndexPrecedenceTests` (supersession converges) |
+| 9 | Compaction relocates records without modifying any manifest | D1, D4 | `ManifestCodecTests` (nothing physical decodes), `IndexPrecedenceTests` (supersession converges); since [ADR-0067](adr/0067-the-keyless-compactor.md), `CompactionIndexTests` and `CompactedRestoreTests` discharge it directly — a restore reads its file through the manifest the capture wrote after half its segments have moved and the blob they came from has been deleted |
 | 10 | GC concurrent with a backup deletes no intent-covered blob | D5, F1 | `ConcurrentCollectionTests` |
 | 11 | Synthetic legacy adapter traverses the same pipeline | F6 | `LegacyImportTests` — stripped of provenance, the imported manifest is byte-identical to a native one |
 

@@ -54,7 +54,29 @@ public sealed record PolicyManifest
 
     /// <summary>Exclude rules (key 9) — an excluded path is never a capture failure (06 §8).</summary>
     public IReadOnlyList<string> ExcludeRules { get; init; } = [];
+
+    /// <summary>
+    /// The capture roots as configured (key 10, ADR-0061): the source
+    /// machine's path and, for a multi-root set, the label the tree names
+    /// it by. Empty when the writer recorded none — every archive written
+    /// before the key existed, and the single-file archive path.
+    /// </summary>
+    public IReadOnlyList<RecordedRoot> Roots { get; init; } = [];
+
+    /// <summary>The backup set's configured name (key 11); null when unrecorded.</summary>
+    public string? SetName { get; init; }
+
+    /// <summary>The set's schedule text (key 12); null when manual-only or unrecorded.</summary>
+    public string? Schedule { get; init; }
 }
+
+/// <summary>
+/// One configured root as the policy manifest records it (specification
+/// 06 §7 key 10): the path on the machine that captured it, and the label a
+/// multi-root snapshot names it by (absent for a single root, whose tree is
+/// the folder itself — ADR-0040).
+/// </summary>
+public sealed record RecordedRoot(string Path, string? Label);
 
 /// <summary>Encodes and decodes policy manifests (specification 06 §7; ADR-0022 §Decision 6).</summary>
 public static class PolicyManifestCodec
@@ -64,8 +86,16 @@ public static class PolicyManifestCodec
     {
         ThrowHelper.ThrowIfNull(manifest);
 
+        // Keys 10-12 are written only when recorded: a manifest that carries
+        // no shape encodes the nine-key map every pre-ADR-0061 archive holds,
+        // byte for byte.
+        var keyCount = 9
+            + (manifest.Roots.Count > 0 ? 1 : 0)
+            + (manifest.SetName is not null ? 1 : 0)
+            + (manifest.Schedule is not null ? 1 : 0);
+
         var writer = new CanonicalCborWriter();
-        writer.WriteStartMap(9);
+        writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
         writer.WriteUnsignedInteger(manifest.SegmentationProfile);
         writer.WriteKey(2);
@@ -128,6 +158,40 @@ public static class PolicyManifestCodec
         }
 
         writer.WriteEndArray();
+
+        if (manifest.Roots.Count > 0)
+        {
+            writer.WriteKey(10);
+            writer.WriteStartArray(manifest.Roots.Count);
+            foreach (var root in manifest.Roots)
+            {
+                writer.WriteStartMap(root.Label is null ? 1 : 2);
+                if (root.Label is { } label)
+                {
+                    writer.WriteKey(1);
+                    writer.WriteTextString(label);
+                }
+
+                writer.WriteKey(2);
+                writer.WriteTextString(root.Path);
+                writer.WriteEndMap();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        if (manifest.SetName is { } setName)
+        {
+            writer.WriteKey(11);
+            writer.WriteTextString(setName);
+        }
+
+        if (manifest.Schedule is { } schedule)
+        {
+            writer.WriteKey(12);
+            writer.WriteTextString(schedule);
+        }
+
         writer.WriteEndMap();
 
         return writer.Encode();
@@ -158,6 +222,8 @@ public static class PolicyManifestCodec
         byte? cdcWindow = null, trustDomain = null;
         uint? blobRecords = null;
         List<string> include = [], exclude = [];
+        List<RecordedRoot> roots = [];
+        string? setName = null, schedule = null;
 
         for (var i = 0; i < count; i++)
         {
@@ -231,6 +297,15 @@ public static class PolicyManifestCodec
                 case 9:
                     exclude = ReadRules(reader);
                     break;
+                case 10:
+                    roots = ReadRoots(reader);
+                    break;
+                case 11:
+                    setName = reader.ReadTextString(maxUtf8Length: MaxNameUtf8Length);
+                    break;
+                case 12:
+                    schedule = reader.ReadTextString(maxUtf8Length: MaxNameUtf8Length);
+                    break;
                 default:
                     throw new ManifestValidationException(Strings.PolicyManifestCodec_PolicyManifestCarriesUnknownKey);
             }
@@ -262,7 +337,49 @@ public static class PolicyManifestCodec
             DedupTrustDomain = trustDomain.Value,
             IncludeRules = include,
             ExcludeRules = exclude,
+            Roots = roots,
+            SetName = setName,
+            Schedule = schedule,
         };
+    }
+
+    /// <summary>A set name or schedule is bounded as a rule is, in UTF-8 bytes.</summary>
+    private const int MaxNameUtf8Length = 4096;
+
+    private static List<RecordedRoot> ReadRoots(CanonicalCborReader reader)
+    {
+        var count = reader.ReadStartArray(maxCount: 4096);
+        var roots = new List<RecordedRoot>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var entryCount = reader.ReadStartMap();
+            string? label = null, path = null;
+            for (var j = 0; j < entryCount; j++)
+            {
+                switch (reader.ReadKey())
+                {
+                    case 1:
+                        label = reader.ReadTextString(maxUtf8Length: MaxNameUtf8Length);
+                        break;
+                    case 2:
+                        path = reader.ReadTextString(maxUtf8Length: MaxNameUtf8Length);
+                        break;
+                    default:
+                        throw new ManifestValidationException(Strings.PolicyManifestCodec_RecordedRootCarriesUnknownKey);
+                }
+            }
+
+            reader.ReadEndMap();
+            if (path is null)
+            {
+                throw new ManifestValidationException(Strings.PolicyManifestCodec_RecordedRootOmitsPath);
+            }
+
+            roots.Add(new RecordedRoot(path, label));
+        }
+
+        reader.ReadEndArray();
+        return roots;
     }
 
     private static List<string> ReadRules(CanonicalCborReader reader)
@@ -380,12 +497,10 @@ public static class ErrorManifestCodec
                     case 2:
                         var value = reader.ReadUInt16();
 
-                        // The bound is the specification's assigned range (06
-                        // §8.1), which runs to 8 — not to whatever this build's
-                        // enum happens to carry. It read only to 7 while the
-                        // scanner was already emitting 8 for a name with no
-                        // faithful UTF-8 form, so any backup that met one wrote
-                        // an error manifest that would not open again.
+                        // 1..8 — specification 06 §8.1 assigns eight reasons,
+                        // and 8 (name not representable) is one this encoder
+                        // itself writes: a bound of 7 made every snapshot
+                        // carrying such a refusal unreadable on the way back.
                         if (value is < 1 or > 8)
                         {
                             throw new ManifestValidationException(Strings.FormatErrorManifestCodec_FailureReasonUnassigned(value));

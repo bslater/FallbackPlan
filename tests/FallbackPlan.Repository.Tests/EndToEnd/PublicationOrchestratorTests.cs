@@ -21,8 +21,6 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 [TestClass]
 public sealed class PublicationOrchestratorTests : ArchiveTestHarness
 {
-    private static readonly byte[] MasterKey = [.. Enumerable.Range(0, 32).Select(value => (byte)value)];
-
     /// <summary>Records every put's key in order — the ordering oracle.</summary>
     private sealed class RecordingStore(IObjectStore inner) : IObjectStore
     {
@@ -54,17 +52,18 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     }
 
     private PublicationOrchestrator CreateOrchestrator(
-        IObjectStore store, RepositoryKeySet keys, KeyHierarchy hierarchy, IPublicationObserver? observer = null) =>
+        IObjectStore store, RepositoryKeySet keys, RepositoryWriteCredential credential, IPublicationObserver? observer = null) =>
         new(
             SmallBlobPolicy,
             Repo,
             Writer,
             KeyGeneration.Zero,
             keys,
-            hierarchy,
+            credential,
             store,
             new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
             SpoolDirectory,
+            FormatVersions.SealedDataPlane,
             observer);
 
     private static BackupJob Job(Stream source) => new(
@@ -84,10 +83,10 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 6);
         var store = new RecordingStore(CreateStore());
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         using var source = new MemoryStream(data);
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         var puts = store.Puts;
 
@@ -125,10 +124,10 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 6);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         using var source = new MemoryStream(data);
-        var published = await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
         // Cold start: enumerate /snapshots/ (01 §6 step 4), open the
         // standalone object, verify its signature, follow the graph.
@@ -153,7 +152,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         Assert.IsTrue(StandaloneRecordCipher.TryOpen(record, Repo, metadataKey, out var snapshotPlain));
 
         var decoded = SnapshotManifestCodec.Decode(snapshotPlain);
-        using (var signer = RepositorySigner.Create(hierarchy, KeyGeneration.Zero))
+        using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
         {
             Assert.IsTrue(signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span),
                 "a published snapshot's signature must verify against the derived key (06 §6.1)");
@@ -162,7 +161,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         Assert.AreEqual(published.RootTreeObjectId, decoded.Manifest.RootTree);
 
         // Follow root tree → file version → segments, all through footers.
-        using var reader = new RepositoryReader(Repo, keys, store);
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
 
         var treeRead = await reader.ReadSegmentAsync(decoded.Manifest.RootTree, CancellationToken.None);
@@ -188,12 +187,12 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         var data = BuildTestFile(regions: 4);
         var store = CreateStore();
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         using var source = new MemoryStream(data);
-        await CreateOrchestrator(store, keys, hierarchy).PublishAsync(Job(source), CancellationToken.None);
+        await CreateOrchestrator(store, keys, credential).PublishAsync(Job(source), CancellationToken.None);
 
-        using var journalReader = new JournalReader(store, Repo, hierarchy);
+        using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, findings) = await journalReader.LoadAsync(maxGeneration: 0, CancellationToken.None);
 
         Assert.AreEqual(0, unparseable);
@@ -211,14 +210,14 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         var steps = new List<PublicationStep>();
         var recorder = new StepRecorder(steps, killAfter: null);
 
         using (var source = new MemoryStream(data))
         {
-            await CreateOrchestrator(CreateStore(), keys, hierarchy, recorder).PublishAsync(Job(source), CancellationToken.None);
+            await CreateOrchestrator(CreateStore(), keys, credential, recorder).PublishAsync(Job(source), CancellationToken.None);
         }
 
         SequenceAssert.AreEqual(
@@ -235,7 +234,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
     {
         var data = BuildTestFile(regions: 4);
         using var keys = CreateKeys();
-        using var hierarchy = new KeyHierarchy(MasterKey);
+        using var credential = CreateCredential();
 
         // A throwing observer is the F1 kill switch: publication stops
         // between steps, leaving exactly the interrupted state on the wire.
@@ -245,7 +244,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         using (var source = new MemoryStream(data))
         {
             await Assert.ThrowsExactlyAsync<PublicationKilledException>(async () =>
-                await CreateOrchestrator(store, keys, hierarchy, killer).PublishAsync(Job(source), CancellationToken.None));
+                await CreateOrchestrator(store, keys, credential, killer).PublishAsync(Job(source), CancellationToken.None));
         }
 
         // Deltas exist; the discoverable snapshot does not.

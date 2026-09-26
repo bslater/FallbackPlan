@@ -1,6 +1,8 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
@@ -11,18 +13,28 @@ namespace FallbackPlan.Retention;
 /// <param name="StoreKey">The blob's store key.</param>
 /// <param name="BlobId">Its writer-allocated identity — what a tombstone names (spec 11 §3).</param>
 /// <param name="Records">How many records it holds — all unreachable, or it would not be here.</param>
-public sealed record DeletableBlob(ObjectKey StoreKey, BlobId BlobId, long Records);
+/// <param name="Reason">
+/// Why, in specification 11 §3's closed vocabulary. The reason is inside the
+/// tombstone's signed bytes, so it is an attested claim about why data was
+/// destroyed rather than a comment — which is why it is derived here, where
+/// the two ways a record can be dead are already distinguished, instead of
+/// being a constant the sweep supplies.
+/// </param>
+public sealed record DeletableBlob(
+    ObjectKey StoreKey, BlobId BlobId, long Records, TombstoneReason Reason);
 
 /// <summary>
 /// What one collection pass would do — produced before anything is done,
-/// because the dry-run report is mandatory (FR-GC-005). Deletion-only:
-/// no compaction, so a blob with a single live record stays whole, and the
-/// report says how much that conservatism is costing.
+/// because the dry-run report is mandatory (FR-GC-005). The pass itself
+/// deletes: a blob with a live minority stays whole and is reported as the
+/// compaction backlog, and a blob compaction has already drained is garbage
+/// here like any other, because every record it holds now resolves
+/// elsewhere (ADR-0067).
 /// </summary>
 /// <param name="ProtectedSnapshots">The snapshots treated as protected, with the planner's reasons.</param>
 /// <param name="ExpiredSnapshotKeys">The standalone snapshot objects the pass would remove.</param>
-/// <param name="DeletableBlobs">Blobs holding nothing reachable and nothing intent-covered.</param>
-/// <param name="RetainedPartialBlobs">Blobs kept whole for a live minority — the compaction backlog.</param>
+/// <param name="DeletableBlobs">Blobs holding nothing reachable <em>here</em> and nothing intent-covered — including one compaction drained, whose records the index now resolves into another blob.</param>
+/// <param name="PartlyLiveBlobs">Blobs kept whole for a live minority — the compaction backlog, named rather than counted so a pass can act on it (ADR-0067).</param>
 /// <param name="Vetoes">
 /// Conditions that force this pass to delete nothing at all: an undecodable
 /// snapshot, an unwalkable manifest, a blob the reader had to skip. Damage
@@ -32,7 +44,7 @@ public sealed record CollectionPlan(
     IReadOnlyList<SnapshotKeep> ProtectedSnapshots,
     IReadOnlyList<ObjectKey> ExpiredSnapshotKeys,
     IReadOnlyList<DeletableBlob> DeletableBlobs,
-    int RetainedPartialBlobs,
+    IReadOnlyList<CompactableBlob> PartlyLiveBlobs,
     IReadOnlyList<string> Vetoes)
 {
     /// <summary>Whether the pass may delete anything at all.</summary>
@@ -40,10 +52,11 @@ public sealed record CollectionPlan(
 }
 
 /// <summary>
-/// Steps 1–5 of the collection algorithm (architecture 07 §3), deletion-only:
-/// mark from the protected snapshots, add every blob an unretired write
-/// intent covers (step 4 — ADR-0009's reason to exist), and plan the
-/// difference. Anything doubtful vetoes the whole pass rather than narrowing
+/// Steps 1–5 of the collection algorithm (architecture 07 §3): mark from the
+/// protected snapshots, add every blob an unretired write intent covers
+/// (step 4 — ADR-0009's reason to exist), and plan the difference, counting
+/// a record as living in a blob only while the index still sends readers
+/// there. Anything doubtful vetoes the whole pass rather than narrowing
 /// it: a collector that guesses is the failure mode this design was built
 /// against.
 /// </summary>
@@ -57,6 +70,21 @@ public static class CollectionPlanner
     /// <param name="reachable">The mark set from <see cref="StagingMark.MarkAsync"/>.</param>
     /// <param name="unwalkable">Objects the mark could not read — each one a veto.</param>
     /// <param name="intents">The journal's live-intent survey — step 4's input.</param>
+    /// <param name="listingConsistency">
+    /// What the store promises about listing freshness
+    /// ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)).
+    /// Anything but <see cref="ListingConsistency.Strong"/> vetoes the pass,
+    /// because every condemnation here rests on absence.
+    /// </param>
+    /// <param name="resolveLocation">
+    /// Where the index says an object now lives, or null when it has no
+    /// opinion. Supplying it is what lets a pass condemn a blob compaction
+    /// drained: a record whose bytes are still here but whose <b>location</b>
+    /// is another blob is dead here, and a blob every one of whose records is
+    /// dead here is garbage like any other (07 §3, ADR-0067). Omit it and the
+    /// planner behaves as it did before compaction existed — conservatively,
+    /// since a drained blob then simply stays.
+    /// </param>
     /// <returns>The plan, never yet an action.</returns>
     public static CollectionPlan Plan(
         SnapshotSurvey survey,
@@ -65,7 +93,9 @@ public static class CollectionPlanner
         RepositoryReader reader,
         HashSet<ObjectId> reachable,
         IReadOnlyList<string> unwalkable,
-        IntentSurvey intents)
+        IntentSurvey intents,
+        ListingConsistency listingConsistency,
+        Func<ObjectId, BlobId?>? resolveLocation = null)
     {
         ThrowHelper.ThrowIfNull(survey);
         ThrowHelper.ThrowIfNull(selection);
@@ -76,6 +106,24 @@ public static class CollectionPlanner
         ThrowHelper.ThrowIfNull(intents);
 
         var vetoes = new List<string>();
+
+        // Every condemnation below rests on absence: a blob is garbage
+        // because nothing reachable names it, and what is reachable is what
+        // the survey could enumerate. A store whose listings may lag cannot
+        // distinguish "there is no such snapshot" from "I cannot see it yet",
+        // so absence is not a fact there and this pass has no authority to
+        // act on it (architecture 05 §1; ADR-0012). The plan is still built
+        // and still reported — the dry run is worth having, because it says
+        // what a strongly-consistent store would have collected — and nothing
+        // may be deleted from it.
+        if (listingConsistency != ListingConsistency.Strong)
+        {
+            var promise = listingConsistency == ListingConsistency.Eventual ? "eventual" : "unstated";
+            vetoes.Add(
+                $"the store does not promise that a listing reflects what it holds (listing consistency: {promise}), "
+                + "and every condemnation in this pass rests on an object's absence from one");
+        }
+
         foreach (var undecodable in survey.Undecodable)
         {
             vetoes.Add($"snapshot object would not decode: {undecodable}");
@@ -100,38 +148,80 @@ public static class CollectionPlanner
             .Select(snapshot => snapshot.StoreKey)
             .ToList();
 
+        // A supersession may only condemn a record here if the blob the index
+        // sends readers to is one this reader actually opened. Trusting an
+        // entry that names a blob nobody holds would delete the last copy of
+        // a record on the strength of a pointer into nothing — ADR-0025 exit
+        // criterion 12, inverted and fatal.
+        var present = reader.Blobs.Select(blob => blob.BlobId).ToHashSet();
+
         var deletable = new List<DeletableBlob>();
-        var retainedPartial = 0;
+        var partlyLive = new List<CompactableBlob>();
         foreach (var (storeKey, blobId, records) in reader.Blobs)
         {
             // Step 4: an unretired intent's coverage is reachability, no
-            // exceptions, no heuristics (FR-GC-003).
+            // exceptions, no heuristics (FR-GC-003). A blob a live intent
+            // covers is never a compaction candidate either — another writer
+            // may still be appending to it (ADR-0008).
             if (intents.IsCovered(blobId))
             {
                 continue;
             }
 
-            var live = records.Count(record => reachable.Contains(record.ObjectId));
-            if (live == records.Count)
+            var live = records.Where(record => LivesHere(record, blobId)).ToList();
+            if (live.Count == records.Count)
             {
                 continue;
             }
 
-            if (live > 0)
+            if (live.Count > 0)
             {
-                retainedPartial++;
+                // Stored lengths, summed: what a rewrite would carry and what
+                // it would leave behind. The footer and the per-record framing
+                // go with the old blob either way, so they are not counted on
+                // either side of the trade.
+                var liveBytes = live.Sum(record => (long)record.StoredLength);
+                var allBytes = records.Sum(record => (long)record.StoredLength);
+                partlyLive.Add(new CompactableBlob(
+                    storeKey, blobId, live, liveBytes, allBytes - liveBytes, records.Count - live.Count));
                 continue;
             }
 
-            deletable.Add(new DeletableBlob(storeKey, blobId, records.Count));
+            // Reason 3 rather than reason 1 when the index moved these records
+            // somewhere that still exists: the blob was drained by a rewrite,
+            // which is what "compacted" names (ADR-0067). One relocated record
+            // is enough — a compactor carries the live records and leaves the
+            // rest, so whatever it did not carry was already unreachable.
+            deletable.Add(new DeletableBlob(
+                storeKey,
+                blobId,
+                records.Count,
+                records.Any(record => Relocated(record, blobId))
+                    ? TombstoneReason.Compacted
+                    : TombstoneReason.Unreferenced));
         }
 
         return new CollectionPlan(
             selection.Keep,
             expiredKeys,
             deletable,
-            retainedPartial,
+            partlyLive,
             vetoes);
+
+        bool LivesHere(RecordTableEntry record, BlobId blobId) =>
+            reachable.Contains(record.ObjectId) && !Relocated(record, blobId);
+
+        // The second of the two ways a record here can be dead, and the one
+        // that names a rewrite: it is still reached by a protected snapshot,
+        // but the index resolves it into a DIFFERENT blob that is PRESENT.
+        // The presence check is load-bearing — a supersession into a blob
+        // nobody holds must condemn nothing (ADR-0025 exit criterion 12,
+        // inverted and fatal), and it must not relabel anything either.
+        bool Relocated(RecordTableEntry record, BlobId blobId) =>
+            reachable.Contains(record.ObjectId)
+            && resolveLocation?.Invoke(record.ObjectId) is { } winner
+            && !winner.Equals(blobId)
+            && present.Contains(winner);
     }
 
     /// <summary>The dry-run report, in the order a human reads it (FR-GC-005).</summary>
@@ -161,7 +251,10 @@ public static class CollectionPlanner
         }
 
         lines.Add($"would delete: {plan.ExpiredSnapshotKeys.Count} snapshot object(s), {plan.DeletableBlobs.Count} blob(s)");
-        lines.Add($"kept whole for a live minority: {plan.RetainedPartialBlobs} blob(s) (compaction is a later phase)");
+        lines.Add(string.Create(
+            CultureInfo.InvariantCulture,
+            $"kept whole for a live minority: {plan.PartlyLiveBlobs.Count} blob(s), "
+            + $"{plan.PartlyLiveBlobs.Sum(blob => blob.DeadBytes):N0} dead byte(s) in them"));
 
         foreach (var veto in plan.Vetoes)
         {

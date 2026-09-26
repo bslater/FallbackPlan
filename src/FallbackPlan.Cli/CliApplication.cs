@@ -10,6 +10,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Catalogue.Forensic;
 using FallbackPlan.Repository.Format.Manifests;
@@ -74,7 +75,7 @@ public static class CliApplication
         // which can only say "always" or "never".
         var repoOption = new Option<string?>("--repo")
         {
-            Description = "Path of the repository store root. Required unless --connect names a remote service.",
+            Description = "Path of the repository store root. Required for direct mode — working on a repository in this process. Omit it to ask the running service instead, which is what --set alone does.",
         };
         var passphraseEnvOption = new Option<string?>("--passphrase-env")
         {
@@ -235,6 +236,46 @@ public static class CliApplication
             };
         }
 
+        // The same one-command query against the LOCAL service, for the verbs
+        // whose local path otherwise reads the catalogue directly: with no
+        // --repo they are service-only, against the shared default
+        // installation when --state is absent too (FR-SVC-016) — the same
+        // connection the web console makes, no repository and no passphrase
+        // involved.
+        async Task<TResult> QueryLocalServiceAsync<TResult>(
+            string? stateDirectory, ServiceCommand command, CancellationToken cancellationToken)
+            where TResult : ServiceResult
+        {
+            var state = stateDirectory is { Length: > 0 } ? stateDirectory : InstallationDefaults.StateDirectory;
+
+            LocalServiceClient client;
+            try
+            {
+                client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException)
+            {
+                throw new CliFailureException(
+                    $"no service is listening for '{state}'. Start one (`fallbackplan-agent`), or name --repo "
+                    + "to read the repository directly.");
+            }
+
+            await using (client.ConfigureAwait(false))
+            {
+                await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                error.WriteLine($"mode: service — the service holding the writer role for '{state}' answered this.");
+
+                var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+                return result switch
+                {
+                    TResult expected => expected,
+                    ServiceError serviceError => throw new CliFailureException(serviceError.Message),
+                    _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+                };
+            }
+        }
+
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken, sessionLogger);
 
@@ -264,7 +305,10 @@ public static class CliApplication
         // A read verb goes to the service when one is listening and reads the
         // repository itself when none is. Unlike a write, neither path takes the
         // writer role, so this is never refused for holding it — the choice is
-        // about who does the reading, not about who is allowed to.
+        // about who does the reading, not about who is allowed to. A command
+        // that named NO repository is service-only, against the shared default
+        // installation when --state is absent too (FR-SVC-016) — the same
+        // connection the web console makes, no passphrase involved.
         async Task<int> ReadThroughGatewayAsync(
             ParseResult parse,
             Func<IOperationGateway, CancellationToken, ValueTask<OperationReport>> operation,
@@ -273,7 +317,11 @@ public static class CliApplication
             var remote = ResolveRemote(parse, parse.GetValue(directOption));
             var gateway = remote is { } target
                 ? await OperationGateway.OpenForRemoteAsync(
-                    target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                    target.Host, target.Port, target.State, target.Fingerprint, cancellationToken,
+                    parse.GetValue(passphraseEnvOption)).ConfigureAwait(false)
+                : parse.GetValue(repoOption) is not { Length: > 0 } && !parse.GetValue(directOption)
+                ? await OperationGateway.OpenServiceOnlyAsync(
+                    parse.GetValue(stateOption), cancellationToken, parse.GetValue(passphraseEnvOption)).ConfigureAwait(false)
                 : await OperationGateway.OpenForReadAsync(
                     Repo(parse),
                     PassphraseEnv(parse),
@@ -326,6 +374,36 @@ public static class CliApplication
 
         static string Hex(ReadOnlyMemory<byte> bytes) => Convert.ToHexString(bytes.Span).ToLowerInvariant();
 
+        // Which pinned peer to expect. A claimant that has just paired knows
+        // the fingerprint, but asking for it is friction at the worst moment —
+        // so a single peer pinned to store for this machine is taken as the
+        // answer, and anything else is named rather than guessed at.
+        static Protocol.PeerIdentity ResolveClaimPeer(PeerGrantStore grants, string? fingerprint)
+        {
+            if (fingerprint is { Length: > 0 })
+            {
+                return grants.Grants
+                    .FirstOrDefault(grant => string.Equals(
+                        grant.Identity.Fingerprint, fingerprint, StringComparison.OrdinalIgnoreCase))
+                    ?.Identity
+                    ?? throw new CliFailureException(
+                        $"no peer with fingerprint '{fingerprint}' is pinned in this state directory. "
+                        + "Pair with the peer first.");
+            }
+
+            var candidates = grants.Grants
+                .Where(grant => grant.Role is PeerRole.StoresForUs or PeerRole.Both)
+                .ToList();
+
+            return candidates.Count switch
+            {
+                1 => candidates[0].Identity,
+                0 => throw new CliFailureException(
+                    "no peer is pinned to store for this machine. Pair with the peer first, then claim."),
+                _ => throw new CliFailureException(
+                    $"{candidates.Count} peers are pinned to store for this machine; name one with --fingerprint."),
+            };
+        }
         // The specification's own vocabulary (06 §6), not a friendlier
         // paraphrase: "best-effort live capture" and "application-consistent"
         // are materially different promises, and softening either is how a
@@ -375,64 +453,76 @@ public static class CliApplication
                 Description = "Informational creator string recorded in the descriptor.",
                 DefaultValueFactory = _ => "fallbackplan-cli/0.1",
             };
-            var writeOnlyOption = new Option<bool>("--write-only")
+            var formatVersionOption = new Option<int>("--format-version")
             {
-                Description = "Create a write-only (format 2) repository (ADR-0042): every key derives from the "
-                    + "passphrase, nothing is stored, content seals to a public key. Requires --acknowledge-loss.",
+                Description = "The on-disk format to create, fixed for the repository's life. "
+                    + $"{FormatLimits.FormatVersion} is the default; {FormatVersions.RelocatableRecords} writes "
+                    + "relocatable records (ADR-0052).",
+                DefaultValueFactory = _ => FormatLimits.FormatVersion,
             };
             var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
             {
-                Description = "Acknowledge that a write-only repository's passphrase can never change and that "
-                    + "losing it loses the backup irrecoverably.",
+                Description = "Acknowledge that a repository's passphrase can never change and that losing it "
+                    + "loses the backup irrecoverably (ADR-0042).",
             };
-            var command = new Command("init", "Create a new repository at --repo (keys first, descriptor last).");
+            var command = new Command(
+                "init",
+                "Create a new repository at --repo: every key derives from the passphrase, nothing is stored, "
+                + "content seals to a public key (ADR-0042). Requires --acknowledge-loss.");
             command.Options.Add(repoOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(createdByOption);
-            command.Options.Add(writeOnlyOption);
             command.Options.Add(acknowledgeLossOption);
+            command.Options.Add(formatVersionOption);
             root.Subcommands.Add(command);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
                 var store = StoreComposition.OpenLocal(Repo(parse));
                 using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
-                var settings = RepositoryCreationSettings.Default with { CreatedBy = parse.GetValue(createdByOption)! };
-
-                if (parse.GetValue(writeOnlyOption))
+                    var requested = parse.GetValue(formatVersionOption);
+                var settings = RepositoryCreationSettings.Default with
                 {
-                    // The loss acknowledgement is the ceremony, not a speed
-                    // bump (ADR-0042 §11, architecture 03 §1 rule 6): there
-                    // is no recovery path to offer later, so consent is
-                    // collected before the descriptor exists.
-                    if (!parse.GetValue(acknowledgeLossOption))
-                    {
-                        throw new CliFailureException(
-                            "A write-only repository's passphrase can never change, and if it is lost the backup "
-                            + "is unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
-                            + "to accept this (ADR-0042).");
-                    }
+                    CreatedBy = parse.GetValue(createdByOption)!,
+                    FormatVersion = requested is >= 0 and <= ushort.MaxValue ? (ushort)requested : (ushort)0,
+                };
 
-                    var (created, authority) = await RepositoryLifecycle.CreateWriteOnlyAsync(
-                        store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        cancellationToken).ConfigureAwait(false);
-                    using (created)
-                    using (authority)
-                    {
-                        output.WriteLine($"created write-only repository {Base32.Encode(created.RepositoryId.ToArray())}");
-                        output.WriteLine(
-                            "the passphrase is the only key: it can never change, and losing it loses the backup.");
-                    }
-
-                    output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
-                    return 0;
+                // Validated here rather than left to the lifecycle, which
+                // refuses an unwritable version with an ArgumentException
+                // GuardAsync does not catch — the difference between
+                // "error: …" and a stack trace. Nothing is written either way.
+                var validation = settings.Validate();
+                if (!validation.IsValid)
+                {
+                    throw new CliFailureException(
+                        "The creation settings are invalid: "
+                        + string.Join(", ", validation.Defects.Select(defect => defect.Message)));
                 }
 
-                using var repository = await RepositoryLifecycle.CreateAsync(
-                    store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), cancellationToken)
-                    .ConfigureAwait(false);
+                // The loss acknowledgement is the ceremony, not a speed bump
+                // (ADR-0042 §11, architecture 03 §1 rule 6): there is no
+                // recovery path to offer later, so consent is collected
+                // before the descriptor exists. `init` is the one creation
+                // path with no wizard in front of it, which is why it asks.
+                if (!parse.GetValue(acknowledgeLossOption))
+                {
+                    throw new CliFailureException(
+                        "A repository's passphrase can never change, and if it is lost the backup is "
+                        + "unrecoverable — there is no reset and no export. Re-run with --acknowledge-loss "
+                        + "to accept this (ADR-0042).");
+                }
 
-                output.WriteLine($"created repository {Base32.Encode(repository.RepositoryId.ToArray())}");
+                var (created, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
+                    store, passphrase, settings, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    cancellationToken).ConfigureAwait(false);
+                using (created)
+                using (authority)
+                {
+                    output.WriteLine($"created repository {Base32.Encode(created.RepositoryId.ToArray())}");
+                    output.WriteLine(
+                        "the passphrase is the only key: it can never change, and losing it loses the backup.");
+                }
+
                 output.WriteLine("note: format is UNSTABLE (phase 0) — the descriptor says so (specification 01 §3.2).");
                 return 0;
             }));
@@ -464,23 +554,17 @@ public static class CliApplication
                     }
                     : CapturePolicy.Default;
 
-                // A write-only repository takes the device trust domain
-                // (ADR-0042): verify-on-reuse reads content, which it cannot.
-                if (session.Repository.Keys.WriteOnly)
-                {
-                    policy = policy with { DedupTrustDomain = Domain.Configuration.DedupTrustDomain.Device };
-                }
-
                 var orchestrator = new PublicationOrchestrator(
                     policy,
                     session.Repository.RepositoryId,
                     session.Writer,
                     session.CurrentGeneration,
                     session.Repository.Keys,
-                    session.Repository.Hierarchy,
+                    session.Repository.Credential,
                     session.Store,
                     session.CreateSequence(),
-                    session.SpoolDirectory);
+                    session.SpoolDirectory,
+                    session.Repository.EffectiveFormatVersion);
 
                 var snapshotId = RandomNumberGenerator.GetBytes(16);
                 var fileName = Path.GetFileName(filePath);
@@ -532,7 +616,7 @@ public static class CliApplication
                     throw new CliFailureException(Strings.FormatCliApplication_NoObjectExists(key.Value));
                 }
 
-                using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Hierarchy.DeriveContentIdKey());
+                using var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(session.Repository.Credential.ContentIdKey.ToArray());
                 using var reader = await BlobReader.OpenAsync(
                     session.Store, key, metadata.Metadata!.Length, session.Repository.RepositoryId,
                     session.Repository.Keys.DeriveClassKey, deriver, cancellationToken).ConfigureAwait(false);
@@ -676,7 +760,7 @@ public static class CliApplication
                         : new ForensicTarget.Everything();
 
                     using var rebuilder = new ForensicRebuilder(
-                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy);
+                        session.Store, session.Repository.RepositoryId, session.Repository.Credential);
                     var report = await rebuilder.RebuildAsync(catalogue, target, cancellationToken).ConfigureAwait(false);
 
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture,
@@ -691,7 +775,7 @@ public static class CliApplication
                     }
 
                     var loader = new IndexLoader(
-                        session.Store, session.Repository.RepositoryId, session.Repository.Hierarchy,
+                        session.Store, session.Repository.RepositoryId, session.Repository.Credential,
                         logging.Factory.CreateLogger<IndexLoader>());
 
                     // Precedence rule 3 (specification 07 §3) needs to know
@@ -901,7 +985,7 @@ public static class CliApplication
             var includeOption = new Option<string[]>("--include") { Description = "rules-v1 include rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var excludeOption = new Option<string[]>("--exclude") { Description = "rules-v1 exclude rule (repeatable).", AllowMultipleArgumentsPerToken = true };
             var fullOption = new Option<bool>("--full") { Description = "Ignore the prior snapshot; read every file." };
-            var command = WithRemoteCapableSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot). With --connect, runs a configured set on the remote service."));
+            var command = WithRemoteCapableSession(new Command("backup", "Back up a directory tree as a snapshot (incremental against the latest catalogue snapshot). With --set and no --repo, asks the running service to run that configured set — locally, or on the remote one named by --connect."));
             command.Arguments.Add(rootArgument);
             command.Options.Add(setOption);
             command.Options.Add(includeOption);
@@ -913,13 +997,23 @@ public static class CliApplication
             {
                 // The one verb that both writes and has a service equivalent, so
                 // the one whose side has to be resolved rather than assumed
-                // (ADR-0028 §3). Everything the two sides do differently lives
+                // (ADR-0028 §3). Everything the sides do differently lives
                 // behind the gateway; what is left here is the same either way —
                 // a remote service, like a local one, runs only a configured set.
+                //
+                // Naming no repository asks the local service, exactly as the
+                // read verbs do: "the CLI connects to the service when one is
+                // running", and a backup is the command an operator most often
+                // wants that way. Requiring --repo here meant requiring the
+                // flag for direct mode in order to ask the service — and the
+                // service, holding the writer role, would then refuse it.
                 var remote = ResolveRemote(parse, parse.GetValue(directOption));
                 var gateway = remote is { } target
                     ? await OperationGateway.OpenForRemoteAsync(
                         target.Host, target.Port, target.State, target.Fingerprint, cancellationToken).ConfigureAwait(false)
+                    : parse.GetValue(repoOption) is not { Length: > 0 } && !parse.GetValue(directOption)
+                    ? await OperationGateway.OpenServiceOnlyAsync(
+                        parse.GetValue(stateOption), cancellationToken).ConfigureAwait(false)
                     : await OperationGateway.OpenForWriteAsync(
                         Repo(parse),
                         PassphraseEnv(parse),
@@ -960,21 +1054,17 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                if (ResolveRemote(parse, direct: false) is { } target)
+                // The service carries no signature state on the wire, so a
+                // service-answered listing — local or remote — shows the file
+                // count where the catalogue's own shows the signature column.
+                int RenderServiceSnapshots(SnapshotsResult result)
                 {
-                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
-                    var result = await QueryRemoteAsync<SnapshotsResult>(
-                        target, new ListSnapshotsCommand(), cancellationToken).ConfigureAwait(false);
-
                     if (result.Snapshots.Count == 0)
                     {
                         output.WriteLine("no snapshots known to the service.");
                         return 0;
                     }
 
-                    // The service carries no signature state on the wire, so the
-                    // remote listing shows the file count where the local one
-                    // shows the signature column.
                     foreach (var snapshot in result.Snapshots)
                     {
                         var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
@@ -995,6 +1085,22 @@ public static class CliApplication
                     }
 
                     return 0;
+                }
+
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    return RenderServiceSnapshots(await QueryRemoteAsync<SnapshotsResult>(
+                        target, new ListSnapshotsCommand(), cancellationToken).ConfigureAwait(false));
+                }
+
+                // No repository named: service-only, against the shared
+                // default installation (FR-SVC-016).
+                if (parse.GetValue(repoOption) is not { Length: > 0 })
+                {
+                    return RenderServiceSnapshots(await QueryLocalServiceAsync<SnapshotsResult>(
+                        parse.GetValue(stateOption), new ListSnapshotsCommand(), cancellationToken)
+                        .ConfigureAwait(false));
                 }
 
                 using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
@@ -1019,6 +1125,194 @@ public static class CliApplication
                 }
 
                 return 0;
+            }));
+        }
+
+        // ---------------------------------------------------------------- jobs
+
+        {
+            var jobArgument = new Argument<string?>("job")
+            {
+                Description = "A job id from the listing; omit for the history.",
+                Arity = ArgumentArity.ZeroOrOne,
+            };
+            var limitOption = new Option<int>("--limit")
+            {
+                Description = "Newest history rows to show (default 50).",
+                DefaultValueFactory = _ => 50,
+            };
+            var changesOption = new Option<bool>("--changes")
+            {
+                Description = "With a job id: what the run changed against the set's previous snapshot.",
+            };
+            var failuresOption = new Option<bool>("--failures")
+            {
+                Description = "With a job id: the run's capture failures — each path with its typed reason.",
+            };
+            var command = WithRemoteCapableSession(new Command("jobs",
+                "The job journal: what each backup run did. Lists the history, or reports one run by id. " +
+                "Needs a running service — the journal is written by it, so there is no direct-mode reading " +
+                "of somebody else's live state. With --connect, asks the remote service."));
+            command.Arguments.Add(jobArgument);
+            command.Options.Add(limitOption);
+            command.Options.Add(changesOption);
+            command.Options.Add(failuresOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var jobId = parse.GetValue(jobArgument);
+                var wantChanges = parse.GetValue(changesOption);
+                var wantFailures = parse.GetValue(failuresOption);
+                if ((wantChanges || wantFailures) && jobId is null)
+                {
+                    throw new CliFailureException(
+                        "--changes and --failures describe one run: name the job id (see `jobs` for the listing).");
+                }
+
+                if (wantChanges || wantFailures)
+                {
+                    async Task<TResult> AskAsync<TResult>(ServiceCommand detailCommand)
+                        where TResult : ServiceResult
+                    {
+                        if (ResolveRemote(parse, direct: false) is { } target)
+                        {
+                            error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                            return await QueryRemoteAsync<TResult>(target, detailCommand, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        return await QueryLocalServiceAsync<TResult>(
+                            parse.GetValue(stateOption), detailCommand, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (wantChanges)
+                    {
+                        var changes = await AskAsync<JobChangesResult>(new JobChangesCommand(jobId!)).ConfigureAwait(false);
+                        output.WriteLine(changes.BaselineSnapshotId is null
+                            ? "the set's first backup — everything is new"
+                            : string.Create(CultureInfo.InvariantCulture,
+                                $"vs {changes.BaselineSnapshotId}: {changes.Unchanged} unchanged"));
+                        foreach (var (label, bucket) in new[]
+                            { ("new", changes.New), ("changed", changes.Changed), ("removed", changes.Removed) })
+                        {
+                            if (bucket.Count == 0)
+                            {
+                                continue;
+                            }
+
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{bucket.Count} {label}"));
+                            foreach (var path in bucket.Sample)
+                            {
+                                output.WriteLine($"  {path}");
+                            }
+
+                            if (bucket.Count > bucket.Sample.Count)
+                            {
+                                output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                    $"  … and {bucket.Count - bucket.Sample.Count} more"));
+                            }
+                        }
+                    }
+
+                    if (wantFailures)
+                    {
+                        var failures = await AskAsync<JobFailuresResult>(new JobFailuresCommand(jobId!)).ConfigureAwait(false);
+                        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{failures.Failures} failure(s)"));
+                        foreach (var failure in failures.Sample)
+                        {
+                            output.WriteLine($"  {failure.Path}");
+                            output.WriteLine($"    {failure.Reason} — {failure.Detail}");
+                        }
+
+                        if (failures.Failures > failures.Sample.Count)
+                        {
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"  … and {failures.Failures - failures.Sample.Count} more"));
+                        }
+                    }
+
+                    return 0;
+                }
+
+                int Render(JobsResult result)
+                {
+                    if (jobId is null)
+                    {
+                        if (result.Jobs.Count == 0)
+                        {
+                            output.WriteLine("no jobs recorded yet.");
+                            return 0;
+                        }
+
+                        foreach (var job in result.Jobs.Reverse())
+                        {
+                            var started = DateTimeOffset.FromUnixTimeMilliseconds((long)job.StartedAt)
+                                .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{job.Id}  {started}  {job.State,-21}  {job.Detail}"));
+                        }
+
+                        return 0;
+                    }
+
+                    if (result.Jobs.FirstOrDefault(job => job.Id == jobId) is not { } row)
+                    {
+                        throw new CliFailureException($"No job '{jobId}' is in the journal. `jobs` lists the ids.");
+                    }
+
+                    // The run's report, in the direct-mode backup report's
+                    // voice. A row from before the run record existed
+                    // (pre-1.22) has no numbers — say so rather than
+                    // printing invented zeroes.
+                    var report = new List<string>
+                    {
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"state          {row.State}"),
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"started        {DateTimeOffset.FromUnixTimeMilliseconds((long)row.StartedAt):yyyy-MM-dd HH:mm:ss}"),
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"took           {TimeSpan.FromMilliseconds(Math.Max(0, (double)(row.UpdatedAt - row.StartedAt))):hh\\:mm\\:ss}"),
+                    };
+
+                    if (row.FilesDone is not null || row.FilesSeen is not null)
+                    {
+                        var planned = row.TotalFiles is { } totalFiles
+                            ? string.Create(CultureInfo.InvariantCulture, $" of {totalFiles} planned")
+                            : string.Empty;
+                        report.Add(string.Create(CultureInfo.InvariantCulture,
+                            $"files          {row.FilesDone ?? 0}{planned} ({row.FilesReused ?? 0} unchanged, {row.FilesFailed ?? 0} failed)"));
+                        report.Add(string.Create(CultureInfo.InvariantCulture,
+                            $"bytes          {row.BytesSeen ?? 0} read, {row.BytesStored ?? 0} newly stored"));
+                    }
+                    else
+                    {
+                        report.Add("record         this run predates the per-run record; only its detail survives");
+                    }
+
+                    report.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"snapshot       {row.SnapshotId ?? "none committed"}"));
+                    report.Add(string.Create(CultureInfo.InvariantCulture,
+                        $"detail         {row.Detail}"));
+                    foreach (var line in report)
+                    {
+                        output.WriteLine(line);
+                    }
+
+                    return 0;
+                }
+
+                // A named job may be older than any sensible page, so the
+                // by-id form asks unbounded; the listing asks for its page.
+                var ask = new ListJobsCommand(ActiveOnly: false, Limit: jobId is null ? parse.GetValue(limitOption) : null);
+
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                    return Render(await QueryRemoteAsync<JobsResult>(target, ask, cancellationToken).ConfigureAwait(false));
+                }
+
+                return Render(await QueryLocalServiceAsync<JobsResult>(
+                    parse.GetValue(stateOption), ask, cancellationToken).ConfigureAwait(false));
             }));
         }
 
@@ -1283,51 +1577,6 @@ public static class CliApplication
             }));
         }
 
-        // ----------------------------------------------------------- key-export
-
-        {
-            var outputOption = new Option<string>("--output")
-            {
-                Description = "Path for the binary kit file (FBPKRKIT). The text form goes to '<output>.txt'.",
-                Required = true,
-            };
-            var command = WithSession(new Command(
-                "key-export",
-                "Export a recovery kit: the verbatim wrapped key object plus everything needed to use it (FR-KIT-001)."));
-            command.Options.Add(outputOption);
-
-            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
-            {
-                // The export path re-derives the KEK and proves the passphrase
-                // opens the exported object — a kit that cannot work is never
-                // written.
-                using var session = await OpenSessionAsync(parse, cancellationToken).ConfigureAwait(false);
-                using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
-
-                var kit = await RecoveryKitFactory.BuildAsync(
-                    session.Store,
-                    passphrase,
-                    session.DeviceId,
-                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    [new FallbackPlan.Repository.Format.RecoveryKit.KitDestination(
-                        "local-path", Path.GetFullPath(Repo(parse)), string.Empty, string.Empty)],
-                    cancellationToken).ConfigureAwait(false);
-
-                var framed = FallbackPlan.Repository.Format.RecoveryKit.RecoveryKitCodec.Serialize(kit);
-                var outputPath = parse.GetValue(outputOption)!;
-                await File.WriteAllBytesAsync(outputPath, framed, cancellationToken).ConfigureAwait(false);
-
-                var text = FallbackPlan.Repository.Format.RecoveryKit.RecoveryKitText.Render(
-                    framed, "Keep this page with your passphrase manager, not with your passphrase.");
-                await File.WriteAllTextAsync(outputPath + ".txt", text, cancellationToken).ConfigureAwait(false);
-
-                output.WriteLine($"kit (binary)   {outputPath}");
-                output.WriteLine($"kit (text)     {outputPath}.txt");
-                output.WriteLine("the kit is ONE factor — store it apart from the passphrase (FR-KIT-004).");
-                return 0;
-            }));
-        }
-
         // ---------------------------------------------------------------- pair
 
 
@@ -1461,6 +1710,52 @@ public static class CliApplication
                 output.WriteLine(who is null ? "signed out" : $"signed out {who}");
                 return 0;
             }));
+
+            // `restart` — the Owner's in-place recycle of the running service
+            // (ADR-0049; contract 1.21). No direct-mode equivalent for the
+            // same reason as `logs`: only a running service can restart.
+            var restartState = new Option<string>("--state")
+            {
+                Description = "The service's state directory.",
+                Required = true,
+            };
+            var restart = new Command(
+                "restart",
+                "Ask the running service to restart in place. Owner-only, and the restart signs every "
+                + "session out — this one included.");
+            restart.Options.Add(restartState);
+            root.Subcommands.Add(restart);
+
+            restart.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(restartState)!;
+                var cache = new SessionCache(state);
+                var client = await ConnectForSessionAsync(state, cancellationToken).ConfigureAwait(false);
+                await using (client.ConfigureAwait(false))
+                {
+                    await cache.PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                    switch (await client
+                        .ExecuteAsync(new RestartServiceCommand(), cancellationToken).ConfigureAwait(false))
+                    {
+                        case AcknowledgedResult:
+                            // The session dies with the old runtime by design
+                            // (FR-USR-003); forgetting it here saves the next
+                            // verb a refusal.
+                            cache.Clear();
+                            output.WriteLine(
+                                "restart commanded — the service is recycling in place. This session ended "
+                                + "with it; `fallbackplan login` again once the service is back.");
+                            return 0;
+
+                        case ServiceError refusal:
+                            throw new CliFailureException(refusal.Message);
+
+                        case var answered:
+                            throw new CliFailureException(
+                                $"the service answered with {answered.GetType().Name}.");
+                    }
+                }
+            }));
         }
         {
             // Not a session verb: pairing needs no repository or passphrase,
@@ -1539,6 +1834,502 @@ public static class CliApplication
 
                 output.WriteLine($"pairing did not complete: {result.Refusal?.Text ?? "the peer went away"}.");
                 return 1;
+            }));
+        }
+
+        // ---------------------------------------------------------------- claim
+        {
+            // The morning the machine is gone
+            // ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)).
+            // A protocol verb like `pair`, not a gateway verb: the claimant
+            // has no service, no configuration and no repository — the one
+            // thing it has is the passphrase, and everything here is derived
+            // from that and what the peer serves.
+            var connectArgument = new Argument<string>("host:port")
+            {
+                Description = "The peer holding the replica, as host:port.",
+            };
+            var stateArgOption = new Option<string>("--state")
+            {
+                Description = "This machine's state directory (its peer identity and the pairing with the peer).",
+                Required = true,
+            };
+            var claimFingerprintOption = new Option<string?>("--fingerprint")
+            {
+                Description = "Fingerprint of the pinned peer to expect. Omit it when exactly one peer is pinned "
+                    + "to store for this machine.",
+            };
+
+            var command = new Command(
+                "claim",
+                "Prove a peer's replica is this installation's — with the passphrase and nothing else — and have "
+                + "the attribution follow this machine (ADR-0053). Pair with the peer first.");
+            command.Arguments.Add(connectArgument);
+            command.Options.Add(stateArgOption);
+            command.Options.Add(passphraseEnvOption);
+            command.Options.Add(claimFingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var target = parse.GetValue(connectArgument)!;
+                if (!TryParseEndpoint(target, out var host, out var port))
+                {
+                    throw new CliFailureException($"'{target}' is not host:port.");
+                }
+
+                var state = parse.GetValue(stateArgOption)!;
+                using var keypair = PeerKeypairStore.Open(state);
+                var grants = PeerGrantStore.Open(state);
+                var expected = ResolveClaimPeer(grants, parse.GetValue(claimFingerprintOption));
+                using var passphrase = CliSession.ReadPassphrase(PassphraseEnv(parse));
+
+                await using var connection = await PeerTlsConnection.DialAsync(
+                    host, port, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+                var session = await PeerSessionDriver.DialAsync(
+                    connection, keypair, grants, expected, "fallbackplan-cli",
+                    terms: null, requiredFeatures: null, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Phase one: ask which derivations to run. The salt lives in
+                // the replica, behind the attribution gate, so the peer is
+                // the only party that can say — and it says only salts and
+                // public parameters, never which is whose.
+                await PeerFrame.WriteAsync(session.Stream, new ReplicationClaimOpen(), cancellationToken)
+                    .ConfigureAwait(false);
+                var parameters = await ReadClaimAnswerAsync(
+                    session.Stream, PeerMessageType.ReplicationClaimParameters, ReplicationClaimParameters.Read,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (parameters.Salts.Count == 0)
+                {
+                    throw new CliFailureException(
+                        "the peer holds no replica that can be claimed: no attribution there carries a claim key. "
+                        + "A replica recorded before this installation published one is the destination "
+                        + "operator's to re-point (ADR-0053 §3: `fallbackplan-agent reattribute` there).");
+                }
+
+                // Phase two: one claim per served derivation. Argon2id runs
+                // here, after the dial, because the inputs came over it; the
+                // claimant cannot tell which salt is its own, and every seed
+                // is zeroed as soon as it has signed.
+                var signed = ReplicationClaim.EncodeForSigning(session.Binding.Span, keypair.Identity.Fingerprint);
+                var keys = new List<ReadOnlyMemory<byte>>(parameters.Salts.Count);
+                var signatures = new List<ReadOnlyMemory<byte>>(parameters.Salts.Count);
+                for (var index = 0; index < parameters.Salts.Count; index++)
+                {
+                    using var authority = WriteOnlyDerivation.Derive(
+                        passphrase,
+                        new Domain.Configuration.Argon2Parameters
+                        {
+                            MemoryKiB = parameters.MemoryKiB[index],
+                            Iterations = parameters.Iterations[index],
+                            Parallelism = parameters.Parallelism[index],
+                        },
+                        parameters.Salts[index].Span,
+                        Domain.Configuration.KdfValidationMode.OpenRepository);
+                    var seed = authority.ClaimKeySeed.ToArray();
+                    try
+                    {
+                        using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
+                        keys.Add(signer.PublicKey.ToArray());
+                        signatures.Add(signer.Sign(signed));
+                    }
+                    finally
+                    {
+                        System.Security.Cryptography.CryptographicOperations.ZeroMemory(seed);
+                    }
+                }
+
+                await PeerFrame.WriteAsync(session.Stream, new ReplicationClaim(keys, signatures), cancellationToken)
+                    .ConfigureAwait(false);
+                var accepted = await ReadClaimAnswerAsync(
+                    session.Stream, PeerMessageType.ReplicationClaimAccepted, ReplicationClaimAccepted.Read,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (accepted.RepositoryIds.Count == 0)
+                {
+                    output.WriteLine("the peer accepted the claim but named no replica.");
+                    return 1;
+                }
+
+                output.WriteLine(
+                    $"claimed {accepted.RepositoryIds.Count} replica(s) at {host}:{port} as peer "
+                    + $"{keypair.Identity.Fingerprint}:");
+                foreach (var id in accepted.RepositoryIds)
+                {
+                    output.WriteLine($"  {Convert.ToHexStringLower(id.Span)}");
+                }
+
+                return 0;
+
+                static async Task<T> ReadClaimAnswerAsync<T>(
+                    Stream stream, PeerMessageType expected, Func<System.Formats.Cbor.CborReader, T> read,
+                    CancellationToken cancellationToken)
+                {
+                    var answer = await PeerFrame.ReadAsync(stream, cancellationToken).ConfigureAwait(false)
+                        ?? throw new CliFailureException("the peer closed the connection without answering.");
+
+                    if (answer.Type == PeerMessageType.SessionRefuse)
+                    {
+                        // The refusal is the whole diagnosis, and it is the
+                        // peer's words rather than ours: "no replica here is
+                        // claimable under that key" — which is also what a
+                        // wrong passphrase reads as, since nothing on this
+                        // machine can tell the two apart — or that this
+                        // destination is too old to offer the ceremony.
+                        throw new CliFailureException(
+                            $"the peer refused the claim: {SessionRefuse.Read(answer.Body).Text}");
+                    }
+
+                    if (answer.Type != expected)
+                    {
+                        throw new CliFailureException($"the peer answered a claim with a {answer.Type}.");
+                    }
+
+                    return read(answer.Body);
+                }
+            }));
+        }
+
+        // ------------------------------------------------- discover and adopt
+
+        // Adopting a destination's archives after a rebuild (ADR-0061): both
+        // verbs are the service's to do — discovery reads the destination's
+        // descriptors, adoption writes the service's own state — so each
+        // speaks to the running service, locally or over --connect, and
+        // never touches a repository in this process.
+        async Task<int> WithServiceClientAsync(
+            ParseResult parse, Func<IFallbackPlanClient, Task<int>> work, CancellationToken cancellationToken)
+        {
+            if (ResolveRemote(parse, direct: false) is { } target)
+            {
+                await using var connection = await RemotePeer.ConnectAsync(
+                    target.Host, target.Port, target.State, target.Fingerprint, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+                error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                return await work(connection.Client).ConfigureAwait(false);
+            }
+
+            var state = parse.GetValue(stateOption) is { Length: > 0 } named ? named : InstallationDefaults.StateDirectory;
+            LocalServiceClient client;
+            try
+            {
+                client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException)
+            {
+                throw new CliFailureException(
+                    $"no service is listening for '{state}'. Start one (`fallbackplan-agent`): discovering and "
+                    + "adopting a destination's archives is the service's to do.");
+            }
+
+            await using (client.ConfigureAwait(false))
+            {
+                await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                error.WriteLine($"mode: service — the service holding the writer role for '{state}' answered this.");
+                return await work(client).ConfigureAwait(false);
+            }
+        }
+
+        static async Task<TResult> AskAsync<TResult>(
+            IFallbackPlanClient client, ServiceCommand command, CancellationToken cancellationToken)
+            where TResult : ServiceResult
+        {
+            var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            return result switch
+            {
+                TResult expected => expected,
+                ServiceError serviceError => throw new CliFailureException(serviceError.Message),
+                _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
+            };
+        }
+
+        {
+            var receiptsStateOption = new Option<string>("--state")
+            {
+                Description = "The state directory whose filed receipts to read.",
+                Required = true,
+            };
+            var receiptsKindOption = new Option<string?>("--kind")
+            {
+                Description = "Only one kind of receipt: 'deletion' or 'replication'.",
+            };
+            var receiptsSetOption = new Option<string?>("--set")
+            {
+                Description = "Only receipts this installation filed as the commander of the named set.",
+            };
+            var receiptsRepositoryOption = new Option<string?>("--repository")
+            {
+                Description = "Only receipts for one repository, by its id (32 hex digits).",
+            };
+            var receiptsLimitOption = new Option<int?>("--limit")
+            {
+                Description = "At most this many of the newest; without it, every receipt on file is read.",
+            };
+            var receiptsJsonOption = new Option<bool>("--json")
+            {
+                Description = "Print the receipts as a JSON array instead of text.",
+            };
+            var command = new Command(
+                "receipts",
+                "Read back the receipts filed under a state directory — what peers attested deleting on this "
+                + "installation's instruction and holding after its pushes, and what this installation attested "
+                + "on theirs (ADR-0063, ADR-0064). Every fact shown is taken from the signed bytes, and each "
+                + "receipt's signature is checked again as it is read.");
+            command.Options.Add(receiptsStateOption);
+            command.Options.Add(receiptsKindOption);
+            command.Options.Add(receiptsSetOption);
+            command.Options.Add(receiptsRepositoryOption);
+            command.Options.Add(receiptsLimitOption);
+            command.Options.Add(receiptsJsonOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, _) => GuardAsync(() =>
+            {
+                var state = parse.GetValue(receiptsStateOption)!;
+                if (!Directory.Exists(state))
+                {
+                    throw new CliFailureException($"no state directory at '{state}' — nothing has been filed there.");
+                }
+
+                var kind = parse.GetValue(receiptsKindOption);
+                if (kind is not null && kind is not (DeletionReceiptStore.Kind or ReplicationReceiptStore.Kind))
+                {
+                    throw new CliFailureException(
+                        $"--kind takes '{DeletionReceiptStore.Kind}' or '{ReplicationReceiptStore.Kind}', not '{kind}'.");
+                }
+
+                string? repositoryIdHex = null;
+                if (parse.GetValue(receiptsRepositoryOption) is { } repository)
+                {
+                    if (!DeletionReceiptReport.TryParseRepositoryId(repository, out var parsed))
+                    {
+                        throw new CliFailureException("--repository takes the repository id as 32 hex digits.");
+                    }
+
+                    repositoryIdHex = parsed;
+                }
+
+                var limit = parse.GetValue(receiptsLimitOption);
+                if (limit is <= 0)
+                {
+                    throw new CliFailureException("--limit must be at least 1.");
+                }
+
+                // No limit reads everything, which is what an operator
+                // reading their own audit trail asked for; a limit bounds the
+                // reading and not only the printing.
+                IReadOnlyList<FiledDeletionReceipt> deletions = kind == ReplicationReceiptStore.Kind
+                    ? []
+                    : DeletionReceiptStore.Open(state).List(repositoryIdHex, limit);
+                IReadOnlyList<FiledReplicationReceipt> replications = kind == DeletionReceiptStore.Kind
+                    ? []
+                    : ReplicationReceiptStore.Open(state).List(repositoryIdHex, limit);
+                if (parse.GetValue(receiptsSetOption) is { } set)
+                {
+                    deletions = [.. deletions.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+                    replications =
+                        [.. replications.Where(filed => string.Equals(filed.Set, set, StringComparison.Ordinal))];
+                }
+
+                if (parse.GetValue(receiptsJsonOption))
+                {
+                    output.WriteLine(ReceiptReport.ToJson(deletions, replications));
+                }
+                else
+                {
+                    ReceiptReport.Write(output, deletions, replications, kind);
+                }
+
+                return Task.FromResult(0);
+            }));
+        }
+
+        {
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "The declared destination to look in, by name.",
+                Required = true,
+            };
+            var command = new Command(
+                "discover",
+                "List the archives a declared destination holds, by descriptor alone — no credential involved "
+                + "(ADR-0061). What a rebuilt machine sees before it adopts anything.");
+            command.Options.Add(destinationOption);
+            command.Options.Add(stateOption);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => WithServiceClientAsync(parse, async client =>
+            {
+                var destination = parse.GetValue(destinationOption)!;
+                var listing = await AskAsync<ArchivesDiscoveredResult>(
+                    client, new DiscoverArchivesCommand(destination), cancellationToken).ConfigureAwait(false);
+
+                if (listing.Archives.Count == 0)
+                {
+                    output.WriteLine($"destination '{destination}' holds no archives.");
+                }
+
+                foreach (var archive in listing.Archives)
+                {
+                    var created = DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(archive.CreatedAt, long.MaxValue))
+                        .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                    var owner = archive.OwnedBySet is { } set
+                        ? $"set '{set}'"
+                        : archive.SameInstallation ? "this installation, unconfigured" : "nobody yet";
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                        $"{archive.RepositoryId}  {created}  {archive.SnapshotObjects,3} snapshot(s)  {archive.CreatedBy}  {owner}"));
+                }
+
+                foreach (var warning in listing.Warnings)
+                {
+                    error.WriteLine($"warning: {warning}");
+                }
+
+                return 0;
+            }, cancellationToken)));
+        }
+
+        {
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "The declared destination the archive was discovered at.",
+                Required = true,
+            };
+            var repositoryOption = new Option<string>("--repository")
+            {
+                Description = "The archive's repository id, thirty-two hex characters, as `discover` listed it.",
+                Required = true,
+            };
+            var nameOption = new Option<string?>("--name")
+            {
+                Description = "Adopt the set under this name instead of the one the archive recorded.",
+            };
+            var rootsOption = new Option<string[]>("--root")
+            {
+                Description = "A root folder to capture, instead of the ones the archive recorded. Repeatable.",
+                AllowMultipleArgumentsPerToken = false,
+            };
+            var scheduleOption = new Option<string?>("--schedule")
+            {
+                Description = "The set's schedule, instead of the one the archive recorded.",
+            };
+            var command = new Command(
+                "adopt",
+                "Take one of a destination's archives back under its original repository and set ids, with the "
+                + "passphrase it was written with (ADR-0061). The set is re-declared from the shape the archive "
+                + "records and its next backup is incremental. The passphrase is derived HERE against the archive's "
+                + "own salt, proved against its sealing key, and only a sealed envelope reaches the service.");
+            command.Options.Add(destinationOption);
+            command.Options.Add(repositoryOption);
+            command.Options.Add(passphraseEnvOption);
+            command.Options.Add(nameOption);
+            command.Options.Add(rootsOption);
+            command.Options.Add(scheduleOption);
+            command.Options.Add(stateOption);
+            command.Options.Add(connectOption);
+            command.Options.Add(fingerprintOption);
+            root.Subcommands.Add(command);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
+            {
+                // Refused before anything dials: the mistakes a person makes on
+                // the worst morning of their computing life should each say
+                // what to do next.
+                var destination = parse.GetValue(destinationOption)!;
+                var repositoryId = parse.GetValue(repositoryOption)!.Trim().ToLowerInvariant();
+                if (repositoryId.Length != 32 || !repositoryId.All(Uri.IsHexDigit))
+                {
+                    throw new CliFailureException(
+                        $"'{repositoryId}' is not a repository id: thirty-two hex characters, as `discover --destination "
+                        + $"{destination}` lists them.");
+                }
+
+                if (parse.GetValue(passphraseEnvOption) is not { Length: > 0 } passphraseVariable)
+                {
+                    throw new CliFailureException(
+                        "name --passphrase-env <VAR>, the environment variable holding the passphrase this backup was "
+                        + "written with. It is derived here, on this machine, and never sent.");
+                }
+
+                return WithServiceClientAsync(parse, async client =>
+                {
+                    var description = await AskAsync<ServiceDescriptionResult>(
+                        client, new DescribeServiceCommand(), cancellationToken).ConfigureAwait(false);
+                    if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex)
+                    {
+                        throw new CliFailureException("the service does not publish a grant-recipient key; run first-run setup first.");
+                    }
+
+                    // The facts to derive against come from the service's own
+                    // discovery, exactly as the console's ceremony takes them.
+                    var listing = await AskAsync<ArchivesDiscoveredResult>(
+                        client, new DiscoverArchivesCommand(destination), cancellationToken).ConfigureAwait(false);
+                    var archive = listing.Archives.FirstOrDefault(candidate =>
+                        string.Equals(candidate.RepositoryId, repositoryId, StringComparison.OrdinalIgnoreCase))
+                        ?? throw new CliFailureException(
+                            $"destination '{destination}' holds no archive '{repositoryId}'; run `discover --destination "
+                            + $"{destination}` and pick one it lists.");
+
+                    string envelope;
+                    using (var passphrase = CliSession.ReadPassphrase(passphraseVariable))
+                    using (var authority = WriteOnlyDerivation.Derive(
+                        passphrase,
+                        new Argon2Parameters
+                        {
+                            MemoryKiB = archive.KdfMemoryKib, Iterations = archive.KdfIterations, Parallelism = archive.KdfParallelism,
+                        },
+                        Convert.FromHexString(archive.KdfSalt),
+                        KdfValidationMode.OpenRepository))
+                    {
+                        if (!authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(archive.SealingPublicKey)))
+                        {
+                            throw new CliFailureException(
+                                "the passphrase does not reproduce this archive's credential — it is not the passphrase "
+                                + "this backup was written with. Nothing was sent.");
+                        }
+
+                        envelope = Convert.ToHexStringLower(
+                            WriteOnlyProvisioning.SealProvision(
+                                Convert.FromHexString(recipientHex), authority, Convert.FromHexString(archive.KdfSalt),
+                                new Argon2Parameters
+                                {
+                                    MemoryKiB = archive.KdfMemoryKib, Iterations = archive.KdfIterations, Parallelism = archive.KdfParallelism,
+                                }));
+                    }
+
+                    var roots = parse.GetValue(rootsOption) is { Length: > 0 } given
+                        ? given.Select(path => new BackupRootDescriptor(path)).ToList()
+                        : null;
+                    var adopted = await AskAsync<ArchiveAdoptedResult>(
+                        client,
+                        new AdoptArchiveCommand(
+                            destination, archive.RepositoryId, envelope,
+                            SetName: parse.GetValue(nameOption), Roots: roots, Schedule: parse.GetValue(scheduleOption)),
+                        cancellationToken).ConfigureAwait(false);
+
+                    output.WriteLine(
+                        $"set '{adopted.SetName}' ({adopted.SetId}) {(adopted.AlreadyAdopted ? "was already configured against" : "adopted")} "
+                        + $"archive {adopted.RepositoryId} at '{destination}'");
+                    foreach (var root in adopted.Roots)
+                    {
+                        output.WriteLine($"  root      {root.Path}{(root.Label is { } label ? $"  [{label}]" : string.Empty)}");
+                    }
+
+                    output.WriteLine($"  schedule  {adopted.Schedule ?? "(manual)"}");
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                        $"  history   {adopted.SnapshotCount} snapshot(s); writer identity resumed: {(adopted.WriterIdentityResumed ? "yes" : "no")}"));
+                    foreach (var line in adopted.Lines)
+                    {
+                        output.WriteLine($"  {line}");
+                    }
+
+                    return adopted.MissingRoots.Count == 0 ? 0 : 2;
+                }, cancellationToken);
             }));
         }
 
@@ -1668,12 +2459,27 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                if (ResolveRemote(parse, direct: false) is { } target)
+                // One rendering for every service-answered status, local or
+                // remote — the matrix beneath the roll-up (ADR-0028 §8), and
+                // a verification claim always a coverage and a date, never a
+                // bare tick (10 §1.2).
+                void RenderServiceStatus(StatusResult result)
                 {
-                    var result = await QueryRemoteAsync<StatusResult>(
-                        target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
+                    // Above the matrix, because it governs every row below it:
+                    // a shut window is why a set that reads "due" is not
+                    // running (ADR-0069). Omitted entirely when there is no
+                    // window, which is also what an older service says.
+                    if (result.BackgroundWindow is { } window)
+                    {
+                        var changes = DateTimeOffset.FromUnixTimeMilliseconds((long)window.ChangesAt)
+                            .ToLocalTime()
+                            .ToString("u", CultureInfo.InvariantCulture);
+                        output.WriteLine(
+                            window.Open
+                                ? $"background window {window.Text} — open, shuts {changes}"
+                                : $"background window {window.Text} — SHUT, opens {changes}");
+                    }
 
-                    error.WriteLine($"mode: service (remote) — {result.MachineName}");
                     foreach (var notice in result.Notices)
                     {
                         output.WriteLine($"notice: {notice}");
@@ -1681,19 +2487,32 @@ public static class CliApplication
 
                     foreach (var set in result.Sets)
                     {
-                        // A verification claim is a coverage and a date, never
-                        // a bare tick (10 §1.2) — rendered wherever it exists.
                         output.WriteLine(
                             $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}");
                         foreach (var row in set.Destinations)
                         {
-                            // The matrix beneath the roll-up (ADR-0028 §8):
-                            // the detail is what the summary was computed from.
                             output.WriteLine(
-                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21} {DescribeDrill(row)}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
+                }
 
+                if (ResolveRemote(parse, direct: false) is { } target)
+                {
+                    var result = await QueryRemoteAsync<StatusResult>(
+                        target, new GetStatusCommand(), cancellationToken).ConfigureAwait(false);
+
+                    error.WriteLine($"mode: service (remote) — {result.MachineName}");
+                    RenderServiceStatus(result);
+                    return 0;
+                }
+
+                // No repository named: service-only, against the shared
+                // default installation (FR-SVC-016).
+                if (parse.GetValue(repoOption) is not { Length: > 0 })
+                {
+                    RenderServiceStatus(await QueryLocalServiceAsync<StatusResult>(
+                        parse.GetValue(stateOption), new GetStatusCommand(), cancellationToken).ConfigureAwait(false));
                     return 0;
                 }
 
@@ -1826,4 +2645,22 @@ public static class CliApplication
                 CultureInfo.InvariantCulture,
                 $"  verified: {detail.Coverage:P0} of objects at {DateTimeOffset.FromUnixTimeMilliseconds((long)detail.VerifiedAtUnixMilliseconds):yyyy-MM-dd HH:mm}")
             : string.Empty;
+
+    /// <summary>
+    /// The last restore drill, in three states rather than two (ADR-0054):
+    /// never run, run and passed, run and failed.
+    /// </summary>
+    /// <remarks>
+    /// <c>drill:never</c> is printed rather than omitted, deliberately. A
+    /// blank column reads as "nothing to report", and "nobody has tried to
+    /// recover from this destination" is very much something to report — it
+    /// means the same thing a failure does about whether recovery is known to
+    /// work, and differs only in whether anything is known to be wrong.
+    /// </remarks>
+    private static string DescribeDrill(DestinationStatusDescriptor row) =>
+        row.DrilledAt is not { } drilled
+            ? "drill:never"
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"drill:{(row.DrillFailure is null ? "ok" : "FAILED")}@{DateTimeOffset.FromUnixTimeMilliseconds((long)drilled):yyyy-MM-dd}");
 }

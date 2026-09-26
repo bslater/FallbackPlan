@@ -23,7 +23,7 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 | 3 | u64 | `sequence` |
 | 4 | u64 | `issued_at` |
 | 5 | map | `payload` — per kind, §3–§6 |
-| 6 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–5; semantics as [06 §6.1](06-manifests.md#61-signature). The record carries no generation field, so a reader verifies against the signing key of each generation from the key bundle's current value downward and accepts the first that verifies — generations are few, monotonic, and enumerable from the bundle |
+| 6 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–5; semantics as [06 §6.1](06-manifests.md#61-signature). The record carries no generation field, so a reader verifies against the signing key of each generation from the repository's current generation downward and accepts the first that verifies — generations are few and monotonic |
 
 `sequence` shares the writer's single monotonic gapless sequence space with index deltas ([07 §4](07-index.md#4-sequence-gaps-and-void-deltas)). One sequence per writer, not one per record type — a gap is then detectable regardless of which kind of record is missing.
 
@@ -31,7 +31,7 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 
 **Advisory hint objects are outside this space.** A placement hint ([06 §10](06-manifests.md#10-placement-hint)) or a source-identity hint ([06 §11](06-manifests.md#11-source-identity)) carries the sequence number of the write intent it was published under, and allocates none of its own. Drawing a number per hint would make a gapless space account for objects whose absence is never damage — and, where hints are per file version, would cost a durable allocation and a void-delta obligation for every changed file. Nothing is weakened by it: a hint sits under `/hints/`, no gap scan enumerates it, and record-key uniqueness rests on the per-object CSPRNG salt rather than on the counter ([03 §5](03-keys.md#5-per-blob-keys)).
 
-> **Erratum (phase 0).** "The repository's current generation" (§7 condition 1) is never defined in this specification. [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 5 defines it: the maximum of the key bundle's `current_data_generation`, `current_metadata_generation`, and the highest generation directory observed under `/index/…` — a lower bound that can only delay expiry, never hasten it.
+> **Erratum (phase 0).** "The repository's current generation" (§7 condition 1) is never defined in this specification. [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 5 defines it: the highest generation directory observed under `/index/…` — a lower bound that can only delay expiry, never hasten it. (The key bundle's two recorded generations, which the definition also took into account, went with format 1; a repository opens at generation zero and only the index moves it.)
 
 ## 3 Write intent
 

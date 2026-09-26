@@ -46,4 +46,25 @@ public static class DestinationCapacity
                 + $"{FreeSpaceFloorBytes}-byte floor this hub leaves for the machine that owns it"
             : null;
     }
+
+    /// <summary>
+    /// The path to hand the platform's free-space query for the volume
+    /// holding <paramref name="replicaRoot"/>.
+    /// </summary>
+    /// <remarks>
+    /// On Unix the answer is the replica root itself: <c>statvfs</c> reports
+    /// for whatever volume holds the path, and <c>Path.GetPathRoot</c> would
+    /// answer <c>/</c> for every absolute path — measuring the OS volume for
+    /// a destination whose whole job is to be a different one, which is the
+    /// 2026-08 defect this decision pins. Windows drive-letter volumes want
+    /// the drive root (NTFS mounted folders remain measured at the drive — a
+    /// documented approximation).
+    /// </remarks>
+    /// <param name="replicaRoot">The directory the copy would write into.</param>
+    public static string ProbeRootFor(string replicaRoot)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(replicaRoot);
+
+        return OperatingSystem.IsWindows() ? Path.GetPathRoot(replicaRoot)! : replicaRoot;
+    }
 }

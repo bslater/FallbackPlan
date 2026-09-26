@@ -1,0 +1,257 @@
+# ADR-0046 — Direct-to-destination publication: the staging archive gives way to the ship sink
+
+**Status:** Accepted
+**Date:** 2026-08
+**Requirements:** FR-DEST-002, FR-DEST-003, FR-DEST-013, FR-DEST-015, FR-DEST-016, NFR-PERF-001
+**Related:** [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0062](0062-the-destination-is-the-rollback-witness.md), [architecture 04 §5](../architecture/04-concurrency-and-publication.md)
+
+---
+
+## Context
+
+ADR-0034 §1 gave every set a staging archive: publication lands locally, and
+destinations receive whole-archive replicas by fan-out afterwards. The owner
+has rejected that shape: a backup's content is to be written **to its
+destinations directly**, with nothing cached or temporarily stored on the
+agent's machine — the staging copy's disk cost buys a durability property
+(a capture never blocks on destination availability) the owner is
+deliberately trading away, with the trade stated rather than implied.
+
+The 2026-08 exploration established what the pipeline actually needs from
+its store: `IObjectStore` is five members; every publication component
+already holds `IObjectStore`, not a concrete type; `PutAsync` takes a
+re-openable content factory (a sealed blob's spool file re-opens per call);
+the writer sequence, catalogue and spool are local files, not store objects;
+and the capture path's store reads are few and specific — the open-time
+descriptor/keys reads, the dedupe presence probe (`GetMetadataAsync` on a
+blob key), the rename-manifest optimisation, and collision read-backs.
+
+## Decision
+
+1. **The ship sink.** A direct-ship set's `ArchiveHandle.Store` is a
+   `DestinationShipSink` — an `IObjectStore` the publication pipeline writes
+   exactly as it wrote the staging store. Routing by key: `blobs/` objects
+   go to the set's in-scope destinations and never to local disk; every
+   other object (descriptor, keys, journal, index, snapshots, hints) goes to
+   the **local metadata store** (`<state>/sets/<setId>/`) *and* the in-scope
+   destinations. Each destination therefore holds a whole, independently
+   restorable repository at `<destination>/<repositoryId>/` — ADR-0034 §2's
+   invariant (one snapshot history, N lawful copies) survives the staging
+   archive's removal. The `ArchiveHandle.Store` type widened from
+   `LocalFileSystemObjectStore` to `IObjectStore` to admit it.
+2. **Reads route to whoever holds the bytes.** Metadata reads answer
+   locally. A `blobs/` read — the dedupe presence probe, a copier's fetch, a
+   verifier's range — is answered by the first destination holding the key,
+   in priority order; a `blobs/` listing is the **union** across
+   destinations. The invariant that makes the union sufficient: a capture
+   refuses to run with no reachable destination, so every committed
+   snapshot's closure exists at at least one destination — and a sibling
+   can therefore always seed a destination that missed a run. This is also
+   what keeps **dedupe working** with no local content: the presence probe
+   (the guard against a stale catalogue row) asks the destinations.
+3. **The run scope** (with ADR-0047's ledger): a run writes to the set's
+   defect-free, reachable, local-path destinations that hold a baseline —
+   or all reachable ones when the set has never captured, because that
+   first capture ships everything and is every destination's full backup. A
+   baseline-less destination on a set with history is *skipped* by the run
+   (an incremental would hand it a snapshot without its closure) and
+   **seeded by catch-up instead**: the existing fan-out, unchanged, copying
+   "from the archive" through the sink — which reads from whichever sibling
+   holds each object. A destination that fails mid-run is dropped, named in
+   the ledger and the log (event 3758), and its replica is lagging-but-valid
+   — a journal intent nothing retired, exactly an interrupted copy's state,
+   healed by the next catch-up. When the last destination fails, the run
+   fails through the pipeline's ordinary interruption safety.
+4. **No reachable destination refuses the capture.** The owner's accepted
+   consequence of holding no local copy: with every destination away there
+   is nowhere to write, and the run says so (a recoverable failure the next
+   pass retries) instead of pretending. ADR-0034 §1's counter-argument — a
+   capture must never block on destination availability — is hereby
+   consciously given up for direct-ship sets.
+5. **The spool stays; it is not staging.** Blobs still assemble in the
+   per-set spool (`spool/<repoId>/`), because in-memory assembly of 64–256
+   MiB blobs breaks NFR-PERF-001's memory bound and deletes crash-resume —
+   and because a sealed spool file re-opening per destination is precisely
+   what a fan-write needs. A spool file lives from first record to last
+   destination acknowledgement of its blob, then deletes; bounded by
+   in-flight blobs, it is a working buffer, not a copy of the backup.
+6. **Device trust everywhere for direct-ship** (as write-only sets already
+   run): reuse decisions come from the catalogue, guarded by the
+   destination presence probe. Verify-on-reuse re-reading ranges through
+   the sink would pay a destination round trip per reuse to re-check bytes
+   the catalogue vouches for.
+7. **Dual mode, deliberately gated.** A set whose staging archive exists
+   keeps it — migration is its own record. A set flagged `direct_ship`
+   (configuration schema 5) publishes through the sink from birth. The flag
+   defaults **false** and the console does not yet offer it: restore,
+   retention and verification still read the local archive, and a set whose
+   restore path does not work yet must not be creatable by accident. The
+   flag flips to the default — and retires — with the destination-side read
+   paths and the migration record.
+
+   > **Amended (2026-08): the gate is discharged for local-path sets.** The
+   > read paths, the migration record and the retention-with-trimming drill
+   > have all landed, so the flag reached the contract (`direct_ship` on the
+   > set descriptor, 1.23 — null preserves, an explicit value sets) and the
+   > console's set editor. A **new set referencing a local-path destination
+   > is born direct-ship**; staging is the explicit opt-out, and a peer-only
+   > set stays staging until the peer write adapter lands (the one remaining
+   > tail).
+   >
+   > > **Amended (2026-09): the tail is discharged, the default is not.**
+   > > [ADR-0058](0058-peer-write-adapter.md) makes a peer destination a ship
+   > > target, so the configuration boundary refuses only a direct-ship set
+   > > with no destination the sink can write to at all. A peer-only set still
+   > > *defaults* to staging — that default was never only about what the sink
+   > > could serve, and ADR-0058 §9 says what it buys. A shape change is refused while a run is live, takes effect
+   > in-process (the archive handle is evicted, so the next open migrates —
+   > no service restart), and queues the seeding catch-up immediately, since
+   > a flipped set's next capture refuses until a destination holds its
+   > history. The drill also caught and fixed the deleting half: the sink
+   > used to stop sweep deletes at the metadata store, so destinations never
+   > shrank under retention and the union listing resurrected every swept
+   > object into the next survey. The sink now fans a delete to the
+   > destinations first and the metadata store last — policy-safe because
+   > the replication gate already holds expiry until every entitled
+   > destination's keep-set has dropped the snapshot (FR-GC-010) — with the
+   > staging fallback never touched (retire_staging is its one deleter).
+
+## Consequences
+
+**Positive** — a saved set's content lands at its destinations directly;
+the agent's disk holds metadata only (the report that started this — an
+archive growing beside the logs — becomes structurally impossible for
+direct-ship sets); destinations are whole repositories from their first
+byte; catch-up needs no new machinery.
+
+**Negative** — a capture now depends on destination availability (decision
+4); dedupe pays a destination presence probe per candidate (local-disk
+cheap for local paths, and memoized per blob per publication); verification
+and retention convergence for direct-ship sets read through the sink and
+land properly destination-side in the next record; peer destinations were
+not served by the sink until [ADR-0058](0058-peer-write-adapter.md), which
+admits them and carries its own named limits — chief among them that a set
+shipping only to a peer has no independent copy to verify its content
+against, and says so rather than claiming one. Two narrower consequences
+are accepted and named: each object is put **local metadata store first,
+then the targets**, so a put that fails at every target can leave the
+metadata store one object ahead of every destination — the run fails
+through the pipeline's ordinary interruption safety and the next catch-up
+carries the object out, exactly as it heals a dropped destination. And the
+unchanged-file short-circuit stays catalogue-trusting (NFR-PERF-003: the
+content is never opened), so a blob deleted from every replica behind the
+catalogue's back is re-shipped only when the dedupe probe next asks about
+its content; loss discovery belongs to verification and the sweep, not to
+capture.
+
+**Neutral** — the publication pipeline is untouched above the store
+interface; interruption safety is the same intent/ordering machinery,
+per destination; staging sets behave exactly as before.
+
+## Alternatives considered
+
+- **A transient whole-archive spool** (package locally, stream out, delete
+  when every destination has it): keeps captures destination-independent
+  but re-creates the local copy the owner rejected, growing unbounded while
+  any destination is away.
+- **In-memory blob assembly** (no spool at all): breaks the stated memory
+  bound at pool concurrency and deletes spool-resume; rejected in favour of
+  calling the spool what it is — a bounded working buffer.
+- **Per-destination publication pipelines** (N independent captures): reads
+  the source N times and packages N times — the owner's requirement is
+  package once, ship N ways.
+
+## Amendment 1 (2026-08) — the converge spare: no replica drops what a sibling is still owed
+
+The default flip surfaced a gap the staging shape never had. Per-destination
+convergence computes each destination's keep-set from **policy alone**
+(ADR-0034 §4), and under staging that was safe: the replication gate holds a
+snapshot's expiry from *staging* until every entitled destination provably
+holds it (FR-GC-009), so a replica trimmed too eagerly is re-seedable from
+the copy the gate protected. Direct-ship removed that copy. With the
+destinations as the only holders, a set whose destinations carry
+**asymmetric retention** could lose history outright: a snapshot inside a
+wide destination's keep-set but past a narrow sibling's window, captured
+while the wide destination was offline, exists only at the narrow one — and
+the narrow one's next converge, judging by its own policy, deleted the last
+copy of history the wide sibling was still owed.
+
+The fix applies the gate's own comparison to the converge's drop half. Before
+any direct-ship destination's converge may delete, the closure of every
+snapshot some declared destination's effective keep-set wants but the sync
+ledger cannot show it received (publication sequence against synced sequence
+— the gate's arithmetic, one shared keep-set computation so the two can
+never disagree) is **spared**: dropped by policy, held anyway, counted and
+logged as a choice rather than a refused delete. The spare releases by
+itself — once the laggard's ledger covers the snapshot it is no longer owed,
+and the next pass converges every destination back to exactly its keep-set.
+Disk is the cheaper failure, exactly as the gate says; an operator sees the
+cost in the converge's spare count while an offline sibling is the reason a
+replica holds more than its policy keeps.
+
+Two stated bounds. The spare reads the ledger's synced sequence — a record
+of what a completed sync covered, not a per-object proof of possession; the
+read-back verification pass remains what turns holdings into proof
+(FR-VER-001), and a sync that could stamp coverage from a partial union
+listing is a separate hardening, tracked apart. And a laggard that never
+returns pins its owed closure at every sibling indefinitely — the same
+deliberate trade FR-GC-009 makes for expiry, visible as the destination's
+standing `behind`/`unavailable` state rather than a new mechanism.
+
+## Amendment 2 (2026-09) — retirement is gated on what the live history needs
+
+The migration slice recorded its retirement gate as: delete the staging
+archive once **every non-lifecycle object it holds** is present in the union
+of the set's destinations. That rule cannot always be satisfied, and the way
+it fails is the opposite of safe.
+
+Publication is driven by the snapshot graph, and under a per-destination
+retention policy by the keep-set closure (FR-GC-010,
+`Replication/StoreToStoreCopier`). An object outside both is invisible to
+every pass that could carry it: a blob whose only referencing snapshot a
+policy dropped, bytes an interrupted run promoted and nothing ever claimed,
+a blob whose seal will no longer parse. Under the old rule each of those
+refused retirement for ever, and the refusal's own advice — run a pass, then
+retire again — was advice no pass could take. The archive's disk space, the
+one thing retirement exists to release, was the hostage. A live install met
+this with twenty-nine such objects.
+
+The gate now refuses exactly while deletion would **cost** something:
+
+1. a blob reachable from a snapshot the repository still lists that no
+   destination holds — real history, real seeding lag, and the refusal names
+   example keys so an operator can see which; or
+2. a non-blob object the flip's migration never carried into the set's
+   metadata store. The migration is idempotent and runs at the first open
+   after the flip, so this should never hold — it is checked because
+   deleting the only copy of an index delta is not a thing to discover
+   afterwards.
+
+Everything else goes with the archive, counted in the result rather than
+passed over in silence. A blob whose seal will not parse is among them, on
+the stated ground that damaged bytes no restore can use are not a reason to
+keep an archive alive; a destination holding a good copy of the same key is
+unaffected, because a key any destination holds is never a candidate.
+
+The safety property this preserves is the one that was always meant:
+**retirement never makes a live snapshot unrestorable.** The property it
+gives up — that staging holds nothing a destination lacks — was never true
+of a set under retention, and asserting it only postponed the reckoning to
+a disk that had filled.
+
+## Status history
+
+| Date | Status | Note |
+|------|--------|------|
+| 2026-09 | Qualified (rollback witness) | [ADR-0062](0062-the-destination-is-the-rollback-witness.md): a direct-ship set's metadata plane is the state directory, so a state directory rolled back whole takes every local witness with it; the destination is the witness on every fan-out pass, the detecting pass deletes nothing there, and the set is healed from the destination in place. `Agent/FanOut`, `Agent/ServiceRuntime`; `Hosts.Tests/DirectoryRollbackTests` |
+| 2026-08 | Accepted | The owner's direction, recorded with the exploration of every store interaction the pipeline makes |
+| 2026-08 | Built (first slice) | The ship sink, the metadata store, run scoping with ADR-0047's ledger, sibling catch-up through the existing fan-out, the no-destination refusal, and the `direct_ship` flag — default off until restore/retention/verification read destination-side |
+| 2026-08 | Built (read paths) | Restore, destination verification and the retention traversal proven THROUGH the sink, unchanged: a restore of a direct-ship set comes back byte-identical (blobs read from whichever destination holds them), verify-destination re-reads each replica against its seals with zero damage, and the retention report walks closures out of destination-held metadata blobs. The staging trim's blob deletes are ignored by the sink by design — per-destination convergence is the deleting half. Outstanding before the flag flips: the peer write adapter, the migration record, and a full retention-with-trimming drill on aged direct-ship snapshots |
+| 2026-08 | Built (migration) | A staging set flagged direct_ship migrates at first open: metadata copies into the metadata store, the staging archive stays as a read-only seed source the sink consults last (so reuse and restores of unseeded history keep working), a standing notice says retirement awaits, and the pass keeps syncing while staging remains — the catch-up through the sink is what carries history outward. Contract 1.18's retire_staging deletes staging only when every non-lifecycle object it holds is present in the union of the destinations, refusing by count otherwise — **a rule Amendment 2 (2026-09) replaces: it does not terminate, because nothing carries an object no live snapshot reaches**; retirement resolves the notice, and history then restores from the destinations alone. FanOut and the staging machinery stay in the codebase for unflagged sets until the default flips |
+| 2026-08 | Built (console retirement) | The staging-retirable notice carries the act it announces: a Retire staging button on the notice opens a typed confirmation and invokes retire_staging, refusals surfacing verbatim — and the threat model records what leaving the staging copy means (the source device no longer holds a whole-archive replica; capture now depends on a reachable destination) |
+| 2026-08 | Built (hardened) | The scenario sweep's correctness round: a behind destination is excluded from run scope like a baseline-less one (metadata without closure must not mint an in-sync row; migrating sets excepted while staging remains the union's promise), run scope is released on completion so reads resolve freshly, `CompleteRun` records outcomes on failure too, seeding is per-destination under the drop rule, the capacity floor applies to sink writes (FR-DEST-010), a pair owed its seed is recorded behind — never a counted failure that starves its own catch-up — and the 04 §5.1 kill matrix runs through a two-destination sink in `Hosts.Tests/DirectShipFaultSweepTests`, every put-death healing to sibling convergence. The direct-ship edges stopped assuming staging exists: the console's restore gate scans the metadata stores, write-only provisioning routes by the set's shape, and delete-set names what actually remains |
+| 2026-08 | Built (operable, default for local paths) | The gate discharged (Decision 7's amendment): `direct_ship` on the contract (1.23) with null-preserve semantics, offered by the console's set editor with the trade stated; a direct-ship set must reference a local-path destination (a peer-only one used to save cleanly and refuse every capture); a shape change is refused mid-run, evicts the cached archive handle so migration happens at the next open in the same process, and queues the seeding catch-up at once. The retention-with-trimming drill (`Hosts.Tests/DirectShipRetentionTests`) ran the full tombstone/grace/sweep cycle against a destination-resident archive and caught the deleting half short — sweep deletes stopped at the metadata store, destinations never shrank, and the union listing resurrected every swept object — fixed by fanning sink deletes destinations-first, metadata-last, policy-safe under the replication gate. New local-path sets are born direct-ship; the peer write adapter remains the stated tail |
+| 2026-08 | Amended (converge spare) | Amendment 1: per-destination convergence gained the gate's owed-sibling veto — a narrow override's trim spares the closure of every snapshot a sibling destination has not provably received, releasing once delivered. `Hosts.Tests/DirectShipConvergeSpareTests` proves the middle snapshot's last copy survives an offline wide sibling and restores from that sibling alone after catch-up; before the spare, the drill's converge deleted it |
+| 2026-09 | Amended (retirement gate regated) | Amendment 2: the migration row above recorded the gate as "every non-lifecycle object it holds is present in the union of the destinations", and that rule never terminates. Publication follows the snapshot graph, and under a per-destination policy the keep-set closure (FR-GC-010), so a staged blob that no live snapshot reaches — history a policy dropped, bytes an interrupted run left behind — is invisible to every pass that could carry it. The archive was then refused for ever and its disk space held hostage, which is the one thing retirement exists to release; a live install met this with twenty-nine such objects and a toast telling it to run a pass that could not help. The gate now refuses exactly while deletion would cost something: a blob reachable from a snapshot the repository still lists that no destination holds, or a non-blob object the flip's migration never carried into the metadata store (the metadata plane's own belt and braces). Everything else goes with the archive and is counted in the result. Refusals name example keys instead of a bare count. `Hosts.Tests/DirectShipMigrationTests` holds both directions |
+| 2026-09 | Built (console ceremonies corrected) | The "hardened" row above overclaimed: the restore gate did scan the metadata stores, but its two siblings in `Web/ConsoleRestoreGate` never learned to. Rebuilding an interrupted setup's recovery kit searched `<archives>/<set id>` alone, so an install whose every set ships direct — the default for new local-path sets since the previous row — answered every rebuild with "no archive of this installation exists yet" and could never leave the setup gate (FR-KIT-004). Write-only provisioning had the same blind spot with a quieter failure: finding no descriptor it took the *creation* branch, minting a fresh salt for a set whose repository already existed. Both now resolve repositories through one shared root list, and the kit searches the installation rather than a caller-supplied set list — one passphrase stamps every archive, so any descriptor is as good a witness. The service also stopped calling a direct-ship set's restore source "staging" |
+| 2026-09 | Amended (peer write adapter) | The last stated tail is discharged by [ADR-0058](0058-peer-write-adapter.md): `Agent/PeerShipStore` presents one live replication push session as an `IObjectStore`, so a peer is a shipment like any other — priority-ordered with its siblings, dropped by the same rule, recorded in the same ledger — and a set whose backups live at a friend's house and nowhere else captures without keeping a staging copy of them on the machine they exist to survive. `Agent/FanOut` gained the honest half: a pass with no evidence independent of the destination records no verification rather than stamping one drawn from the metadata plane it happens to keep locally. A peer-only set's default is unchanged and now has a reason rather than an incapacity behind it. `Hosts.Tests/DirectShipPeerTests` holds the shipping, `Hosts.Tests/DirectShipTests` the boundary |

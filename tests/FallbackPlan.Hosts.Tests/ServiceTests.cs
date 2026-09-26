@@ -11,6 +11,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The service (ADR-0028): sole writer role, a command surface, real job
 /// states, and cancellation that lands in the journal.
+/// Establishes FR-SVC-001.
 /// </summary>
 [TestClass]
 public sealed class ServiceTests : IDisposable
@@ -56,6 +57,48 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(ContractVersion.Current.ToString(), description.ContractVersion);
         Assert.IsFalse(description.RemoteBindingEnabled);
         Assert.AreEqual(_harness.StateDirectory, description.StateDirectory);
+    }
+
+    [TestMethod]
+    public async Task Backup_CommandedByAClient_ReportsTheCountedPlanOnItsProgress()
+    {
+        // FR-SVC-006's determinate half over a live service: the run counts
+        // its work first, so the terminal report's plan equals what was
+        // actually processed and a client could have divided honestly the
+        // whole way.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "counted");
+        _harness.WriteSourceFile("deep/more.txt", "also counted");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartAsync();
+        JobProgress? final = null;
+
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    if (progress.Progress.State is JobState.Complete or JobState.CompletedWithFailures)
+                    {
+                        final = progress.Progress;
+                        return;
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token));
+        await watching;
+
+        Assert.IsNotNull(final);
+        Assert.AreEqual(2L, final.TotalFiles, "the plan counts exactly the files the run processes");
+        Assert.AreEqual(final.FilesDone, final.TotalFiles, "a clean run finishes having processed its whole plan");
+        Assert.IsNotNull(final.TotalBytes);
     }
 
     [TestMethod]
@@ -212,6 +255,12 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(JobState.Cancelled, job.State);
         Assert.AreEqual("cancelled by request", job.Detail);
 
+        // A cancelled run's numbers survive on the row (ADR-0050). No
+        // snapshot exists for this run, so the journal is the only record of
+        // how far it got — the one case where losing the terminal progress
+        // loses everything.
+        Assert.IsNotNull(job.FilesSeen, "the cancelled run's terminal progress was not recorded");
+
         // A second cancel finds no active job to stop, and says so.
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token), out var error);
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
@@ -232,83 +281,6 @@ public sealed class ServiceTests : IDisposable
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand("no-such-job"), _timeout.Token), out var error);
 
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
-    }
-
-    [TestMethod]
-    public async Task CancelJob_QueuedBehindAnotherSet_RecordsCancelledImmediately()
-    {
-        await _harness.CreateRepositoryAsync();
-        for (var i = 0; i < 24; i++)
-        {
-            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
-        }
-
-        _harness.WriteConfiguration("every 1h", withSecondSet: true);
-
-        await using var runtime = await StartAsync();
-        var seen = new List<JobState>();
-        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
-        var watching = Task.Run(
-            async () =>
-            {
-                await foreach (var progress in progressEvents)
-                {
-                    lock (seen)
-                    {
-                        seen.Add(progress.Progress.State);
-                    }
-                }
-            },
-            _timeout.Token);
-
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-        Assert.IsInstanceOfType<JobAcceptedResult>(
-            await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token), out var first);
-
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Scanning);
-            }
-        });
-
-        // The second set queues behind the writer lane's single worker.
-        Assert.IsInstanceOfType<JobAcceptedResult>(
-            await handler.ExecuteAsync(new RunBackupCommand("extra", Full: false), _timeout.Token), out var second);
-        Assert.AreNotEqual(first.JobId, second.JobId);
-
-        // Cancelling a job that has not started takes effect at the command,
-        // not when the lane drains: the journal reads Cancelled while the
-        // first job is still doing its work. Before this, the acknowledgement
-        // was truthful about the token and silent about the state — the card
-        // sat at Pending until the running job finished, possibly hours.
-        Assert.IsInstanceOfType<AcknowledgedResult>(
-            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token));
-
-        Assert.IsInstanceOfType<JobsResult>(
-            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
-        var queued = jobs.Jobs.Single(descriptor => descriptor.Id == second.JobId);
-        Assert.AreEqual(JobState.Cancelled, queued.State);
-        Assert.AreEqual("cancelled before it started", queued.Detail);
-
-        // And a second cancel is the honest not-found, not another cheerful
-        // acknowledgement of nothing.
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token), out var error);
-        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
-
-        // The running job was never disturbed: it still completes.
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Complete);
-            }
-        });
-
-        await _timeout.CancelAsync();
-        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
     }
 
     [TestMethod]
@@ -646,7 +618,7 @@ public sealed class ServiceTests : IDisposable
         var destination = Path.Combine(_harness.WorkPath, "restored");
 
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var restored);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var restored);
 
         // ADR-0028 §6: the output directory is a path on the machine running the
         // service. A caller is told what happened and never sent the files, so
@@ -696,9 +668,9 @@ public sealed class ServiceTests : IDisposable
         var destination = Path.Combine(_harness.WorkPath, "twice");
 
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var first);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var first);
         Assert.IsInstanceOfType<RestoreResult>(await handler.ExecuteAsync(
-                new RunRestoreCommand(snapshot.SnapshotId, null, destination), _timeout.Token), out var second);
+                new RunRestoreCommand(snapshot.SnapshotId, null, destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var second);
 
         Assert.AreNotEqual(first.OutputDirectory, second.OutputDirectory,
             "two restores of one snapshot must land in distinct run directories");
@@ -776,7 +748,11 @@ public sealed class ServiceTests : IDisposable
             new UpsertBackupSetCommand(new BackupSetDescriptor(
                 new string('b', 32), "photos", _harness.SourceRoot, "every 6h", [], [], ["vault"])),
             _timeout.Token);
-        Assert.IsInstanceOfType<AcknowledgedResult>(created);
+
+        // Creation answers with its queued first backup (ADR-0047): saving a
+        // set IS asking for it to run.
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(created, out var creation);
+        Assert.IsTrue(creation.Lines.Any(line => line.Contains("First backup", StringComparison.Ordinal)));
 
         Assert.IsInstanceOfType<BackupSetsResult>(
             await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var afterCreate);
@@ -885,16 +861,18 @@ public sealed class ServiceTests : IDisposable
 
     private async Task<ServiceRuntime> StartAsync()
     {
-        using var passphrase = Passphrase.Create(
-            Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        await _harness.SetupAsync();
 
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                // The placement condition (ADR-0051) judges by volume, and the
+                // fixture's every path shares one real volume — the vaults are
+                // told apart by name, the compliant install's shape.
+                VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
             },
-            passphrase,
             _timeout.Token);
     }
 

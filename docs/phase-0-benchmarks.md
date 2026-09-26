@@ -1,6 +1,6 @@
 # Phase 0 benchmarks — reduced scale, honestly labelled
 
-**Status:** measured · **Wave:** F4 · **Requirements:** NFR-PERF-001, -002, -004, -010 (shape); the full NFR-PERF-001..015 set remains open at scale
+**Status:** measured · **Wave:** F4 · **Requirements:** NFR-PERF-001, -002, -004, -010, -011, -012 (shape); the full NFR-PERF-001..015 set remains open at scale
 **Harness:** [`tests/FallbackPlan.PerformanceTests/`](../tests/FallbackPlan.PerformanceTests/)
 
 ---
@@ -43,6 +43,8 @@ They are **not** verification of the NFR targets:
 cd tests/FallbackPlan.PerformanceTests
 dotnet run -c Release -- --filter '*' --job short   # BenchmarkDotNet suite
 dotnet run -c Release -- membound 3                 # NFR-PERF-001 proof, 3 GiB
+dotnet run -c Release -- catalogue-size 100000      # NFR-PERF-011, by plane
+dotnet run -c Release -- rebuild-rate 4000          # NFR-PERF-012, timed
 ```
 
 `BenchmarkDotNet.Artifacts/` output is gitignored; the numbers in this file
@@ -139,15 +141,100 @@ interference) is the number the target actually names.
 Targets for context, **not** verified at this scale: NFR-PERF-004 p99
 ≤ 10 ms at scale M; NFR-PERF-010 p99 ≤ 1 ms at scale M.
 
+
+## 5. Catalogue size per file version (NFR-PERF-011)
+
+`CatalogueSizeBenchmark` seeds through the catalogue's own
+`RecordFileVersion`, `RecordTreeEntry`, `ApplyDelta` and
+`RecordSegmentDedup` calls — so what is measured is the schema's cost, not a
+model's guess at it — at the shape the [reference
+scales](requirements/non-functional.md#reference-scales) themselves state:
+10 M file versions against 50 M segment references is **five references per
+version**, each version named by one path in one snapshot.
+
+| Planes held | B/version |
+|---|---:|
+| `file_versions` and its two indexes | 375 |
+| `tree_entries` and its two indexes | 642 |
+| `object_locations` and `ix_locations_blob` | 1 174 |
+| `segment_dedup` | 427 |
+| **all four, at scale M's shape** | **2 520** |
+| **the floor — no segments at all** | **1 174** |
+
+**The 400 B/version budget is missed by 6.3×**, and the shortfall is
+structural rather than a corpus's bad luck: the *floor* — one file version,
+the one path that makes it reachable, and its own manifest's location, with
+no segment anywhere — is already 1 174 B/version. A version no snapshot
+names is not restorable and is not one of scale M's ten million, so nothing
+below that floor is a catalogue anybody could restore from.
+
+At this ratio scale **M** is ~25 GB and scale **L** ~250 GB, against the
+4 GB and 40 GB the requirement's own sentence works out to — and that
+sentence ends *"a number that must fit on a consumer laptop"*.
+
+**The ratio is flat**, which is what lets a small measurement speak for a
+large one: 2 537 B/version at 2 000 versions, 2 486 at 40 000 — within 1.2%
+over a 20× range, and *falling* as the B-trees fill, so the cheap
+measurement is the conservative one. That is asserted and not merely
+observed, by `Repository.Tests/CatalogueSizeTests`.
+
+**Where the bytes are** decides what could be done about it, which is why
+the total is broken out. The two segment planes are 62% of the cost, at
+~256 B per segment reference — exactly the term
+[the segmentation benchmark](segmentation-benchmark.md) named in passing as
+*"the real cost of smaller segments … which quadruples between 1 MiB and
+256 KiB targets"*. That was written as a caveat on a segmentation decision;
+it turns out to be the main term.
+
+Every segment reference here is a **distinct** object, which is the no-dedup
+upper bound on `object_locations`; a corpus with cross-version dedup holds
+fewer rows there for the same reference count. The floor is unaffected by
+that and is the honest lower bound.
+
+---
+
+## 6. Forensic rebuild rate (NFR-PERF-012)
+
+`RebuildRateBenchmark` publishes a tree, deletes its **whole index plane** —
+the premise a forensic rebuild runs under — and times the rebuild from
+recovery footers alone.
+
+| Files | Blobs | Records | Elapsed | records/s | blobs/s | reads/record |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 000 | 2 | 4 035 | 1.30 s | 3 104 | 1.5 | 0.51 |
+| 4 000 | 2 | 8 066 | 2.37 s | 3 402 | 0.8 | 0.51 |
+
+**The blob is the wrong unit, and the table shows why.** A blob holds up to
+65 536 records, so blobs per second varies with how full the blobs are —
+4 033 records per blob here. Reported in blobs/s this pass looks like a
+catastrophic 0.8 against a ≥ 500 target while doing 3 402 records/s. A
+rebuild's work is per record.
+
+**And the requirement's two clauses disagree by about two orders of
+magnitude.** Scale **M** is roughly 24 000 blobs at the default 128 MiB blob
+size; at ≥ 500 blobs/s that is under a minute, not the ≤ 2 hours the same
+row states. One of the two numbers was written about a different blob size,
+and the row cannot be marked met until that is settled.
+
+**The measurement found a defect on the way.** The targeted walk opened a
+fresh `BlobReader` per record — three ranged reads, a footer decrypt and a
+record-table decode each time, then a linear scan of that table — so an
+added file cost 4.4 ranged reads where it now costs 1.1. Holding one blob
+across the walk fixed it; `Repository.Tests/ForensicRebuildCostTests` is
+what keeps it fixed, and it asserts the **work** rather than the rate,
+because a rate target is unreachable on any disk if the scan re-reads.
+
 ---
 
 ## Q7 ledger — target revisions arising from these measurements
 
-No target is revised by this round. The measurements are consistent with the
-targets being *plausible* at scale on reference hardware, and nothing
-measured here contradicts one. When a later, full-scale run revises a target,
-the revision belongs in this section with the number that forced it.
+**Two targets are now contradicted, and neither is revised here** — which is
+the honest answer rather than a dodge. A revision needs a replacement number,
+and in both cases the replacement follows from a decision this round does not
+make. What the round does is stop them being unmeasured, and record what
+forced the question.
 
 | Date | Target | Old | New | Evidence |
 |------|--------|-----|-----|----------|
-| — | — | — | — | none yet |
+| 2026-09 | NFR-PERF-011 | ≤ 400 B/file version at scale M | **contradicted, not yet replaced** — measured 2 520 B, with a structural floor of ~1 175 B | §5. The floor is reached with no segment at all, so no corpus brings the schema inside 400 B. A replacement number is a schema or segmentation-target decision, not a measurement. |
+| 2026-09 | NFR-PERF-012 | ≥ 500 blobs/s **and** scale M in ≤ 2 hours | **internally inconsistent, and in the wrong unit** — the two clauses differ by ~100×, and a rebuild's work is per record | §6. Scale M is ~24 000 blobs at the default blob size, so ≥ 500 blobs/s is under a minute. Settling the unit is what the row needs before a number can be set. |

@@ -7,7 +7,7 @@ namespace FallbackPlan.Repository.Crypto;
 
 /// <summary>
 /// The sealed envelopes a service's ceremonies exchange (ADR-0042 §4,
-/// ADR-0046): <b>provisioning</b> carries the write bundle plus the KDF salt
+/// ADR-0070): <b>provisioning</b> carries the write bundle plus the KDF salt
 /// and parameters the descriptor must record, a <b>restore grant</b> carries
 /// the derived scalar alone, and a <b>claim root</b> carries the Argon2id
 /// output a rebuilt machine proves a replica with. Each is sealed end-to-end
@@ -23,17 +23,16 @@ public static class WriteOnlyProvisioning
 
     private static ReadOnlySpan<byte> GrantAad => "fbp/restore-grant/v2"u8;
 
-    /// <summary>
-    /// The claim root's purpose (ADR-0046). Its own, and not the grant's: a
-    /// restore grant reads one repository's content, while a claim root can
-    /// re-point that repository's attribution at a new device on somebody
-    /// else's disk. Sharing an AAD would let either envelope be replayed as
-    /// the other, which is the whole reason each carries a purpose at all.
-    /// </summary>
-    private static ReadOnlySpan<byte> ClaimRootAad => "fbp/claim-root/v1"u8;
-
-    /// <summary>The provisioning payload: magic ‖ credential ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
-    private const int ProvisionPayloadLength = 8 + RepositoryWriteCredential.SerializedLength + KekDerivation.SaltLength + 4 + 4 + 1;
+    /// <summary>Everything in the provisioning payload except the credential: magic ‖ … ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
+    /// <remarks>
+    /// The credential's own length is asked of the credential
+    /// (<see cref="RepositoryWriteCredential.LengthOf"/>) rather than assumed,
+    /// because the two ends of this envelope are not always the same build: a
+    /// console seals it and a service opens it, and an envelope carrying the
+    /// shape an older console writes must not be refused as if it were
+    /// tampered with.
+    /// </remarks>
+    private const int ProvisionFramingLength = 8 + KekDerivation.SaltLength + 4 + 4 + 1;
 
     /// <summary>Seals a provisioning envelope for the service's recipient key.</summary>
     public static byte[] SealProvision(
@@ -52,14 +51,13 @@ public static class WriteOnlyProvisioning
                 nameof(kdfSalt));
         }
 
-        var payload = new byte[ProvisionPayloadLength];
+        var credential = authority.Credential.ToBytes();
+        var payload = new byte[ProvisionFramingLength + credential.Length];
         try
         {
             ProvisionMagic.CopyTo(payload);
-            var credential = authority.Credential.ToBytes();
             credential.CopyTo(payload, 8);
-            CryptographicOperations.ZeroMemory(credential);
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credential.Length;
             kdfSalt.CopyTo(payload.AsSpan(offset));
             offset += KekDerivation.SaltLength;
             BinaryPrimitives.WriteUInt32BigEndian(payload.AsSpan(offset), kdfParameters.MemoryKiB);
@@ -70,6 +68,7 @@ public static class WriteOnlyProvisioning
         }
         finally
         {
+            CryptographicOperations.ZeroMemory(credential);
             CryptographicOperations.ZeroMemory(payload);
         }
     }
@@ -82,7 +81,10 @@ public static class WriteOnlyProvisioning
         var payload = ContentSealing.OpenPayload(recipientPrivateKey, sealedBytes, ProvisionAad);
         try
         {
-            if (payload.Length != ProvisionPayloadLength || !payload.AsSpan(0, 8).SequenceEqual(ProvisionMagic))
+            var credentialLength = payload.Length > 8 && payload.AsSpan(0, 8).SequenceEqual(ProvisionMagic)
+                ? RepositoryWriteCredential.LengthOf(payload.AsSpan(8))
+                : -1;
+            if (credentialLength < 0 || payload.Length != ProvisionFramingLength + credentialLength)
             {
                 throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
             }
@@ -90,8 +92,7 @@ public static class WriteOnlyProvisioning
             RepositoryWriteCredential credential;
             try
             {
-                credential = RepositoryWriteCredential.FromBytes(
-                    payload.AsSpan(8, RepositoryWriteCredential.SerializedLength));
+                credential = RepositoryWriteCredential.FromBytes(payload.AsSpan(8, credentialLength));
             }
             catch (ArgumentException)
             {
@@ -100,7 +101,7 @@ public static class WriteOnlyProvisioning
                 // gets one refusal shape, never a leaked parse detail.
                 throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
             }
-            var offset = 8 + RepositoryWriteCredential.SerializedLength;
+            var offset = 8 + credentialLength;
             var salt = payload.AsSpan(offset, KekDerivation.SaltLength).ToArray();
             offset += KekDerivation.SaltLength;
             var parameters = new KdfParameters
@@ -131,6 +132,37 @@ public static class WriteOnlyProvisioning
         return ContentSealing.SealPayload(recipientPublicKey, sealingPrivateKey, GrantAad);
     }
 
+    /// <summary>
+    /// Seals a <b>reclaim</b> grant — the derived reclaim sub-root — for the
+    /// service's recipient key
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// </summary>
+    /// <remarks>
+    /// Named separately from <see cref="SealGrant"/> so a caller cannot send
+    /// the power to read where the power to delete is meant, or the reverse.
+    /// The envelopes are indistinguishable on the wire — both are opaque
+    /// 32-byte payloads under the same AAD — which is precisely why the
+    /// service proves a reclaim grant against a tombstone the repository
+    /// already holds before letting it author anything: a sealing scalar
+    /// arriving in a reclaim grant's place will not verify one.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="reclaimRoot">The 32-byte reclaim sub-root.</param>
+    /// <exception cref="ArgumentException">The sub-root is not exactly 32 bytes.</exception>
+    public static byte[] SealReclaimGrant(
+        ReadOnlySpan<byte> recipientPublicKey, ReadOnlySpan<byte> reclaimRoot)
+    {
+        if (reclaimRoot.Length != WriteOnlyDerivation.ReclaimKeyLength)
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyDerivation_ReclaimSeedExactlyBytes(
+                    WriteOnlyDerivation.ReclaimKeyLength),
+                nameof(reclaimRoot));
+        }
+
+        return ContentSealing.SealPayload(recipientPublicKey, reclaimRoot, GrantAad);
+    }
+
     /// <summary>Opens a restore grant with the service's recipient scalar.</summary>
     /// <exception cref="SealedContentException">The envelope does not open or is not a grant.</exception>
     public static byte[] OpenGrant(ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes)
@@ -143,48 +175,5 @@ public static class WriteOnlyProvisioning
         }
 
         return scalar;
-    }
-
-    /// <summary>
-    /// Seals a claim root — the Argon2id output the passphrase produces — for
-    /// the service's recipient key (ADR-0046; peer-protocol 07 §5.2).
-    /// </summary>
-    /// <remarks>
-    /// The client derives this from the passphrase and the recovery kit's KDF
-    /// salt and parameters, because a rebuilt machine has the kit and no
-    /// repository to read the salt from. What crosses the contract is this
-    /// envelope; the passphrase stays where it was typed, exactly as in the
-    /// two ceremonies above.
-    /// </remarks>
-    /// <param name="recipientPublicKey">The service's published recipient key.</param>
-    /// <param name="claimRoot">The 32-byte Argon2id root.</param>
-    /// <exception cref="ArgumentException"><paramref name="claimRoot"/> is not exactly 32 bytes.</exception>
-    public static byte[] SealClaimRoot(ReadOnlySpan<byte> recipientPublicKey, ReadOnlySpan<byte> claimRoot)
-    {
-        if (claimRoot.Length != KekDerivation.KekLength)
-        {
-            throw new ArgumentException(
-                Resources.Strings.FormatContentSealing_KeyExactlyBytes(KekDerivation.KekLength),
-                nameof(claimRoot));
-        }
-
-        return ContentSealing.SealPayload(recipientPublicKey, claimRoot, ClaimRootAad);
-    }
-
-    /// <summary>Opens a claim root with the service's recipient scalar.</summary>
-    /// <param name="recipientPrivateKey">The service's recipient scalar.</param>
-    /// <param name="sealedBytes">The envelope.</param>
-    /// <returns>The root. The caller owns it and must zero it.</returns>
-    /// <exception cref="SealedContentException">The envelope does not open, or is not a claim root.</exception>
-    public static byte[] OpenClaimRoot(ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes)
-    {
-        var root = ContentSealing.OpenPayload(recipientPrivateKey, sealedBytes, ClaimRootAad);
-        if (root.Length != KekDerivation.KekLength)
-        {
-            CryptographicOperations.ZeroMemory(root);
-            throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
-        }
-
-        return root;
     }
 }

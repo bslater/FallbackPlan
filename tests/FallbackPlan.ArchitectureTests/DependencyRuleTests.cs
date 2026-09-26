@@ -26,6 +26,7 @@ namespace FallbackPlan.ArchitectureTests;
 /// separated behind tested interfaces — cite this file as proof rather than as
 /// intent. The caveat is recorded here rather than silently deleted, because a
 /// test whose strength changed is worth saying so once.
+/// Establishes FR-CP-006.
 /// </summary>
 [TestClass]
 public sealed class DependencyRuleTests
@@ -51,47 +52,56 @@ public sealed class DependencyRuleTests
     /// library — so it is loaded by name from the test output directory, where
     /// its ProjectReference guarantees it has been copied.
     /// </summary>
-    private static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
+    internal static Assembly Cli => Assembly.Load("FallbackPlan.Cli");
 
     /// <summary>The standalone recovery tool — also an executable, loaded by name.</summary>
     private static Assembly Recovery => Assembly.Load("FallbackPlan.Recovery");
 
     /// <summary>The Agent host — an executable, loaded by name.</summary>
-    private static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
+    internal static Assembly Agent => Assembly.Load("FallbackPlan.Agent");
 
     /// <summary>The client contract (ADR-0028 §7).</summary>
-    private static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
-
-    /// <summary>The platform keystores (ADR-0028 §9).</summary>
-    private static Assembly Keystore => Assembly.Load("FallbackPlan.Keystore");
-
-    /// <summary>The logging sink host (ADR-0043) — loaded by name, no marker.</summary>
-    private static Assembly Diagnostics => Assembly.Load("FallbackPlan.Diagnostics");
-
-    /// <summary>The store-to-store copier (ADR-0034) — loaded by name, no marker.</summary>
-    private static Assembly Replication => Assembly.Load("FallbackPlan.Replication");
-
-    /// <summary>Retention and collection (ADR-0009) — loaded by name, no marker.</summary>
-    private static Assembly Retention => Assembly.Load("FallbackPlan.Retention");
+    internal static Assembly Api => typeof(FallbackPlan.Api.ContractVersion).Assembly;
 
     /// <summary>The peer protocol (ADR-0030).</summary>
-    private static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
+    internal static Assembly Protocol => typeof(FallbackPlan.Protocol.AssemblyMarker).Assembly;
 
     /// <summary>The local web console (ADR-0036) — an executable, loaded by name.</summary>
-    private static Assembly Web => Assembly.Load("FallbackPlan.Web");
+    internal static Assembly Web => Assembly.Load("FallbackPlan.Web");
+
+    /// <summary>
+    /// The logging sinks (ADR-0043 §1). A library, but markerless, so it is
+    /// loaded by name like the executables above.
+    /// </summary>
+    internal static Assembly Diagnostics => Assembly.Load("FallbackPlan.Diagnostics");
+
+    /// <summary>The replication engine — markerless, loaded by name.</summary>
+    internal static Assembly Replication => Assembly.Load("FallbackPlan.Replication");
+
+    /// <summary>The retention engine — markerless, loaded by name.</summary>
+    internal static Assembly Retention => Assembly.Load("FallbackPlan.Retention");
 
     /// <summary>
     /// Every src assembly. Containment rules iterate this list rather than a
     /// hand-picked subset, because a subset is how Repository.Packing acquired
     /// a Bodu reference with no rule covering it.
+    ///
+    /// It was a hand-picked subset anyway until the telemetry rules were
+    /// written: it named twenty-one of the twenty-four projects under src/,
+    /// omitting Diagnostics, Replication and Retention — the three with no
+    /// AssemblyMarker to reach them by. Diagnostics is where a logging sink
+    /// that learned to post somewhere would live, so the omission mattered
+    /// most exactly where the list claimed to be exhaustive. Recorded here
+    /// rather than silently corrected, because the comment above had been
+    /// making a promise the code below did not keep.
     /// </summary>
-    private static IEnumerable<Assembly> AllSourceAssemblies =>
+    internal static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
          RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
-         Filesystem, FilesystemLocal, Restore, Application, Api, Keystore, Protocol, Cli, Recovery, Agent, Web,
+         Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web,
          Diagnostics, Replication, Retention];
 
-    private static void AssertPasses(TestResult result, string rule)
+    internal static void AssertPasses(TestResult result, string rule)
     {
         Assert.IsTrue(
             result.IsSuccessful,
@@ -347,9 +357,8 @@ public sealed class DependencyRuleTests
     /// list on purpose. Repository.Crypto currently contains only an assembly
     /// marker, so the compiler emits no reference to a library no code has
     /// called yet — an assembly-level assertion would fail today for a reason
-    /// that has nothing to do with the rule. The package reference (from the
-    /// committed external/packages feed, ADR-0021) is the containment that
-    /// exists right now, so it is the thing to pin.
+    /// that has nothing to do with the rule. The package reference (ADR-0021)
+    /// is the containment that exists right now, so it is the thing to pin.
     /// </summary>
     [TestMethod]
     public void ThirdPartyCryptography_ProjectFileCanary_StaysInRepositoryCrypto()
@@ -704,7 +713,15 @@ public sealed class DependencyRuleTests
             Types.InAssembly(Replication)
                 .ShouldNot()
                 .HaveDependencyOnAny(
-                    "FallbackPlan.Repository",
+                    // FallbackPlan.Repository is deliberately NOT here. It was,
+                    // when this rule was written against a Replication that only
+                    // copied bytes. ADR-0065 gave the verifier a chunk-possession
+                    // challenge, and answering one means recomputing a blob's
+                    // Merkle leaf — `Repository.Packing.BlobMerkle`, the one
+                    // place that construction is defined. Duplicating it inside
+                    // Replication to keep the closure narrow would put the same
+                    // commitment in two places, which is the failure this
+                    // repository cares about more than the layering.
                     "FallbackPlan.Storage.Local",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
@@ -713,7 +730,8 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Cli",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
-            "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034).");
+            "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034), "
+            + "reaching the packing layer only for the Merkle commitment ADR-0065 made it check.");
     }
 
     /// <summary>
@@ -757,7 +775,7 @@ public sealed class DependencyRuleTests
     /// exist on a CI runner — with the source path as the fallback for
     /// runners that relocate binaries.
     /// </summary>
-    private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
+    internal static string RepositoryRoot([CallerFilePath] string sourceFile = "")
     {
         var root = LocateRoot(AppContext.BaseDirectory) ?? LocateRoot(Path.GetDirectoryName(sourceFile));
         Assert.IsNotNull(root);
@@ -798,7 +816,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Repository",
                     "FallbackPlan.Storage",
                     "FallbackPlan.Filesystem",
-                    "FallbackPlan.Keystore",
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
             "FallbackPlan.Api must reference Domain and nothing else (11 §2).");
@@ -815,7 +832,7 @@ public sealed class DependencyRuleTests
         AssertPasses(
             Types.InAssembly(Recovery)
                 .ShouldNot()
-                .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application", "FallbackPlan.Keystore")
+                .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application")
                 .GetResult(),
             "FallbackPlan.Recovery must run from repository plus kit alone (11 §2, NFR-OPS-005).");
     }
@@ -870,7 +887,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Storage",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
-                    "FallbackPlan.Keystore",
                     "FallbackPlan.Protocol",
                     "FallbackPlan.Replication",
                     "FallbackPlan.Retention",
@@ -893,7 +909,6 @@ public sealed class DependencyRuleTests
                     "FallbackPlan.Application",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
-                    "FallbackPlan.Keystore",
                     "FallbackPlan.Protocol",
                     "FallbackPlan.Replication",
                     "FallbackPlan.Retention",
@@ -913,26 +928,6 @@ public sealed class DependencyRuleTests
 
         SequenceAssert.AreEqual(
             ["FallbackPlan.Api", "FallbackPlan.Repository", "FallbackPlan.Storage.Local"], references);
-    }
-
-    /// <summary>
-    /// The keystore holds unlocked key material for the service account and
-    /// must not become a route to anything else (NFR-SEC-009).
-    /// </summary>
-    [TestMethod]
-    public void Keystore_DependencyClosure_KnowsNothingAboutRepositories()
-    {
-        AssertPasses(
-            Types.InAssembly(Keystore)
-                .ShouldNot()
-                .HaveDependencyOnAny(
-                    "FallbackPlan.Domain",
-                    "FallbackPlan.Repository",
-                    "FallbackPlan.Api",
-                    "FallbackPlan.Application",
-                    "FallbackPlan.Storage")
-                .GetResult(),
-            "FallbackPlan.Keystore stores a passphrase for an account; it must not reach the repository.");
     }
 
 }

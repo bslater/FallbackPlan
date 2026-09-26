@@ -50,6 +50,66 @@ public sealed class IndexState
 
     /// <summary>Every damage and security finding.</summary>
     public IReadOnlyList<DamageFinding> Findings { get; }
+
+    /// <summary>
+    /// The highest sequence number the repository itself attests for
+    /// <paramref name="writer"/> — the observed head (NFR-SEC-005).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The writer's own <c>sequence</c> file is allocation state: it says what
+    /// this machine has handed out, and it is exactly as durable as the state
+    /// directory holding it. This is the other half, and it is the half that
+    /// travels: every checkpoint carries a signed per-writer watermark and
+    /// every applied delta carries its signed sequence (07 §§5–6), so any
+    /// replica of the repository can say how far its writers had got. A
+    /// machine whose local state was lost or rolled back can therefore learn
+    /// the truth from the repository rather than from a collision partway
+    /// through its next backup.
+    /// </para>
+    /// <para>
+    /// Zero for a writer this index has never seen, which is the honest
+    /// answer for a genuinely new writer and for one whose objects are all
+    /// missing — the second being a damage finding this method is not the
+    /// place to raise.
+    /// </para>
+    /// </remarks>
+    /// <param name="writer">The writer to ask about.</param>
+    public ulong ObservedHeadFor(WriterId writer)
+    {
+        var head = 0UL;
+
+        foreach (var checkpoint in Checkpoints)
+        {
+            foreach (var watermark in checkpoint.Checkpoint.WriterWatermarks)
+            {
+                if (watermark.WriterId == writer)
+                {
+                    head = Math.Max(head, watermark.HighestSequence);
+                }
+            }
+        }
+
+        foreach (var delta in Deltas)
+        {
+            if (delta.Delta.WriterId == writer)
+            {
+                head = Math.Max(head, delta.Delta.Sequence);
+            }
+        }
+
+        // A gap inside the bounded patience is a number this writer allocated
+        // and has not accounted for: unpublished, but assuredly used.
+        foreach (var (gapWriter, sequence) in UnresolvedGaps)
+        {
+            if (gapWriter == writer)
+            {
+                head = Math.Max(head, sequence);
+            }
+        }
+
+        return head;
+    }
 }
 
 /// <summary>
@@ -67,26 +127,26 @@ public sealed class IndexLoader : IDisposable
 {
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
-    private readonly KeyHierarchy _hierarchy;
+    private readonly RepositoryWriteCredential _credential;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
 
     /// <summary>Creates a loader.</summary>
     /// <param name="store">Where the index plane lives.</param>
     /// <param name="repositoryId">The repository being loaded.</param>
-    /// <param name="hierarchy">The key hierarchy the objects open under.</param>
+    /// <param name="credential">The write credential the objects open under.</param>
     /// <param name="logger">Where the load's shape is recorded.</param>
     public IndexLoader(
-        IObjectStore store, RepositoryId repositoryId, KeyHierarchy hierarchy, ILogger? logger = null)
+        IObjectStore store, RepositoryId repositoryId, RepositoryWriteCredential credential, ILogger? logger = null)
     {
         ThrowHelper.ThrowIfNull(store);
-        ThrowHelper.ThrowIfNull(hierarchy);
+        ThrowHelper.ThrowIfNull(credential);
 
         _log = logger ?? NullLogger.Instance;
         _store = store;
         _repositoryId = repositoryId;
-        _hierarchy = hierarchy;
-        _objectIdDeriver = new ObjectIdDeriver(hierarchy.DeriveContentIdKey());
+        _credential = credential;
+        _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
@@ -285,7 +345,7 @@ public sealed class IndexLoader : IDisposable
             return false;
         }
 
-        using var signer = RepositorySigner.Create(_hierarchy, new KeyGeneration((uint)generation));
+        using var signer = RepositorySigner.Create(_credential, new KeyGeneration((uint)generation));
 
         if (!signer.Verify(signedBytes, signature))
         {
@@ -339,7 +399,7 @@ public sealed class IndexLoader : IDisposable
             return null;
         }
 
-        var metadataKey = _hierarchy.DeriveMetadataKey(record.KeyGeneration);
+        var metadataKey = _credential.DeriveMetadataKey(record.KeyGeneration);
         try
         {
             if (!StandaloneRecordCipher.TryOpen(record, _repositoryId, metadataKey, out var plaintext))

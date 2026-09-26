@@ -56,13 +56,19 @@ public sealed class PartialBackupHonestyTests : IDisposable
         File.WriteAllText(Path.Combine(SourceRoot, "readable.txt"), "this one is fine");
     }
 
+    // The installation is set up and the "docs" archive created the way the
+    // service creates one on a set's first backup: from the installation
+    // credential, under the installation's salt (ADR-0044).
     private async Task CreateRepositoryAsync()
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var _ = await RepositoryLifecycle.CreateAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase,
-            Domain.Configuration.RepositoryCreationSettings.Default,
-            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None);
+        WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+        using var provisioning = new InstallationCredentialStore(StateDirectory).TryLoad();
+        Assert.IsNotNull(provisioning);
+        (await RepositoryLifecycle.CreateAsync(
+            new LocalFileSystemObjectStore(RepoPath), provisioning.Credential,
+            provisioning.KdfSalt.ToArray(), provisioning.KdfParameters,
+            createdBy: "fallbackplan-tests/1.0",
+            createdAtUnixMilliseconds: 1_722_600_000_000, CancellationToken.None)).Dispose();
     }
 
     private void WriteConfiguration() => new ClientConfiguration
@@ -93,8 +99,18 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
     private async Task<AgentPassResult> RunPassAsync(DateTimeOffset now)
     {
-        using var passphrase = Passphrase.Create(PassphraseText);
-        return await AgentPass.RunAsync(ArchivesRoot, passphrase, StateDirectory, now, CancellationToken.None);
+        // A pass creates any missing archive from the installation credential
+        // (ADR-0044), so the installation is set up before the first pass
+        // whether or not a test created an archive by hand.
+        using (var provisioned = new InstallationCredentialStore(StateDirectory).TryLoad())
+        {
+            if (provisioned is null)
+            {
+                WriteOnlyInstallation.Provision(StateDirectory, PassphraseText);
+            }
+        }
+
+        return await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
     }
 
     /// <summary>Makes one file genuinely unreadable, by removing every mode bit.</summary>
@@ -159,7 +175,60 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
         var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
         Assert.AreEqual(JobState.Complete, job.State);
-        Assert.IsNull(job.Detail, "a clean backup should have nothing to say");
+
+        // The terminal detail is the run summary — always written explicitly,
+        // because Transition keeps the prior detail on null and a preempted
+        // run's prior detail is "resumed", which must not survive onto the
+        // record a person reads (ADR-0047). Clean-vs-partial stays a state
+        // distinction: the summary never says "partial".
+        Assert.IsNotNull(job.Detail);
+        Assert.Contains("file(s)", job.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("partial", job.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A clean run's journal row keeps its numbers (ADR-0050): the counts a
+    /// live progress stream forgets at settle are the summary a person asks
+    /// for later, and the detail string alone cannot answer "how many bytes".
+    /// </summary>
+    [TestMethod]
+    public async Task ABackupThatReadEverything_RecordsItsRunStatisticsOnTheJournalRow()
+    {
+        await CreateRepositoryAsync();
+        WriteConfiguration();
+
+        await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+
+        var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
+        Assert.IsNotNull(job.Stats, "the terminal numbers were not persisted — nothing can summarise this run later");
+        Assert.AreEqual(1, job.Stats.FilesDone, "one readable file was captured");
+        Assert.AreEqual(0, job.Stats.FilesFailed);
+        Assert.AreEqual(1, job.Stats.TotalFiles, "the counting pre-pass fixed the plan at one file");
+        Assert.IsTrue(job.Stats.BytesSeen > 0, "the file's bytes were read, so the row must say so");
+    }
+
+    /// <summary>
+    /// The partial run is where the block earns its place: the terminal detail
+    /// is "partial: N failure(s)" — no file counts at all — so without the
+    /// stats a partial backup's shape is simply gone.
+    /// </summary>
+    [TestMethod]
+    [UnprivilegedPlatformCondition(TestPlatforms.Posix, "denial is expressed with chmod")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task ABackupThatCouldNotReadAFile_RecordsTheCountsItsDetailOmits()
+    {
+        await CreateRepositoryAsync();
+        WriteConfiguration();
+        WriteUnreadableFile("denied.txt");
+
+        await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
+
+        var job = Assert.ContainsSingle(JobStateStore.Open(StateDirectory).Jobs);
+        Assert.AreEqual(JobState.CompletedWithFailures, job.State);
+        Assert.IsNotNull(job.Stats);
+        Assert.AreEqual(1, job.Stats.FilesFailed, "the unreadable file is a counted failure on the row itself");
+        Assert.AreEqual(1, job.Stats.FilesDone, "the readable file was still captured, and the row says so");
     }
 
     /// <summary>
@@ -229,9 +298,9 @@ public sealed class PartialBackupHonestyTests : IDisposable
 
         await RunPassAsync(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
 
-        using var passphrase = Passphrase.Create(PassphraseText);
-        using var repository = await RepositoryLifecycle.OpenAsync(
-            new LocalFileSystemObjectStore(RepoPath), passphrase, CancellationToken.None);
+        using var opened = await WriteOnlyInstallation.OpenAsync(
+            new LocalFileSystemObjectStore(RepoPath), PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
         using var catalogue = Repository.Catalogue.Catalogue.Open(
             Path.Combine(StateDirectory, $"catalogue-{repository.RepositoryId}.db"), repository.RepositoryId);
 

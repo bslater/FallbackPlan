@@ -117,7 +117,7 @@ template in any case. Exception messages keep using resx exactly as before.
 | 2000–2499 | `Repository` |
 | 2500–2799 | `Storage.*`, `Filesystem.*` |
 | 2800–3199 | `Restore`, `Retention`, `Replication`, `Recovery` |
-| 3200–3399 | `Protocol`, `Keystore` |
+| 3200–3399 | `Protocol` (3300–3399 were the platform keystore's, retired with it — amended 2026-09, [ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md)) |
 | 3400–3599 | `Application` |
 | 3600–3699 | `Api` transport |
 | 3700–3999 | `Agent` |
@@ -309,11 +309,11 @@ already existed**, and it is precisely this data structure — fixed capacity,
 snapshot-based enumerator, MIT.
 
 What made it easy to miss is worth recording, because the same trap is still
-there. `external/packages/` vendors four Bodu packages, and `Bodu.Core`
-contains a `Bodu.Collections.*` namespace holding **extension methods only**.
-A search of the vendored feed therefore returns a collections namespace with no
-collections in it, which reads like evidence that no such type exists. It is
-not: the packages are published from `bslater/bodu`'s `local-packages/` feed
+there. `Bodu.Core` contains a `Bodu.Collections.*` namespace holding
+**extension methods only**. A search of the packages this repository consumes
+therefore returns a collections namespace with no collections in it, which
+reads like evidence that no such type exists. It is not: the packages come
+from `bslater/bodu`'s feed
 under a lock-step version, and this repository vendors only the subset it has
 needed so far. **The vendored feed is a record of what we have taken, never a
 statement of what exists.**
@@ -355,11 +355,33 @@ The rotating file sink remains ours: file rotation, retention and owner-only
 permissions are policy about this product's state directory, not a general data
 structure.
 
+## Amendment (2026-08): the Information tier records change, not routine
+
+A day of real service log made the rule concrete. The scheduler re-reads the
+configuration every pass through the logged path — deliberately, so "what was
+in force when this ran" is answerable — and the load message (3400) sat at
+Information. The result: 347 of the log's 353 Information records were one
+sentence repeating that nothing had happened, and the six records that meant
+something drowned in it.
+
+The correction keeps both halves. The load record survives at **Debug**, one
+per read, so the pass stays reconstructable at the level of routine mechanics.
+The **Information** record is now the one only a rememberer can write:
+`ServiceRuntime` fingerprints the canonical export of what it loaded and
+announces (3742) on the first read and on change — an edit taking effect, in
+one line, in the tier an operator actually reads. Reformatting the file is not
+an event; changing what it says is.
+
+The general rule this instance pins: a message emitted on a timer belongs at
+Debug however interesting its subject, because at Information a timer does not
+report events, it manufactures them.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | The shape decided: abstractions in the libraries, sinks in the hosts, redaction by declared type, event-id ranges |
+| 2026-08 | Amended | The Information tier records change, not routine: the per-pass configuration load demoted to Debug (3400), change announced from the runtime that can see it (3742) |
 | 2026-08 | Accepted | Built: abstractions in twenty-four projects, per-project `Log.cs`, and the ring, rolling file and renderer in `FallbackPlan.Diagnostics` |
 | 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
 | 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is complete: the 61-declaration register is empty, twelve by deletion and the rest wired, with drills asserting records arrive rather than only that call sites exist |
@@ -429,6 +451,29 @@ A declaration that promises a count nothing computes is the same hazard the
 register exists to expose, and harder to see: it survives a "is it called?"
 check the moment somebody wires it with a plausible-looking zero.
 
+### Amendment: the sinks stay in the hosts, and now so does the proof
+
+This record's §1 division — libraries take the abstraction, the hosts own the
+factory and the sinks — was held by `ArchitectureTests/LoggingShapeTests`,
+which proves that only `FallbackPlan.Diagnostics` references the concrete
+logging package. That covers a sink arriving as a *package*. It never covered a
+sink that writes somewhere rather than to a file: `Diagnostics` holds the
+rolling file and the ring, and nothing stopped one of them growing a client and
+posting records at a URL, because `System.Net.Http` needs no package reference
+at all.
+
+`ArchitectureTests/TelemetrySilenceTests` closes that (2026-09): no `src`
+assembly references an HTTP client, and outbound capability is confined to the
+five that are the peer protocol and the loopback IPC — `Diagnostics` is not
+among them. The same commit found and closed a gap in the guard beside it:
+`DependencyRuleTests.AllSourceAssemblies`, which the cryptography and
+recurrence containment rules iterate, named twenty-one of the twenty-four
+projects under `src/` and omitted `Diagnostics`, `Replication` and `Retention`
+— the three with no `AssemblyMarker` to reach them by. The logging sinks were
+the assembly a telemetry rule most needed to cover and the one the list could
+not see. The reasoning is [ADR-0027](0027-services-scheduling-status-telemetry.md)
+§3's, amended there; this record carries the consequence for its own §1.
+
 ### Amendment: a call site is not a logger
 
 The register proved every declaration is *called*. Nothing in the type system
@@ -442,3 +487,6 @@ and a retention drill over an applied pass.
 
 
 | 2026-08 | Amended | The ring buffer is `Bodu.Collections.Concurrent`'s, not hand-rolled; operational tier, pinned by canary |
+| 2026-09 | Amended | Range 3300–3399 retired with the platform keystore (format 1 withdrawn, [ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)); `Protocol` keeps 3200–3299 |
+| 2026-09 | Amended (event 3100) | The recovery tool's event 3100 records the archive descriptor read — repository id and format — rather than the recovery kit read, because there is no kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); 3101 and 3102 are unchanged, and the 1.14 numbering note above stays as history |
+| 2026-09 | Amended | §1's division extended to the network: no sink may reach for an HTTP client, which needs no package reference and so escaped `ArchitectureTests/LoggingShapeTests` (`ArchitectureTests/TelemetrySilenceTests`; reasoning at [ADR-0027](0027-services-scheduling-status-telemetry.md) §3's 2026-09 amendment) |

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -70,16 +69,20 @@ public static class WebConsoleHost
         ThrowHelper.ThrowIfNull(output);
         ThrowHelper.ThrowIfNull(error);
 
-        if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
+        if (args.Length > 0 && args[0] is "-h" or "--help" or "help")
         {
             await output.WriteLineAsync("""
                 FallbackPlan web console — a browser front end for a running service
 
                 usage:
-                  fallbackplan-web --state <dir> [--port <n>] [--log-level <level>]
+                  fallbackplan-web [--state <dir>] [--port <n>] [--log-level <level>]
 
-                The console talks to the service holding the writer role for <dir>
-                over its local binding, exactly as the CLI does. It binds
+                The console talks to the service holding the writer role for the
+                state directory over its local binding, exactly as the CLI does.
+                With no --state it uses the machine's default installation — the
+                same directory a bare `fallbackplan-agent` serves (FR-SVC-016),
+                overridable by FALLBACKPLAN_STATE — so a default install of the
+                whole solution connects with no arguments at all. It binds
                 http://127.0.0.1 only — remote access to a service is what device
                 pairing is for — and prints a URL carrying a fresh access token on
                 every start. It holds no repository, no keys and no writer role: if
@@ -90,7 +93,7 @@ public static class WebConsoleHost
                 or none, and reads FALLBACKPLAN_LOG_LEVEL when absent. Logs go to
                 standard error; the service keeps its own (ADR-0043 §6).
                 """).ConfigureAwait(false);
-            return args.Length == 0 ? 1 : 0;
+            return 0;
         }
 
         if (!WebConsoleOptions.TryParse(args, out var options, out var failure))
@@ -188,42 +191,21 @@ public static class WebConsoleHost
             await next(context).ConfigureAwait(false);
         });
 
-        MapStaticAsset(app, "/", "wwwroot/index.html", "text/html; charset=utf-8", log);
-        MapStaticAsset(app, "/app.css", "wwwroot/app.css", "text/css; charset=utf-8", log);
-        MapStaticAsset(app, "/app.js", "wwwroot/app.js", "text/javascript; charset=utf-8", log);
+        MapStaticAsset(app, "/", "wwwroot/index.html", "text/html; charset=utf-8");
+        MapStaticAsset(app, "/app.css", "wwwroot/app.css", "text/css; charset=utf-8");
+        MapStaticAsset(app, "/app.js", "wwwroot/app.js", "text/javascript; charset=utf-8");
 
-        app.MapPost("/api/command", (HttpContext context) =>
-            TimedAsync(context, log, "/api/command", () => ExchangeAsync(context, clients, auth, log)));
-        app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth));
-        app.MapPost("/api/restore-gate", (HttpContext context) =>
-            TimedAsync(context, log, "/api/restore-gate", () => RestoreGateAsync(context, clients, auth)));
-        app.MapPost("/api/provision-write-only", (HttpContext context) =>
-            TimedAsync(context, log, "/api/provision-write-only", () => ProvisionWriteOnlyAsync(context, clients, auth)));
-        app.MapPost("/api/setup", (HttpContext context) =>
-            TimedAsync(context, log, "/api/setup", () => SetupAsync(context, clients, auth, log)));
-        app.MapPost("/api/recovery-kit", (HttpContext context) =>
-            TimedAsync(context, log, "/api/recovery-kit", () => RecoveryKitAsync(context, clients, auth, log)));
-        app.MapPost("/api/passphrase-strength", (HttpContext context) =>
-            TimedAsync(context, log, "/api/passphrase-strength", () => AssessPassphraseAsync(context, auth)));
+        app.MapPost("/api/command", (HttpContext context) => ExchangeAsync(context, clients, auth, log));
+        app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth, log));
+        app.MapPost("/api/restore-gate", (HttpContext context) => RestoreGateAsync(context, clients, auth));
+        app.MapPost("/api/provision-write-only", (HttpContext context) => ProvisionWriteOnlyAsync(context, clients, auth));
+        app.MapPost("/api/adopt-archive", (HttpContext context) => AdoptArchiveAsync(context, clients, auth));
+        app.MapPost("/api/setup", (HttpContext context) => SetupAsync(context, clients, auth));
+        app.MapPost("/api/passphrase-strength", (HttpContext context) => AssessPassphraseAsync(context, auth));
+        app.MapPost("/api/password-check", (HttpContext context) => CheckPasswordAsync(context, auth));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return new RunningConsole(app, auth);
-    }
-
-    /// <summary>
-    /// Runs one endpoint and leaves a trace line saying it happened. The
-    /// events stream is deliberately not wrapped: a connection that lives
-    /// for hours would report its lifetime, not a request.
-    /// </summary>
-    private static async Task TimedAsync(HttpContext context, ILogger log, string endpoint, Func<Task> handler)
-    {
-        var started = Stopwatch.GetTimestamp();
-        await handler().ConfigureAwait(false);
-        if (log.IsEnabled(LogLevel.Trace))
-        {
-            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Log.RequestHandled(log, endpoint, context.Response.StatusCode, elapsed);
-        }
     }
 
     /// <summary>One command in, one result out — the whole data surface.</summary>
@@ -267,18 +249,29 @@ public static class WebConsoleHost
             // relays for all of them — a console that cached one token would
             // make every action attributable to whoever signed in first, which
             // is the problem ADR-0045 exists to fix, moved one hop.
-            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session)
-            {
-                await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
-                    .ConfigureAwait(false);
-            }
+            //
+            // A refused resume ends the exchange: the refusal names the fix
+            // ("log in again") where the command's own refusal, sent blind
+            // afterwards, would not — and a browser that slept through its
+            // session's idle timeout retries every few seconds, so the doomed
+            // command would double the traffic of an already-failing loop.
+            // Refused specifically: a service that predates contract 1.16
+            // answers resume_session itself with InvalidArgument, and that
+            // must stay the shrug it always was, not become a blockade.
+            var presented = context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                ? await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false)
+                : null;
+            var refused = presented is ServiceError { Reason: ServiceErrorReason.Refused } dead ? dead : null;
 
-            var relayed = Stopwatch.GetTimestamp();
-            result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
-            if (log.IsEnabled(LogLevel.Trace))
+            if (refused is not null)
             {
-                var elapsed = (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds;
-                Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name, elapsed);
+                Log.RelayedSessionRefused(log, command.GetType().Name);
+                result = refused;
+            }
+            else
+            {
+                result = await client.ExecuteAsync(command, context.RequestAborted).ConfigureAwait(false);
             }
         }
         catch (ServiceConnectionException exception)
@@ -350,6 +343,7 @@ public static class WebConsoleHost
         }
 
         string? archivesRoot = null;
+        string? stateDirectory = null;
         string? grantRecipient = null;
         try
         {
@@ -358,6 +352,7 @@ public static class WebConsoleHost
                 is ServiceDescriptionResult description)
             {
                 archivesRoot = description.ArchivesRoot;
+                stateDirectory = description.StateDirectory;
                 grantRecipient = description.RestoreGrantRecipient;
             }
         }
@@ -368,7 +363,7 @@ public static class WebConsoleHost
         }
 
         var answer = await ConsoleRestoreGate.VerifyAsync(
-            archivesRoot, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
+            archivesRoot, stateDirectory, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
 
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json; charset=utf-8";
@@ -394,6 +389,142 @@ public static class WebConsoleHost
     /// <param name="Detail">Why, when not provisioned.</param>
     /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
     private sealed record ProvisionResponse(string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
+
+    /// <summary>The page's adoption request (ADR-0061 §5).</summary>
+    /// <param name="DestinationName">The declared destination the archive was discovered at.</param>
+    /// <param name="RepositoryId">The discovered archive's repository id.</param>
+    /// <param name="Passphrase">The typed passphrase; it stops here.</param>
+    /// <param name="Acknowledged">The loss acknowledgement, collected before anything derives.</param>
+    /// <param name="SetName">An optional name to adopt the set under; blank takes the archive's recorded one.</param>
+    private sealed record AdoptRequest(
+        string? DestinationName, string? RepositoryId, string? Passphrase, bool Acknowledged, string? SetName = null);
+
+    /// <summary>The adoption endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>adopted</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not adopted.</param>
+    /// <param name="Lines">The service's statements, when adopted.</param>
+    /// <param name="Set">The set as adopted, when adopted.</param>
+    private sealed record AdoptResponse(
+        string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null, ArchiveAdoptedResult? Set = null);
+
+    /// <summary>
+    /// The adoption ceremony (ADR-0061 §5): the third endpoint permitted a
+    /// secret, holding the same line as the other two — Argon2id runs in
+    /// this process, against the <em>discovered</em> archive's salt, and
+    /// what goes to the service is the write bundle sealed to its published
+    /// recipient key. The derivation is proved against the discovered
+    /// sealing key before anything is sent, so a wrong passphrase is caught
+    /// where it was typed.
+    /// </summary>
+    private static async Task AdoptArchiveAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        AdoptRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<AdoptRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { DestinationName.Length: > 0, RepositoryId.Length: > 0, Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a destination name, a repository id and a passphrase are required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(AdoptResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        if (!request.Acknowledged)
+        {
+            await AnswerAsync(new AdoptResponse(
+                "refused",
+                "Adoption needs the loss acknowledgement: the passphrase can never change, and if it is "
+                + "lost the backup is unrecoverable.")).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult { RestoreGrantRecipient.Length: > 0 } description)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    "unavailable", "The service does not publish a grant-recipient key.")).ConfigureAwait(false);
+                return;
+            }
+
+            // The facts to derive against come from the service's own
+            // discovery, never from the page: the page names an id, the
+            // service says what that id's descriptor holds.
+            var discovered = await client.ExecuteAsync(
+                new DiscoverArchivesCommand(request.DestinationName), context.RequestAborted).ConfigureAwait(false);
+            if (discovered is ServiceError discoveryRefusal)
+            {
+                await AnswerAsync(new AdoptResponse("refused", discoveryRefusal.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (discovered is not ArchivesDiscoveredResult listing
+                || listing.Archives.FirstOrDefault(archive =>
+                    string.Equals(archive.RepositoryId, request.RepositoryId, StringComparison.OrdinalIgnoreCase)) is not { } target)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    "unavailable",
+                    $"Destination '{request.DestinationName}' does not list an archive '{request.RepositoryId}' — "
+                    + "discover again and pick one it shows.")).ConfigureAwait(false);
+                return;
+            }
+
+            var minted = ConsoleRestoreGate.BuildAdoptEnvelope(target, request.Passphrase, description.RestoreGrantRecipient);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new AdoptResponse(
+                    minted.Outcome == ConsoleRestoreGate.GateOutcome.Wrong ? "wrong" : "unavailable",
+                    minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new AdoptArchiveCommand(
+                    request.DestinationName, target.RepositoryId, minted.Envelope!,
+                    SetName: string.IsNullOrWhiteSpace(request.SetName) ? null : request.SetName.Trim()),
+                context.RequestAborted).ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                ArchiveAdoptedResult adopted => new AdoptResponse("adopted", Lines: adopted.Lines, Set: adopted),
+                ServiceError refusal => new AdoptResponse("refused", refusal.Message),
+                _ => new AdoptResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>
     /// The write-only setup ceremony (ADR-0042 §4, §10): the second endpoint
@@ -477,8 +608,8 @@ public static class WebConsoleHost
             }
 
             var minted = await ConsoleRestoreGate.BuildProvisionEnvelopeAsync(
-                description.ArchivesRoot, target.Id, request.Passphrase, description.RestoreGrantRecipient,
-                context.RequestAborted).ConfigureAwait(false);
+                description.ArchivesRoot, description.StateDirectory, target.Id, request.Passphrase,
+                description.RestoreGrantRecipient, context.RequestAborted).ConfigureAwait(false);
             if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
             {
                 await AnswerAsync(new ProvisionResponse(
@@ -571,6 +702,64 @@ public static class WebConsoleHost
             context.RequestAborted).ConfigureAwait(false);
     }
 
+    /// <summary>The password-check endpoint's answer, for the account form's live checklist.</summary>
+    /// <param name="Acceptable">Whether the account policy would accept this candidate.</param>
+    /// <param name="Findings">Plain sentences naming each unmet rule.</param>
+    private sealed record PasswordCheckResponse(bool Acceptable, IReadOnlyList<string> Findings);
+
+    /// <summary>
+    /// Checks a half-typed account password against the policy the service
+    /// will enforce (FR-USR-001 as amended) — same posture as the passphrase
+    /// meter above: one implementation, one verdict, computed in this local
+    /// process and never sent to the service.
+    /// </summary>
+    private static async Task CheckPasswordAsync(HttpContext context, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        StrengthRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<StrengthRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        var assessment = PasswordPolicy.Assess(request?.Candidate ?? string.Empty);
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-store";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new PasswordCheckResponse(
+                assessment.IsAcceptable, [.. assessment.Findings.Select(Describe)]),
+            SerializerOptions,
+            context.RequestAborted).ConfigureAwait(false);
+    }
+
+    /// <summary>The account-policy sentences the checklist renders.</summary>
+    private static string Describe(PasswordFinding finding) => finding switch
+    {
+        PasswordFinding.TooShort =>
+            $"At least {PasswordPolicy.MinimumLength} characters.",
+        PasswordFinding.NoUppercase => "At least one uppercase letter.",
+        PasswordFinding.FewerThanTwoDigits => "At least two digits.",
+        PasswordFinding.NoSpecialCharacter =>
+            "At least one special character — anything that is not a letter or digit.",
+        _ => finding.ToString(),
+    };
+
     /// <summary>What the setup endpoint reads from the page.</summary>
     /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0044 §4).</param>
     /// <param name="Confirmation">The second entry, which must match.</param>
@@ -586,26 +775,9 @@ public static class WebConsoleHost
     /// <param name="Detail">Why, when not provisioned.</param>
     /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
     /// <param name="Findings">What was wrong with the passphrase, on a weak outcome.</param>
-    /// <param name="Kit">The recovery kit, when provisioned — see <see cref="SetupKit"/>.</param>
     private sealed record SetupResponse(
         string Outcome, string? Detail = null,
-        IReadOnlyList<string>? Lines = null, IReadOnlyList<string>? Findings = null,
-        SetupKit? Kit = null);
-
-    /// <summary>
-    /// The recovery kit, handed to the page rather than kept here.
-    /// </summary>
-    /// <remarks>
-    /// Returned inline so this host holds no kit between two requests. The
-    /// page turns these into downloads; nothing about the kit is secret
-    /// (FR-KIT-002), and a console that stored one would be a console
-    /// keeping a copy of the thing the operator is being asked to take
-    /// somewhere else.
-    /// </remarks>
-    /// <param name="Machine">The framed binary form, base64.</param>
-    /// <param name="Text">The printable transcribable form.</param>
-    /// <param name="Checksum">The kit's SHA-256, lowercase hex.</param>
-    private sealed record SetupKit(string Machine, string Text, string Checksum);
+        IReadOnlyList<string>? Lines = null, IReadOnlyList<string>? Findings = null);
 
     /// <summary>
     /// First-run setup (ADR-0044): the third endpoint permitted a secret, and
@@ -619,8 +791,7 @@ public static class WebConsoleHost
     /// comes before the work for the same reason it does in the write-only
     /// ceremony — there is no recovery path to offer afterwards.
     /// </remarks>
-    private static async Task SetupAsync(
-        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
+    private static async Task SetupAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -651,10 +822,6 @@ public static class WebConsoleHost
 
         async Task AnswerAsync(SetupResponse response)
         {
-            // The outcome and whether a kit went with it — never the body.
-            // This is the server half of the pair the page's own trace line
-            // forms: the two disagreeing is what localises a stale page.
-            Log.SetupOutcome(log, response.Outcome, response.Kit is not null);
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.Headers.CacheControl = "no-store";
@@ -688,7 +855,8 @@ public static class WebConsoleHost
             await AnswerAsync(new SetupResponse(
                 "weak",
                 $"This passphrase is too weak to be an installation's master key (it needs at least "
-                + $"{PassphraseStrength.MinimumLength} characters, and more than one repeated unit).",
+                + $"{PassphraseStrength.MinimumLength} characters including an uppercase letter, two "
+                + "digits and a special character, and more than one repeated unit).",
                 Findings: [.. assessment.Findings.Select(Describe)])).ConfigureAwait(false);
             return;
         }
@@ -705,11 +873,8 @@ public static class WebConsoleHost
                 return;
             }
 
-            // One Argon2id pass produces both the sealed envelope and the
-            // recovery kit — they come from the same derivation, so deriving
-            // twice would be paying that cost to learn nothing.
             var minted = ConsoleRestoreGate.BuildInstallationSetup(
-                request.Passphrase, description.RestoreGrantRecipient, description.DeviceId ?? string.Empty);
+                request.Passphrase, description.RestoreGrantRecipient);
             if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
             {
                 await AnswerAsync(new SetupResponse("unavailable", minted.Detail)).ConfigureAwait(false);
@@ -721,121 +886,9 @@ public static class WebConsoleHost
 
             await AnswerAsync(result switch
             {
-                ConfigurationChangeResult change => new SetupResponse(
-                    "provisioned",
-                    Lines: change.Lines,
-                    Kit: new SetupKit(
-                        Convert.ToBase64String(minted.Kit!.Framed), minted.Kit.Text, minted.Kit.Checksum)),
+                ConfigurationChangeResult change => new SetupResponse("provisioned", Lines: change.Lines),
                 ServiceError refusal => new SetupResponse("refused", refusal.Message),
                 _ => new SetupResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
-            }).ConfigureAwait(false);
-        }
-        catch (ServiceConnectionException exception)
-        {
-            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
-                exception.Message).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>What the recovery-kit endpoint reads from the page.</summary>
-    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere.</param>
-    private sealed record KitRequest(string? Passphrase);
-
-    /// <summary>The recovery-kit endpoint's answer.</summary>
-    /// <param name="Outcome"><c>built</c>, <c>wrong</c>, or <c>unavailable</c>.</param>
-    /// <param name="Detail">Why not, when it was not built.</param>
-    /// <param name="Kit">The kit in both forms.</param>
-    private sealed record KitResponse(string Outcome, string? Detail = null, SetupKit? Kit = null);
-
-    /// <summary>
-    /// Rebuilds this installation's recovery kit for a ceremony that was
-    /// interrupted before the kit was confirmed saved (FR-KIT-004).
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// This is the one place the ceremony asks for the passphrase a second
-    /// time, and only because the first attempt did not finish. Nothing is
-    /// stored between the two visits: the service keeps no kit, and this
-    /// host keeps no passphrase — so the only way back to a kit is the way
-    /// it was made.
-    /// </para>
-    /// <para>
-    /// The salt comes from the archive the installation already wrote, via
-    /// the same derive-and-compare the restore gate uses, so a wrong
-    /// passphrase produces no kit rather than a kit that opens nothing. An
-    /// installation with no archive yet has no salt to recover from — its
-    /// operator has to finish the original ceremony, and the endpoint says
-    /// so rather than minting a second root.
-    /// </para>
-    /// </remarks>
-    private static async Task RecoveryKitAsync(
-        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
-    {
-        if (!auth.Authorizes(context.Request))
-        {
-            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
-                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
-            return;
-        }
-
-        KitRequest? request;
-        try
-        {
-            request = await JsonSerializer.DeserializeAsync<KitRequest>(
-                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
-        }
-        catch (JsonException exception)
-        {
-            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
-                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
-            return;
-        }
-
-        if (request is not { Passphrase.Length: > 0 })
-        {
-            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
-                Strings.FormatWebConsoleHost_MalformedCommand("a passphrase is required")).ConfigureAwait(false);
-            return;
-        }
-
-        async Task AnswerAsync(KitResponse response)
-        {
-            Log.RecoveryKitOutcome(log, response.Outcome, response.Kit is not null);
-            context.Response.StatusCode = StatusCodes.Status200OK;
-            context.Response.ContentType = "application/json; charset=utf-8";
-            context.Response.Headers.CacheControl = "no-store";
-            await JsonSerializer.SerializeAsync(
-                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
-        }
-
-        try
-        {
-            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
-
-            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
-                is not ServiceDescriptionResult description)
-            {
-                await AnswerAsync(new KitResponse("unavailable", "The service did not describe itself."))
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            var sets = await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted)
-                .ConfigureAwait(false) as BackupSetsResult;
-
-            var rebuilt = await ConsoleRestoreGate.RebuildInstallationKitAsync(
-                description.ArchivesRoot, sets?.Sets.Select(set => set.Id) ?? [],
-                request.Passphrase, description.DeviceId ?? string.Empty, context.RequestAborted)
-                .ConfigureAwait(false);
-
-            await AnswerAsync(rebuilt.Outcome switch
-            {
-                ConsoleRestoreGate.GateOutcome.Verified => new KitResponse(
-                    "built",
-                    Kit: new SetupKit(
-                        Convert.ToBase64String(rebuilt.Kit!.Framed), rebuilt.Kit.Text, rebuilt.Kit.Checksum)),
-                ConsoleRestoreGate.GateOutcome.Wrong => new KitResponse("wrong", rebuilt.Detail),
-                _ => new KitResponse("unavailable", rebuilt.Detail),
             }).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)
@@ -872,7 +925,11 @@ public static class WebConsoleHost
         PassphraseFinding.FewDistinctCharacters =>
             "Long, but built from very few different characters.",
         PassphraseFinding.LengthCarriesIt =>
-            "Long enough that ordinary words are fine — no digits or symbols needed.",
+            "Good length — ordinary words carry it, once the required characters are in.",
+        PassphraseFinding.NoUppercase => "Add at least one uppercase letter.",
+        PassphraseFinding.FewerThanTwoDigits => "Add at least two digits.",
+        PassphraseFinding.NoSpecialCharacter =>
+            "Add at least one special character — anything that is not a letter or digit.",
         _ => "Several kinds of character, which is what you want.",
     };
 
@@ -881,7 +938,20 @@ public static class WebConsoleHost
     /// service watch per subscribed page; the browser's <c>EventSource</c>
     /// reconnects on its own when either end goes away.
     /// </summary>
-    private static async Task StreamEventsAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    /// <remarks>
+    /// The session rides the query the way the console's own token does,
+    /// because <c>EventSource</c> cannot set a header (ADR-0036 §4) — and it
+    /// must ride somewhere: once an installation has accounts the gate
+    /// answers an anonymous watch with an empty stream, which ends at once,
+    /// which the browser answers by redialling on the streaming retry hint.
+    /// That loop ran for sixteen minutes at a watch every two seconds in the
+    /// 2026-08-25 service log without a single progress event arriving. A
+    /// refused session therefore ends the stream honestly: the page is told
+    /// on a named event so it can show sign-in, and the retry hint is raised
+    /// to thirty seconds so even a page that ignores it polls politely.
+    /// </remarks>
+    private static async Task StreamEventsAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, ILogger log)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -908,8 +978,25 @@ public static class WebConsoleHost
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-store";
 
+            string? session = context.Request.Query["session"];
+            var sessionPresented = !string.IsNullOrEmpty(session);
+            Log.EventStreamOpened(log, sessionPresented);
+
+            var events = 0L;
             try
             {
+                if (!string.IsNullOrEmpty(session)
+                    && await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                        .ConfigureAwait(false) is ServiceError { Reason: ServiceErrorReason.Refused } refused)
+                {
+                    var refusal = JsonSerializer.Serialize<ServiceResult>(refused, SerializerOptions);
+                    await context.Response.WriteAsync(
+                        $"retry: 30000\nevent: session\ndata: {refusal}\n\n", context.RequestAborted)
+                        .ConfigureAwait(false);
+                    await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
+                    return;
+                }
+
                 // Ask EventSource to wait a beat before redialling, so a
                 // stopped service is polite retries rather than a busy loop.
                 await context.Response.WriteAsync("retry: 2000\n\n", context.RequestAborted).ConfigureAwait(false);
@@ -917,6 +1004,7 @@ public static class WebConsoleHost
 
                 await foreach (var progress in client.WatchAsync(context.RequestAborted).ConfigureAwait(false))
                 {
+                    events++;
                     var json = JsonSerializer.Serialize(progress, SerializerOptions);
                     await context.Response.WriteAsync($"data: {json}\n\n", context.RequestAborted).ConfigureAwait(false);
                     await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
@@ -926,11 +1014,14 @@ public static class WebConsoleHost
             {
                 // The browser went away; nothing to tell anyone.
             }
+            finally
+            {
+                Log.EventStreamEnded(log, events);
+            }
         }
     }
 
-    private static void MapStaticAsset(
-        WebApplication app, string path, string resource, string contentType, ILogger log)
+    private static void MapStaticAsset(WebApplication app, string path, string resource, string contentType)
     {
         var bytes = LoadEmbedded(resource);
         app.MapGet(path, async (HttpContext context) =>
@@ -939,10 +1030,6 @@ public static class WebConsoleHost
             context.Response.ContentType = contentType;
             context.Response.Headers.CacheControl = "no-cache";
             await context.Response.Body.WriteAsync(bytes, context.RequestAborted).ConfigureAwait(false);
-            // The assets are embedded at build time, so the byte count names
-            // the build: a page tracing one asset version while this line
-            // reports another settles a staleness question from both sides.
-            Log.StaticAssetServed(log, path, bytes.Length);
         });
     }
 

@@ -14,11 +14,57 @@ public sealed record CopyOutcome(long Copied, long AlreadyHeld)
     public long Examined => Copied + AlreadyHeld;
 }
 
+/// <summary>
+/// How much of what a destination is owed it holds, as a pass discovers it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The denominator a completion figure needs, produced as a by-product of
+/// work the pass already does: converging a destination means listing both
+/// sides, so the bytes are in hand and only need adding up. Measuring this
+/// on a status poll instead would mean listing a whole replica to answer a
+/// question nobody asked.
+/// </para>
+/// <para>
+/// Reported as it goes rather than returned at the end, because the answer
+/// matters most when the pass does <em>not</em> finish: a drive pulled
+/// halfway leaves a destination genuinely part-full, and a figure that only
+/// exists on success could never say so.
+/// </para>
+/// </remarks>
+/// <param name="HeldBytes">Bytes the destination holds of what it is owed.</param>
+/// <param name="OwedBytes">Bytes it is owed in total. Zero when the source has nothing for it.</param>
+public sealed record CopyProgress(long HeldBytes, long OwedBytes);
+
+/// <summary>
+/// How much of the namespace a pass walks (ADR-0056): the dependency phases
+/// alone, or those plus the catch-all sweep for objects under prefixes no
+/// phase names.
+/// </summary>
+/// <remarks>
+/// The catch-all phase is a correctness net for a repository written by a
+/// version this one has never heard of, and it is the only part of a pass that
+/// cannot be scoped to a prefix — "every key no named phase claims" has to be
+/// found by walking everything. Paying that on every poll, for a set of objects
+/// that is normally empty, is what made a pass cost the archive rather than the
+/// change. An incremental pass leaves it out; a reconciling pass takes it, and
+/// a reconciling pass is what runs on the reconciliation cadence.
+/// </remarks>
+public enum CopyScope
+{
+    /// <summary>The named dependency phases only.</summary>
+    Incremental,
+
+    /// <summary>Every phase, the catch-all sweep included.</summary>
+    Reconcile,
+}
+
 /// <summary>What one filtered convergence did — the FR-GC-010 shape.</summary>
 /// <param name="Copied">Objects the destination lacked and its policy keeps.</param>
 /// <param name="AlreadyHeld">Objects the destination already held and keeps.</param>
 /// <param name="Deleted">Objects the destination held and its policy no longer keeps.</param>
-public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted);
+/// <param name="Spared">Objects the policy dropped but a sibling is still owed — held for now (FR-GC-009).</param>
+public sealed record ConvergeOutcome(long Copied, long AlreadyHeld, long Deleted, long Spared = 0);
 
 /// <summary>
 /// Copies one repository archive's missing objects from any object store to
@@ -57,11 +103,19 @@ public static class StoreToStoreCopier
     private static readonly string[] PhasePrefixes =
     [
         "repository-format",
-        "keys/",
         "blobs/",
         "journal/",
         "index/delta/",
         "index/checkpoint/",
+
+        // Named, not left to the catch-all: hints and audit records are part
+        // of the namespace specification 01 §2 defines, so a pass that skipped
+        // the catch-all sweep would leave real objects behind rather than
+        // hypothetical ones (ADR-0056). The catch-all is for prefixes this
+        // build has never heard of, and it is only correct to leave it out of
+        // an incremental pass if everything the build DOES write is named here.
+        "hints/",
+        "audit/",
         "",
         "snapshots/",
     ];
@@ -80,13 +134,24 @@ public static class StoreToStoreCopier
     /// <param name="cancellationToken">Stops the copy; a re-run resumes from the destination's inventory.</param>
     /// <param name="destinationName">The destination's configured name, for the log alone.</param>
     /// <param name="logger">Where the pass reports itself.</param>
+    /// <param name="progress">
+    /// Told how much of what the destination is owed it holds, as the pass
+    /// discovers it. Reported while copying rather than returned at the end,
+    /// so a pass that dies halfway still leaves the caller a true figure.
+    /// </param>
+    /// <param name="scope">
+    /// Whether to walk the catch-all phase as well as the named ones. A pass
+    /// on the reconciliation cadence takes it; the ones between do not.
+    /// </param>
     /// <returns>What was copied and what was already there.</returns>
     public static async ValueTask<CopyOutcome> CopyAsync(
         IObjectStore source,
         IObjectStore destination,
         CancellationToken cancellationToken,
         string? destinationName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IProgress<CopyProgress>? progress = null,
+        CopyScope scope = CopyScope.Reconcile)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
@@ -94,35 +159,48 @@ public static class StoreToStoreCopier
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
 
-        // The destination's inventory, once: the diff that makes a catch-up
-        // pass cost proportional to the gap rather than to the archive.
-        var held = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in destination.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            held.Add(entry.Key.Value);
-        }
-
-        Log.ReplicationStarting(log, name, held.Count);
+        Log.ReplicationStarting(log, name, "copy");
 
         var copied = 0L;
         var alreadyHeld = 0L;
-        var matched = new HashSet<string>(StringComparer.Ordinal);
+
+        // The completion figures. Owed grows as the phases reveal what the
+        // source holds, so an early reading understates the denominator —
+        // which is why the pair is only recorded once the pass ends, and why
+        // both halves travel together rather than as two independent numbers
+        // a reader could pair up out of step.
+        var heldBytes = 0L;
+        var owedBytes = 0L;
 
         foreach (var phase in PhasePrefixes)
         {
-            await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+            if (Skip(phase, scope))
+            {
+                continue;
+            }
+
+            // The destination's inventory for THIS phase, and released with
+            // it: the diff that makes a catch-up cost the gap rather than the
+            // archive, without the whole archive's key set resident to answer
+            // it. Null for the catch-all phase, which cannot be scoped and is
+            // answered per candidate instead.
+            var held = await HeldUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false);
+
+            await foreach (var entry in source.ListAsync(PrefixFor(phase), ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (StagingOnly(entry.Key.Value)
-                    || !InPhase(entry.Key.Value, phase) || !matched.Add(entry.Key.Value))
+                if (StagingOnly(entry.Key.Value) || !InPhase(entry.Key.Value, phase))
                 {
                     continue;
                 }
 
-                if (held.Contains(entry.Key.Value))
+                owedBytes += entry.Length;
+
+                if (await HoldsAsync(destination, held, entry.Key, cancellationToken).ConfigureAwait(false))
                 {
                     alreadyHeld++;
+                    heldBytes += entry.Length;
+                    progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     continue;
                 }
 
@@ -148,6 +226,12 @@ public static class StoreToStoreCopier
                     copied++;
                     Log.ObjectCopied(log, entry.Key);
                 }
+
+                // Counted on both answers: AlreadyExists means the
+                // destination holds these bytes too, which is the
+                // question this figure asks.
+                heldBytes += entry.Length;
+                progress?.Report(new CopyProgress(heldBytes, owedBytes));
             }
         }
 
@@ -171,6 +255,22 @@ public static class StoreToStoreCopier
     /// <param name="cancellationToken">Stops the pass; a re-run converges from the destination's inventory.</param>
     /// <param name="destinationName">The destination's configured name, for the log alone.</param>
     /// <param name="logger">Where the pass reports itself.</param>
+    /// <param name="spares">
+    /// The drop half's second veto, or null when nothing is owed: a key this
+    /// destination's policy drops but a sibling destination is still owed
+    /// stays put, because under direct-ship (ADR-0046) the replicas are the
+    /// only holders and this may be the last copy (FR-GC-009). Never
+    /// consulted by the push half — a spare is held where it already is, not
+    /// propagated.
+    /// </param>
+    /// <param name="progress">
+    /// Told how much of its own keep-set the destination holds, as the pass
+    /// discovers it.
+    /// </param>
+    /// <param name="scope">
+    /// Whether to walk the catch-all phase as well as the named ones. A pass
+    /// on the reconciliation cadence takes it; the ones between do not.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
         IObjectStore source,
@@ -178,7 +278,10 @@ public static class StoreToStoreCopier
         Func<string, bool> keeps,
         CancellationToken cancellationToken,
         string? destinationName = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<string, bool>? spares = null,
+        IProgress<CopyProgress>? progress = null,
+        CopyScope scope = CopyScope.Reconcile)
     {
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
@@ -187,33 +290,43 @@ public static class StoreToStoreCopier
         ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNull(keeps);
 
-        var held = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in destination.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            held.Add(entry.Key.Value);
-        }
-
-        Log.ReplicationStarting(log, name, held.Count);
+        Log.ReplicationStarting(log, name, "converge");
 
         var copied = 0L;
         var alreadyHeld = 0L;
-        var matched = new HashSet<string>(StringComparer.Ordinal);
+
+        // Owed is what this destination's OWN policy keeps, not what the
+        // source holds: a narrow override is complete when it holds its own
+        // keep-set, and measuring it against a wide sibling's would leave it
+        // permanently short of a hundred per cent for doing exactly as told.
+        var heldBytes = 0L;
+        var owedBytes = 0L;
 
         foreach (var phase in PhasePrefixes)
         {
-            await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+            if (Skip(phase, scope))
+            {
+                continue;
+            }
+
+            var held = await HeldUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false);
+
+            await foreach (var entry in source.ListAsync(PrefixFor(phase), ListOptions.Default, cancellationToken)
                 .ConfigureAwait(false))
             {
                 if (StagingOnly(entry.Key.Value) || !keeps(entry.Key.Value)
-                    || !InPhase(entry.Key.Value, phase) || !matched.Add(entry.Key.Value))
+                    || !InPhase(entry.Key.Value, phase))
                 {
                     continue;
                 }
 
-                if (held.Contains(entry.Key.Value))
+                owedBytes += entry.Length;
+
+                if (await HoldsAsync(destination, held, entry.Key, cancellationToken).ConfigureAwait(false))
                 {
                     alreadyHeld++;
+                    heldBytes += entry.Length;
+                    progress?.Report(new CopyProgress(heldBytes, owedBytes));
                     continue;
                 }
 
@@ -239,38 +352,54 @@ public static class StoreToStoreCopier
                     copied++;
                     Log.ObjectCopied(log, entry.Key);
                 }
-            }
-        }
 
-        // The source's own listing bounds what the drop half may condemn: a
-        // key the destination holds that staging no longer lists — a trimmed
-        // data blob — may be the only copy left, and a filter computed from
-        // staging cannot vouch for it either way. Unknown is kept (ADR-0034
-        // §6's trim rests on this). Listed HERE, after the push half: an
-        // hours-long copy must not condemn on the strength of a stale
-        // opening inventory (ADR-0029 Amendment 2).
-        var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            sourceKeys.Add(entry.Key.Value);
+                heldBytes += entry.Length;
+                progress?.Report(new CopyProgress(heldBytes, owedBytes));
+            }
         }
 
         // The drop half, reverse dependency order: a snapshot object goes
         // before anything it references, so the replica is lagging-but-valid
         // at every interruption point, exactly as the push half guarantees.
+        //
+        // Each phase re-reads both sides under its own prefix. The source's
+        // listing bounds what may be condemned: a key the destination holds
+        // that staging no longer lists — a trimmed data blob — may be the only
+        // copy left, and a filter computed from staging cannot vouch for it
+        // either way. Unknown is kept (ADR-0034 §6's trim rests on this). Read
+        // HERE, after the push half: an hours-long copy must not condemn on
+        // the strength of a stale opening inventory (ADR-0029 Amendment 2).
         var deleted = 0L;
+        var spared = 0L;
         foreach (var phase in PhasePrefixes.Reverse())
         {
-            foreach (var key in held)
+            if (Skip(phase, scope))
             {
-                // Identity and keys never go, whatever the filter says — a
-                // replica without its descriptor is not a repository at all.
-                // And nothing goes that the source does not list: a key only
-                // the destination holds may be a trimmed object's last copy.
+                continue;
+            }
+
+            var present = await HeldUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false)
+                ?? await EveryKeyUnderAsync(destination, phase, cancellationToken).ConfigureAwait(false);
+            var sourceKeys = await EveryKeyUnderAsync(source, phase, cancellationToken).ConfigureAwait(false);
+
+            foreach (var key in present)
+            {
+                // Identity never goes, whatever the filter says — a replica
+                // without its descriptor is not a repository at all. And
+                // nothing goes that the source does not list: a key only the
+                // destination holds may be a trimmed object's last copy.
                 if (!InPhase(key, phase) || keeps(key) || !sourceKeys.Contains(key)
-                    || key is "repository-format" || key.StartsWith("keys/", StringComparison.Ordinal))
+                    || key is "repository-format")
                 {
+                    continue;
+                }
+
+                // The spare: dropped by this destination's policy, still owed
+                // to a sibling. Counted apart from the refused deletes because
+                // it is a choice, not a store answering no.
+                if (spares?.Invoke(key) ?? false)
+                {
+                    spared++;
                     continue;
                 }
 
@@ -289,10 +418,87 @@ public static class StoreToStoreCopier
             }
         }
 
+        if (spared > 0)
+        {
+            Log.ConvergeSpared(log, name, spared);
+        }
+
         Log.ReplicationComplete(log, name, "converge", copied, alreadyHeld, deleted);
 
-        return new ConvergeOutcome(copied, alreadyHeld, deleted);
+        return new ConvergeOutcome(copied, alreadyHeld, deleted, spared);
     }
+
+    /// <summary>The listing prefix a phase walks under.</summary>
+    /// <remarks>
+    /// The catch-all phase has no prefix to scope to — "every key no named
+    /// phase claims" is not expressible as a prefix — so it walks the whole
+    /// namespace. That is the one full walk a pass makes, and
+    /// <see cref="CopyScope.Incremental"/> is what leaves it out.
+    /// </remarks>
+    /// <param name="phase">The phase prefix, empty for the catch-all.</param>
+    private static ObjectPrefix PrefixFor(string phase) =>
+        phase.Length == 0 ? ObjectPrefix.All : ObjectPrefix.Parse(phase);
+
+    /// <summary>Whether this phase is left out under this scope.</summary>
+    /// <param name="phase">The phase prefix.</param>
+    /// <param name="scope">What the caller asked for.</param>
+    private static bool Skip(string phase, CopyScope scope) =>
+        phase.Length == 0 && scope == CopyScope.Incremental;
+
+    /// <summary>
+    /// What the destination already holds under one phase, or null for the
+    /// catch-all phase, whose membership is answered one candidate at a time.
+    /// </summary>
+    /// <remarks>
+    /// Per phase rather than per pass. The whole-archive inventory used to be
+    /// read once and held for the length of the copy, which made a pass's peak
+    /// memory a function of the archive's object count rather than of the work
+    /// in front of it (NFR-PERF-008). The catch-all phase is excluded because
+    /// listing it means listing everything, which is the same key set by
+    /// another name — and the objects it finds are, by construction, ones no
+    /// phase expects, so there are normally none to ask about.
+    /// </remarks>
+    /// <param name="destination">The store being filled.</param>
+    /// <param name="phase">The phase prefix.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    private static async ValueTask<HashSet<string>?> HeldUnderAsync(
+        IObjectStore destination, string phase, CancellationToken cancellationToken) =>
+        phase.Length == 0 ? null : await EveryKeyUnderAsync(destination, phase, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>Every key one store holds under one phase.</summary>
+    /// <param name="store">The store to read.</param>
+    /// <param name="phase">The phase prefix.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    private static async ValueTask<HashSet<string>> EveryKeyUnderAsync(
+        IObjectStore store, string phase, CancellationToken cancellationToken)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in store.ListAsync(PrefixFor(phase), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (InPhase(entry.Key.Value, phase))
+            {
+                keys.Add(entry.Key.Value);
+            }
+        }
+
+        return keys;
+    }
+
+    /// <summary>
+    /// Whether the destination already holds a key: from the phase's inventory
+    /// where there is one, and by asking about that object alone where there
+    /// is not.
+    /// </summary>
+    /// <param name="destination">The store being filled.</param>
+    /// <param name="held">The phase's inventory, or null for the catch-all phase.</param>
+    /// <param name="key">The object in question.</param>
+    /// <param name="cancellationToken">Stops the probe.</param>
+    private static async ValueTask<bool> HoldsAsync(
+        IObjectStore destination, HashSet<string>? held, ObjectKey key, CancellationToken cancellationToken) =>
+        held?.Contains(key.Value)
+        ?? (await destination.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false)).Found;
 
     private static bool StagingOnly(string key) =>
         StagingOnlyPrefixes.Any(prefix => key.StartsWith(prefix, StringComparison.Ordinal));

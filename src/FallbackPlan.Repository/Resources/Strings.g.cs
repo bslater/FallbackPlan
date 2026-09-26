@@ -94,24 +94,9 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RepositoryKeySet_BlobClassXNotDefined, arg0);
 
     /// <summary>
-    /// The descriptor does not verify — nothing is exported from an unverifiable repository.
-    /// </summary>
-    internal static string RepositoryLifecycle_DescriptorDoesNotVerify => Get(nameof(RepositoryLifecycle_DescriptorDoesNotVerify));
-
-    /// <summary>
-    /// The descriptor is present but /keys/ listed no key object — a lagging store listing; retry rather than treating this as damage (ADR-0022 §Decision 3).
-    /// </summary>
-    internal static string RepositoryLifecycle_DescriptorPresentButKeysListed => Get(nameof(RepositoryLifecycle_DescriptorPresentButKeysListed));
-
-    /// <summary>
     /// The descriptor's digest does not verify — accidental corruption (specification 01 §3.1).
     /// </summary>
     internal static string RepositoryLifecycle_DescriptorSDigestDoesNot => Get(nameof(RepositoryLifecycle_DescriptorSDigestDoesNot));
-
-    /// <summary>
-    /// No repository descriptor exists at /repository-format.
-    /// </summary>
-    internal static string RepositoryLifecycle_NoRepositoryDescriptorExistsRepository => Get(nameof(RepositoryLifecycle_NoRepositoryDescriptorExistsRepository));
 
     /// <summary>
     /// No /repository-format object exists — this location does not hold a FallbackPlan repository (specification 01 §3).
@@ -162,17 +147,115 @@ internal static class Strings
     internal static string RepositoryLifecycle_CredentialNotThisRepository => Get(nameof(RepositoryLifecycle_CredentialNotThisRepository));
 
     /// <summary>
-    /// This repository is not write-only (format v2); open it with its passphrase through the key-object path.
-    /// </summary>
-    internal static string RepositoryLifecycle_NotWriteOnlyRepository => Get(nameof(RepositoryLifecycle_NotWriteOnlyRepository));
-
-    /// <summary>
     /// The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the descriptor's.
     /// </summary>
     internal static string RepositoryLifecycle_PassphraseDoesNotReproduce => Get(nameof(RepositoryLifecycle_PassphraseDoesNotReproduce));
 
     /// <summary>
-    /// This is a write-only (format v2) repository: it has no key object. The service opens it with its write credential; restore derives the keys from the passphrase (ADR-0042).
+    /// A repository holds no data class key: content is sealed to the repository's public key and opened only under a read authority (specification 03 §9.2). Asking for one is a bug in the caller.
     /// </summary>
-    internal static string RepositoryLifecycle_WriteOnlyNeedsDerivedOpen => Get(nameof(RepositoryLifecycle_WriteOnlyNeedsDerivedOpen));
+    internal static string RepositoryKeySet_NoDataClassKey => Get(nameof(RepositoryKeySet_NoDataClassKey));
+
+    /// <summary>
+    /// This repository already writes format version {0}; there is nothing to upgrade.
+    /// </summary>
+    private static string RepositoryLifecycle_AlreadyAtFormatVersion => Get(nameof(RepositoryLifecycle_AlreadyAtFormatVersion));
+
+    /// <summary>
+    /// This repository already writes format version {0}; there is nothing to upgrade.
+    /// </summary>
+    internal static string FormatRepositoryLifecycle_AlreadyAtFormatVersion(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_AlreadyAtFormatVersion, arg0);
+
+    /// <summary>
+    /// Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.
+    /// </summary>
+    private static string RepositoryLifecycle_UpgradeBelowEffectiveVersion => Get(nameof(RepositoryLifecycle_UpgradeBelowEffectiveVersion));
+
+    /// <summary>
+    /// Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.
+    /// </summary>
+    internal static string FormatRepositoryLifecycle_UpgradeBelowEffectiveVersion(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_UpgradeBelowEffectiveVersion, arg0, arg1);
+
+    /// <summary>
+    /// Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).
+    /// </summary>
+    internal static string BlobCompactor_CompactionNeedsFormatThree => Get(nameof(BlobCompactor_CompactionNeedsFormatThree));
+
+    /// <summary>
+    /// The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.
+    /// </summary>
+    private static string BlobCompactor_SourceBlobMissing => Get(nameof(BlobCompactor_SourceBlobMissing));
+
+    /// <summary>
+    /// The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.
+    /// </summary>
+    internal static string FormatBlobCompactor_SourceBlobMissing(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceBlobMissing, arg0);
+
+    /// <summary>
+    /// Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.
+    /// </summary>
+    private static string BlobCompactor_SourceRecordRefused => Get(nameof(BlobCompactor_SourceRecordRefused));
+
+    /// <summary>
+    /// Record {1} of compaction source '{0}' was refused rather than relocated: {2}. A compactor that carried it anyway would launder damage into a blob nothing suspects.
+    /// </summary>
+    internal static string FormatBlobCompactor_SourceRecordRefused(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, BlobCompactor_SourceRecordRefused, arg0, arg1, arg2);
+
+    /// <summary>
+    /// Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.
+    /// </summary>
+    private static string CompactionPublication_BlobExceedsDeltaBudget => Get(nameof(CompactionPublication_BlobExceedsDeltaBudget));
+
+    /// <summary>
+    /// Compacted blob {0} carries {1} record(s), whose index entries alone exceed one delta's budget of {2} bytes; a delta over the metadata-object bound is written without complaint and refused on read, so it is refused here instead.
+    /// </summary>
+    internal static string FormatCompactionPublication_BlobExceedsDeltaBudget(object? arg0, object? arg1, object? arg2) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_BlobExceedsDeltaBudget, arg0, arg1, arg2);
+
+    /// <summary>
+    /// The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.
+    /// </summary>
+    private static string CompactionPublication_StoreHeldDifferentBytes => Get(nameof(CompactionPublication_StoreHeldDifferentBytes));
+
+    /// <summary>
+    /// The store already held different bytes under '{0}'; a freshly allocated blob identifier collided, so the sequence state regressed and an index published over it would name a blob that cannot be read back.
+    /// </summary>
+    internal static string FormatCompactionPublication_StoreHeldDifferentBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_StoreHeldDifferentBytes, arg0);
+
+    /// <summary>
+    /// The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.
+    /// </summary>
+    private static string CompactionPublication_StoreRefusedBlob => Get(nameof(CompactionPublication_StoreRefusedBlob));
+
+    /// <summary>
+    /// The store refused the compacted blob '{0}' on its if-absent put; nothing was published for it.
+    /// </summary>
+    internal static string FormatCompactionPublication_StoreRefusedBlob(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPublication_StoreRefusedBlob, arg0);
+
+    /// <summary>
+    /// This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.
+    /// </summary>
+    private static string CompactionPass_NeedsFormatThree => Get(nameof(CompactionPass_NeedsFormatThree));
+
+    /// <summary>
+    /// This repository is at format {0}; compaction relocates sealed records and that is a format-3 property. Below it a rewrite means decrypt-and-reseal, which needs a content key this service does not hold — upgrade the set's format first.
+    /// </summary>
+    internal static string FormatCompactionPass_NeedsFormatThree(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CompactionPass_NeedsFormatThree, arg0);
+
+    /// <summary>
+    /// This store declares no conditional create, and every durable step of a publication is an if-absent put — without it a write over a live key answers 'created', which is how a sealed blob would be silently replaced. Refused rather than guessed (ADR-0012).
+    /// </summary>
+    internal static string StoreAdmission_NoConditionalCreate => Get(nameof(StoreAdmission_NoConditionalCreate));
+
+    /// <summary>
+    /// This store declares no ranged reads, and opening a blob needs three of them before a single record is read. Refused rather than guessed (ADR-0012).
+    /// </summary>
+    internal static string StoreAdmission_NoRangedReads => Get(nameof(StoreAdmission_NoRangedReads));
 }
