@@ -2075,7 +2075,10 @@ const setupActions = {
     U.step = 3;
     await refreshDesc();
     if (S.setupState === "users_required") {
-      reportDialog("Passphrase accepted", body.lines ?? []);
+      // No report here: nothing may sit over the ceremony (setupRender).
+      // Step 3 opens by saying the installation is set up, and the
+      // service's lines wait in U.setupLines for the "Setup complete"
+      // report the ceremony ends with.
       setupRender();
       return;
     }

@@ -97,6 +97,65 @@ public sealed class SetupCeremonyDomTests
     }
 
     [TestMethod]
+    public async Task SetupCeremony_AcceptedPassphrase_OpensNoModalForTheRenderToClose()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        var provisioned = false;
+        harness.Clients.Client.Respond = command =>
+        {
+            switch (command)
+            {
+                case DescribeServiceCommand:
+                    return Describe(provisioned ? "users_required" : "setup_required");
+                case ProvisionInstallationCommand:
+                    provisioned = true;
+                    return new ConfigurationChangeResult(["This installation is set up."]);
+                default:
+                    return new AcknowledgedResult();
+            }
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+
+        // Every showModal() the page makes, by the heading it shows, recorded
+        // from before the page's own script runs.
+        await page.AddInitScriptAsync(
+            """
+            globalThis.fbpModalsOpened = [];
+            const showModal = HTMLDialogElement.prototype.showModal;
+            HTMLDialogElement.prototype.showModal = function () {
+              globalThis.fbpModalsOpened.push(this.querySelector("h3")?.textContent ?? "(no heading)");
+              return showModal.call(this);
+            };
+            """);
+        await page.GotoAsync(harness.TokenedUrl);
+
+        await page.CheckAsync("#setup-ack");
+        await page.ClickAsync("[data-action=\"setup-begin\"]");
+        await page.FillAsync("#setup-pass", StrongPassphrase);
+        await page.FillAsync("#setup-confirm", StrongPassphrase);
+        var finish = page.Locator("[data-action=\"setup-finish\"]");
+        await Expect(finish).ToBeEnabledAsync();
+        await finish.ClickAsync();
+        await Expect(page.GetByText("Create the first account")).ToBeVisibleAsync();
+
+        // The walk above proves step 3 arrives with no modal over it, and
+        // setupRender's heal makes that true of any path — including one that
+        // opened a modal and had it closed before anybody saw it. The heal is
+        // for accidents. An accepted passphrase is the ceremony's ordinary
+        // path, so nothing on it may open a modal at all: one that is always
+        // closed unseen is a report nobody can read, and a heal that fires on
+        // every setup can no longer tell anyone about the accident it is for.
+        var opened = await page.EvaluateAsync<string[]>("globalThis.fbpModalsOpened");
+        Assert.IsEmpty(opened, "the ceremony opened a modal over itself: " + string.Join(", ", opened));
+
+        // And the recorder is not blind: a modal opened now is seen.
+        await page.EvaluateAsync("document.getElementById('dialog').showModal()");
+        Assert.HasCount(1, await page.EvaluateAsync<string[]>("globalThis.fbpModalsOpened"));
+    }
+
+    [TestMethod]
     public async Task UnfinishedCeremony_TypingThePassphrase_ArmsTheFinishWithoutStealingFocus()
     {
         await using var harness = await DomHarness.StartAsync();
