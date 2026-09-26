@@ -353,10 +353,12 @@ reference to the Application project with a canary that it exists, and
 amendment. The schedule tests — including the machine-timezone regression
 — pass unchanged, which is the proof that the swap preserved behaviour.
 
-The consumed version is **0.7.0**, from nuget.org along with the other five
+The consumed version is **1.0.0**, from nuget.org along with the other five
 Bodu packages, which are versioned in lock-step and taken together
 ([ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)
-Amendment 2). Two arrangements that bridged earlier gaps are gone and should
+Amendment 2). The move from 0.7.0 was upstream's first stable release, taken in
+a commit of its own; nothing `Application/Schedule` calls changed, and the
+schedule tests pass unchanged at 1.0.0. Two arrangements that bridged earlier gaps are gone and should
 not reappear: an interim build packed from source, from before upstream
 published a release containing `AnchoredInterval`; and the committed
 `external/packages` feed, from before upstream published at all.

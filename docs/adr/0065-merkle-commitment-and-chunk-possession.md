@@ -5,7 +5,7 @@
 **Requirements:** FR-VER-001, FR-VER-003, FR-WOR-003, NFR-COMP-004
 **Related:** [ADR-0052](0052-relocatable-records-format-v3.md), [ADR-0058](0058-peer-write-adapter.md), [ADR-0014](0014-format-versioning-and-stability.md), [repository-format 05 §5.2](../../specifications/repository-format/05-blob.md#52-the-merkle-commitment), [repository-format 07 §2.3](../../specifications/repository-format/07-index.md#23-covered-blob-merkle-roots), [peer-protocol 07 §3.6](../../specifications/peer-protocol/07-retrieval.md#36-merkle_challenge-278--merkle_proof-279), [architecture 09 §5](../architecture/09-replication-and-peers.md)
 
-**Built:** `Repository.Packing/BlobMerkle` (the RFC 6962 tree over one-mebibyte leaves, the length-bound root, the path and its verification) and `BlobMerkleAccumulator` (fed by the calls that already feed the blob's digest, so the tree costs no second pass), `Repository.Packing/BlobWriter` and `SealedBlob` (the root produced at seal and carried with the blob), `Repository.Index/IndexDeltaCodec` (delta key 11, its parallel-or-absent rule and its never-alone rule), `Repository.Index/IndexPublisher`, `Repository/SnapshotPublication` and `Repository/PublicationOrchestrator` (published only at repository format 3 or above), `Repository.Catalogue/CatalogueSchema` and `Catalogue` (schema 7's `merkle_root`, upserted beside the digest and never erased by a delta that carries none, read back by `SignedMerkleRootOf`), `Protocol/PeerRetrievalMessages.cs` (`MerkleChallenge` and `MerkleProof`), `Protocol/PeerFrame.cs`, `Protocol/PeerAuthenticator` and `Protocol/PeerSessionNegotiation` (types 278–279, the state gate and the `chunk-possession` token), `Agent/RetrievalResponder` (the destination streams its own copy and answers with one leaf and its path), `Agent/PeerRetrievalClient` (the challenge over the session the read-back already holds), `Replication/ReplicaVerifier` (the chunk tier ahead of the digest tier, and `VerificationOutcome.Chunk`), `Agent/FanOut` (the prover closed over the session, and the tier on the ledger), `Application/DestinationSyncStore` (schema 4's `verified_chunk`), `Api/Results.cs` and `Api/ContractVersion.cs` (contract 1.34); `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Repository.Tests/Index/IndexPlaneTests`, `Repository.Tests/Catalogue/CatalogueTests`, `Repository.Tests/EndToEnd/WriteOnlyRepositoryTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests`, `Repository.ConformanceTests/FixtureRepositoryV2Tests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
+**Built:** `Repository.Crypto/BlobMerkle` (the format's binding of `Bodu.Security.Cryptography`'s RFC 6962 `MerkleTree` — the one-mebibyte leaf, the preimage, the length-bound root and the bound on a peer's path, [Amendment 1](#amendment-1-2026-09--the-tree-is-the-librarys)) and `BlobMerkleAccumulator` (each leaf streamed from the calls that already feed the blob's digest, so the tree costs no second pass and holds no leaf), `Repository.Packing/BlobWriter` and `SealedBlob` (the root produced at seal and carried with the blob), `Repository.Index/IndexDeltaCodec` (delta key 11, its parallel-or-absent rule and its never-alone rule), `Repository.Index/IndexPublisher`, `Repository/SnapshotPublication` and `Repository/PublicationOrchestrator` (published only at repository format 3 or above), `Repository.Catalogue/CatalogueSchema` and `Catalogue` (schema 7's `merkle_root`, upserted beside the digest and never erased by a delta that carries none, read back by `SignedMerkleRootOf`), `Protocol/PeerRetrievalMessages.cs` (`MerkleChallenge` and `MerkleProof`), `Protocol/PeerFrame.cs`, `Protocol/PeerAuthenticator` and `Protocol/PeerSessionNegotiation` (types 278–279, the state gate and the `chunk-possession` token), `Agent/RetrievalResponder` (the destination streams its own copy and answers with one leaf and its path), `Agent/PeerRetrievalClient` (the challenge over the session the read-back already holds), `Replication/ReplicaVerifier` (the chunk tier ahead of the digest tier, and `VerificationOutcome.Chunk`), `Agent/FanOut` (the prover closed over the session, and the tier on the ledger), `Application/DestinationSyncStore` (schema 4's `verified_chunk`), `Api/Results.cs` and `Api/ContractVersion.cs` (contract 1.34); `Repository.Tests/Packing/BlobMerkleTests`, `Repository.Tests/Crypto/BlobMerkleBoundaryTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Repository.Tests/Index/IndexPlaneTests`, `Repository.Tests/Catalogue/CatalogueTests`, `Repository.Tests/EndToEnd/WriteOnlyRepositoryTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests`, `Repository.ConformanceTests/FixtureRepositoryV2Tests`, `Protocol.Tests/RetrievalMessageTests`, `Hosts.Tests/PeerReadBackVerificationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
 
 ---
 
@@ -50,6 +50,12 @@ The prefixes are load-bearing. Without the leaf prefix a one-leaf tree's head
 is the chunk's bare digest, and an interior node's preimage could be
 presented as a leaf's — which is how a second tree is made to produce a root
 somebody already signed.
+
+> **Amended 2026-09 ([Amendment 1](#amendment-1-2026-09--the-tree-is-the-librarys)):**
+> this tree is now computed by `Bodu.Security.Cryptography`'s `MerkleTree` and
+> bound to the format by `Repository.Crypto/BlobMerkle`. The definition did not
+> move — the same prefixes, the same split, the same bound root of §2 — and the
+> frozen vectors that pinned it are what the delegation passed.
 
 **The leaf size is stated by the format, not recorded per blob.** Both
 parties to a challenge then agree on it by construction, and a size a reader
@@ -209,9 +215,58 @@ counted apart from the whole-blob tier rather than with it.
   the digest tier where the records are sealed.
 - It does not prove the blob. One leaf is one leaf.
 
+## Amendment 1 (2026-09) — the tree is the library's
+
+The construction §§1–2 define, and the check §5 makes, are now computed by
+`Bodu.Security.Cryptography` 1.0.0's `MerkleTree` rather than by code of this
+repository's own. The requirements that took the construction upstream are
+[the Merkle requirements](../bodu-merkle-requirements.md), and the library
+answers them: RFC 6962's shape at a fan-out of two, §2's bound root as
+`BindRoot`, block mode with a short final block hashed at its own length, and a
+verifier, `VerifyBlockInclusion`, that derives the tree's size from the bound
+length and holds the leaf to the exact length its position requires — the two
+properties `BlobMerkle.VerifyLeaf` used to supply for itself.
+
+**What moved.** `BlobMerkle` left `Repository.Packing` for `Repository.Crypto`,
+because `ArchitectureTests/DependencyRuleTests` confines
+`Bodu.Security.Cryptography` to that project and to `Protocol`, and because it
+is a cryptographic construction rather than a packing detail. It now binds the
+library's tree to the format — the one-mebibyte leaf, the preimage, the bound
+root, and `MaximumPathLength` on a peer's answer — and none of the arithmetic
+is its own. Admitting the library beneath roots this repository has already
+published is a dependency decision, and
+[ADR-0019](0019-third-party-dependency-policy.md) Amendment 4 records it, with
+the evidence for each gate.
+
+**What did not move.** The format: every root, path and verdict is what it was.
+`Repository.Tests/Packing/BlobMerkleTests`' twelve cases pass unchanged, as do
+`merkle.json` — derived independently in Python, and re-derived by CI on every
+run — and `fixture-repository-v3`'s committed `covered_blob_merkle_roots`.
+Before the hand-rolled implementation was deleted, a differential run against
+it compared 4,578 results over 47 preimage lengths, every refusal included, and
+found no disagreement. No format version is involved.
+
+Nor did the accumulator's leaf hashing. The library's accumulator hashes a
+leaf in one call, so it holds a whole one — a fresh, unpooled mebibyte per
+instance, for every blob written, spool resumed and challenge answered — and a
+spool resume is bounded below that (NFR-PERF-001;
+`Repository.Tests/Packing/SpoolCheckpointTests` refused it). So
+`BlobMerkleAccumulator` still streams each leaf into its hash under §1's leaf
+prefix and hands the leaf hashes to the library for everything above them,
+which keeps the Consequences' claim — no second pass over the sealed bytes —
+and adds that no leaf is held either. The library offers no incremental leaf
+hash; [§12 of the requirements](../bodu-merkle-requirements.md#12-open-questions-for-the-maintainer)
+asks for one.
+
+Held by the same suites as before, and by
+`Repository.Tests/Crypto/BlobMerkleBoundaryTests`: a verifier that refuses a
+malformed answer rather than throwing on it, the accumulator's hand-over and
+reset, and roots computed concurrently through the one shared tree.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (the tree is the library's) | [Amendment 1](#amendment-1-2026-09--the-tree-is-the-librarys): the arithmetic of §§1–2 and §5's check delegate to `Bodu.Security.Cryptography` 1.0.0's `MerkleTree`, and `BlobMerkle` moves to `Repository.Crypto` as the format's binding of it ([ADR-0019](0019-third-party-dependency-policy.md) Amendment 4). No byte moved: the twelve cases, `merkle.json` and fixture v3's roots pass unchanged. The accumulator's leaf hashing stays local, because the library's holds a whole leaf |
 | 2026-09 | Amended (reachable in production) | The creation default moved to format 3 ([ADR-0066](0066-the-format-upgrade-record.md)), so every set the product creates publishes a Merkle root and the chunk challenge is reachable without the test-only seam. Nothing in the commitment, the messages or the tier changed; what changed is who has one |
 | 2026-09 | Accepted | [ADR-0052](0052-relocatable-records-format-v3.md)'s open question 4, built over four commits: the commitment and its conformance vectors (`Repository.Packing/BlobMerkle`, `merkle.json`); the index plane (`Repository.Index/IndexDeltaCodec` key 11, `Repository.Catalogue/Catalogue` schema 7, both committed fixtures regenerated); the wire (`Protocol/PeerRetrievalMessages.cs` types 278–279, the `chunk-possession` token); and both ends with the tier (`Agent/RetrievalResponder`, `Agent/PeerRetrievalClient`, `Replication/ReplicaVerifier`, `Agent/FanOut`, ledger schema 4, contract 1.34). Building it found the length binding: plain RFC 6962 admits a four-leaf tree's path under a claimed size of three, so a destination could understate its copy to exempt its last leaf. Held by `Repository.Tests/Packing/BlobMerkleTests`, `Repository.ConformanceTests/MerkleConformanceTests`, `Protocol.Tests/RetrievalMessageTests` and `Hosts.Tests/PeerReadBackVerificationTests` |

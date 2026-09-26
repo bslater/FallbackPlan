@@ -89,6 +89,61 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 - The warnings-as-errors gate is **scoped to exclude `/external/`**. Vendored code is held to its own repository's standards, not ours; a submodule bump must not be able to fail our build on a style rule. Our own code remains at zero warnings, and the gate would still fail on a warning from `src/` or `tests/`.
 - `eng/check-links.py` excludes `/external/` for the same reason: the submodule carries its own documentation conventions.
 
+## Amendment 4 — the Merkle tree beneath published roots
+
+[ADR-0065](0065-merkle-commitment-and-chunk-possession.md) publishes an RFC 6962
+root over each sealed blob into the signed index, and its Amendment 1 moved the
+arithmetic behind that root onto `Bodu.Security.Cryptography`'s `MerkleTree`.
+§4 says anything beyond Argon2id requires amending this record, and this is the
+case §1 was written for: the roots are committed to durable storage, so a defect
+in the tree is in the user's stored bytes rather than a bug to fix. **The tree
+is format-critical, permitted in `FallbackPlan.Repository.Crypto` and nowhere
+else** — Amendment 2's allowlist of two projects is unchanged, and the tree
+stays out of `Repository.Format`, whose recovery-tool closure (NFR-PORT-001) is
+untouched.
+
+**The gates, with the evidence §2 asks for.**
+
+1. *No reimplementation of a platform primitive.* .NET has no Merkle tree. The
+   one primitive beneath it is SHA-256, and it stays the platform's:
+   `Repository.Crypto/BlobMerkle` hands the tree `SHA256.Create` as its
+   algorithm factory, so the library composes the platform's hash and supplies
+   none of its own.
+2. *No native dependency.* The package is managed, as before.
+3. *Vectors reproduce.* `merkle.json`, derived independently in Python by the
+   conformance generator, reproduces through the library bit for bit, and so do
+   `fixture-repository-v3`'s committed `covered_blob_merkle_roots`;
+   `Repository.Tests/Packing/BlobMerkleTests` passes unchanged. Before the
+   hand-rolled implementation was deleted, a differential run against it found
+   no disagreement in 4,578 comparisons, refusals included.
+4. *No algorithm change.* The tree, its prefixes and the bound root are
+   [specification 05 §5.2](../../specifications/repository-format/05-blob.md#52-the-merkle-commitment)'s,
+   unchanged.
+5. *Licence.* MIT, unchanged.
+
+**§3's compensations hold, one of them better than for the other exceptions.**
+The construction is named here and in ADR-0065, and contained by the same
+architecture test. Its cross-verification is the specification's own vectors,
+re-derived by CI on every run from an independent implementation, which is
+stronger evidence than an oracle library: a disagreement there is a
+disagreement with the published format.
+
+**What was not taken.** The package's own accumulator hashes a leaf in one call
+and so holds a whole leaf — a fresh mebibyte per instance — which the writer's
+memory bound refuses, so the streamed leaf hash stays in `BlobMerkleAccumulator`,
+beside `BlobMerkle` in `Repository.Crypto`, over the platform's `IncrementalHash`.
+And a reference is still not a licence: what is called is the tree over blocks
+and over leaf hashes, the leaf hash, the bound root, the authentication path,
+the block verifier and the block arithmetic. The rest of the package's Merkle
+surface — entry mode, consistency proofs, its own accumulator — is reachable
+and unused, and using it would need a case of its own.
+
+**Review scope.** The pre-beta cryptographic review §3 requires grows again: it
+must cover the library's `MerkleTree` as ADR-0065 uses it — block mode and the
+reduction over leaf hashes, `BindRoot`, `AuthenticationPath` and
+`VerifyBlockInclusion` — because the verifier sits directly behind a peer's
+answer.
+
 ## Amendment 3 — X25519 becomes format-critical
 
 [ADR-0042](0042-write-only-repositories.md) seals a write-only repository's file contents to an X25519 public key, which moves the primitive across §1's line: a defect in X25519 as used there is no longer a re-pairing — it is in the user's stored bytes. The classification follows the use, not the library: **X25519 is now also permitted in `FallbackPlan.Repository.Crypto`, as a format-critical primitive**, alongside Argon2id and XChaCha20-Poly1305. Amendment 2's assembly allowlist of two projects is unchanged — this reclassifies what one of them may use the shared library *for* — and the architecture test's stated rationale is updated to match. It remains banned from `Repository.Format`, whose recovery-tool closure (NFR-PORT-001) stays minimal. The pre-beta cryptographic review's scope grows accordingly: X25519 as used for content sealing is format-critical review surface, not only ceremony surface.
@@ -155,3 +210,4 @@ Two clarifications from a supply-chain review of the scaffold, recorded here bec
 | 2026-08 | Accepted (amended) | Amendment 1: gitlink-is-the-pin clarified; restore inputs pinned (explicit NuGetAudit, lockfiles + locked-mode CI, source mapping, graph-accurate transitive pins, explicit vulnerable-package gate) |
 | 2026-08 | Accepted (amended) | Amended by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md): submodule replaced by the committed `external/packages` feed; dependency-tier policy, five gates, and containment unchanged |
 | 2026-08 | Accepted (amended) | Amendment 3: X25519 reclassified format-critical for [ADR-0042](0042-write-only-repositories.md)'s content sealing — permitted in `Repository.Crypto`, still banned from `Repository.Format`; review scope widened |
+| 2026-09 | Accepted (amended) | Amendment 4: `Bodu.Security.Cryptography`'s `MerkleTree` admitted as format-critical in `Repository.Crypto` for [ADR-0065](0065-merkle-commitment-and-chunk-possession.md)'s commitment — over the platform's SHA-256, cross-verified by `merkle.json` on every run; the package's accumulator not taken; still banned from `Repository.Format`; review scope widened |

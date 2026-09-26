@@ -1,7 +1,11 @@
 # Requirements: an RFC 6962 Merkle tree and proof type for Bodu
 
-**Status: Answered upstream; byte-level acceptance pending adoption** —
-`Bodu.Security.Cryptography` **0.7.0** ships the type this document asked for.
+**Status: Answered upstream, and adopted** — `Bodu.Security.Cryptography`
+**0.7.0** shipped the type this document asked for, and FallbackPlan consumes it
+at 1.0.0 since slice 32, which also ran the byte-level acceptance: the tree, the
+bound root, the path and the verifier are the library's, and the accumulator is
+not ([§11](#11-adoption-in-fallbackplan), [§12](#12-open-questions-for-the-maintainer)
+question 6).
 `MerkleTree`, `MerkleBlockAccumulator` and `MerkleBlockComputation` carry
 RFC 6962's tree shape, inclusion and consistency proofs, block mode, obtainable
 leaf hashes and the length-bound root of
@@ -365,6 +369,15 @@ identical member for member) — **not** by running anything. Most acceptance
 criteria below are *"every vector in Appendix A/B/C reproduces"*, and a vector
 run is a consumer's job; FallbackPlan's is slice 32, against its own frozen
 `merkle.json` and `fixture-repository-v3`.
+
+> **Run, 2026-09-26 (slice 32).** FallbackPlan's `merkle.json` and
+> `fixture-repository-v3`'s committed roots reproduce through `MerkleTree` bit
+> for bit, and a differential run against the hand-rolled implementation found
+> no disagreement in 4,578 comparisons before it was deleted. That establishes
+> block mode, the bound root, inclusion paths and `VerifyBlockInclusion` at
+> FallbackPlan's own parameters — one-mebibyte leaves over SHA-256. Entry mode
+> and the consistency proofs are unused here, and this run says nothing about
+> them; Appendix A's vectors remain the library's to run.
 
 **Answered, with the shipped text as the evidence.** MTH-F-003 (`HashEmpty`),
 F-004 (`ComputeRoot` over entries), F-005 (`ComputeBlocked`, and a zero-length
@@ -906,6 +919,25 @@ the ones that distinguish a correct implementation from a plausible one.
 
 ## 11. Adoption in FallbackPlan
 
+> **Adopted, 2026-09-26, in slice 32** — as
+> [ADR-0065](adr/0065-merkle-commitment-and-chunk-possession.md) Amendment 1 and
+> [ADR-0019](adr/0019-third-party-dependency-policy.md) Amendment 4, with the
+> version move to 1.0.0 in a commit of its own ahead of it. The plan below is
+> kept as it was written; where the adoption differed, this note is the record.
+> `BlobMerkle` did become a thin binding in `Repository.Crypto`, and
+> `AuthenticationPath` and `VerifyLeaf` forward — the latter to
+> `VerifyBlockInclusion`. `BlobMerkleAccumulator` was **not** replaced: the
+> library's accumulator holds a whole block to hash it in one call, a fresh
+> mebibyte per instance, and FallbackPlan's spool resume is bounded below that,
+> so the streamed leaf hash stayed local and the leaf hashes go to the library
+> for the rest ([§12](#12-open-questions-for-the-maintainer) question 6). The
+> parallel pipeline the plan hoped for is `MerkleTree`'s own
+> `maxDegreeOfParallelism` now, and is not taken in this slice: the responder
+> streams the blob past `BlobMerkleAccumulator`, and reading it in parallel
+> batches would be a change to the responder rather than a delegation. The block
+> arithmetic is taken — `LeafCount`, `LeafOffset` and `LeafLength` are
+> `MerkleTree.BlockCount`, `BlockOffset` and `BlockLength`.
+
 **It landed upstream; FallbackPlan has not yet adopted it.** Slice 32 is the
 adoption, and it is planned rather than done: `BlobMerkle` becomes a thin
 adapter and moves to `FallbackPlan.Repository.Crypto`, because
@@ -973,3 +1005,13 @@ then `BlobMerkle` stands and the format is unaffected either way.
 5. **Consistency proofs now or later?** They are SHOULD here because no current
    consumer needs them, but they are cheap alongside inclusion proofs and
    expensive to retrofit into a frozen API.
+6. **An incremental leaf hash?** Raised by adoption, 2026-09-26. The block
+   accumulator re-blocks its input into a buffer of one whole block and hashes
+   each block in one call, so every instance allocates `blockSize + 1` bytes up
+   front — at a one-mebibyte leaf, a large-object-heap allocation per blob
+   written. A consumer whose memory contract is tighter than one block per
+   stream cannot use it, and FallbackPlan's is (its spool resume). Hashing the
+   leaf prefix and then each appended span straight into an incremental hash
+   would hold no block at all, and would produce the same leaves. Exposed as an
+   accumulator option or as a leaf hasher a caller feeds, it would let
+   FallbackPlan delete the last of its hand-rolled Merkle code.
