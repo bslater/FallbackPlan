@@ -333,11 +333,18 @@ public sealed class JobSchedulerPreemptionTests : IDisposable
         // The expiry is stamped to the park it was armed for: park, resume,
         // park again — the FIRST park's timer firing must not cancel a run
         // that has only just re-parked.
+        //
+        // The margins carry the case. The check has to fall after park 1's
+        // expiry, and the release well before park 2's: park 2's own expiry
+        // cancelling a run released too late is correct behaviour, and a
+        // loaded runner can take far longer than a few tens of milliseconds
+        // to resume a released run. So each side gets most of a second.
         await using var queue = new JobScheduler(
-            writerWorkers: 1, maxPause: TimeSpan.FromMilliseconds(500));
+            writerWorkers: 1, maxPause: TimeSpan.FromSeconds(2));
         var gate = new PauseGate();
         var cancelled = Tcs();
         var done = Tcs();
+        var finish = Tcs();
         var order = new ConcurrentQueue<string>();
 
         queue.Enqueue(new QueuedJob(
@@ -347,7 +354,11 @@ public sealed class JobSchedulerPreemptionTests : IDisposable
                 order.Enqueue("start");
                 try
                 {
-                    for (var i = 0; i < 400; i++)
+                    // Crosses a pause point every few milliseconds until the
+                    // case says stop, so how long it lives is the case's to
+                    // decide rather than an iteration count's against a
+                    // platform's timer resolution.
+                    while (!finish.Task.IsCompleted)
                     {
                         await gate.WaitWhilePausedAsync(token);
                         await Task.Delay(5, token);
@@ -375,20 +386,23 @@ public sealed class JobSchedulerPreemptionTests : IDisposable
         // Park 2, still inside park 1's expiry window; the occupier holds the
         // slot while park 1's timer fires. The stamped expiry must let the
         // young park live.
-        await Task.Delay(150, Timeout);
+        await Task.Delay(TimeSpan.FromMilliseconds(1_500), Timeout);
         var holdHigh = Tcs();
         queue.Enqueue(new QueuedJob(
             "h2", JobLane.Writer, UserInitiated: false, "occupier",
             async token => await holdHigh.Task.WaitAsync(token), Priority: 9));
         await WaitForAsync(() => gate.IsPaused, Timeout);
 
-        // Wait past park 1's expiry moment (500ms from the first park).
-        await Task.Delay(450, Timeout);
+        // Half a second past park 1's expiry, two seconds from the first
+        // park, and a second short of park 2's own.
+        await Task.Delay(TimeSpan.FromMilliseconds(1_000), Timeout);
         Assert.IsFalse(cancelled.Task.IsCompleted,
             "park 1's expiry timer cancelled a run whose second park is younger than the bound");
 
         holdHigh.SetResult();
-        await done.Task.WaitAsync(Timeout);
+        finish.SetResult();
+        var ended = await Task.WhenAny(done.Task, cancelled.Task).WaitAsync(Timeout);
+        Assert.AreSame(done.Task, ended, "the released run was cancelled instead of resuming to its finish");
     }
 
     [TestMethod]
