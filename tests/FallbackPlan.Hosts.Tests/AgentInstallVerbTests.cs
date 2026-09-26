@@ -72,7 +72,10 @@ public sealed class AgentInstallVerbTests
 
         Assert.AreEqual(0, result.ExitCode, result.Error);
         Assert.Contains(FallbackPlan.Api.InstallationDefaults.ArchivesRoot, result.Output, StringComparison.Ordinal);
-        Assert.Contains("/var/lib/fallbackplan", result.Output, StringComparison.Ordinal);
+
+        // As the verb writes it for this platform: absolutised, which on
+        // Windows puts a rooted POSIX path on the current drive.
+        Assert.Contains(Path.GetFullPath("/var/lib/fallbackplan"), result.Output, StringComparison.Ordinal);
     }
 
     /// <summary>

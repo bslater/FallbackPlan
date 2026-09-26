@@ -416,9 +416,11 @@ public sealed class DirectoryRollbackTests : IDisposable
     private static List<string> SnapshotObjects(string replica) =>
         [.. Directory.GetFiles(Path.Combine(replica, "snapshots"), "*", SearchOption.AllDirectories)];
 
+    // Store keys, as the store itself lists them: '/'-separated on every
+    // platform, which is what IsMetadataKey and DataBlobs compare against.
     private static List<string> ReplicaKeys(string replica) =>
         [.. Directory.GetFiles(replica, "*", SearchOption.AllDirectories)
-            .Select(path => Path.GetRelativePath(replica, path))
+            .Select(path => Path.GetRelativePath(replica, path).Replace(Path.DirectorySeparatorChar, '/'))
             .Where(relative => !relative.StartsWith(".fbp-tmp", StringComparison.Ordinal))];
 
     private static void CopyDirectory(string from, string to)
