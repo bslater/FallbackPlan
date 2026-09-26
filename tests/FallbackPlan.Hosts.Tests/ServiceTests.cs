@@ -233,13 +233,7 @@ public sealed class ServiceTests : IDisposable
         // an acknowledged outcome, not a signal whose effect nobody reports.
         Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token));
 
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Cancelled);
-            }
-        });
+        await WaitForCancelledAsync(runtime, accepted.JobId, seen);
 
         // The cancelled state reached the progress stream, and the job never
         // pretended to complete.
@@ -339,13 +333,7 @@ public sealed class ServiceTests : IDisposable
 
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await handler.ExecuteAsync(new CancelJobCommand(accepted.JobId), _timeout.Token));
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Cancelled);
-            }
-        });
+        await WaitForCancelledAsync(runtime, accepted.JobId, seen);
 
         await _timeout.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
@@ -443,13 +431,7 @@ public sealed class ServiceTests : IDisposable
         // End it promptly rather than packing 24 MB for nothing.
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await handler.ExecuteAsync(new CancelJobCommand(first.JobId), _timeout.Token));
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Cancelled);
-            }
-        });
+        await WaitForCancelledAsync(runtime, first.JobId, seen);
 
         await _timeout.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
@@ -888,6 +870,42 @@ public sealed class ServiceTests : IDisposable
         }
 
         return new string(characters);
+    }
+
+    /// <summary>
+    /// Waits for the progress stream to report the job cancelled. When it
+    /// never does, the failure carries the journal's account of the run and
+    /// the states the stream did see, rather than a bare timeout: a cancel
+    /// that reaches a run the queue has already lost settles the journal
+    /// alone, as "the run was no longer live" (ADR-0049), and that reads
+    /// nothing like a run that never stopped.
+    /// </summary>
+    private async Task WaitForCancelledAsync(ServiceRuntime runtime, string jobId, List<JobState> seen)
+    {
+        try
+        {
+            await WaitForAsync(() =>
+            {
+                lock (seen)
+                {
+                    return seen.Contains(JobState.Cancelled);
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            var row = runtime.Jobs.Jobs.LastOrDefault(job => job.Id == jobId);
+            string states;
+            lock (seen)
+            {
+                states = string.Join(", ", seen.Distinct());
+            }
+
+            Assert.Fail(
+                $"the progress stream never reported job {jobId} cancelled; the journal has it "
+                + (row is null ? "absent" : $"{row.State} ('{row.Detail}')")
+                + $", and the stream saw: {states}");
+        }
     }
 
     private async Task WaitForAsync(Func<bool> condition)

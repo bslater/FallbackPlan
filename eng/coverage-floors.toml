@@ -4,7 +4,7 @@
 #
 # The global `--floor 50` catches a collapse: a project dropping out of the
 # run, a suite silently not executing. It cannot catch one module regressing,
-# because a healthy total absorbs it — `FallbackPlan.Keystore` could go to zero
+# because a healthy total absorbs it — `FallbackPlan.Recovery` could go to zero
 # and the union would barely move. These floors catch that, by name.
 #
 # Each is pinned roughly two points below the module's measured figure, which
@@ -22,22 +22,25 @@
 # asked to climb; the number is a tripwire, not a goal, and treating it as a
 # goal is how coverage figures start being gamed.
 #
-# THE TWO SINGLE-OS FIGURES, NOW READ OFF A MERGED RUN
+# THE SINGLE-OS FIGURE, READ OFF A MERGED RUN
 #
-# `Keystore` and `Filesystem.Local` measure far lower on Linux alone than they
-# really are, because their macOS and Windows halves are unreachable there by
-# construction. These floors used to be pinned to the Linux figure and left
-# deliberately loose, with a note saying the honest number needed a merged run
-# to read off.
+# `Filesystem.Local` measures far lower on Linux alone than it really is,
+# because its macOS and Windows halves are unreachable there by construction.
+# Its floor used to be pinned to the Linux figure and left deliberately loose,
+# with a note saying the honest number needed a merged run to read off.
 #
-# That run has now happened: the union of ubuntu, windows and macos puts
-# `Keystore` at 89.40% (it reads 24.88% on Linux alone) and `Filesystem.Local`
-# at 62.26% (50.44% on Linux). The floors below are set from those merged
-# figures, on the same roughly-two-points-below convention as everything else.
+# That run has now happened: the union of ubuntu, windows and macos put
+# `Filesystem.Local` at 62.26% (50.44% on Linux), and its floor below is set
+# from the merged figure, on the same roughly-two-points-below convention as
+# everything else. The consequence is that a local Linux run can report it
+# below its floor. That is expected and is not a regression — only CI's merged
+# report can judge it.
 #
-# The consequence is that a local Linux run will report both as below their
-# floors. That is expected and is not a regression — only CI's merged report
-# can judge these two.
+# `Keystore` was the other such module: 89.40% merged, 24.88% on Linux alone.
+# Its floor went with the project. The platform keystore was deleted with the
+# service's passphrase mode when format 1 was withdrawn (ADR-0014 Amendment 1,
+# ADR-0028 §9), and a floor naming an assembly the report no longer contains
+# is one nothing can trip, which the merge step refuses.
 # See `docs/review/2026-08-coverage-audit.md` §3.
 
 "FallbackPlan.Agent" = 80
@@ -49,7 +52,6 @@
 "FallbackPlan.Filesystem" = 98
 "FallbackPlan.Filesystem.Local" = 60
 "FallbackPlan.Import.Abstractions" = 98
-"FallbackPlan.Keystore" = 87
 "FallbackPlan.Protocol" = 88
 "FallbackPlan.Recovery" = 82
 "FallbackPlan.Replication" = 96

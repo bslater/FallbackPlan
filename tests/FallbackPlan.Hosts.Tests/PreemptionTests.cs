@@ -19,7 +19,13 @@ namespace FallbackPlan.Hosts.Tests;
 [DoNotParallelize]
 public sealed class PreemptionTests : IDisposable
 {
-    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
+    // A hang guard, not a performance claim. The cases here that capture
+    // 1,500 real files and park the run part-way take seconds on Linux and
+    // minutes on the Windows runner, where file-heavy assemblies run ten to
+    // thirty times slower (Repository.Tests: under two minutes on macOS,
+    // fifty-five there). A guard sized for the fast platforms failed the slow
+    // one on speed alone; a genuine stall still fails, only later.
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(10));
 
     private CancellationToken Timeout => _timeout.Token;
 
@@ -165,12 +171,17 @@ public sealed class PreemptionTests : IDisposable
         var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
 
         // Wait until the capture is genuinely mid-scan — the journal active
-        // AND at least one file counted, so the paused report provably
-        // carries live counts — then outrank it. The incomer HOLDS its slot
-        // so the suspension window is observable.
+        // AND at least one file archived, so the paused report provably
+        // carries live counts — then outrank it. Archived, not counted: the
+        // counting walk's tally is a meter of its own, and the capture walk's
+        // first report starts again from nought, so a park landing just after
+        // it re-emits a faithful zero. The ask is made at the enqueue and the
+        // park comes at the next file boundary, where the capture's counts
+        // can only have grown. The incomer HOLDS its slot so the suspension
+        // window is observable.
         while (!runtime.Jobs.Jobs.Any(job =>
                 job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing)
-            || !progressStates.Any(progress => progress.FilesSeen > 0))
+            || !progressStates.Any(progress => progress.State == JobState.Packing && progress.FilesSeen > 0))
         {
             Assert.IsFalse(backup.IsCompleted, "the backup finished before the test could preempt it");
             await Task.Delay(10, Timeout);

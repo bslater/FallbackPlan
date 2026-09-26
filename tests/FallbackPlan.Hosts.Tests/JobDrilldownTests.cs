@@ -136,7 +136,10 @@ public sealed partial class JobDrilldownTests : IDisposable
     /// moment somebody asked what failed.
     /// </summary>
     [TestMethod]
-    [PlatformTrait(TestPlatforms.Posix)]
+    [PlatformCondition(
+        TestPlatforms.Linux,
+        "a filename that is not valid UTF-8 is only expressible on POSIX, and macOS's APFS enforces valid UTF-8 at the filesystem, so the fixture cannot exist there")]
+    [PlatformTrait(TestPlatforms.Linux)]
     [UnsupportedOSPlatform("windows")]
     public async Task JobFailures_APartialRun_ListsPathReasonAndDetail()
     {

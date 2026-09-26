@@ -28,7 +28,13 @@ jobs:
   build:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows runs the file-heavy assemblies several times slower than the
+    # others (Retention.Tests: two minutes on Linux, nine to thirteen here),
+    # and at thirty minutes the job was cancelled before Repository.Tests and
+    # Hosts.Tests reported. A cancelled job reads "cancelled", not "failed",
+    # so the limit hid the failures it should have caught. The others keep
+    # thirty, which is still a hang guard for them.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 90 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +111,7 @@ jobs:
       # table only checks the modules it already knows about.
       #
       # The per-module table catches one module regressing, which the global
-      # floor cannot, because a healthy total absorbs it: Keystore could go to
+      # floor cannot, because a healthy total absorbs it: Recovery could go to
       # zero and the union would barely move. It also fails on a floor naming
       # a module that no longer exists, and on a module with no floor — a new
       # assembly is otherwise unguarded from the moment it is created, which
