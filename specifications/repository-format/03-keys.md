@@ -177,6 +177,8 @@ Rule 1 in §1 says to use audited platform primitives and write none ourselves. 
 | HKDF-Expand | Platform (`HKDF`) | Audited, in-box |
 | AES-256-GCM | Platform (`AesGcm`) | Audited, in-box |
 | **Argon2id** | **Third-party** | No platform implementation exists |
+| **X25519** | **Third-party** | No platform implementation exists. Write-only repositories only ([§9](#9-write-only-repositories-format-v2)) |
+| **Ed25519** | **Third-party** | No standalone platform implementation exists |
 
 **Why `xchacha20-poly1305-v1` was withdrawn.** .NET provides `ChaCha20Poly1305` — RFC 8439, with a **12-byte** nonce. It does **not** provide the extended-nonce XChaCha20 variant, which takes 24 bytes. The two are not interchangeable, and an implementer who substitutes one for the other produces a repository nothing else can read. An earlier revision of this document listed the profile as approved without noting that, which made it unimplementable as specified.
 
@@ -186,10 +188,10 @@ The cost is accepted and named: on hardware without AES acceleration, AES-256-GC
 
 **Consequences an implementer must accept:**
 
-- **Argon2id** is the one third-party primitive left in the format-critical path, and it is **not** covered by the platform's audit posture. The external cryptographic review required before the first beta MUST cover it specifically.
-- It is cross-verified against a second independent implementation on every CI run, which is how the empty-passphrase gap in §2.1 was found. That check is the condition on which a third-party primitive is admitted at all.
+- **Argon2id, X25519 and Ed25519** are the third-party primitives in the format-critical path, and none of them is covered by the platform's audit posture. The external cryptographic review required before the first beta MUST cover each of them specifically.
+- Each is cross-verified against a second independent implementation on every CI run. For Argon2id that is a second library, which is how the empty-passphrase gap in §2.1 was found. For X25519 and Ed25519 it is the conformance generator's own pure-Python RFC 7748 and RFC 8032 implementations, gated by those RFCs' published vectors ([`write-only.json`](conformance/vectors/write-only.json), [`ed25519.json`](conformance/vectors/ed25519.json)). That check is the condition on which a third-party primitive is admitted at all.
 
-The reference implementation takes Argon2id from `Bodu.Security.Cryptography` and confines it, and every other third-party primitive, to a single project. The policy governing what may enter the format-critical path is [ADR-0019](../../docs/adr/0019-third-party-dependency-policy.md).
+The reference implementation takes all three from `Bodu.Security.Cryptography` and confines them, within the format-critical path, to a single project. The policy governing what may enter the format-critical path is [ADR-0019](../../docs/adr/0019-third-party-dependency-policy.md).
 
 No other suite is permitted. A writer MUST reject an unapproved suite at configuration time, not at write time — discovering an unusable configuration during a backup is a failure mode the user cannot act on. Insecure selection MUST NOT be available as a compatibility switch.
 
