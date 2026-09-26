@@ -978,7 +978,13 @@ function renderLiveJob(job) {
   // event still says Packing while the truth is "parked for a
   // higher-priority run".
   const paused = job.state === "Paused";
-  const meta = JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
+  // A commanded cancel outranks both the journal and the stream: neither has
+  // caught up with the operator yet, so the only source that knows the run is
+  // stopping is the click that stopped it.
+  const cancelling = CANCELLING.has(job.id);
+  const meta = cancelling
+    ? { cls: "warn", label: "Cancelling…" }
+    : JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
   // The denominator is the run's counted plan (contract 1.20). Reused files
   // are a subset of done, so handled is done plus failed — never reused
   // added on top. Failed files left the plan's path, so the clamp keeps an
@@ -1567,6 +1573,21 @@ async function withBusy(button, work) {
 // but the passphrase (ADR-0060): every archive carries the rest.
 let U = null;
 
+// The ONLY shape of U that may reach a trace line. U holds the passphrase and
+// its confirmation for the length of steps 2-3, so tracing U itself — or
+// anything JSON.stringify would walk into — would put the master key in the
+// browser console. This projector derives what a diagnosis needs and nothing
+// a screenshot could leak.
+function setupView() {
+  if (!U) return { u: null };
+  return {
+    step: U.step, acknowledged: U.acknowledged, busy: U.busy,
+    passphraseLength: U.passphrase?.length ?? 0,
+    confirmationMatches: U.confirmation === U.passphrase,
+    strengthAcceptable: U.strength?.acceptable ?? null,
+  };
+}
+
 const SETUP_STEPS = ["What this is", "Passphrase", "Account"];
 
 /* ------------------------------------------------------------- sign-in */
@@ -1804,7 +1825,7 @@ function setupStep2() {
 function setupStrengthMarkup() {
   const meter = U?.strength;
   return meter ? `
-      <div class="meter meter-${esc(meter.band)}"><i style="width:${Math.max(4, meter.score)}%"></i></div>
+      <div class="meter meter-${esc(meter.band)}"><i data-meter-width="${Math.max(4, meter.score)}"></i></div>
       <ul class="setup-findings">${meter.findings.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : "";
 }
 
