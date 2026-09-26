@@ -13,6 +13,8 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// implementations of 07 §3 that must never diverge. Also (FR-VER-001) that
 /// the signed blob digests every delta publishes survive a rebuild from the
 /// index plane alone, which is what the digest tier of verification reads.
+/// And that each commit is atomic but not flushed, the protection
+/// ADR-0010 Amendment 2 gives a cache.
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -337,6 +339,23 @@ public sealed class CatalogueTests : IDisposable
         // (FR-MAN-002 — the catalogue is disposable, never authoritative).
         Assert.AreEqual(0, reopened.AppliedDeltaCount());
         Assert.IsNull(reopened.ResolveLocation(Object(1)));
+    }
+
+    [TestMethod]
+    public void Open_EachCommit_IsAtomicButNotFlushed_BecauseTheCatalogueIsACache()
+    {
+        using var catalogue = Open();
+
+        var (journalMode, synchronous) = catalogue.Durability();
+
+        // WAL keeps every commit atomic and the file consistent through a
+        // crash or a power loss. NORMAL (1) is what spares each commit a disk
+        // flush: a power loss can then take the newest commits, leaving the
+        // catalogue behind the store, the direction StaleCatalogueTests shows
+        // costs only a rewrite. FULL (2) is a flush for every row a
+        // publication records, and on Windows each flush costs milliseconds.
+        Assert.AreEqual("wal", journalMode);
+        Assert.AreEqual(1L, synchronous);
     }
 
     [TestMethod]

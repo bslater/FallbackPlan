@@ -209,7 +209,7 @@ The neutral model exists so that the same import pipeline serves an importer for
 | Remote client authentication | Paired device identity, pinned on approval | Reuses [09 §3](09-replication-and-peers.md#3-pairing); no password, no token file |
 | Repository server | ASP.NET Core | A separate remote-destination gateway, not the client surface |
 | Peer transfer | QUIC/HTTP-3 under evaluation, TLS fallback | |
-| Catalogue | SQLite behind an abstraction | Disposable; engine replaceable — [ADR-0010](../adr/0010-local-store-separation.md) |
+| Catalogue | SQLite behind an abstraction; WAL, commits atomic but not flushed | Disposable; engine replaceable — [ADR-0010](../adr/0010-local-store-separation.md); a power loss can take the newest commits ([Amendment 2](../adr/0010-local-store-separation.md#amendment-2-2026-09--the-catalogues-commits-are-atomic-not-flushed)) |
 | Canonical encoding | Canonical CBOR, pending benchmark | [ADR-0003](../adr/0003-canonical-metadata-encoding.md) |
 | Compression | Zstandard | [`02-repository-format.md` §4](02-repository-format.md#4-compression) |
 | Segment hash | Profile-selected, SHA-256 default | [ADR-0004](../adr/0004-segment-hash-function.md) |
