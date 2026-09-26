@@ -19,7 +19,13 @@ namespace FallbackPlan.Hosts.Tests;
 [DoNotParallelize]
 public sealed class PreemptionTests : IDisposable
 {
-    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(2));
+    // A hang guard, not a performance claim. The cases here that capture
+    // 1,500 real files and park the run part-way take seconds on Linux and
+    // minutes on the Windows runner, where file-heavy assemblies run ten to
+    // thirty times slower (Repository.Tests: under two minutes on macOS,
+    // fifty-five there). A guard sized for the fast platforms failed the slow
+    // one on speed alone; a genuine stall still fails, only later.
+    private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(10));
 
     private CancellationToken Timeout => _timeout.Token;
 
