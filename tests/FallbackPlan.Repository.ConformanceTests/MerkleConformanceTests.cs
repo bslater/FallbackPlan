@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using FallbackPlan.Repository.Packing;
+using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Repository.ConformanceTests;
 

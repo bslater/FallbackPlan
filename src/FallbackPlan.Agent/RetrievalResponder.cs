@@ -2,6 +2,7 @@ using Bodu;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Packing;
 
 namespace FallbackPlan.Agent;

@@ -499,7 +499,7 @@ public static class ReplicaVerifier
         }
 
         var preimageLength = found.Length - LocatorLength;
-        var leafCount = Repository.Packing.BlobMerkle.LeafCount(preimageLength);
+        var leafCount = Repository.Crypto.BlobMerkle.LeafCount(preimageLength);
 
         // Drawn at random rather than fixed: a party that discarded part of
         // a blob survives a fixed choice for ever, and rotation across
@@ -520,7 +520,7 @@ public static class ReplicaVerifier
             return DigestVerdict.Failed;
         }
 
-        return Repository.Packing.BlobMerkle.VerifyLeaf(
+        return Repository.Crypto.BlobMerkle.VerifyLeaf(
             root.Span, preimageLength, (int)leafIndex, given.Leaf.Span, given.Path)
             ? DigestVerdict.Proved
             : DigestVerdict.Failed;

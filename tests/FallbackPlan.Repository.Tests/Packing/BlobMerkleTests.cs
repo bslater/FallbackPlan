@@ -1,5 +1,5 @@
 using System.Security.Cryptography;
-using FallbackPlan.Repository.Packing;
+using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Repository.Tests.Packing;
 

@@ -717,11 +717,11 @@ public sealed class DependencyRuleTests
                     // when this rule was written against a Replication that only
                     // copied bytes. ADR-0065 gave the verifier a chunk-possession
                     // challenge, and answering one means recomputing a blob's
-                    // Merkle leaf — `Repository.Packing.BlobMerkle`, the one
-                    // place that construction is defined. Duplicating it inside
-                    // Replication to keep the closure narrow would put the same
-                    // commitment in two places, which is the failure this
-                    // repository cares about more than the layering.
+                    // Merkle leaf — `Repository.Crypto.BlobMerkle`, the one
+                    // place the format binds that construction. Duplicating it
+                    // inside Replication to keep the closure narrow would put
+                    // the same commitment in two places, which is the failure
+                    // this repository cares about more than the layering.
                     "FallbackPlan.Storage.Local",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
@@ -731,7 +731,8 @@ public sealed class DependencyRuleTests
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
             "FallbackPlan.Replication must stay a byte copier over the storage abstraction (ADR-0034), "
-            + "reaching the packing layer only for the Merkle commitment ADR-0065 made it check.");
+            + "reaching the repository only for what its verifier checks: the Merkle commitment ADR-0065 "
+            + "made it check, and the outcome of reading a record back.");
     }
 
     /// <summary>

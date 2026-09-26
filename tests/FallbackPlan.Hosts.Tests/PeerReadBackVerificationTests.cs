@@ -297,7 +297,7 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         // same number — and a proof that carried a whole leaf would be
         // refused at the wire if they ever parted.
         Assert.AreEqual(
-            FallbackPlan.Repository.Packing.BlobMerkle.LeafSize, MerkleProof.MaximumLeafBytes);
+            FallbackPlan.Repository.Crypto.BlobMerkle.LeafSize, MerkleProof.MaximumLeafBytes);
     }
 
     private string? Cursor()

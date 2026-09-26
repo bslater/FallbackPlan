@@ -3,6 +3,7 @@ using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Compression;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
