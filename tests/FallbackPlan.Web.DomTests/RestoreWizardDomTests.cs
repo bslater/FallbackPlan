@@ -4,6 +4,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
+using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
 using ApiRestoreResult = FallbackPlan.Api.RestoreResult;
 
@@ -14,7 +15,9 @@ namespace FallbackPlan.Web.DomTests;
 /// the committed counterpart of the "live Playwright walk" ADR-0041 cites.
 /// The passphrase gate is the real thing: a v1 archive on disk, the console
 /// process deriving with Argon2id against its key files, the secret never on
-/// the service wire (NFR-SEC-009).
+/// the service wire (NFR-SEC-009). The last step confirms a plan, so nothing
+/// there can be confirmed until the plan is on screen — the console's half of
+/// FR-RST-003, which puts the plan before any byte is written.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -90,6 +93,27 @@ public sealed class RestoreWizardDomTests
             _ => new AcknowledgedResult(),
         };
 
+    /// <summary>
+    /// Steps 1 to 5 with every default taken, ending on the click that asks
+    /// for the plan — the walk the end-to-end case narrates, for the cases
+    /// that are about what step 6 does with it.
+    /// </summary>
+    private static async Task WalkToThePlanAsync(IPage page, DomHarness harness)
+    {
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"restore\"]");
+        await page.FillAsync("#rst-passphrase", RightPassphrase);
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("#rst-set")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("#rst-date")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await page.CheckAsync("input[data-rst-mark=\"notes.txt\"]");
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await page.FillAsync("#rst-output", "/restore/out");
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+    }
+
     [TestMethod]
     public async Task Wizard_WalkedEndToEnd_UnlocksPlansAndRestores()
     {
@@ -153,6 +177,88 @@ public sealed class RestoreWizardDomTests
         await page.ClickAsync("#dialog [data-action=\"close-dialog\"]");
         var closed = await harness.ReceivedAsync<CloseRestoreSourceCommand>();
         Assert.AreEqual("src-1", closed.SourceId);
+    }
+
+    [TestMethod]
+    public async Task Wizard_WhileThePlanIsOnItsWay_TheRestoreCannotBeArmed()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        var planReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Clients.Client.Respond = command =>
+        {
+            // Held at the fake until the step has been looked at without a
+            // plan. A real plan probes every object the restore needs, and
+            // from a peer's replica that takes as long as the link does.
+            if (command is PlanRestoreCommand)
+            {
+                planReleased.Task.Wait(TimeSpan.FromSeconds(30));
+            }
+
+            return fakes(command);
+        };
+
+        try
+        {
+            await using var context = await BrowserSession.NewContextAsync();
+            var page = await context.NewPageAsync();
+            await WalkToThePlanAsync(page, harness);
+            await harness.ReceivedAsync<PlanRestoreCommand>();
+
+            // Nothing on screen says yet what the restore would do, so there
+            // is nothing to confirm. The word typed here used to arm the
+            // button, and then vanish with its field when the plan arrived
+            // and re-rendered the step — or, clicked first, start a restore
+            // whose plan nobody had read.
+            var run = page.Locator("#rst-run-go");
+            await Expect(page.GetByText("Planning…")).ToBeVisibleAsync();
+            await Expect(page.Locator("#confirm-word")).ToBeDisabledAsync();
+            await Expect(run).ToBeDisabledAsync();
+
+            planReleased.SetResult();
+
+            // The plan arrives with the one place to type, and focus already
+            // in it: real keystrokes arm the button.
+            await Expect(page.Locator(".plan-figures")).ToBeVisibleAsync();
+            await Expect(page.Locator("#confirm-word")).ToBeFocusedAsync();
+            await page.Keyboard.TypeAsync("restore");
+            await Expect(run).ToBeEnabledAsync();
+            await run.ClickAsync();
+
+            var restored = await harness.ReceivedAsync<RunRestoreCommand>();
+            Assert.AreEqual("snap-1", restored.SnapshotId);
+        }
+        finally
+        {
+            // A failure above must not leave the console's request parked on
+            // the plan while the harness shuts down around it.
+            planReleased.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    public async Task Wizard_ARefusedPlan_SaysSo_AndTheRestoreCannotBeArmed()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new ServiceError(ServiceErrorReason.Failed, "The snapshot's manifest could not be read.")
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        // No plan is coming, and the step says so rather than "Planning…"
+        // for ever; with no plan there is nothing to confirm, so the way on
+        // stays shut. Back is the way out, and continuing again re-plans.
+        await Expect(page.GetByText("No plan could be made")).ToBeVisibleAsync();
+        await Expect(page.GetByText("Planning…")).Not.ToBeVisibleAsync();
+        await Expect(page.Locator("#confirm-word")).ToBeDisabledAsync();
+        await Expect(page.Locator("#rst-run-go")).ToBeDisabledAsync();
+        await Expect(page.Locator("#dialog [data-action=\"rst-back\"]")).ToBeEnabledAsync();
     }
 
     [TestMethod]

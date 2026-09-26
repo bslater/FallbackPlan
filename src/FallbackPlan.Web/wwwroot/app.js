@@ -4345,6 +4345,7 @@ function openRestoreWizard(prefill) {
     output: "",
     existing: "rename",
     plan: null,
+    planFailed: false,        // the plan was asked for and did not come
     result: null,
     prefill: prefill?.snapshotId ? prefill : null,
   };
@@ -4618,6 +4619,9 @@ function rstStep6() {
       <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`;
   }
 
+  // The word confirms the plan shown above it, so its field takes nothing
+  // until there is one (FR-RST-003) — and the plan's arrival re-renders this
+  // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
   const figures = plan ? `
     <div class="plan-figures">
@@ -4630,7 +4634,9 @@ function rstStep6() {
       needs cannot be found — those files will fail.</li></ul>` : ""}
     ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
     ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`
-    : `<p class="subtle">Planning…</p>`;
+    : W.planFailed
+      ? `<p class="subtle">No plan could be made, so there is nothing to confirm. Go back and continue to plan again.</p>`
+      : `<p class="subtle">Planning…</p>`;
 
   return `
     <p class="dlg-sub">Restoring the backup of <b>${esc(fmtWhen(W.snapshot.capturedAt))}</b> from
@@ -4640,7 +4646,7 @@ function rstStep6() {
     ${figures}
     <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
     <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go">
+           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go"${plan ? "" : " disabled"}>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn" data-action="rst-back">‹ Back</button>
@@ -4783,6 +4789,7 @@ const rstActions = {
     }
     W.step = 6;
     W.plan = null;
+    W.planFailed = false;
     W.result = null;
     rstRender();
 
@@ -4799,6 +4806,9 @@ const rstActions = {
       rstRender();
       // The typed word gates the button; re-enable path is the input event.
       document.getElementById("confirm-word")?.focus();
+    } else {
+      W.planFailed = true;
+      rstRender();
     }
   },
 };
