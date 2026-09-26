@@ -619,6 +619,17 @@ public sealed class BlobWriter : IAsyncDisposable
             spoolPath, FileMode.Open, FileAccess.Read, FileShare.Read,
             bufferSize: 64 * 1024, FileOptions.SequentialScan);
 
+        // A restart from here on deletes the spool this handle still holds,
+        // and Windows refuses to delete a file open without FileShare.Delete:
+        // the restart would throw where it should start the blob over. Every
+        // one closes the reader first, as the append handle below does before
+        // it claims the file.
+        ResumeResult.MustRestart DiscardOpen(string reason)
+        {
+            spoolRead.Dispose();
+            return Discard(reason);
+        }
+
         // Enough for the longest envelope shape; Parse refuses a v2 data
         // envelope that is shorter than its sealed key, exactly as it did
         // when the whole file was in hand.
@@ -632,7 +643,7 @@ public sealed class BlobWriter : IAsyncDisposable
         }
         catch (BlobFormatException)
         {
-            return Discard("envelope_unreadable");
+            return DiscardOpen("envelope_unreadable");
         }
 
         if (envelope.BlobId != checkpoint.BlobId ||
@@ -643,7 +654,7 @@ public sealed class BlobWriter : IAsyncDisposable
             envelope.FormatVersion != checkpoint.FormatVersion ||
             !envelope.BlobSalt.SequenceEqual(checkpoint.BlobSalt.Span))
         {
-            return Discard("envelope_checkpoint_mismatch");
+            return DiscardOpen("envelope_checkpoint_mismatch");
         }
 
         // Derived before the walk rather than after it: the key is now walk
@@ -700,7 +711,7 @@ public sealed class BlobWriter : IAsyncDisposable
             CryptographicOperations.ZeroMemory(sealedBytes);
             digest.Dispose();
             merkle.Dispose();
-            return Discard("spool_tail_unauthenticated");
+            return DiscardOpen("spool_tail_unauthenticated");
         }
 
         Span<byte> nonce = stackalloc byte[RecordNonce.AesGcmLength];
