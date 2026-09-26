@@ -114,9 +114,10 @@ The recovery kit above answers the case where the *store* survives and the machi
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
 | FR-DR-005 **[new]** | A claimed replica shall be readable without further human action at the destination, and retention instructions from the claiming identity shall be refused, deleting nothing, until the destination's operator acknowledges the claim. | A restore from a freshly claimed replica completes unattended; a retention instruction against it removes no object and names the unacknowledged claim as the reason. |
+| FR-DR-006 **[new]** | The repository shall record, with every publication, the backup set's own retention policy beside its shape (FR-MAN-018), so that a set re-declared from its archive deletes by the policy it was captured under. A retention override the set declares for one destination shall not be recorded, because it names the destination (FR-DEST-006). | A service run's newest policy manifest carries the set's retention, and a set that defers retention records none; adopting the archive on a machine with no configuration re-declares the set with that retention and reports it; a destination's override does not come back. |
 | FR-DR-009 **[new]** | A recovered configuration shall be presented for confirmation before it takes effect, with each root's recorded path shown as a hint and flagged where it does not resolve on this machine. | Reconstruction cannot complete without confirming the roots; a recorded path that does not exist is reported rather than captured from, and the retention policy is shown before it can delete anything. |
 
-Both rows are **unbuilt**, and deliberately so. They are the two properties of the
+FR-DR-005 and FR-DR-009 are **unbuilt**, and deliberately so. They are the two properties of the
 disaster-recovery review that the claim ceremony this repository *did* build does
 not have. Nothing today stops a successful claimant issuing deletions: the
 refusals that exist are the reclaim-signature ones of
@@ -129,13 +130,13 @@ in as many words, "reported, not refused". Neither has a proof obligation yet,
 because the proof page tracks invariants the product claims and it does not yet
 claim these.
 
-**Owed, and not built here.** The review also found that the repository does not
-carry the set's **retention policy** as part of its recorded shape. The policy
-manifest carries the set's name, its roots and its schedule (FR-MAN-018) and
-stops there, so a machine that reconstructs a set from the repository alone
-recovers everything about it except what it is allowed to delete. Recorded as
-owed rather than written as a requirement, because the row that carries it
-should arrive with the work.
+**FR-DR-006 arrived with its work.** The review also found that the repository
+did not carry the set's **retention policy** as part of its recorded shape, so a
+machine that reconstructed a set from the repository alone recovered everything
+about it except what it was allowed to delete. That was recorded here as owed,
+because the row that carries it should arrive with the work. It has: the policy
+manifest records the set's own retention beside its name, roots and schedule, and
+adoption re-declares it ([ADR-0061 Amendment 1](../adr/0061-adopt-a-destinations-archives.md#amendment-1-2026-09--the-sets-own-retention-is-recorded)).
 
 
 ## Write-only repositories

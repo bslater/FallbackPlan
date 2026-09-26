@@ -190,6 +190,9 @@
   <data name="PolicyManifestCodec_RecordedRootOmitsPath" xml:space="preserve">
     <value>A recorded root omits its path (specification 06 §7 key 10).</value>
   </data>
+  <data name="PolicyManifestCodec_RetentionCarriesUnknownKey" xml:space="preserve">
+    <value>A recorded retention carries an unknown key; specification 06 §7 assigns retention keys 1 to 5 only.</value>
+  </data>
   <data name="PolicyManifestCodec_PolicyManifestNotCanonicalCBOR" xml:space="preserve">
     <value>The policy manifest is not canonical CBOR: {0}</value>
   </data>

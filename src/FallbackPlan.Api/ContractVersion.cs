@@ -343,8 +343,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// from the same parsed window the scheduler's pass uses, so a client
     /// cannot catch the two disagreeing across a boundary.
     /// </para>
+    /// <para>
+    /// 1.40 adds `retention` to `archive_adopted` (FR-DR-006): the set's own
+    /// retention policy as the adopted set is now configured, taken from the
+    /// archive's newest policy manifest, which records it since this version.
+    /// Adoption re-declares a set that will delete by that policy, so the
+    /// answer says what it is before anything runs under it. The same
+    /// descriptor the set listing carries, null when the set defers retention.
+    /// A destination's override is not in it and cannot be: it names the
+    /// destination, and the repository carries no destination identity
+    /// (FR-DEST-006). Additive with a null default. A pre-1.40 client ignores
+    /// the field, and a pre-1.40 service never sends it, which a client reads
+    /// as "the archive recorded none", as it could not have.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 39);
+    public static ContractVersion Current { get; } = new(1, 40);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

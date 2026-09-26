@@ -66,6 +66,11 @@ recorded retention would be half a policy; priority is a scheduling
 preference re-declared for free. A single-file archive and the CLI's direct
 `backup --repo` have no set and record roots only.
 
+> **Amendment 1 (2026-09).** The set's own retention is now recorded, as
+> key 13. What stays out is a destination's override, which names the
+> destination — see
+> [Amendment 1](#amendment-1-2026-09--the-sets-own-retention-is-recorded).
+
 Root paths sit in the metadata plane, encrypted under the metadata key, so a
 destination or peer sees ciphertext and T-11 is unchanged. The structure
 plane a write-credential holder can read (FR-WOR-003) now names *where on
@@ -244,8 +249,42 @@ another writer's bytes untrusted; a rebuilt machine is the same writer with
 a new state directory, and taking the identity back when nothing has been
 published under the new one is the honest reading of that.
 
+## Amendment 1 (2026-09) — the set's own retention is recorded
+
+§1 left retention out because "a recorded retention would be half a
+policy": retention is overridable per destination by destination name, and
+FR-DEST-006 keeps destination identities out of the repository. The premise
+holds, but the conclusion does not follow from it. A set's retention is two
+things. One is the set's own policy, which is the whole of what the set says
+about deletion: it governs the set's own archive where there is one, and
+every destination that declares no override. The other is the overrides,
+which belong to a pairing of set and destination, and only they name a
+destination. Leaving both out meant a set re-declared from its archive came
+back with retention deferred. A machine rebuilt from nothing recovered
+everything about a set except what it was allowed to delete, which the merge
+that brought this record in wrote down as owed (FR-DR-006).
+
+So the policy manifest gains key 13, `retention`: the set's own policy, one
+u32 per declared rule, absent when the set defers retention
+([06 §7](../../specifications/repository-format/06-manifests.md#7-policy-manifest)).
+A manifest without it is byte-identical to one written before, as with
+keys 10–12. Overrides stay out for the reason §1 gave. They come back where
+destinations come back: declared by hand, with the destination they name.
+
+Adoption re-declares the recorded policy with the rest of the shape, and
+says so. The answer carries it (contract 1.40), and the report names the
+rules, so a person sees what the adopted set will delete by before anything
+runs under it. That is not a confirmation step: FR-DR-009 stays unbuilt,
+and this amendment does not claim it. A recorded zero, which this writer
+never produces, is refused by the configuration's own rule. The set is then
+adopted with retention deferred and the report says why, rather than the
+adoption failing on a field the command gives no way to correct.
+
+Priority and destinations remain unrecorded, for §1's reasons.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built end to end over six commits: the policy manifest's keys 10–12 (`Repository.Format/Manifests/PolicyManifest`, `Repository/SnapshotPublication`, `Agent/BackupRunner`); contract 1.30 and the service's `Agent/ServiceCommandHandler.Adoption.cs` with the writer-identity resume in `Application/LocalState`; the console's `/api/adopt-archive` through `Web/ConsoleRestoreGate`; the CLI's `discover` and `adopt` in `Cli/CliApplication` with the per-set restore grant in `Cli/OperationGateway`; the peer half over `Agent/PeerRetrievalClient`; `eng/recovery-drill.sh` step 8 green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests` and `Hosts.Tests/PeerAdoptionTests` as the in-process drills |
+| 2026-09 | Accepted (amended) | Amendment 1: the set's own retention recorded as policy-manifest key 13 and re-declared on adoption, reported in the answer (FR-DR-006, contract 1.40); a destination's override still unrecorded (FR-DEST-006). `Repository.Format/Manifests/PolicyManifest`, `Agent/RecordedRetentionMapping`; `Hosts.Tests/DestinationAdoptionTests` |

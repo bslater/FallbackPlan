@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.39
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.40
 
 ---
 
@@ -46,7 +46,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.39 — 56 commands. One line each; parameters, results
+The register as of 1.40 — 56 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -58,7 +58,8 @@ destination holds, by descriptor alone, and taking one archive back under
 its original ids with the passphrase; ADR-0061; discovery holds no
 credential, so the `format_version` it reports is the version each archive
 was **created** at — an upgrade record is signed, and verifying a signature
-needs a key discovery does not have),
+needs a key discovery does not have; since 1.40 the adoption answer carries
+the set's own retention as the archive recorded it, FR-DR-006),
 `login` / `resume_session` / `logout`, `list_users` / `create_user` /
 `delete_user` / `change_password` (ADR-0045).
 
@@ -144,3 +145,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.37 | `total` on `receipts_listed` ([ADR-0063](../../docs/adr/0063-deletion-receipts.md), [ADR-0064](../../docs/adr/0064-replication-receipts.md)): how many receipts are on file for the `kind` and `repository` asked for, counted from file names rather than from what was read — so `limit` now bounds the **reading** as well as the answer, and a client can still say what share of the pile it is showing. Peer receipts are swept under a stated retention rule (NFR-OPS-008), and a count beside the rows is what makes a bound that is working visible. The count precedes the `set` filter, which can only be answered by reading a receipt, so a listing narrowed by set may return fewer rows than its limit while the total stands above both. Additive with a zero default |
 | 1.38 | `upgrade_set_format {set_name}` ([ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md)): one set's repository moved to the latest format this build writes, answering `configuration_change` so no result shape moves. The move is an **appended signed record**, not a rewritten descriptor: a destination seeds a descriptor only if absent and a peer keeps the copy it has, so a rewrite would carry the source alone and leave every copy claiming the older format over newer blobs. It takes no version — the service upgrades to the one version it writes, so a client cannot ask for a format this build could not read back. Refused by name for a set already at that version, for a set with no archive yet (one created here is born at the latest format), and while a run holds the set. What it changes is what the set **seals next**: everything already sealed stays exactly as it is, and the record reaches each destination on the next reconciling pass. Additive |
 | 1.39 | `background_window` on `status` ([ADR-0069](../../docs/adr/0069-the-background-window.md)): the configured window, whether background work may start right now, and when that next changes. The window is the first of NFR-PERF-013's four named limits to exist and it can hold every backup on an installation for hours; before this the only way to find out was the service's log, which is not where "why did nothing run last night" gets asked. One nullable descriptor rather than three loose fields, so a client tests "is there a window" once. Null from a service with no window configured **and** from one older than 1.39 — deliberately the same answer, because a client does nothing different in the two cases and an absent window has always meant always open. Reporting only: the window is edited in the configuration file, as `max_concurrent_backups` is, and a console control for it is owed. The state is evaluated at the instant `observed_at` names, from the same parsed window the scheduler's pass uses, so a client cannot catch the two disagreeing across a boundary. Additive |
+| 1.40 | `retention` on `archive_adopted` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 1, FR-DR-006): the set's own retention policy as the adopted set is now configured, taken from the archive's newest policy manifest, which records it from this version on. The same descriptor the set listing carries, null when the set defers retention; a destination's override is never in it, because it names the destination (FR-DEST-006). Additive with a null default: a pre-1.40 service never sends it, which a client reads as "the archive recorded none" |

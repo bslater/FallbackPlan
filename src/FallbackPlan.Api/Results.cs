@@ -1068,6 +1068,12 @@ public sealed record ArchivesDiscoveredResult(
 /// </param>
 /// <param name="AlreadyAdopted">The set was already configured against this archive; nothing was repeated.</param>
 /// <param name="Lines">What was done, for a person.</param>
+/// <param name="Retention">
+/// The set's own retention policy as configured — what it will now delete
+/// by, taken from the archive's newest record (FR-DR-006, contract 1.40).
+/// Null when the set defers retention, and from a service older than 1.40.
+/// A destination's override is never in an archive to recover (FR-DEST-006).
+/// </param>
 public sealed record ArchiveAdoptedResult(
     string SetId,
     string SetName,
@@ -1082,7 +1088,8 @@ public sealed record ArchiveAdoptedResult(
     ulong? NewestSnapshotAt,
     bool WriterIdentityResumed,
     bool AlreadyAdopted,
-    IReadOnlyList<string> Lines) : ServiceResult;
+    IReadOnlyList<string> Lines,
+    RetentionPolicyDescriptor? Retention = null) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

@@ -362,6 +362,11 @@ internal static class Strings
     internal static string PolicyManifestCodec_RecordedRootOmitsPath => Get(nameof(PolicyManifestCodec_RecordedRootOmitsPath));
 
     /// <summary>
+    /// A recorded retention carries an unknown key; specification 06 §7 assigns retention keys 1 to 5 only.
+    /// </summary>
+    internal static string PolicyManifestCodec_RetentionCarriesUnknownKey => Get(nameof(PolicyManifestCodec_RetentionCarriesUnknownKey));
+
+    /// <summary>
     /// The policy manifest is not canonical CBOR: {0}
     /// </summary>
     private static string PolicyManifestCodec_PolicyManifestNotCanonicalCBOR => Get(nameof(PolicyManifestCodec_PolicyManifestNotCanonicalCBOR));

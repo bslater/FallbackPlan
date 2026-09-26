@@ -421,6 +421,17 @@ public sealed partial class ServiceCommandHandler
         IReadOnlyList<string> includeRules = shape.Policy?.IncludeRules ?? [];
         IReadOnlyList<string> excludeRules = shape.Policy?.ExcludeRules ?? [];
 
+        // The set's own retention comes back with its shape (FR-DR-006); a
+        // destination's override never does, because it names the destination
+        // (FR-DEST-006). A recorded zero is refused here rather than failing
+        // the adoption, since the command has no field to correct it with.
+        var retention = RecordedRetentionMapping.FromRecorded(shape.Policy?.Retention);
+        var retentionRefused = retention is { IsValid: false };
+        if (retentionRefused)
+        {
+            retention = null;
+        }
+
         ClientConfiguration configuration;
         try
         {
@@ -476,6 +487,7 @@ public sealed partial class ServiceCommandHandler
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
             Schedule = schedule,
+            Retention = retention,
             Priority = command.Priority,
             DirectShip = true,
             Destinations = [new SetDestinationReference { Ref = destination.Name }],
@@ -537,6 +549,15 @@ public sealed partial class ServiceCommandHandler
                 + "edit the set before its next run, or restore them there first.");
         }
 
+        lines.Add(retentionRefused
+            ? "The archive records a retention rule of zero, which is not a policy, so the set is adopted with "
+                + "retention deferred and deletes nothing until one is declared."
+            : retention is null
+                ? "The archive records no retention policy, so the set is adopted with retention deferred and "
+                    + "deletes nothing until one is declared."
+                : $"Retention comes back as the archive recorded it: {DescribeRetention(retention)}. A destination's "
+                    + "own override is not kept in the archive, and is declared with the destination.");
+
         if (shape.OtherSetIds.Count > 0)
         {
             lines.Add($"The archive also holds snapshots for other set id(s): {string.Join(", ", shape.OtherSetIds)}.");
@@ -553,7 +574,8 @@ public sealed partial class ServiceCommandHandler
             [.. resolvedRoots.Select(root => new BackupRootDescriptor(root.Path, root.Label))],
             missingRoots, schedule, includeRules, excludeRules,
             shape.SnapshotCount, shape.NewestSnapshotId, shape.NewestSnapshotAt,
-            WriterIdentityResumed: writerResumed, AlreadyAdopted: false, Lines: lines);
+            WriterIdentityResumed: writerResumed, AlreadyAdopted: false, Lines: lines,
+            Retention: ToPolicyDescriptor(retention));
     }
 
     /// <summary>
@@ -619,7 +641,28 @@ public sealed partial class ServiceCommandHandler
             [.. set.Roots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path)],
             set.Schedule, set.IncludeRules, set.ExcludeRules,
             shape.SnapshotCount, shape.NewestSnapshotId, shape.NewestSnapshotAt,
-            WriterIdentityResumed: false, AlreadyAdopted: true, Lines: lines);
+            WriterIdentityResumed: false, AlreadyAdopted: true, Lines: lines,
+            Retention: ToPolicyDescriptor(set.Retention));
+    }
+
+    /// <summary>A retention policy in a person's words, for the adoption report.</summary>
+    private static string DescribeRetention(RetentionConfiguration retention)
+    {
+        List<string> rules = [];
+        AddRule(retention.KeepDaily, "{0} daily");
+        AddRule(retention.KeepWeekly, "{0} weekly");
+        AddRule(retention.KeepMonthly, "{0} monthly");
+        AddRule(retention.MinGenerations, "never fewer than {0} snapshots");
+        AddRule(retention.DeferralDays, "a lagging destination warned about after {0} days");
+        return rules.Count == 0 ? "no rules" : string.Join(", ", rules);
+
+        void AddRule(int? value, string format)
+        {
+            if (value is { } rule)
+            {
+                rules.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, format, rule));
+            }
+        }
     }
 
     /// <summary>

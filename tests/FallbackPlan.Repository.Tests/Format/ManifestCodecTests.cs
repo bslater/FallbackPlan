@@ -8,8 +8,8 @@ using FallbackPlan.TestSupport;
 namespace FallbackPlan.Repository.Tests.Format;
 
 /// <summary>
-/// The manifest codecs (specification 06; FR-MAN-003, FR-MAN-018, FR-ARCH-010,
-/// NFR-PORT-003): round-trips are exact, unknown keys are rejected so
+/// The manifest codecs (specification 06; FR-MAN-003, FR-MAN-018, FR-DR-006,
+/// FR-ARCH-010, NFR-PORT-003): round-trips are exact, unknown keys are rejected so
 /// physical location has nowhere to hide (exit criteria 2 and 9), the
 /// 06 §3.2 coverage obligation is enforced, tree chains obey 06 §9, and the
 /// snapshot signature survives the two-pass construction.
@@ -460,6 +460,60 @@ public sealed class ManifestCodecTests
         var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
             PolicyManifestCodec.Decode(writer.Encode()));
         Assert.Contains("root", exception.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_WithRecordedRetention_RoundTripsCanonically()
+    {
+        // FR-DR-006: the set's own retention travels with its shape, so a set
+        // re-declared from its archive deletes by the policy it ran under.
+        // Every rule is optional, and only the ones the set declared are
+        // written.
+        var policy = NinePolicyKeys() with
+        {
+            SetName = "docs",
+            Retention = new RecordedRetention
+            {
+                KeepDaily = 7, KeepWeekly = 4, KeepMonthly = 12, MinGenerations = 3, DeferralDays = 30,
+            },
+        };
+
+        var bytes = PolicyManifestCodec.Encode(policy);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+
+        SequenceAssert.AreEqual(bytes, PolicyManifestCodec.Encode(decoded));
+        Assert.AreEqual(policy.Retention, decoded.Retention);
+
+        var dailyOnly = NinePolicyKeys() with { Retention = new RecordedRetention { KeepDaily = 14 } };
+        Assert.AreEqual(
+            new RecordedRetention { KeepDaily = 14 },
+            PolicyManifestCodec.Decode(PolicyManifestCodec.Encode(dailyOnly)).Retention);
+
+        // A set that defers retention records nothing, and reads back as
+        // deferring it rather than as an empty policy.
+        Assert.IsNull(PolicyManifestCodec.Decode(PolicyManifestCodec.Encode(NinePolicyKeys())).Retention);
+    }
+
+    [TestMethod]
+    public void PolicyManifest_ARetentionCarryingAnUnknownKey_IsRejected()
+    {
+        // The retention map is pinned to keys 1-5; a sixth is refused as every
+        // other unknown key is, rather than read past.
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(10);
+        WriteNinePolicyKeys(writer);
+        writer.WriteKey(13);
+        writer.WriteStartMap(2);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(7);
+        writer.WriteKey(6);
+        writer.WriteUnsignedInteger(1);
+        writer.WriteEndMap();
+        writer.WriteEndMap();
+
+        var exception = Assert.ThrowsExactly<ManifestValidationException>(() =>
+            PolicyManifestCodec.Decode(writer.Encode()));
+        Assert.Contains("retention", exception.Message, StringComparison.Ordinal);
     }
 
     private static PolicyManifest NinePolicyKeys() => new()
