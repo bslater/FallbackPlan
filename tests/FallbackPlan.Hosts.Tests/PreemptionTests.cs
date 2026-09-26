@@ -171,12 +171,17 @@ public sealed class PreemptionTests : IDisposable
         var backup = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false);
 
         // Wait until the capture is genuinely mid-scan — the journal active
-        // AND at least one file counted, so the paused report provably
-        // carries live counts — then outrank it. The incomer HOLDS its slot
-        // so the suspension window is observable.
+        // AND at least one file archived, so the paused report provably
+        // carries live counts — then outrank it. Archived, not counted: the
+        // counting walk's tally is a meter of its own, and the capture walk's
+        // first report starts again from nought, so a park landing just after
+        // it re-emits a faithful zero. The ask is made at the enqueue and the
+        // park comes at the next file boundary, where the capture's counts
+        // can only have grown. The incomer HOLDS its slot so the suspension
+        // window is observable.
         while (!runtime.Jobs.Jobs.Any(job =>
                 job.BackupSetId == set.Id && job.State is JobState.Scanning or JobState.Publishing)
-            || !progressStates.Any(progress => progress.FilesSeen > 0))
+            || !progressStates.Any(progress => progress.State == JobState.Packing && progress.FilesSeen > 0))
         {
             Assert.IsFalse(backup.IsCompleted, "the backup finished before the test could preempt it");
             await Task.Delay(10, Timeout);
