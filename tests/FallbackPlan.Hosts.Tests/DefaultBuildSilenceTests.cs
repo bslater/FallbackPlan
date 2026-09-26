@@ -126,13 +126,17 @@ public sealed class DefaultBuildSilenceTests : IDisposable
             "the capture recorded no connect at all, so it proves nothing about the ones it did not "
             + "record:\n" + silence.Report());
 
+        // The service's own socket is the address it and every client derive
+        // from the state directory: inside it when that fits sun_path, and at
+        // LocalEndpoint's short fallback under /tmp when it does not — which
+        // is every macOS runner, whose temp root alone is most of the limit.
+        var serviceSocket = LocalEndpoint.AddressFor(_harness.StateDirectory);
         foreach (var connect in silence.Connects)
         {
             Assert.AreEqual(
                 "Unix", connect.Family, $"a connect left the filesystem: {connect.Describe()}");
             Assert.IsNotNull(connect.UnixPath, connect.Describe());
-            Assert.StartsWith(
-                _harness.StateDirectory, connect.UnixPath, StringComparison.Ordinal);
+            Assert.AreEqual(serviceSocket, connect.UnixPath, connect.Describe());
         }
     }
 
