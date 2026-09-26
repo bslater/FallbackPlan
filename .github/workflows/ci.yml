@@ -111,7 +111,7 @@ jobs:
       # table only checks the modules it already knows about.
       #
       # The per-module table catches one module regressing, which the global
-      # floor cannot, because a healthy total absorbs it: Keystore could go to
+      # floor cannot, because a healthy total absorbs it: Recovery could go to
       # zero and the union would barely move. It also fails on a floor naming
       # a module that no longer exists, and on a module with no floor — a new
       # assembly is otherwise unguarded from the moment it is created, which
