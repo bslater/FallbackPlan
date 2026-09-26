@@ -74,6 +74,15 @@ public sealed record NetworkEvent(
     /// header already stripped by the runtime's own printing: port first, in
     /// network order, then the address.
     /// </summary>
+    /// <remarks>
+    /// An IPv4-mapped IPv6 address, <c>::ffff:a.b.c.d</c>, comes back as the
+    /// IPv4 endpoint it carries. It is what a dual-mode socket — the runtime's
+    /// default on any host with an IPv6 stack — writes when it dials an IPv4
+    /// destination, and the packets go to that IPv4 destination. Only a mapped
+    /// address is unwrapped: <see cref="IPAddress.MapToIPv4"/> would turn
+    /// <c>::1</c> into <c>0.0.0.1</c> without complaint. <see cref="Family"/>
+    /// still reports what the runtime wrote.
+    /// </remarks>
     public IPEndPoint? InternetEndpoint
     {
         get
@@ -90,7 +99,13 @@ public sealed record NetworkEvent(
                 return new IPEndPoint(new IPAddress(bytes[2..6]), port);
             }
 
-            return bytes.Length < 26 ? null : new IPEndPoint(new IPAddress(bytes[6..22]), port);
+            if (bytes.Length < 26)
+            {
+                return null;
+            }
+
+            var address = new IPAddress(bytes[6..22]);
+            return new IPEndPoint(address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address, port);
         }
     }
 
