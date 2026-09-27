@@ -168,6 +168,8 @@ The run for the commit that made the change, against the two runs before it:
 
 Hosts.Tests' concurrent batch fell from 500 seconds to 431 on Windows and from 382 to 281 on macOS. On Linux it held at 368, against 361. The macOS step is the fastest it has been, and the Linux one is where the last run left it.
 
+The next run, for the documentation-only commit that recorded this, gave 8m40s on Windows, 6m33s on macOS and 3m35s on Linux. Windows and macOS stayed where the first run put them. Linux varied as it has throughout.
+
 The Windows step is faster but not back to Amendment 1's 7m35s, because Cli.Tests is now a second critical path there:
 
 - Its first test started 152 seconds after its run did. On macOS and Linux the wait was 6 and 13 seconds.
