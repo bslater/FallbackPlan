@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
@@ -11,7 +12,8 @@ namespace FallbackPlan.Api.Tests;
 /// <summary>
 /// The local binding (ADR-0028 §5, FR-SVC-003): a Unix domain socket or named
 /// pipe, authenticated by the operating system. No password, no token file, and
-/// — the assertion that matters most — no port.
+/// — the assertion that matters most — no port. With nothing listening, a client
+/// is told so without waiting for a service that is not there (NFR-OPS-009).
 /// </summary>
 [TestClass]
 public sealed class LocalBindingTests : IDisposable
@@ -194,6 +196,25 @@ public sealed class LocalBindingTests : IDisposable
             () => LocalServiceClient.ConnectAsync(_state, "test", Timeout).AsTask());
 
         Assert.Contains("No service is listening", failure.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    // Alone: it bounds a real duration, which concurrent classes would stretch.
+    [DoNotParallelize]
+    public async Task Connect_WhenNoServiceIsListening_ShouldAnswerWithoutWaitingForOne()
+    {
+        // NFR-OPS-009. Every CLI command asks this before choosing direct mode,
+        // so the answer is paid once per command on a machine with no service.
+        // On Windows it cost two seconds: a missing pipe raises no error of its
+        // own, so the client waited out its whole connect timeout for a pipe
+        // nothing would create. A second is far more than an answer needs and
+        // far less than that wait.
+        var stopwatch = Stopwatch.StartNew();
+
+        await Assert.ThrowsExactlyAsync<ServiceConnectionException>(
+            () => LocalServiceClient.ConnectAsync(_state, "test", Timeout).AsTask());
+
+        Assert.IsLessThan(TimeSpan.FromSeconds(1), stopwatch.Elapsed);
     }
 
     [TestMethod]
