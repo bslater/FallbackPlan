@@ -375,6 +375,7 @@ public sealed class DestinationSyncStore
     private readonly string _path;
     private readonly List<DestinationSyncRecord> _records;
     private readonly Lock _gate = new();
+    private Action<DestinationSyncRecord>? _written;
 
     private DestinationSyncStore(string path, List<DestinationSyncRecord> records)
     {
@@ -395,7 +396,22 @@ public sealed class DestinationSyncStore
     }
 
     /// <summary>Opens (or creates) the ledger in <paramref name="stateDirectory"/>.</summary>
-    public static DestinationSyncStore Open(string stateDirectory)
+    /// <param name="stateDirectory">The directory holding <c>destinations.json</c>.</param>
+    /// <param name="written">
+    /// Called with each row as it is written, under the ledger's lock, so rows
+    /// arrive in the order they were written and each is a state a reader
+    /// could have read. It must not write to the ledger, and one that throws
+    /// fails a write that has already happened. Null, the production value,
+    /// observes nothing.
+    /// </param>
+    public static DestinationSyncStore Open(string stateDirectory, Action<DestinationSyncRecord>? written = null)
+    {
+        var store = Load(stateDirectory);
+        store._written = written;
+        return store;
+    }
+
+    private static DestinationSyncStore Load(string stateDirectory)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(stateDirectory);
         Directory.CreateDirectory(stateDirectory);
@@ -852,6 +868,7 @@ public sealed class DestinationSyncStore
                 JsonSerializer.Serialize(
                     new LedgerFile { SchemaVersion = CurrentSchemaVersion, Destinations = _records },
                     SerializerOptions));
+            _written?.Invoke(record);
             return record;
         }
     }
