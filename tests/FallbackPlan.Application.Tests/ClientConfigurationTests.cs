@@ -144,6 +144,34 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    [FallbackPlan.TestSupport.PlatformCondition(FallbackPlan.TestSupport.TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void Load_WhileASaveHoldsTheFileForDeletion_StillLoads()
+    {
+        // The service reads this file afresh on every use, from its scheduler,
+        // its jobs and every command, while a client may be saving it. A save
+        // renames the new file into place and holds it open for deletion until
+        // the rename returns, and a load in that moment must still read the
+        // old file or the new one rather than fail whatever asked.
+        //
+        // The handle below is that moment held still, as in AtomicFileTests;
+        // delete-on-close is how .NET asks for deletion access.
+        new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("vault")],
+            BackupSets = [Set("docs", Ref("vault"))],
+        }.Save(ConfigPath);
+
+        using (File.OpenHandle(
+            ConfigPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            Assert.AreEqual("docs", Assert.ContainsSingle(ClientConfiguration.Load(ConfigPath).BackupSets).Name);
+        }
+    }
+
+    [TestMethod]
     public void SaveThenLoad_DestinationsAndRetention_RoundTrip()
     {
         new ClientConfiguration
