@@ -13,7 +13,9 @@ namespace FallbackPlan.Api.Tests;
 /// a new client, and an OLD service's frames, which never mention them,
 /// read as the stated defaults rather than failing to parse. Establishes
 /// the wire half of FR-SVC-013, FR-DEST-014's status surface, and
-/// FR-SVC-006's plan.
+/// FR-SVC-006's plan. Later additions ride here too, among them contract
+/// 1.40's adoption answer naming the retention an archive recorded, the wire
+/// half of FR-DR-006.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -543,6 +545,41 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.IsInstanceOfType<StatusResult>(result, out var status);
         Assert.IsNull(status.BackgroundWindow);
     }
+
+    [TestMethod]
+    public void TheAdoptedRetention_WireNameAndPre140Default()
+    {
+        // Contract 1.40 (FR-DR-006): the adoption answer says what the
+        // re-declared set will now delete by, because the archive recorded it.
+        var json = JsonSerializer.Serialize<ServiceResult>(
+            AdoptedWithRetention(new RetentionPolicyDescriptor(KeepDaily: 7, MinGenerations: 3)),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"retention\":{\"keep_daily\":7,", json, StringComparison.Ordinal);
+        Assert.Contains("\"min_generations\":3", json, StringComparison.Ordinal);
+
+        // The old frame is the modern one with the addition stripped. A
+        // pre-1.40 service never mentions the field, and a client reads that
+        // as "the archive recorded none", which is what it could tell.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            AdoptedWithRetention(new RetentionPolicyDescriptor(KeepDaily: 7)), FrameCodec.SerializerOptions);
+        var old = modern.Replace(
+            ",\"retention\":{\"keep_daily\":7,\"keep_weekly\":null,\"keep_monthly\":null,"
+                + "\"min_generations\":null,\"deferral_days\":null}",
+            "",
+            StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<ArchiveAdoptedResult>(result, out var adopted);
+        Assert.IsNull(adopted.Retention);
+    }
+
+    private static ArchiveAdoptedResult AdoptedWithRetention(RetentionPolicyDescriptor retention) =>
+        new(
+            new string('a', 32), "docs", new string('c', 32), [new BackupRootDescriptor("/src")], [],
+            "every 1h", [], [], 1, null, null,
+            WriterIdentityResumed: true, AlreadyAdopted: false, Lines: [], Retention: retention);
 
     [TestMethod]
     public void TheCurrentFile_WireNameAndPre122Default()

@@ -27,7 +27,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </summary>
 /// <remarks>Does not establish FR-DRL-001: nothing here recovers content to a person.</remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class FormatUpgradeTests : IDisposable
 {
     private static readonly byte[] WriterId = [.. Enumerable.Repeat((byte)23, 16)];
@@ -43,7 +42,6 @@ public sealed class FormatUpgradeTests : IDisposable
 
     public void Dispose()
     {
-        ServiceRuntime.ArchiveFormatVersion = FormatLimits.FormatVersion;
         _timeout.Dispose();
         _harness.Dispose();
     }

@@ -15,7 +15,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// the mapping itself.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class RetentionTrimVerbTests : IDisposable
 {
     private readonly string _root =

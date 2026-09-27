@@ -252,6 +252,39 @@ The scheduler pass also stopped awaiting its own transfer phases inline
 multi-hour copy. The reader and transfer lanes stay one worker each, for this
 record's original reasons.
 
+#### Amendment 5 (2026-09): a queued cancel is immediate
+
+Cancelling a job that had not started was truthful about the token and silent
+about the state. The token flipped and the acknowledgement went out, but the
+journal stayed `Pending` until a worker reached the job. Behind a long backup,
+under a pool narrowed to one, that could be hours after the person clicked,
+and it came with a `Scanning` flash on the way to `Cancelled`. A queued job
+that knows how to record its own cancellation is now taken out of play at the
+command. Its queue entry is removed, it is journalled `Cancelled` ("cancelled
+before it started") there and then, the progress stream hears it, whoever is
+awaiting the run's outcome is answered, and a second cancel gets the honest
+not-found.
+
+A job that has started keeps the cooperative path: cancellation remains a
+command whose effect the runner records (§4). A job queued without the
+callback keeps it too. It stays queued and runs, when its turn comes, with a
+token already cancelled, and fan-out and the sweep rely on that, their
+runners settling their own cancellation. Removing an entry leaves its
+semaphore token behind, and a worker that wakes to it finds nothing queued
+and waits again, as every lane's pump already does. If the cancelled arrival
+had outranked a running backup, it may already have asked that run to park.
+The run still parks at its next file boundary, and is resumed at once, since
+nothing outranks it any more. The ask is not tracked well enough to withdraw,
+and the park costs one boundary.
+
+The line merged in at 9fb5ab6 had made this change as its own Amendment 4 to
+this record, in the job scheduler this branch replaced. The merge kept this
+branch's scheduler, so the change went with the other one, along with the
+tests that held it, and the merge recorded that as a real loss. This amendment
+builds it into the scheduler that stayed, and the tests are back:
+`Hosts.Tests/JobSchedulerTests` drills the three cases against the queue, and
+`Hosts.Tests/ServiceTests` drills the journal end to end.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -467,3 +500,4 @@ cost is no longer a question worth asking.
 | 2026-08 | Accepted (amended) | Amendment 4: the writer lane is a pool of 1..5 with priorities in the queue key and a pause gate at the pipeline's file boundary, and the pass no longer awaits its transfer phases ([ADR-0047](0047-backup-pool-and-priorities.md)) |
 | 2026-09 | Accepted (amended) | The 2026-09 amendment: NFR-PERF-013's CPU cap was never built, and neither were its disk, network or time-window limits — `Domain/Configuration/CapturePolicy`'s `Concurrency` is the only configured bound and bounds parallel work rather than CPU. The requirement's yielding half is built; its measurable half does not exist |
 | 2026-09 | Accepted (amended) | One of the four is now built: the **time window** ([ADR-0069](0069-the-background-window.md)), out of this record's own §4 pause gate rather than beside it. CPU, disk and network remain unbuilt, and the CPU cap's acceptance stays machine-dependent in a way a container cannot settle |
+| 2026-09 | Accepted (amended) | Amendment 5: a job cancelled before it has started is taken out of the queue and journalled `Cancelled` at the command, when it carries its own record of cancellation; started jobs, and queued ones without that record, keep the cooperative path. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests` |

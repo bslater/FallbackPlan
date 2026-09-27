@@ -22,7 +22,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// retrieval, not a read of the file.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class ReplicaReattributionTests : IDisposable
 {
     private readonly HostHarness _harness = new();

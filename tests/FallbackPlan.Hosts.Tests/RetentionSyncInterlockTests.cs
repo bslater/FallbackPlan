@@ -14,7 +14,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// apply defers and says so.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class RetentionSyncInterlockTests : IDisposable
 {
     private readonly HostHarness _harness = new();

@@ -68,6 +68,43 @@ public sealed record PolicyManifest
 
     /// <summary>The set's schedule text (key 12); null when manual-only or unrecorded.</summary>
     public string? Schedule { get; init; }
+
+    /// <summary>
+    /// The set's own retention policy (key 13, FR-DR-006); null when the set
+    /// defers retention or the writer recorded none. A destination's override
+    /// is never recorded: it names the destination, and the repository
+    /// carries no destination identity (FR-DEST-006).
+    /// </summary>
+    public RecordedRetention? Retention { get; init; }
+}
+
+/// <summary>
+/// A set's own retention policy as the policy manifest records it
+/// (specification 06 §7 key 13). Each rule is optional, and an absent rule
+/// is how "no rule" is said, as in the configuration it was written from.
+/// </summary>
+/// <remarks>
+/// Its own shape rather than the client configuration's type:
+/// <c>Repository.Format</c> is what the standalone recovery tool links, and
+/// its dependency closure stays small (NFR-PORT-001). The service maps
+/// between the two.
+/// </remarks>
+public sealed record RecordedRetention
+{
+    /// <summary>Keep one snapshot per day for this many days (inner key 1).</summary>
+    public uint? KeepDaily { get; init; }
+
+    /// <summary>Keep one snapshot per week for this many weeks (inner key 2).</summary>
+    public uint? KeepWeekly { get; init; }
+
+    /// <summary>Keep one snapshot per month for this many months (inner key 3).</summary>
+    public uint? KeepMonthly { get; init; }
+
+    /// <summary>Keep at least this many snapshots regardless of age (inner key 4).</summary>
+    public uint? MinGenerations { get; init; }
+
+    /// <summary>How many days retention may be deferred before the gap is warned about (inner key 5).</summary>
+    public uint? DeferralDays { get; init; }
 }
 
 /// <summary>
@@ -86,13 +123,14 @@ public static class PolicyManifestCodec
     {
         ThrowHelper.ThrowIfNull(manifest);
 
-        // Keys 10-12 are written only when recorded: a manifest that carries
+        // Keys 10-13 are written only when recorded: a manifest that carries
         // no shape encodes the nine-key map every pre-ADR-0061 archive holds,
         // byte for byte.
         var keyCount = 9
             + (manifest.Roots.Count > 0 ? 1 : 0)
             + (manifest.SetName is not null ? 1 : 0)
-            + (manifest.Schedule is not null ? 1 : 0);
+            + (manifest.Schedule is not null ? 1 : 0)
+            + (manifest.Retention is not null ? 1 : 0);
 
         var writer = new CanonicalCborWriter();
         writer.WriteStartMap(keyCount);
@@ -192,9 +230,42 @@ public static class PolicyManifestCodec
             writer.WriteTextString(schedule);
         }
 
+        if (manifest.Retention is { } retention)
+        {
+            writer.WriteKey(13);
+            WriteRetention(writer, retention);
+        }
+
         writer.WriteEndMap();
 
         return writer.Encode();
+    }
+
+    private static void WriteRetention(CanonicalCborWriter writer, RecordedRetention retention)
+    {
+        ReadOnlySpan<uint?> rules =
+        [
+            retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly,
+            retention.MinGenerations, retention.DeferralDays,
+        ];
+
+        var count = 0;
+        foreach (var rule in rules)
+        {
+            count += rule is null ? 0 : 1;
+        }
+
+        writer.WriteStartMap(count);
+        for (var i = 0; i < rules.Length; i++)
+        {
+            if (rules[i] is { } value)
+            {
+                writer.WriteKey((uint)(i + 1));
+                writer.WriteUnsignedInteger(value);
+            }
+        }
+
+        writer.WriteEndMap();
     }
 
     /// <summary>Decodes and validates a policy manifest.</summary>
@@ -224,6 +295,7 @@ public static class PolicyManifestCodec
         List<string> include = [], exclude = [];
         List<RecordedRoot> roots = [];
         string? setName = null, schedule = null;
+        RecordedRetention? retention = null;
 
         for (var i = 0; i < count; i++)
         {
@@ -306,6 +378,9 @@ public static class PolicyManifestCodec
                 case 12:
                     schedule = reader.ReadTextString(maxUtf8Length: MaxNameUtf8Length);
                     break;
+                case 13:
+                    retention = ReadRetention(reader);
+                    break;
                 default:
                     throw new ManifestValidationException(Strings.PolicyManifestCodec_PolicyManifestCarriesUnknownKey);
             }
@@ -340,7 +415,29 @@ public static class PolicyManifestCodec
             Roots = roots,
             SetName = setName,
             Schedule = schedule,
+            Retention = retention,
         };
+    }
+
+    private static RecordedRetention ReadRetention(CanonicalCborReader reader)
+    {
+        var count = reader.ReadStartMap();
+        var retention = new RecordedRetention();
+        for (var i = 0; i < count; i++)
+        {
+            retention = reader.ReadKey() switch
+            {
+                1 => retention with { KeepDaily = reader.ReadUInt32() },
+                2 => retention with { KeepWeekly = reader.ReadUInt32() },
+                3 => retention with { KeepMonthly = reader.ReadUInt32() },
+                4 => retention with { MinGenerations = reader.ReadUInt32() },
+                5 => retention with { DeferralDays = reader.ReadUInt32() },
+                _ => throw new ManifestValidationException(Strings.PolicyManifestCodec_RetentionCarriesUnknownKey),
+            };
+        }
+
+        reader.ReadEndMap();
+        return retention;
     }
 
     /// <summary>A set name or schedule is bounded as a rule is, in UTF-8 bytes.</summary>

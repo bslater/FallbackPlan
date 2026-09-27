@@ -15,7 +15,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// the direct-ship shape of FR-GC-006 and FR-GC-010.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipRetentionTests : IDisposable
 {
     private readonly HostHarness _harness = new();

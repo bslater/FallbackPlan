@@ -28,7 +28,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class IncrementalSyncTests : IDisposable
 {
     private readonly HostHarness _harness = new();

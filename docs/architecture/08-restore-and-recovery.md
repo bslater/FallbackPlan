@@ -120,7 +120,7 @@ The release gate is recovery using **only** repository access and the passphrase
 |-------|------------------------------|-----------------------------------|
 | Catalogue | Yes — [`02-repository-format.md` §8](02-repository-format.md#8-catalogue-rebuild) | No |
 | Durable local state (device keypair, pairing grants, job history) | **No** | No — a recovering device establishes a new identity, and for a peer destination claims its replica under that new identity (below) |
-| Configuration (backup sets, schedules, policies) | Mostly — the policy manifest records each set's name, roots, schedule and rules since [ADR-0061](../adr/0061-adopt-a-destinations-archives.md); retention, priority and destinations are re-declared by hand | Not for restore; needed to *resume backing up* — and a destination's archive re-declares its set through adoption |
+| Configuration (backup sets, schedules, policies) | Mostly — the policy manifest records each set's name, roots, schedule and rules since [ADR-0061](../adr/0061-adopt-a-destinations-archives.md), and its own retention since that record's Amendment 1; a destination's retention override, priority and destinations are re-declared by hand | Not for restore; needed to *resume backing up* — and a destination's archive re-declares its set through adoption |
 
 Recovery of **data** needs only the repository and the passphrase. Recovery of **operation** — resuming scheduled backups to the same destinations — additionally needs configuration and re-pairing. The distinction is stated plainly in the UI, because a user who has restored their files and believes they are protected again is in a worse position than one who knows they still have to set up their destinations.
 

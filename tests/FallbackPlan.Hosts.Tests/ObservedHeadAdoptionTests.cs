@@ -27,7 +27,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class ObservedHeadAdoptionTests : IDisposable
 {
     private readonly HostHarness _harness = new();

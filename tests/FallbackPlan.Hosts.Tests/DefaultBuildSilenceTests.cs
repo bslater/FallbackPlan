@@ -37,6 +37,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// Establishes NFR-PRIV-001.
 /// </summary>
 [TestClass]
+// Alone: NetworkSilence hears every socket in the process, so another class's connection would read as this build's.
 [DoNotParallelize]
 public sealed class DefaultBuildSilenceTests : IDisposable
 {

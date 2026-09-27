@@ -29,12 +29,15 @@ jobs:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Windows runs the file-heavy assemblies several times slower than the
-    # others (Retention.Tests: two minutes on Linux, nine to thirteen here),
-    # and at thirty minutes the job was cancelled before Repository.Tests and
-    # Hosts.Tests reported. A cancelled job reads "cancelled", not "failed",
-    # so the limit hid the failures it should have caught. The others keep
-    # thirty, which is still a hang guard for them.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 90 || 30 }}
+    # others (Hosts.Tests alone takes about 23 minutes there), and at thirty
+    # minutes the job was cancelled before Repository.Tests and Hosts.Tests
+    # reported. A cancelled job reads "cancelled", not "failed", so the limit
+    # hid the failures it should have caught. The Windows limit is therefore
+    # the measured job plus a margin: two green runs took 25m40s and 25m34s,
+    # and 45 minutes lets every assembly report while still stopping a hang.
+    # If Hosts.Tests grows toward it, raise this rather than let a slow run
+    # read as cancelled. The others keep thirty, a hang guard for them.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +47,21 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
+      # Every test writes under the temp directory, and on the Windows runner
+      # the profile's temp is on C: while the runner's own temp directory sits
+      # on its local D: disk beside the workspace. Moving the tests there took
+      # Repository.Tests from 12m40s to 2m41s and the job from about 26
+      # minutes to 16. It is a property of the runner, not of the code under
+      # test. Real-time scanning was measured off on these runners, so no
+      # exclusion is needed.
+      - name: Keep test I/O on the runner's local disk (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # Locked mode: the committed packages.lock.json files are the restore
       # (NFR-SUP-003). A dependency change that forgot to update them fails
       # here rather than silently resolving something new.
@@ -68,13 +86,29 @@ jobs:
       # paths are mutually unreachable, so a one-OS number understates the
       # codebase. The merge job below unions them.
       - name: Test
-        run: dotnet test FallbackPlan.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory coverage
+        run: dotnet test FallbackPlan.slnx -c Release --no-build --collect:"XPlat Code Coverage" --logger trx --results-directory coverage
       - name: Upload coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-${{ matrix.os }}
-          path: coverage/**/coverage.cobertura.xml
+          # The TRX logger copies each report into its own In folder; the
+          # original, beside it, is the one to upload.
+          path: |
+            coverage/**/coverage.cobertura.xml
+            !coverage/*/In/**
           if-no-files-found: error
+      # Every test's start, end and outcome, per OS. The console reports each
+      # assembly's total only, and with classes running concurrently a total
+      # cannot say which tests a slower run spent its time on, or what else
+      # was running beside a test that failed.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: coverage/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload build log
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -20,6 +20,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// by review. The same run proves the headline instruments actually fire.
 /// </summary>
 [TestClass]
+// Alone: a MeterListener hears every meter in the process, so another class's measurements would count as this pipeline's.
+[DoNotParallelize]
 public sealed class TelemetryPrivacyTests : ArchiveTestHarness
 {
     private static readonly Dictionary<string, string[]> AllowedValues =

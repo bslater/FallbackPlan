@@ -17,6 +17,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// variables never leak into their runs.
 /// </remarks>
 [TestClass]
+// Alone: it sets the installation-wide state and archives variables that every host resolving a default location reads.
 [DoNotParallelize]
 public sealed class AgentDefaultLocationsTests : IDisposable
 {

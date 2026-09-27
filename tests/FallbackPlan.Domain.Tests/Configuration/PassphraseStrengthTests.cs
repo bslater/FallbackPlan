@@ -218,6 +218,8 @@ public sealed class PassphraseStrengthTests
     }
 
     [TestMethod]
+    // Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+    [DoNotParallelize]
     public void Assess_UnderATurkishCulture_ReachesTheSameVerdict()
     {
         // The dotted/dotless I is where culture-sensitive character handling

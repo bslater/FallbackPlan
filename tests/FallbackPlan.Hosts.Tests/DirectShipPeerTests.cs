@@ -39,7 +39,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipPeerTests : IDisposable
 {
     private readonly HostHarness _harness = new();
@@ -545,7 +544,6 @@ public sealed class DirectShipPeerTests : IDisposable
 
     public void Dispose()
     {
-        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion;
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
         _timeout.Dispose();

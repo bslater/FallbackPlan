@@ -20,7 +20,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// prove nothing.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class CreatedFormatTests : IDisposable
 {
     private readonly HostHarness _harness = new();

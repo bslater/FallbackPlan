@@ -19,4 +19,13 @@
     <NoWarn>$(NoWarn);CA1707;CA1515;CA1861</NoWarn>
   </PropertyGroup>
 
+  <!-- On CI every test assembly shares a three- or four-core runner, and the
+       step ends when Hosts.Tests does. The other assemblies finish well before
+       it either way, so there they run one class at a time rather than take
+       cores from it (ADR-0032 Amendment 4). Everywhere else they run their
+       classes concurrently. -->
+  <PropertyGroup Condition="'$(CI)' == 'true' and '$(MSBuildProjectName)' != 'FallbackPlan.Hosts.Tests'">
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)off-critical-path.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
 </Project>

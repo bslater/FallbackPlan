@@ -89,6 +89,68 @@ Bodu enters as a **git submodule** at `external/bodu` with project references, n
 - The warnings-as-errors gate is **scoped to exclude `/external/`**. Vendored code is held to its own repository's standards, not ours; a submodule bump must not be able to fail our build on a style rule. Our own code remains at zero warnings, and the gate would still fail on a warning from `src/` or `tests/`.
 - `eng/check-links.py` excludes `/external/` for the same reason: the submodule carries its own documentation conventions.
 
+## Amendment 5 — Ed25519 signs the repository
+
+The repository's own signatures are Ed25519 from `Bodu.Security.Cryptography`,
+and nothing in this record admitted them. `Repository.Crypto/RepositorySigner`
+signs each snapshot manifest
+([specification 06 §6.1](../../specifications/repository-format/06-manifests.md#61-signature))
+and the other signed records the format defines, under a key derived per
+generation ([specification 03 §4](../../specifications/repository-format/03-keys.md#4-derived-keys),
+[ADR-0020](0020-ed25519-signing-key-semantics.md)). The reclaim and claim
+authorities ([ADR-0055](0055-reclaim-authority.md),
+[ADR-0053](0053-peer-claim-and-configuration-recovery.md)) are Ed25519 keys
+through the same type. §4 says anything beyond Argon2id requires amending this
+record, and Amendment 2 admitted Ed25519 for the peer protocol only. Its
+"`Repository.Crypto` does not use Ed25519 or X25519 for peer purposes" stayed
+true while a repository purpose went unrecorded.
+[ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md)
+Decision 8 names the implementation and its strictness, so the use was never
+hidden. This amendment is the admission that should have come first, made
+after the fact. **Ed25519 is format-critical, permitted in
+`FallbackPlan.Repository.Crypto` for the repository's signatures, and in
+`FallbackPlan.Protocol` for pairing as before.** The signatures are committed
+to durable storage, and a reader treats a bad one as forgery, so a defect in
+the primitive would be in the user's stored bytes. Amendment 2's allowlist of
+two projects is unchanged, and `Repository.Format` still does not reference the
+library: it carries signatures as bytes, and the recovery tool's closure
+(NFR-PORT-001) is untouched.
+
+**The gates, with the evidence §2 asks for.**
+
+1. *No reimplementation of a platform primitive.* .NET 10 has no standalone
+   Ed25519 (Amendment 2). The seed is derived with the platform's `HKDF`, so
+   the library supplies the signature scheme and nothing the platform has.
+2. *No native dependency.* The package is managed, as before.
+3. *Vectors reproduce.* `ed25519.json` carries the RFC 8032 §7.1 known-answer
+   cases and format-real cases, computed by the conformance generator's
+   pure-Python RFC 8032 implementation, which those published vectors gate on
+   every run (ADR-0022 Decision 8).
+   `Repository.ConformanceTests/Ed25519ConformanceTests` drives every case
+   through `RepositorySigner`.
+4. *No algorithm change.* Specification 03 §4's Ed25519, with the seed
+   interpretation ADR-0020 fixed, is unchanged.
+5. *Licence.* MIT, unchanged.
+
+**§3's compensations.** Ed25519 is now named in
+[specification 03 §6.1](../../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from),
+together with X25519: Amendment 3 made X25519 format-critical but did not add it
+to that table. The same architecture test contains Ed25519, and the test's
+stated rationale is corrected to match. It had still named
+XChaCha20-Poly1305, which the format withdrew and nothing calls, and it had
+left out both the signatures and the tree. Cross-verification is the
+independently derived `ed25519.json`, as the gates record. One difference
+between implementations is known and stated in ADR-0022 Decision 8: this
+library's verifier is strict and cofactorless, so a signature a lenient
+verifier accepts can be refused here. The difference narrows what verifies,
+never widens it.
+
+**Review scope.** The pre-beta cryptographic review §3 requires grows again. It
+must cover Ed25519 as the repository uses it: signing, the strict verifier, and
+verification against a bare public key at a keyless destination
+(ADR-0055 §5). Amendment 2 only asked for Ed25519 as the pairing ceremony uses
+it.
+
 ## Amendment 4 — the Merkle tree beneath published roots
 
 [ADR-0065](0065-merkle-commitment-and-chunk-possession.md) publishes an RFC 6962
@@ -211,3 +273,4 @@ Two clarifications from a supply-chain review of the scaffold, recorded here bec
 | 2026-08 | Accepted (amended) | Amended by [ADR-0021](0021-consume-bodu-via-committed-package-feed.md): submodule replaced by the committed `external/packages` feed; dependency-tier policy, five gates, and containment unchanged |
 | 2026-08 | Accepted (amended) | Amendment 3: X25519 reclassified format-critical for [ADR-0042](0042-write-only-repositories.md)'s content sealing — permitted in `Repository.Crypto`, still banned from `Repository.Format`; review scope widened |
 | 2026-09 | Accepted (amended) | Amendment 4: `Bodu.Security.Cryptography`'s `MerkleTree` admitted as format-critical in `Repository.Crypto` for [ADR-0065](0065-merkle-commitment-and-chunk-possession.md)'s commitment — over the platform's SHA-256, cross-verified by `merkle.json` on every run; the package's accumulator not taken; still banned from `Repository.Format`; review scope widened |
+| 2026-09 | Accepted (amended) | Amendment 5: `Bodu.Security.Cryptography`'s Ed25519 admitted as format-critical in `Repository.Crypto`, where `RepositorySigner` already used it for the repository's signatures, recorded after the fact; cross-verified by `ed25519.json` through `Ed25519ConformanceTests` on every run; named with X25519 in specification 03 §6.1; still banned from `Repository.Format`; review scope widened |

@@ -14,7 +14,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// only the choosing is gated.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class LocalPlacementTests : IDisposable
 {
     private readonly HostHarness _harness = new();

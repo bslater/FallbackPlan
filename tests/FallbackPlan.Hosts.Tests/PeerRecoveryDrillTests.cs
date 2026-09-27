@@ -28,7 +28,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerRecoveryDrillTests : IDisposable
 {
     private readonly HostHarness _harness = new();

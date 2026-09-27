@@ -12,6 +12,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// reaches a pause point. Establishes FR-SVC-013 and FR-SVC-014.
 /// </summary>
 [TestClass]
+// Alone: the max-pause bound and the escalation delay it drills are real durations, which concurrent classes would stretch.
 [DoNotParallelize]
 public sealed class JobSchedulerPreemptionTests : IDisposable
 {

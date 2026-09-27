@@ -13,7 +13,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// (it needs a live Service Control Manager, which CI has no way to provide).
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class AgentServiceLifetimeTests : IDisposable
 {
     private const int Sigterm = 15;

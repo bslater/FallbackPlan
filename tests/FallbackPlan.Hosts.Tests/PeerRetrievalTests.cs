@@ -19,7 +19,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// pairing are enough.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerRetrievalTests : IDisposable
 {
     private readonly HostHarness _siteOne = new();

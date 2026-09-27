@@ -1,5 +1,6 @@
 using Bodu;
 using System.Globalization;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using FallbackPlan.Api.Resources;
@@ -167,8 +168,7 @@ public static partial class LocalEndpoint
 
         if (OperatingSystem.IsWindows())
         {
-            return Directory.Exists(@"\\.\pipe\")
-                && Directory.EnumerateFiles(@"\\.\pipe\", AddressFor(stateDirectory)).Any();
+            return PipeExists(AddressFor(stateDirectory));
         }
 
         try
@@ -179,6 +179,28 @@ public static partial class LocalEndpoint
         {
             // An unusable address is not an endpoint.
             return false;
+        }
+    }
+
+    /// <summary>Whether a named pipe of this name exists, checked without connecting to it.</summary>
+    /// <param name="pipeName">The pipe name, as <see cref="AddressFor"/> gives it on Windows.</param>
+    /// <returns><see langword="false"/> only when no pipe of that name exists.</returns>
+    /// <remarks>
+    /// The pipe namespace is listed rather than the pipe opened, because opening a
+    /// pipe is connecting to it, which would take an instance from the service. A
+    /// listing that cannot be read answers yes, so that a caller's bounded connect
+    /// decides rather than this guess.
+    /// </remarks>
+    [SupportedOSPlatform("windows")]
+    internal static bool PipeExists(string pipeName)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(@"\\.\pipe\", pipeName).Any();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 

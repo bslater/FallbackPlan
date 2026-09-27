@@ -231,6 +231,8 @@ What crosses to a client is **rendered**, never the record's raw name/value stat
 
 The web console's page keeps its own trace, and it is deliberately not a third sink. Lines go to the browser's `console.debug` and to a bounded in-page ring that `fbpTraceDump()` renders for a bug report; nothing is relayed to the console process or the service, because a browser-originated log line would widen a relay surface that is deliberately narrow. State reaches a trace line only through a redacting projector — the setup ceremony's state holds the passphrase while it is being typed, and the projector hands a trace lengths and booleans, never values.
 
+The two processes a request crosses keep trace tiers of their own, and each reports only what its own process knows, so the two never give competing accounts of one event. The service leaves one line per command at the seam every verb crosses, naming the command's type, the result's type and the time taken, so a trace read end to end is the conversation. The console leaves the server half of the page's trace: which endpoint answered with which status and how quickly, which command it relayed and what came back, how a setup ceremony was classified, and which embedded asset it served at what size. A page tracing one asset version while the console served another settles a staleness question from both sides. Both tiers log names and outcomes only, and no message in either takes a request body ([ADR-0043](../adr/0043-structured-logging-and-diagnostics.md)).
+
 ---
 
 **Previous:** [09 — Replication and peers](09-replication-and-peers.md) · **Next:** [11 — Solution structure](11-solution-structure.md)

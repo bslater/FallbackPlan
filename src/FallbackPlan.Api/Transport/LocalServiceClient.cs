@@ -265,22 +265,22 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     }
 
     /// <summary>
-    /// How long to wait for a Windows named pipe to appear before reporting it
-    /// absent.
+    /// How long to wait for an instance of a Windows named pipe that exists.
     /// </summary>
     /// <remarks>
     /// Windows has no "nothing is listening" error for a pipe: connecting waits
-    /// for one to be created, and with no timeout it waits for as long as the
-    /// caller allows — so a client asking a machine with no service running
-    /// would hang rather than be told, and the stated reason this method exists
-    /// to give would never be reached. A bounded wait is what turns absence
-    /// into an answer, because the timeout surfaces as
-    /// <see cref="TimeoutException"/>. The Unix path needs none: connecting to
-    /// a socket path that does not exist fails immediately.
+    /// for one to be created, for as long as the caller allows. So a client
+    /// first checks whether the pipe exists at all, which answers a machine with
+    /// no service at once, as a Unix socket path that does not exist does
+    /// (NFR-OPS-009). This bounds what is left: a pipe that exists but has no
+    /// free instance. The service offers its next instance as soon as it accepts
+    /// a connection, so a wait longer than a moment means no service will
+    /// answer, and the timeout, surfacing as <see cref="TimeoutException"/>,
+    /// turns that into the stated reason this method exists to give.
     /// <para>
-    /// Two seconds because a local pipe that exists is connectable at once, so
-    /// this bounds only the answer "no", and a person waiting for it should not
-    /// wait long.
+    /// Two seconds because a person waiting for that answer should not wait
+    /// long. Before the existence check, every command on a machine with no
+    /// service paid all of it.
     /// </para>
     /// </remarks>
     private const int WindowsConnectTimeoutMilliseconds = 2_000;
@@ -289,6 +289,11 @@ public sealed class LocalServiceClient : IFallbackPlanClient
     {
         if (OperatingSystem.IsWindows())
         {
+            if (!LocalEndpoint.PipeExists(address))
+            {
+                throw new ServiceConnectionException(Strings.FormatLocalServiceClient_NoServiceListening(address));
+            }
+
             var pipe = new NamedPipeClientStream(
                 ".", address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try

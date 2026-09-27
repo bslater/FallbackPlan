@@ -59,6 +59,13 @@ public sealed record SnapshotJob
     /// <summary>The set's schedule text, recorded beside the name; null records nothing.</summary>
     public string? Schedule { get; init; }
 
+    /// <summary>
+    /// The set's own retention policy, recorded beside its shape
+    /// (FR-DR-006); null records nothing. Never a destination's override,
+    /// which names the destination (FR-DEST-006).
+    /// </summary>
+    public RecordedRetention? Retention { get; init; }
+
     /// <summary>The claiming device (snapshot key 2), 16 bytes.</summary>
     public required ReadOnlyMemory<byte> DeviceId { get; init; }
 
@@ -430,12 +437,13 @@ public sealed partial class PublicationOrchestrator
                 IncludeRules = job.IncludeRules,
                 ExcludeRules = job.ExcludeRules,
                 // The shape as configured (ADR-0061): the roots' paths and
-                // labels, the set's name and schedule, so a destination's
-                // archive can re-declare the set after the configuration
-                // that wrote it is gone.
+                // labels, the set's name, schedule and own retention, so a
+                // destination's archive can re-declare the set after the
+                // configuration that wrote it is gone.
                 Roots = [.. job.Roots.Select(root => new RecordedRoot(root.Path, root.Label))],
                 SetName = job.SetName,
                 Schedule = job.Schedule,
+                Retention = job.Retention,
             };
             var policyId = await builder.AppendManifestAsync(
                 ObjectType.PolicyManifest, PolicyManifestCodec.Encode(policy), cancellationToken).ConfigureAwait(false);

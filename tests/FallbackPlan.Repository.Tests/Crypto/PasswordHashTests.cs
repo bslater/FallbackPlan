@@ -176,6 +176,8 @@ public sealed class PasswordHashTests
     }
 
     [TestMethod]
+    // Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+    [DoNotParallelize]
     public void Encode_UnderATurkishCulture_ParsesBack()
     {
         // CA1305 is an error in this tree because a formatter that follows the
@@ -193,6 +195,8 @@ public sealed class PasswordHashTests
     }
 
     [TestMethod]
+    // Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+    [DoNotParallelize]
     public void Encode_ParsedUnderADifferentCulture_StillVerifies()
     {
         // The half the case above cannot prove on its own: a stored form

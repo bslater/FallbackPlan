@@ -270,17 +270,18 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
-    /// FallbackPlan needs exactly two cryptographic primitives .NET does not
-    /// provide — Argon2id and XChaCha20-Poly1305 — so both come from a third
-    /// party and neither inherits the platform's audit posture
-    /// (specification 03 section 6.1, ADR-0019).
+    /// FallbackPlan needs cryptography .NET does not provide — Argon2id,
+    /// X25519 and Ed25519, and a Merkle tree over the platform's SHA-256 — so
+    /// it comes from a third party and does not inherit the platform's audit
+    /// posture (specification 03 section 6.1, ADR-0019).
     ///
-    /// That exposure is bounded by keeping it in one project. Repository.Crypto
-    /// is the only assembly permitted to reference Bodu.Security.Cryptography;
-    /// everywhere else, a call reaching an unaudited primitive would be a
+    /// That exposure is bounded by keeping it in two named projects:
+    /// Repository.Crypto, for the format-critical uses whose output is in the
+    /// user's stored bytes, and Protocol, for the pairing ceremony's.
+    /// Everywhere else, a call reaching an unaudited primitive would be a
     /// dependency nobody chose and nobody reviewed.
     ///
-    /// The rule covers EVERY src assembly except Repository.Crypto, not a
+    /// The rule covers EVERY src assembly except those two, not a
     /// hand-picked subset — an earlier version listed four assemblies and
     /// silently left Repository.Packing (which already references Bodu.Core),
     /// Index, Catalogue, the engine root, Storage.Local and Cli uncovered.
@@ -312,9 +313,9 @@ public sealed class DependencyRuleTests
                     .HaveDependencyOn("Bodu.Security.Cryptography")
                     .GetResult(),
                 $"{assembly.GetName().Name} must not reference third-party cryptography. " +
-                "Argon2id, XChaCha20-Poly1305 and X25519-for-content-sealing are confined to " +
-                "Repository.Crypto; Ed25519 and X25519-for-pairing to Protocol " +
-                "(ADR-0019 §3, §5, Amendment 3; ADR-0042).");
+                "Argon2id, X25519-for-content-sealing, Ed25519-for-the-repository's-signatures " +
+                "and the blob Merkle tree are confined to Repository.Crypto; Ed25519 and " +
+                "X25519-for-pairing to Protocol (ADR-0019 §3 and Amendments 2 to 5; ADR-0042).");
         }
     }
 

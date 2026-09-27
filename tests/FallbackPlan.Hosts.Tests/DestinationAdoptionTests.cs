@@ -12,16 +12,16 @@ using RestoreResult = FallbackPlan.Api.RestoreResult;
 namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
-/// Adopting a destination's archives after a rebuild (ADR-0061; FR-WOR-006).
-/// A fresh installation pointed at an existing destination lists the
-/// archives it holds by descriptor alone and adopts one under its original
-/// repository and set ids with the passphrase, re-declaring the set from
-/// the shape the archive records — and the next backup is incremental
+/// Adopting a destination's archives after a rebuild (ADR-0061; FR-WOR-006,
+/// FR-DR-006). A fresh installation pointed at an existing destination lists
+/// the archives it holds by descriptor alone and adopts one under its
+/// original repository and set ids with the passphrase, re-declaring the set
+/// from the shape the archive records, its own retention included — and the
+/// next backup is incremental
 /// against the replica rather than a re-seed. The drill is the one
 /// <c>eng/recovery-drill.sh</c> step 8 runs on the Release binaries.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DestinationAdoptionTests : IDisposable
 {
     private const string Vault = "vault";
@@ -140,6 +140,39 @@ public sealed class DestinationAdoptionTests : IDisposable
         Assert.AreEqual("complete", restored.Outcome);
         var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "notes.txt", SearchOption.AllDirectories));
         Assert.AreEqual("the second words", await File.ReadAllTextAsync(recovered, Timeout));
+    }
+
+    [TestMethod]
+    public async Task Adopt_AfterTheMachineIsGone_BringsBackTheSetsOwnRetentionAndNotADestinationsOverride()
+    {
+        // FR-DR-006: what the set was allowed to delete comes back with it.
+        // The destination's override does not: it names a destination, the
+        // repository never carries destination identities (FR-DEST-006), and
+        // it is re-declared with the destination, by hand.
+        _harness.WriteSourceFile("docs/notes.txt", "the first words");
+        await BackUpThenLoseTheMachineAsync(
+            retention: new RetentionConfiguration { KeepDaily = 7, KeepMonthly = 12, MinGenerations = 3 },
+            destinationRetention: new RetentionConfiguration { KeepDaily = 2 });
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var row = await DiscoverSingleAsync(handler);
+
+        Assert.IsInstanceOfType<ArchiveAdoptedResult>(
+            await handler.ExecuteAsync(
+                new AdoptArchiveCommand(Vault, row.RepositoryId, await EnvelopeForAsync(handler, row, PassphraseText)),
+                Timeout),
+            out var adopted, "adoption refused");
+
+        Assert.AreEqual(
+            new RetentionPolicyDescriptor(KeepDaily: 7, KeepMonthly: 12, MinGenerations: 3), adopted.Retention);
+
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        Assert.AreEqual(
+            new RetentionConfiguration { KeepDaily = 7, KeepMonthly = 12, MinGenerations = 3 }, set.Retention);
+        Assert.IsNull(
+            Assert.ContainsSingle(set.Destinations).Retention,
+            "a destination's retention override came back from the repository");
     }
 
     [TestMethod]
@@ -473,10 +506,11 @@ public sealed class DestinationAdoptionTests : IDisposable
     /// with the same passphrase and a configuration naming only the vault.
     /// Returns the replica directory the vault holds.
     /// </summary>
-    private async Task<string> BackUpThenLoseTheMachineAsync()
+    private async Task<string> BackUpThenLoseTheMachineAsync(
+        RetentionConfiguration? retention = null, RetentionConfiguration? destinationRetention = null)
     {
         Directory.CreateDirectory(VaultPath);
-        WriteConfiguration(_harness, withDocsSet: true);
+        WriteConfiguration(_harness, withDocsSet: true, retention, destinationRetention);
         await _harness.SetupAsync();
         await using (var runtime = await ServiceRuntime.StartAsync(OptionsFor(_harness), Timeout))
         {
@@ -529,7 +563,11 @@ public sealed class DestinationAdoptionTests : IDisposable
         VolumeIdentityOverride = path => path.Contains(Vault, StringComparison.Ordinal) ? 2UL : 1UL,
     };
 
-    private void WriteConfiguration(HostHarness harness, bool withDocsSet) => new ClientConfiguration
+    private void WriteConfiguration(
+        HostHarness harness,
+        bool withDocsSet,
+        RetentionConfiguration? retention = null,
+        RetentionConfiguration? destinationRetention = null) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -549,7 +587,8 @@ public sealed class DestinationAdoptionTests : IDisposable
                     Roots = [new BackupRootConfiguration { Path = harness.SourceRoot }],
                     Schedule = "every 1h",
                     ExcludeRules = [ExcludeRule],
-                    Destinations = [new SetDestinationReference { Ref = Vault }],
+                    Retention = retention,
+                    Destinations = [new SetDestinationReference { Ref = Vault, Retention = destinationRetention }],
                     DirectShip = true,
                 },
             ]

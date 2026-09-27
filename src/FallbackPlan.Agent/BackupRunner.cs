@@ -166,6 +166,7 @@ public static class BackupRunner
                     ExcludeRules = set.ExcludeRules,
                     SetName = set.Name,
                     Schedule = set.Schedule,
+                    Retention = RecordedRetentionMapping.ToRecorded(set.Retention),
                     DeviceId = runtime.State.DeviceId,
                     BackupSetId = backupSetId,
                     SnapshotId = snapshotId,

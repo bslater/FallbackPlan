@@ -11,13 +11,28 @@ dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
 ```
 
-- SDK pinned in `global.json`. **Warnings are errors** — analyzer findings
-  (CA1822, CA1873, CA2263, …) fail the build, including in tests.
+- `global.json` sets the SDK floor, not a pin: CI builds with the newest 10.0
+  SDK, and a web session installs the same at start
+  (`.claude/hooks/session-start.sh`). Check `dotnet --version` before a
+  pre-push build — an older SDK misses analyzer findings CI fails on.
+  **Warnings are errors** — analyzer findings (CA1822, CA1873, CA2263, …) fail
+  the build, including in tests.
 - MSTest ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md)). House
   idioms: `Assert.ContainsSingle(collection)`, `Assert.HasCount(n, c)`,
   `Assert.Contains(substring, value, StringComparison.Ordinal)`,
   `Assert.IsInstanceOfType<T>(value, out var typed)`,
   `Assert.ThrowsExactly<T>(...)`.
+- Every test project but PerformanceTests and Web.DomTests runs its classes
+  concurrently ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md)
+  amendments), and a new one gets the same `Parallelism.cs`. On CI only
+  Hosts.Tests does, because the step waits for it alone
+  (`tests/off-critical-path.runsettings`). A test
+  that shares process state (an environment variable a host reads, a
+  process-wide listener or culture, an assertion about real durations) runs
+  alone: `[DoNotParallelize]`, with the reason beside it. Nothing else should.
+  The product's test hooks (`ServiceRuntime.ArchiveFormatVersion`,
+  `FanOut.ReadBackBudget`) belong to the flow that sets them, so set one
+  before starting the runtime it is for, and it needs no marker.
 - **Tests first.** Fixes and features start with named failing tests; a
   compile error against a not-yet-written API counts as the red.
 

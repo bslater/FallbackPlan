@@ -993,8 +993,15 @@ public sealed class Catalogue : IDisposable
         }.ToString());
         connection.Open();
 
+        // WAL keeps every commit atomic and the file consistent through a
+        // crash or a power loss; synchronous = NORMAL stops each commit
+        // flushing the log to disk, so a power loss can take the newest
+        // commits. That is the protection a cache gets (ADR-0010 Amendment 2):
+        // it leaves the catalogue behind the store, which costs a rewrite,
+        // never a restore. The default, FULL, flushes once for every row a
+        // publication records, and a flush on Windows costs milliseconds.
         using var pragmas = connection.CreateCommand();
-        pragmas.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;";
+        pragmas.CommandText = "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;";
         pragmas.ExecuteNonQuery();
 
         return connection;
@@ -1040,6 +1047,21 @@ public sealed class Catalogue : IDisposable
         {
             return false; // corrupt cache: rebuild
         }
+    }
+
+    /// <summary>
+    /// The journal mode and synchronous level this connection runs with, as
+    /// SQLite reports them: read back rather than assumed, because SQLite
+    /// ignores a pragma it cannot honour instead of refusing it.
+    /// </summary>
+    internal (string JournalMode, long Synchronous) Durability()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode;";
+        var journalMode = (string)command.ExecuteScalar()!;
+
+        command.CommandText = "PRAGMA synchronous;";
+        return (journalMode, (long)command.ExecuteScalar()!);
     }
 
     /// <inheritdoc />

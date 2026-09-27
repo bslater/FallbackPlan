@@ -53,8 +53,156 @@ A third defect *did* fail loudly, and is worth recording because it inverted an 
 
 **Convert assertions mechanically and accept the risk.** Rejected for sequence equality specifically. Reference comparison of two equal arrays *fails* rather than passing, so the risk was noise rather than false confidence — but 100 red tests hide the handful that are red for a real reason.
 
+## Amendment (2026-09): the two largest suites run their classes concurrently
+
+Every project ran its tests one at a time: MSTest does unless an assembly asks otherwise, and none did. CI's test step lasts as long as its slowest assembly, which is Hosts.Tests on every platform. Run that way on Linux, its 605 test durations summed to 480 seconds of a 481-second run. Three of its classes, measured alone, used between 0.4 and 1.3 of four cores. The least busy was a peer suite, which spends most of its time waiting.
+
+Hosts.Tests and Repository.Tests now run their classes concurrently, one worker per core, while the tests inside a class still run in order (`Parallelism.cs` in each). That is safe because every test owns its directories, stores, sockets and passphrase variable, so all a class can share with another is the process. What runs alone says which part of the process it shares, in a comment beside its `[DoNotParallelize]`:
+
+- **A process-wide listener**: `NetworkSilence` hears every socket in the process, and a `MeterListener` every meter.
+- **Process-wide settings**: the installation-wide environment variables that every host resolving a default location reads, and `CultureScope`, which sets the default culture for every thread.
+- **The two test hooks the product keeps as process-wide properties**, `ServiceRuntime.ArchiveFormatVersion` and `FanOut.ReadBackBudget`. Only the nine methods that set them are marked, not their classes, so the rest of those classes still runs concurrently. Each hook's own documentation now says so.
+- **Four drills whose assertions are about real durations**: the background window's parking, a real capture's preemption, and the max-pause bound and escalation delay at the scheduler.
+
+> **Amended (2026-09):** the two test hooks now belong to the flow that sets them, and the nine methods run concurrently. See [Amendment 3](#amendment-3-2026-09-the-two-test-hooks-belong-to-the-flow-that-sets-them).
+
+Fifty-four host classes had carried `[DoNotParallelize]` with no reason recorded. While nothing ran in parallel it did nothing, and it had been copied from class to class; forty-eight lost it. One failure in the first parallel run found a hook the audit had missed. That failure is why the hooks are named above rather than assumed away.
+
+The audit also found a defect in the product, not a test. The scanner's owner and group name cache was unlocked, so the writer pool's concurrent scans could corrupt it or record the wrong name. It is fixed under FR-MAN-003, drilled by `Filesystem.Tests/PosixNameCacheTests`.
+
+Measured on Linux with four cores, each suite alone on the machine, as the duration the test run reports. Before is the same build with parallelisation switched off at run time, once for Hosts.Tests and three times for Repository.Tests. After is three runs each.
+
+| Suite | Before | After | Tests |
+|---|---|---|---|
+| Hosts.Tests | 8m00s | 2m49s to 2m53s | 605 before and after |
+| Repository.Tests | 53s to 59s | 25s to 26s | 738 before and after (731 passed, 7 skipped) |
+
+A whole-solution run is not a baseline for one assembly, because the other assemblies share the machine during it. In one, Hosts.Tests reported 9m01s, against 8m00s alone.
+
+What runs alone is paid for in full. In one parallel Hosts.Tests run, the 556 tests that run concurrently took 117 seconds, and the 49 that run alone took 57 more. MSTest starts them only once the concurrent batch has finished, and they never overlap one another.
+
+To rule concurrency in or out of a failure, run the suite serially without editing it: `dotnet test` with `-- RunConfiguration.DisableParallelization=true` after its other arguments.
+
+This record's own rule after a framework-level change is to compare the counts, and they match.
+
+## Amendment 2 (2026-09): every suite runs its classes concurrently
+
+After the amendment above, CI's test step was bounded by Hosts.Tests on every platform, at 6m27s to 6m53s, and the longest suite still running serially came next: Retention.Tests, at 3m00s to 4m12s.
+
+Every test project now carries the same `Parallelism.cs`, except two: PerformanceTests, whose benchmarks measure real durations, and Web.DomTests, which drives one browser. The audit found the suites already built for it. Every test writes under a name of its own, and the only process-wide state the product lets a test change is the two hooks named above. What runs alone says why, beside its `[DoNotParallelize]`:
+
+- **CultureScope's users**: `HostileCultureTests`, and one method each in `PassphraseStrengthTests` and `PathRuleHostileNameTests`.
+- **The installation-wide state variable**: the one method in `WebConsoleOptionsTests` that sets it.
+- **A real duration**: `RollingFileSinkTests`' bound on how long 10,000 queued lines keep the caller.
+- **`LocalEndpointTests`** already ran alone, with its reason: the per-user fallback directory is machine-global.
+
+`PeerRetentionTests` lost a marker that recorded no reason, as forty-eight host classes did above. The CLI suite's harnesses share one passphrase variable across the process. They can, because each writes the same value and none clears it, and the harness now says so beside the name.
+
+Measured on Linux with four cores, each suite alone on the machine: the same build serially, then three runs in parallel.
+
+| Suite | Before | After | Tests |
+|---|---|---|---|
+| Retention.Tests | 1m28s | 41s to 42s | 102 before and after (101 passed, 1 skipped) |
+| Cli.Tests | 28s | 15s to 16s | 77 before and after |
+| InterruptionTests | 15s | 7s to 9s | 111 before and after |
+| Web.Tests | 10s | 4s | 148 before and after |
+| Protocol.Tests | 10s | 6s | 245 before and after |
+
+The other ten suites take a few seconds either way, and their counts match too. On CI the gain will be smaller, because there every assembly already runs beside the others on four cores.
+
+## Amendment 3 (2026-09): the two test hooks belong to the flow that sets them
+
+Everything that runs alone runs after the concurrent batch, one test at a time, and nine of the tests in Hosts.Tests' alone phase were there only because they set `ServiceRuntime.ArchiveFormatVersion` or `FanOut.ReadBackBudget`. In one run they took 23 of that phase's 57 seconds.
+
+The hooks now keep their value in an `AsyncLocal`. A value set belongs to the flow that set it and to the work that flow starts afterwards; everywhere else a hook reads its default. So a test that sets one before starting its runtime runs beside every other class, and an archive created or a read-back run anywhere else still takes the default. Amendments 1 and 2 describe the hooks as process-wide; that is what this replaces.
+
+Three facts make it safe:
+
+- **Each of the nine sets its hook first**, before any runtime, host or peer starts, so everything that reads the hook is work the test's flow starts afterwards.
+- **Nothing in the product stops the context flowing**: no `SuppressFlow`, no unsafe queueing, no unsafe timer registration.
+- **The tests would notice if the value did not arrive.** Their subjects depend on it: a digest-tier proof exists only below format 3, and an upgrade record needs an archive created at 2.
+
+`Hosts.Tests/TestHookScopeTests` holds the rule. One flow sets each hook and holds it while another reads it, and the setting flow then reads it again from work it starts only afterwards. Before the change the other flow saw the value: format 2 where it expected 3, and a budget of 5 where it expected 16. The Dispose methods that reset the hooks after every test are gone, because a value set in a test's own flow ends with it.
+
+Measured on Linux with four cores, Hosts.Tests alone, three runs after the change against Amendment 1's three:
+
+| | Before | After |
+|---|---|---|
+| Duration | 2m49s to 2m53s | 2m33s to 2m37s |
+| Alone phase | 57s, 49 tests | 31s to 34s, 40 tests |
+| Tests | 605 | 607: the same 605 and the two above |
+
+In each run all nine methods ran inside the concurrent batch, each overlapping tests of other classes.
+
+## Amendment 4 (2026-09): on CI, only the critical path runs concurrently
+
+Amendment 2 measured each suite alone and expected CI to gain less. On two platforms CI gained less than nothing. The baseline is the run for Amendment 1, when only Hosts.Tests and Repository.Tests ran concurrently. Over the next two runs the Windows test step went from 7m35s to 9m42s and 9m53s, and the macOS one from 7m01s to 9m06s and 8m14s. Linux varied too much between runs to say either way: 5m03s, then 7m31s for the same tests.
+
+CI now keeps every test's timing, and the timings show why. Every assembly shares one three- or four-core runner, and the step ends when Hosts.Tests does.
+
+- On Windows, its four workers were busy from the first minute to the eighth.
+- Meanwhile the other assemblies, concurrent since Amendment 2, kept up to eleven more tests in flight, and finished at eight minutes.
+- Hosts.Tests' concurrent batch took 500 seconds there, against 122 on a quiet machine.
+
+The other assemblies were never the critical path: they finish before Hosts.Tests either way. Running their classes concurrently only moved CPU from the one assembly the step waits for to the ones it does not.
+
+So on CI, where `CI` is set to true as GitHub Actions sets it, every test project but Hosts.Tests runs one class at a time. `tests/Directory.Build.props` names `off-critical-path.runsettings` for them there. Elsewhere nothing changes: every suite runs its classes concurrently, as Amendment 2 measured, and the classes are exactly as audited. A concurrency defect in one of those suites would therefore show on a developer's machine first, not on CI.
+
+Checked locally, with `CI` set and without it:
+
+- Retention.Tests ran one test at a time with it (no overlapping pairs, 1m27s) and concurrently without it (270 pairs, 41s).
+- Hosts.Tests stayed concurrent with it.
+- The settings file combines with CI's coverage collector and results logger, giving one report and one results file per run.
+
+The next runs will report what CI makes of it, and the status history will record the result.
+
+### The first run with it (2026-09)
+
+The run for the commit that made the change, against the two runs before it:
+
+| Test step | Before | After |
+|---|---|---|
+| Windows | 9m42s and 9m53s | 8m49s |
+| macOS | 9m06s and 8m14s | 6m00s |
+| Linux | 5m03s and 7m31s | 7m40s |
+
+Hosts.Tests' concurrent batch fell from 500 seconds to 431 on Windows and from 382 to 281 on macOS. On Linux it held at 368, against 361. The macOS step is the fastest it has been, and the Linux one is where the last run left it.
+
+The next run, for the documentation-only commit that recorded this, gave 8m40s on Windows, 6m33s on macOS and 3m35s on Linux. Windows and macOS stayed where the first run put them. Linux varied as it has throughout.
+
+The Windows step is faster but not back to Amendment 1's 7m35s, because Cli.Tests is now a second critical path there:
+
+- Its first test started 152 seconds after its run did. On macOS and Linux the wait was 6 and 13 seconds.
+- Run one class at a time, it then took 362 seconds; run concurrently, it had taken 266.
+- It finished at 511 seconds, beside Hosts.Tests at 516.
+- Most of that time is its `CommandTests` class: 285 seconds on Windows, against 47 on Linux and 23 on macOS.
+
+Why Cli.Tests is so much slower on Windows is not yet known, and it is what to look at next.
+
+### What the Windows finding was (2026-09)
+
+Most of it was one wait, paid by every CLI command. A command asks for a local service before it takes direct mode. On Windows a named pipe that does not exist raised no error of its own, so the client waited out its two-second connect timeout before it was told. These tests run commands against state directories with no service, so every command paid it, as every command on a person's machine with no service did. [ADR-0028](0028-service-boundary-and-deployment-topologies.md)'s conformance fix of the same month ended it, under NFR-OPS-009: the client now checks that the pipe exists before it waits for one.
+
+Here are the two CI runs of the commit that fixed it, against the two runs of the commit before it, on Windows:
+
+| | Before | After |
+|---|---|---|
+| The no-service connect | 2.01 s and 2.00 s | 0.004 s and 0.006 s |
+| `CommandTests` | 136 s and 57 s | 15 s and 60 s |
+| Cli.Tests, first test to last | 207 s and 167 s | 54 s and 131 s |
+
+The Test step took 4m47s and 8m37s before, and 6m17s and 7m07s after. It waits for Hosts.Tests, whose own run took anywhere from 4m18s to 7m52s over these four, so the step shows nothing either way about this change.
+
+The wait before Cli.Tests' first test is a separate cost, and the fix did not touch it. It was 55 and 9 seconds before, and 5 and 276 after. It is not Cli.Tests' own. In one of the runs before, ArchitectureTests waited 144 seconds instead, and in each run at most one assembly waited longer than 30 seconds. What an assembly waits for before its first test on Windows is not yet known, and it is what to look at next.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | 966 tests across thirteen projects; count verified identical before and after |
+| 2026-09 | Amended | Hosts.Tests and Repository.Tests run their classes concurrently; what runs alone says why beside `[DoNotParallelize]`; on Linux, each suite alone, 8m00s to under 3m and under 1m to under 30s, counts identical before and after |
+| 2026-09 | Amended | Every test project but PerformanceTests and Web.DomTests runs its classes concurrently; on Linux, Retention.Tests 1m28s to 42s or less and Cli.Tests 28s to 16s or less, counts identical before and after |
+| 2026-09 | Amended | The two test hooks belong to the flow that sets them, held by `Hosts.Tests/TestHookScopeTests`; the nine methods that set them leave the alone phase, which falls from 57s to 34s or less, and Hosts.Tests from 2m49s to 2m37s or less |
+| 2026-09 | Amended | On CI only Hosts.Tests runs its classes concurrently: the other assemblies' concurrency took cores from the critical path, and the Windows test step went from 7m35s to 9m42s and 9m53s |
+| 2026-09 | Amended (Amendment 4 measured) | First CI run with the cap: the test step took 8m49s on Windows (from 9m42s and 9m53s), 6m00s on macOS (from 9m06s and 8m14s) and 7m40s on Linux (from 5m03s and 7m31s); on Windows Cli.Tests is now a second critical path, for a reason not yet known |
+| 2026-09 | Amended (Windows finding) | Cli.Tests' Windows slowness was mostly a two-second wait that every CLI command paid for a service pipe that did not exist, ended by ADR-0028's conformance fix under NFR-OPS-009: the no-service connect fell from 2 s to under 10 ms, and CommandTests from 136 s and 57 s to 15 s and 60 s. The wait some assembly makes before its first test on Windows is separate and not yet explained |

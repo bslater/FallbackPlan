@@ -33,6 +33,11 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 
 **Catalogue:** SQLite behind an abstraction so another embedded engine can replace it. Never repository authority.
 
+> **Amendment 2 (2026-09).** "The catalogue none" is carried down to the
+> engine: its commits are atomic but not flushed, so a power loss can take
+> the newest of them — see
+> [Amendment 2](#amendment-2-2026-09--the-catalogues-commits-are-atomic-not-flushed).
+
 **Durable local state:** separate store, OS-key-store protected where available. The device *private key* is never written to the recovery kit — a recovering device establishes a new identity and is re-authorised.
 
 **Configuration:** file-based, schema-versioned, validated before use, exportable without secrets. Files rather than a database because users edit, version-control, and diff them.
@@ -84,6 +89,49 @@ The rejected alternative "configuration in the repository" stays rejected, and
 gains its sharpest example yet: destination endpoints in the repository would
 hand every destination the list of all the others.
 
+## Amendment 2 (2026-09) — the catalogue's commits are atomic, not flushed
+
+The decision gave the catalogue no protection, but the engine was still
+running SQLite's default for it, `synchronous = FULL`: a flush of the
+write-ahead log to disk at every commit. Publication records each blob,
+directory, file version and segment reference as a commit of its own, so a
+first backup of N files paid roughly N × (2 + segments per file) flushes to
+keep a cache durable. On Linux and macOS a flush is cheap enough to hide.
+On Windows it costs milliseconds, and it became most of the cost: in one CI
+run Repository.Tests took 42 minutes on the Windows runner against 2
+minutes 8 seconds on macOS, and of the 197,968 flushes that suite makes,
+182,148 were the catalogue's log.
+
+The catalogue now runs WAL with `synchronous = NORMAL`. Every commit is
+still atomic. What changes is durability: a process crash still loses
+nothing, because a commit has reached the operating system before it
+returns, but a power loss or an operating-system crash can take the newest
+commits.
+
+That is safe for the reason the decision gives, and it puts the catalogue
+in no state it could not already reach:
+
+- **It only ever leaves the catalogue behind the store.** Flushing every
+  commit never made the catalogue current after a power loss either; it
+  kept the commits up to the moment of the loss, where now the survivors
+  can stop a little earlier. Behind is the direction the design already
+  prices as a rewrite, never as a lost restore
+  (`Repository.Tests/EndToEnd/StaleCatalogueTests`). The collector marks
+  from the repository and never reads the catalogue
+  ([07 §3](../architecture/07-retention-and-gc.md#3-garbage-collection)),
+  and a rebuild from the index plane restores anything else
+  ([02 §8](../architecture/02-repository-format.md#8-catalogue-rebuild)).
+- **The file stays consistent.** Each WAL frame carries a checksum, and
+  recovery replays the log only up to its last whole commit.
+
+Nothing else loosens. The store's objects, the blob spools and the state
+files are flushed exactly as before.
+
+SQLite ignores a pragma it cannot honour instead of refusing it, so the
+setting is held by reading it back from the engine:
+`Repository.Tests/Catalogue/CatalogueTests` fails if the catalogue opens
+with anything but WAL and `NORMAL`.
+
 ## Status history
 
 | Date | Status | Note |
@@ -91,3 +139,4 @@ hand every destination the list of all the others.
 | 2026-08 | Proposed | |
 | 2026-08 | Accepted | Built and held to: `LocalStateSeparationTests` deletes the catalogue and asserts device identity and configuration survive, which is the whole claim. Nothing about the three-way split awaits a later phase. |
 | 2026-08 | Accepted (amended) | Amendment 1: destinations are configuration, sync state and notices are sacrificial journals beside `jobs.json` ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
+| 2026-09 | Accepted (amended) | Amendment 2: the catalogue's commits are atomic but no longer flushed one by one, so a power loss can take the newest of them and leave it behind the store, which costs a rewrite. Set in `Repository.Catalogue/Catalogue`, read back from SQLite by `CatalogueTests`. |

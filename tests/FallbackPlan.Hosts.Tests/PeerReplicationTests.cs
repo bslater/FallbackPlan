@@ -23,7 +23,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// signed statement of what a push created (FR-DEST-004).
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerReplicationTests : IDisposable
 {
     private readonly HostHarness _source = new();

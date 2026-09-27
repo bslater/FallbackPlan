@@ -32,6 +32,8 @@ namespace FallbackPlan.Application.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
+// Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+[DoNotParallelize]
 public sealed class HostileCultureTests
 {
     private string _directory = null!;

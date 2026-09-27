@@ -37,9 +37,18 @@ public static class FanOut
     /// Blobs one read-back opens at a peer. A property rather than a
     /// constant so the test that watches the rotation's cursor move can
     /// narrow it below the handful of blobs a fixture ships; the service
-    /// never sets it.
+    /// never sets it. A value set belongs to the flow that set it and to the
+    /// work that flow starts afterwards, so a test sets it before starting its
+    /// runtime and runs beside any other: a read-back run anywhere else still
+    /// opens the default.
     /// </summary>
-    internal static int ReadBackBudget { get; set; } = VerificationSampler.DefaultBudget;
+    internal static int ReadBackBudget
+    {
+        get => ReadBackBudgetInFlow.Value ?? VerificationSampler.DefaultBudget;
+        set => ReadBackBudgetInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<int?> ReadBackBudgetInFlow = new();
 
     /// <summary>The coalescing identity: one active sync per (set, destination).</summary>
     /// <param name="setId">The set's 32-hex identity.</param>

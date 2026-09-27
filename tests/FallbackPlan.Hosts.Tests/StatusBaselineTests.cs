@@ -12,7 +12,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// per-destination panel renders exactly these two facts (FR-DEST-014).
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class StatusBaselineTests : IDisposable
 {
     private readonly HostHarness _harness = new();

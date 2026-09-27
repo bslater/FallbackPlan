@@ -10,7 +10,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// carried out by two people at two machines, the string compared out of band.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PairingCeremonyProcessTests : IDisposable
 {
     private readonly string _scratch =

@@ -596,6 +596,9 @@ public static class Scheduler
     private static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
         Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
 
+    /// <summary>What a backup's journal row says when it was cancelled before a worker reached it.</summary>
+    internal const string CancelledBeforeStart = "cancelled before it started";
+
     /// <summary>
     /// Queues one set's backup and hands back a task that completes when it
     /// does — so a caller that must wait can, and the service, which must not,
@@ -674,7 +677,20 @@ public static class Scheduler
                     }
                 },
                 Priority: set.Priority ?? 0,
-                PauseGate: gate));
+                PauseGate: gate,
+                // Cancelled before a worker reached it (ADR-0029 Amendment 5):
+                // the journal settles at the command rather than when the lane
+                // drains, the stream hears it so a watching card does not sit
+                // at Pending, and whoever awaits the outcome is answered
+                // instead of waiting on a run that will never happen.
+                OnCancelledBeforeStart: () =>
+                {
+                    runtime.Jobs.Transition(
+                        job.Id, JobState.Cancelled, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        CancelledBeforeStart);
+                    runtime.Progress.Report(new JobProgress(job.Id, JobState.Cancelled, 0, 0, 0, 0, 0, 0));
+                    completion.SetResult(new BackupOutcome(set.Name, "cancelled", CancelledBeforeStart));
+                }));
 
             if (!accepted)
             {

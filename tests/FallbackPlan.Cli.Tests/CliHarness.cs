@@ -16,6 +16,9 @@ namespace FallbackPlan.Cli.Tests;
 /// </remarks>
 public sealed class CliHarness : IDisposable
 {
+    // One variable for every harness in the process, which the concurrent
+    // classes can share only because each harness writes the same value and
+    // none ever clears it.
     private const string PassphraseVariable = "FBP_TEST_PASSPHRASE";
 
     private readonly string _scratch =

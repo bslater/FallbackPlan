@@ -16,6 +16,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// re-run path. Establishes FR-SVC-014.
 /// </summary>
 [TestClass]
+// Alone: a real capture pauses at its next file boundary under priority pressure, and concurrent classes would move that boundary in time.
 [DoNotParallelize]
 public sealed class PreemptionTests : IDisposable
 {

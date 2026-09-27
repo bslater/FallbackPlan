@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging;
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
-/// Multi-file publication end to end (phase-1 wave T1; FR-MAN-004, FR-MAN-018): the scanner event
+/// Multi-file publication end to end (phase-1 wave T1; FR-MAN-004, FR-MAN-018, FR-DR-006): the scanner event
 /// stream becomes a full manifest graph — bottom-up trees, per-kind file
 /// versions with the ADR-0026 shapes, populated policy and error manifests,
 /// the probed source filesystem — and everything restores from a cold
@@ -291,6 +291,31 @@ public sealed class SnapshotPublicationTests : ArchiveTestHarness
         Assert.AreEqual("Documents", policy.Roots[0].Label);
         Assert.AreEqual("/pics", policy.Roots[1].Path);
         Assert.AreEqual("Pictures", policy.Roots[1].Label);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_RecordsTheSetsRetentionInThePolicyManifest()
+    {
+        // FR-DR-006: the set's own retention rides beside its shape, so a
+        // machine that re-declares the set from its archive also knows what
+        // the set is allowed to delete.
+        var source = new FakeFileSystemSource();
+        source.AddFile("docs/a.bin", Deterministic(4_000, 3));
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+
+        var retention = new RecordedRetention { KeepDaily = 7, KeepMonthly = 12, MinGenerations = 3 };
+        var job = Job(source) with { SetName = "home", Retention = retention };
+        var published = await CreateOrchestrator(store, keys, credential).PublishAsync(job, CancellationToken.None);
+
+        using var reader = new RepositoryReader(Repo, keys, store, Authority);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var policyRead = await reader.ReadSegmentAsync(published.PolicyObjectId, CancellationToken.None);
+        Assert.AreEqual(RecordReadOutcome.Ok, policyRead.Outcome);
+
+        Assert.AreEqual(retention, PolicyManifestCodec.Decode(policyRead.Plaintext!).Retention);
     }
 
     [TestMethod]

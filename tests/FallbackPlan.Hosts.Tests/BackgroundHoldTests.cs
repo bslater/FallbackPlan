@@ -31,6 +31,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
+// Alone: the hold is drilled against the max-pause bound, a real duration that concurrent classes would stretch.
 [DoNotParallelize]
 public sealed class BackgroundHoldTests : IDisposable
 {

@@ -27,6 +27,8 @@ public sealed class WebConsoleOptionsTests
     }
 
     [TestMethod]
+    // Alone: it sets the installation-wide state variable, which every console resolving its default state directory reads.
+    [DoNotParallelize]
     public void Parse_NoState_ResolvesTheSharedInstallationDefault()
     {
         // The same default every process of the installation resolves

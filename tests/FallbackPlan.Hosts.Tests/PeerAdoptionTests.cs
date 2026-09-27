@@ -16,7 +16,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// the claim tests hold.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerAdoptionTests : IDisposable
 {
     private const string Friend = "friend";
