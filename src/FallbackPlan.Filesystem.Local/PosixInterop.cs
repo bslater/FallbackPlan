@@ -465,10 +465,19 @@ internal static partial class DarwinInterop
 /// POSIX name lookups shared by Linux and macOS: uid/gid to names via
 /// <c>getpwuid</c>/<c>getgrgid</c>, reading only the first field
 /// (<c>pw_name</c>/<c>gr_name</c> lead both structs on both platforms).
-/// Cached — the scanner is single-threaded over one uid space.
+/// Cached for the life of the process, behind one lock.
 /// </summary>
+/// <remarks>
+/// More than one scan reaches this at once — the writer lane is a pool
+/// (ADR-0047) — and <c>getpwuid</c>/<c>getgrgid</c> answer into storage every
+/// caller in the process shares, so another thread's lookup can overwrite an
+/// entry before this one has read its name. The lock covers the cache, the
+/// call and the read together. It is taken once per file and contended only
+/// on an id's first lookup.
+/// </remarks>
 internal static partial class PosixNames
 {
+    private static readonly Lock Gate = new();
     private static readonly Dictionary<uint, string?> Users = [];
     private static readonly Dictionary<uint, string?> Groups = [];
 
@@ -480,22 +489,28 @@ internal static partial class PosixNames
 
     public static string? UserName(uint uid)
     {
-        if (!Users.TryGetValue(uid, out var name))
+        lock (Gate)
         {
-            Users[uid] = name = FirstStringField(NativeGetPwUid(uid));
-        }
+            if (!Users.TryGetValue(uid, out var name))
+            {
+                Users[uid] = name = FirstStringField(NativeGetPwUid(uid));
+            }
 
-        return name;
+            return name;
+        }
     }
 
     public static string? GroupName(uint gid)
     {
-        if (!Groups.TryGetValue(gid, out var name))
+        lock (Gate)
         {
-            Groups[gid] = name = FirstStringField(NativeGetGrGid(gid));
-        }
+            if (!Groups.TryGetValue(gid, out var name))
+            {
+                Groups[gid] = name = FirstStringField(NativeGetGrGid(gid));
+            }
 
-        return name;
+            return name;
+        }
     }
 
     private static string? FirstStringField(nint entry) =>
