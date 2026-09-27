@@ -11,7 +11,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The service (ADR-0028): sole writer role, a command surface, real job
 /// states, and cancellation that lands in the journal.
-/// Establishes FR-SVC-001.
+/// Establishes FR-SVC-001, and FR-SVC-017's cancel of a job that has not
+/// started.
 /// </summary>
 [TestClass]
 public sealed class ServiceTests : IDisposable
@@ -275,6 +276,87 @@ public sealed class ServiceTests : IDisposable
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(new CancelJobCommand("no-such-job"), _timeout.Token), out var error);
 
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+    }
+
+    [TestMethod]
+    public async Task CancelJob_QueuedBehindAnotherSet_RecordsCancelledImmediately()
+    {
+        await _harness.CreateRepositoryAsync();
+        for (var i = 0; i < 24; i++)
+        {
+            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
+        }
+
+        // A pool of one, so the second set queues behind the first rather
+        // than running beside it (ADR-0047's default is two).
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+        var configurationPath = Path.Combine(_harness.StateDirectory, "config.json");
+        (ClientConfiguration.Load(configurationPath) with { MaxConcurrentBackups = 1 }).Save(configurationPath);
+
+        await using var runtime = await StartAsync();
+        var seen = new List<JobState>();
+        var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
+        var watching = Task.Run(
+            async () =>
+            {
+                await foreach (var progress in progressEvents)
+                {
+                    lock (seen)
+                    {
+                        seen.Add(progress.Progress.State);
+                    }
+                }
+            },
+            _timeout.Token);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token), out var first);
+
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Scanning);
+            }
+        });
+
+        // The second set queues behind the pool's single worker.
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand("extra", Full: false), _timeout.Token), out var second);
+        Assert.AreNotEqual(first.JobId, second.JobId);
+
+        // Cancelling a job that has not started takes effect at the command,
+        // not when the lane drains: the journal reads Cancelled while the
+        // first job is still doing its work. Before this, the acknowledgement
+        // was truthful about the token and silent about the state — the card
+        // sat at Pending until the running job finished, possibly hours.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token));
+
+        Assert.IsInstanceOfType<JobsResult>(
+            await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
+        var queued = jobs.Jobs.Single(descriptor => descriptor.Id == second.JobId);
+        Assert.AreEqual(JobState.Cancelled, queued.State);
+        Assert.AreEqual("cancelled before it started", queued.Detail);
+
+        // And a second cancel is the honest not-found, not another cheerful
+        // acknowledgement of nothing.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token), out var error);
+        Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
+
+        // The running job was never disturbed: it still completes.
+        await WaitForAsync(() =>
+        {
+            lock (seen)
+            {
+                return seen.Contains(JobState.Complete);
+            }
+        });
+
+        await _timeout.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => watching);
     }
 
     [TestMethod]

@@ -48,6 +48,14 @@ public enum JobLane
 /// run when a slot frees again. A job without a gate is never paused — it
 /// merely cannot yield, so the incomer waits behind it.
 /// </param>
+/// <param name="OnCancelledBeforeStart">
+/// How the job records its own cancellation when it is cancelled before it
+/// has started (ADR-0029 Amendment 5). A job that has one is taken out of the
+/// queue at the command and the callback is invoked there, once; a job
+/// without one keeps the original path — it stays queued and runs, when its
+/// turn comes, with a token already cancelled — which fan-out and the sweep
+/// rely on, their runners settling their own cancellation.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
@@ -55,7 +63,8 @@ public sealed record QueuedJob(
     string Description,
     Func<CancellationToken, ValueTask> Run,
     int Priority = 0,
-    PauseGate? PauseGate = null);
+    PauseGate? PauseGate = null,
+    Action? OnCancelledBeforeStart = null);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -396,12 +405,16 @@ public sealed class JobScheduler : IAsyncDisposable
 
     /// <summary>
     /// Cancels a queued or running job. Cancellation is a command, not a signal
-    /// (ADR-0029 §4) — the runner records <see cref="JobState.Cancelled"/>.
+    /// (ADR-0029 §4) — the runner records <see cref="JobState.Cancelled"/>, or,
+    /// for a job that has not started and knows how to record it, the job's
+    /// <see cref="QueuedJob.OnCancelledBeforeStart"/> does, at the command
+    /// (Amendment 5).
     /// </summary>
     /// <param name="jobId">The job to stop.</param>
     /// <returns><see langword="true"/> when a job by that identity was found.</returns>
     public bool Cancel(string jobId)
     {
+        Action? recordCancellation = null;
         lock (_gate)
         {
             if (!_running.TryGetValue(jobId, out var cancellation))
@@ -409,10 +422,52 @@ public sealed class JobScheduler : IAsyncDisposable
                 return false;
             }
 
-            cancellation.Cancel();
-            return true;
+            if (FindQueuedLocked(jobId) is { OnCancelledBeforeStart: { } callback } queued)
+            {
+                // Out of play here, not when the lane drains. The semaphore
+                // token its enqueue released stays behind: a worker that wakes
+                // to it finds nothing queued and waits again, which every pump
+                // already does for a token with no job behind it.
+                LaneQueue(queued.Lane).Remove(queued, out _, out _);
+                _running.Remove(jobId);
+                cancellation.Dispose();
+                recordCancellation = callback;
+            }
+            else
+            {
+                cancellation.Cancel();
+            }
         }
+
+        // Outside the gate: the callback writes the journal, and nothing that
+        // does I/O belongs under the lock every worker takes.
+        recordCancellation?.Invoke();
+        return true;
     }
+
+    /// <summary>The queued-and-not-started entry for <paramref name="jobId"/>, in whichever lane holds it.</summary>
+    private QueuedJob? FindQueuedLocked(string jobId)
+    {
+        foreach (var lane in (ReadOnlySpan<JobLane>)[JobLane.Writer, JobLane.Reader, JobLane.Transfer])
+        {
+            foreach (var (job, _) in LaneQueue(lane).UnorderedItems)
+            {
+                if (string.Equals(job.JobId, jobId, StringComparison.Ordinal))
+                {
+                    return job;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private PriorityQueue<QueuedJob, (int Initiation, int Priority, long Arrival)> LaneQueue(JobLane lane) => lane switch
+    {
+        JobLane.Writer => _writerLane,
+        JobLane.Reader => _readerLane,
+        _ => _transferLane,
+    };
 
     /// <summary>Stops the queue, cancelling everything in flight.</summary>
     /// <remarks>
