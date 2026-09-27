@@ -163,7 +163,7 @@ public sealed class RollingFileSinkTests : IDisposable
     }
 
     [TestMethod]
-    public void Sink_MoreLinesThanTheQueueHolds_DropsThemAndSaysSo()
+    public async Task Sink_MoreLinesThanTheQueueHolds_DropsThemAndSaysSo()
     {
         // An unbounded queue in front of a slow disk is a memory leak with a
         // delay on it. Dropping is the right answer; silence about it is not.
@@ -175,7 +175,7 @@ public sealed class RollingFileSinkTests : IDisposable
         // apart, whatever the scheduler does with the two of them. Asserting
         // the caller outruns a writer that is merely appending is a coin toss
         // that lands heads on an idle machine and tails on a loaded one.
-        using var sink = new RollingFileSink(_directory, maximumBytes: 64, retain: 3);
+        await using var sink = new RollingFileSink(_directory, maximumBytes: 64, retain: 3);
 
         for (var index = 0; index < 200_000; index++)
         {
@@ -191,6 +191,12 @@ public sealed class RollingFileSinkTests : IDisposable
         // behind, and it would satisfy the assertion above for the wrong
         // reason. Rolled files are the evidence that the drain was doing the
         // slow work rather than discarding it.
+        //
+        // They are looked for once the queue has reached disk, not the moment
+        // the loop ends: when the drain gets its first turn is the thread
+        // pool's business, and with every worker busy the loop can finish
+        // before it has rolled once. A writer that discards still leaves none.
+        await SettleAsync(sink);
         Assert.IsNotEmpty(RolledFiles(), "nothing reached the disk, so nothing was queued behind it");
     }
 
