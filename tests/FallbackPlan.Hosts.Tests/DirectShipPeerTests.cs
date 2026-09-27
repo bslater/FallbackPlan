@@ -262,8 +262,6 @@ public sealed class DirectShipPeerTests : IDisposable
     }
 
     [TestMethod]
-    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
-    [DoNotParallelize]
     public async Task DirectShipSet_AnUpgradeRecordWrittenAtTheSource_ReachesTheReplicaOnTheNextPass()
     {
         // The descriptor cannot carry a format upgrade to a peer: 03 §5 has
@@ -546,7 +544,6 @@ public sealed class DirectShipPeerTests : IDisposable
 
     public void Dispose()
     {
-        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatLimits.FormatVersion;
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
         _timeout.Dispose();

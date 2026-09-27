@@ -64,6 +64,8 @@ Hosts.Tests and Repository.Tests now run their classes concurrently, one worker 
 - **The two test hooks the product keeps as process-wide properties**, `ServiceRuntime.ArchiveFormatVersion` and `FanOut.ReadBackBudget`. Only the nine methods that set them are marked, not their classes, so the rest of those classes still runs concurrently. Each hook's own documentation now says so.
 - **Four drills whose assertions are about real durations**: the background window's parking, a real capture's preemption, and the max-pause bound and escalation delay at the scheduler.
 
+> **Amended (2026-09):** the two test hooks now belong to the flow that sets them, and the nine methods run concurrently. See [Amendment 3](#amendment-3-2026-09-the-two-test-hooks-belong-to-the-flow-that-sets-them).
+
 Fifty-four host classes had carried `[DoNotParallelize]` with no reason recorded. While nothing ran in parallel it did nothing, and it had been copied from class to class; forty-eight lost it. One failure in the first parallel run found a hook the audit had missed. That failure is why the hooks are named above rather than assumed away.
 
 The audit also found a defect in the product, not a test. The scanner's owner and group name cache was unlocked, so the writer pool's concurrent scans could corrupt it or record the wrong name. It is fixed under FR-MAN-003, drilled by `Filesystem.Tests/PosixNameCacheTests`.
@@ -108,6 +110,30 @@ Measured on Linux with four cores, each suite alone on the machine: the same bui
 
 The other ten suites take a few seconds either way, and their counts match too. On CI the gain will be smaller, because there every assembly already runs beside the others on four cores.
 
+## Amendment 3 (2026-09): the two test hooks belong to the flow that sets them
+
+Everything that runs alone runs after the concurrent batch, one test at a time, and nine of the tests in Hosts.Tests' alone phase were there only because they set `ServiceRuntime.ArchiveFormatVersion` or `FanOut.ReadBackBudget`. In one run they took 23 of that phase's 57 seconds.
+
+The hooks now keep their value in an `AsyncLocal`. A value set belongs to the flow that set it and to the work that flow starts afterwards; everywhere else a hook reads its default. So a test that sets one before starting its runtime runs beside every other class, and an archive created or a read-back run anywhere else still takes the default. Amendments 1 and 2 describe the hooks as process-wide; that is what this replaces.
+
+Three facts make it safe:
+
+- **Each of the nine sets its hook first**, before any runtime, host or peer starts, so everything that reads the hook is work the test's flow starts afterwards.
+- **Nothing in the product stops the context flowing**: no `SuppressFlow`, no unsafe queueing, no unsafe timer registration.
+- **The tests would notice if the value did not arrive.** Their subjects depend on it: a digest-tier proof exists only below format 3, and an upgrade record needs an archive created at 2.
+
+`Hosts.Tests/TestHookScopeTests` holds the rule. One flow sets each hook and holds it while another reads it, and the setting flow then reads it again from work it starts only afterwards. Before the change the other flow saw the value: format 2 where it expected 3, and a budget of 5 where it expected 16. The Dispose methods that reset the hooks after every test are gone, because a value set in a test's own flow ends with it.
+
+Measured on Linux with four cores, Hosts.Tests alone, three runs after the change against Amendment 1's three:
+
+| | Before | After |
+|---|---|---|
+| Duration | 2m49s to 2m53s | 2m33s to 2m37s |
+| Alone phase | 57s, 49 tests | 31s to 34s, 40 tests |
+| Tests | 605 | 607: the same 605 and the two above |
+
+In each run all nine methods ran inside the concurrent batch, each overlapping tests of other classes.
+
 ## Status history
 
 | Date | Status | Note |
@@ -115,3 +141,4 @@ The other ten suites take a few seconds either way, and their counts match too. 
 | 2026-08 | Accepted | 966 tests across thirteen projects; count verified identical before and after |
 | 2026-09 | Amended | Hosts.Tests and Repository.Tests run their classes concurrently; what runs alone says why beside `[DoNotParallelize]`; on Linux, each suite alone, 8m00s to under 3m and under 1m to under 30s, counts identical before and after |
 | 2026-09 | Amended | Every test project but PerformanceTests and Web.DomTests runs its classes concurrently; on Linux, Retention.Tests 1m28s to 42s or less and Cli.Tests 28s to 16s or less, counts identical before and after |
+| 2026-09 | Amended | The two test hooks belong to the flow that sets them, held by `Hosts.Tests/TestHookScopeTests`; the nine methods that set them leave the alone phase, which falls from 57s to 34s or less, and Hosts.Tests from 2m49s to 2m37s or less |

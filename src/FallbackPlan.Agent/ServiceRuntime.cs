@@ -122,11 +122,18 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// stand an archive up at an older format through the real pipeline —
     /// which is what the digest tier and the upgrade record both need, since
     /// neither has anything to say about a repository already at the latest.
-    /// The service never sets it. It belongs to the whole process, so a test
-    /// that sets it runs alone (<c>[DoNotParallelize]</c> on the method):
-    /// every archive the process creates meanwhile is created at it.
+    /// The service never sets it. A value set belongs to the flow that set it
+    /// and to the work that flow starts afterwards, so a test sets it before
+    /// starting its runtime and runs beside any other: an archive created
+    /// anywhere else is still created at the latest.
     /// </summary>
-    internal static ushort ArchiveFormatVersion { get; set; } = Domain.FormatLimits.FormatVersion;
+    internal static ushort ArchiveFormatVersion
+    {
+        get => ArchiveFormatVersionInFlow.Value ?? Domain.FormatLimits.FormatVersion;
+        set => ArchiveFormatVersionInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<ushort?> ArchiveFormatVersionInFlow = new();
 
     private readonly StateDirectoryLock _writerRole;
     private readonly Dictionary<string, ArchiveHandle> _archives = new(StringComparer.Ordinal);
