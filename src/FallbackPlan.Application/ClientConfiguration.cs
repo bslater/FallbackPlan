@@ -336,7 +336,7 @@ public sealed record ClientConfiguration
         ClientConfiguration configuration;
         try
         {
-            configuration = JsonSerializer.Deserialize<ClientConfiguration>(File.ReadAllText(path), SerializerOptions)
+            configuration = JsonSerializer.Deserialize<ClientConfiguration>(AtomicFile.ReadAllText(path), SerializerOptions)
                 ?? throw new ClientStateException(Strings.FormatClientConfiguration_HoldsNoConfigurationObject(path));
         }
         catch (JsonException exception)
