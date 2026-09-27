@@ -86,13 +86,29 @@ jobs:
       # paths are mutually unreachable, so a one-OS number understates the
       # codebase. The merge job below unions them.
       - name: Test
-        run: dotnet test FallbackPlan.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory coverage
+        run: dotnet test FallbackPlan.slnx -c Release --no-build --collect:"XPlat Code Coverage" --logger trx --results-directory coverage
       - name: Upload coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-${{ matrix.os }}
-          path: coverage/**/coverage.cobertura.xml
+          # The TRX logger copies each report into its own In folder; the
+          # original, beside it, is the one to upload.
+          path: |
+            coverage/**/coverage.cobertura.xml
+            !coverage/*/In/**
           if-no-files-found: error
+      # Every test's start, end and outcome, per OS. The console reports each
+      # assembly's total only, and with classes running concurrently a total
+      # cannot say which tests a slower run spent its time on, or what else
+      # was running beside a test that failed.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: coverage/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload build log
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
