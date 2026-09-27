@@ -190,6 +190,80 @@ public sealed class LocalBindingTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Watch_WhenTheServiceHasGoneBeforeItOpens_EndsRatherThanThrowing()
+    {
+        // A watch belongs to a client that has already connected, so finding
+        // no service when it opens means the service went away in between —
+        // the stopped service a watch ends on, not a failure to report. The
+        // console's event stream depends on it: it redials after the retry
+        // interval it gave the browser, and a thrown "no service is
+        // listening" would end its request with an error instead.
+        var listener = LocalServiceListener.Start(new FakeService(), _state);
+        await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
+        await listener.DisposeAsync();
+
+        var delivered = 0;
+        await foreach (var _ in client.WatchAsync(Timeout))
+        {
+            delivered++;
+        }
+
+        Assert.AreEqual(0, delivered);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix,
+        "a Unix socket can stop receiving while it still sends, which holds the service's going away at one "
+        + "point of the handshake; a named pipe has no half-close")]
+    public async Task Watch_WhenTheServiceGoesAwayInItsHandshake_EndsRatherThanThrowing()
+    {
+        // The same stopped service, met one step later: the watch has said
+        // hello, and the service is gone before the watch frame reaches it.
+        // The stand-in below answers the command connection as a service
+        // does, then takes the watch connection, stops receiving on it, and
+        // only then acknowledges its hello — so the client writes its watch
+        // frame to a service that has already gone, every time, and the write
+        // fails as it does against one that stopped.
+        var address = LocalEndpoint.AddressFor(_state);
+        var accepted = new HelloAcknowledgementFrame(ContractVersion.Current.ToString(), Accepted: true, Message: null);
+        using var standIn = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        standIn.Bind(new UnixDomainSocketEndPoint(address));
+        standIn.Listen();
+        try
+        {
+            var serving = Task.Run(
+                async () =>
+                {
+                    using var command = await standIn.AcceptAsync(Timeout);
+                    await using var commandStream = new NetworkStream(command);
+                    await FrameCodec.ReadAsync(commandStream, Timeout);
+                    await FrameCodec.WriteAsync(commandStream, accepted, Timeout);
+
+                    using var watch = await standIn.AcceptAsync(Timeout);
+                    await using var watchStream = new NetworkStream(watch);
+                    await FrameCodec.ReadAsync(watchStream, Timeout);
+                    watch.Shutdown(SocketShutdown.Receive);
+                    await FrameCodec.WriteAsync(watchStream, accepted, Timeout);
+                },
+                Timeout);
+
+            await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
+            var delivered = 0;
+            await foreach (var _ in client.WatchAsync(Timeout))
+            {
+                delivered++;
+            }
+
+            Assert.AreEqual(0, delivered);
+            await serving;
+        }
+        finally
+        {
+            File.Delete(address);
+        }
+    }
+
+    [TestMethod]
     public async Task Connect_WhenNoServiceIsListening_ShouldThrowWithAStatedReason()
     {
         var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(
