@@ -22,8 +22,9 @@ dotnet test  FallbackPlan.slnx -c Release
   `Assert.Contains(substring, value, StringComparison.Ordinal)`,
   `Assert.IsInstanceOfType<T>(value, out var typed)`,
   `Assert.ThrowsExactly<T>(...)`.
-- Hosts.Tests and Repository.Tests run their classes concurrently
-  ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md) amendment). A test
+- Every test project but PerformanceTests and Web.DomTests runs its classes
+  concurrently ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md)
+  amendments), and a new one gets the same `Parallelism.cs`. A test
   that shares process state (an environment variable a host reads, a
   process-wide listener or culture, a static test hook such as
   `ServiceRuntime.ArchiveFormatVersion`, an assertion about real durations)

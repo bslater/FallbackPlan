@@ -83,9 +83,35 @@ To rule concurrency in or out of a failure, run the suite serially without editi
 
 This record's own rule after a framework-level change is to compare the counts, and they match.
 
+## Amendment 2 (2026-09): every suite runs its classes concurrently
+
+After the amendment above, CI's test step was bounded by Hosts.Tests on every platform, at 6m27s to 6m53s, and the longest suite still running serially came next: Retention.Tests, at 3m00s to 4m12s.
+
+Every test project now carries the same `Parallelism.cs`, except two: PerformanceTests, whose benchmarks measure real durations, and Web.DomTests, which drives one browser. The audit found the suites already built for it. Every test writes under a name of its own, and the only process-wide state the product lets a test change is the two hooks named above. What runs alone says why, beside its `[DoNotParallelize]`:
+
+- **CultureScope's users**: `HostileCultureTests`, and one method each in `PassphraseStrengthTests` and `PathRuleHostileNameTests`.
+- **The installation-wide state variable**: the one method in `WebConsoleOptionsTests` that sets it.
+- **A real duration**: `RollingFileSinkTests`' bound on how long 10,000 queued lines keep the caller.
+- **`LocalEndpointTests`** already ran alone, with its reason: the per-user fallback directory is machine-global.
+
+`PeerRetentionTests` lost a marker that recorded no reason, as forty-eight host classes did above. The CLI suite's harnesses share one passphrase variable across the process. They can, because each writes the same value and none clears it, and the harness now says so beside the name.
+
+Measured on Linux with four cores, each suite alone on the machine: the same build serially, then three runs in parallel.
+
+| Suite | Before | After | Tests |
+|---|---|---|---|
+| Retention.Tests | 1m28s | 41s to 42s | 102 before and after (101 passed, 1 skipped) |
+| Cli.Tests | 28s | 15s to 16s | 77 before and after |
+| InterruptionTests | 15s | 7s to 9s | 111 before and after |
+| Web.Tests | 10s | 4s | 148 before and after |
+| Protocol.Tests | 10s | 6s | 245 before and after |
+
+The other ten suites take a few seconds either way, and their counts match too. On CI the gain will be smaller, because there every assembly already runs beside the others on four cores.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | 966 tests across thirteen projects; count verified identical before and after |
 | 2026-09 | Amended | Hosts.Tests and Repository.Tests run their classes concurrently; what runs alone says why beside `[DoNotParallelize]`; on Linux, each suite alone, 8m00s to under 3m and under 1m to under 30s, counts identical before and after |
+| 2026-09 | Amended | Every test project but PerformanceTests and Web.DomTests runs its classes concurrently; on Linux, Retention.Tests 1m28s to 42s or less and Cli.Tests 28s to 16s or less, counts identical before and after |

@@ -139,6 +139,8 @@ public sealed class RollingFileSinkTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it bounds a real duration, which concurrent classes would stretch.
+    [DoNotParallelize]
     public void Sink_Writing_DoesNotBlockTheCaller()
     {
         // The reason this sink is queued at all: writing inline put a lock, a

@@ -20,7 +20,6 @@ namespace FallbackPlan.Retention.Tests;
 /// the key it holds.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerRetentionTests : IDisposable
 {
     private readonly string _root =

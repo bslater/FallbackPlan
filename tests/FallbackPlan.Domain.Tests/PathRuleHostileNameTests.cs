@@ -163,6 +163,8 @@ public sealed class PathRuleHostileNameTests
     /// which machine ran it must not be part of the answer.
     /// </summary>
     [TestMethod]
+    // Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+    [DoNotParallelize]
     public void CaseInsensitiveMatchingFoldsTheSameWay_WhateverTheOperatorsLocale()
     {
         foreach (var culture in CultureScope.Hostile)
