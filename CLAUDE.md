@@ -11,8 +11,12 @@ dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
 ```
 
-- SDK pinned in `global.json`. **Warnings are errors** — analyzer findings
-  (CA1822, CA1873, CA2263, …) fail the build, including in tests.
+- `global.json` sets the SDK floor, not a pin: CI builds with the newest 10.0
+  SDK, and a web session installs the same at start
+  (`.claude/hooks/session-start.sh`). Check `dotnet --version` before a
+  pre-push build — an older SDK misses analyzer findings CI fails on.
+  **Warnings are errors** — analyzer findings (CA1822, CA1873, CA2263, …) fail
+  the build, including in tests.
 - MSTest ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md)). House
   idioms: `Assert.ContainsSingle(collection)`, `Assert.HasCount(n, c)`,
   `Assert.Contains(substring, value, StringComparison.Ordinal)`,
