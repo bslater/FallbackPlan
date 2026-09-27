@@ -39,7 +39,7 @@ dotnet build FallbackPlan.slnx -c Release
 dotnet test  FallbackPlan.slnx -c Release
 ```
 
-Requires the .NET SDK pinned in [`global.json`](global.json).
+Requires a .NET 10 SDK, 10.0.100 or later: [`global.json`](global.json) sets that floor and rolls forward to the newest 10.0 SDK installed. CI builds with the newest 10.0 SDK, whose analyzers can fail a build an older SDK passes, so build with that one before pushing.
 
 Bodu — the library supplying Argon2id, one of two primitives .NET does not provide ([ADR-0019](docs/adr/0019-third-party-dependency-policy.md)) — is consumed as ordinary packages from nuget.org ([ADR-0021](docs/adr/0021-consume-bodu-via-committed-package-feed.md)), pinned in `Directory.Packages.props` and source-mapped in `nuget.config`. Upgrading them is a deliberate, reviewed change: the six move together at one version, and the conformance fixtures are what would catch an Argon2id or base32 behaviour change. The procedure is in [`external/packages/README.md`](external/packages/README.md), which also records the committed feed they used to come from.
 
@@ -48,7 +48,7 @@ Bodu — the library supplying Argon2id, one of two primitives .NET does not pro
 ### Building on Windows with Visual Studio
 
 - **Visual Studio 2022 17.14 or later** (or Visual Studio 2026) — earlier versions cannot open the `.slnx` solution format.
-- **.NET SDK 10.0.1xx** — [`global.json`](global.json) pins the band; VS uses it automatically once installed.
+- **.NET 10 SDK, 10.0.100 or later** — [`global.json`](global.json) sets the floor, and VS picks the newest 10.0 SDK installed.
 - Open `FallbackPlan.slnx`, build, and run tests from Test Explorer. Restore resolves the Bodu packages from the committed feed, so this works from a `git clone`, from Visual Studio's own clone dialog, and from an extracted "Download ZIP" alike.
 
 ## Checks that run in CI
