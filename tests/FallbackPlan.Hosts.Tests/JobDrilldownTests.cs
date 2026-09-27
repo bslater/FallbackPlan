@@ -16,7 +16,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// sacrificial journal.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed partial class JobDrilldownTests : IDisposable
 {
     private readonly HostHarness _harness = new();

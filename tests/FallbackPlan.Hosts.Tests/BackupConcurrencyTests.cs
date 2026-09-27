@@ -17,7 +17,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// by SetChangeTests; here only its collision with a manual trigger.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class BackupConcurrencyTests : IDisposable
 {
     private readonly HostHarness _harness = new();

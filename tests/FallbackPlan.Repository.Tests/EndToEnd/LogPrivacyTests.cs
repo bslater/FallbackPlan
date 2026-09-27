@@ -188,6 +188,8 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    // Alone: CultureScope sets the process's default culture, which every thread that starts meanwhile would take.
+    [DoNotParallelize]
     public async Task Logging_UnderAHostileCulture_RendersTheSameFacts()
     {
         // CA1305 is an error in this build and the renderer formats, so the

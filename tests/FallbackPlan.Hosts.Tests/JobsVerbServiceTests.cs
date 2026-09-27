@@ -21,7 +21,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// read from the repository on demand.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class JobsVerbServiceTests : IDisposable
 {
     private readonly HostHarness _harness = new();

@@ -37,7 +37,9 @@ public static class FanOut
     /// Blobs one read-back opens at a peer. A property rather than a
     /// constant so the test that watches the rotation's cursor move can
     /// narrow it below the handful of blobs a fixture ships; the service
-    /// never sets it.
+    /// never sets it. It belongs to the whole process, so a test that sets it
+    /// runs alone (<c>[DoNotParallelize]</c> on the method): every read-back
+    /// the process runs meanwhile is held to it.
     /// </summary>
     internal static int ReadBackBudget { get; set; } = VerificationSampler.DefaultBudget;
 

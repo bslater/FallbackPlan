@@ -53,8 +53,39 @@ A third defect *did* fail loudly, and is worth recording because it inverted an 
 
 **Convert assertions mechanically and accept the risk.** Rejected for sequence equality specifically. Reference comparison of two equal arrays *fails* rather than passing, so the risk was noise rather than false confidence — but 100 red tests hide the handful that are red for a real reason.
 
+## Amendment (2026-09): the two largest suites run their classes concurrently
+
+Every project ran its tests one at a time: MSTest does unless an assembly asks otherwise, and none did. CI's test step lasts as long as its slowest assembly, which is Hosts.Tests on every platform. Run that way on Linux, its 605 test durations summed to 480 seconds of a 481-second run. Three of its classes, measured alone, used between 0.4 and 1.3 of four cores. The least busy was a peer suite, which spends most of its time waiting.
+
+Hosts.Tests and Repository.Tests now run their classes concurrently, one worker per core, while the tests inside a class still run in order (`Parallelism.cs` in each). That is safe because every test owns its directories, stores, sockets and passphrase variable, so all a class can share with another is the process. What runs alone says which part of the process it shares, in a comment beside its `[DoNotParallelize]`:
+
+- **A process-wide listener**: `NetworkSilence` hears every socket in the process, and a `MeterListener` every meter.
+- **Process-wide settings**: the installation-wide environment variables that every host resolving a default location reads, and `CultureScope`, which sets the default culture for every thread.
+- **The two test hooks the product keeps as process-wide properties**, `ServiceRuntime.ArchiveFormatVersion` and `FanOut.ReadBackBudget`. Only the nine methods that set them are marked, not their classes, so the rest of those classes still runs concurrently. Each hook's own documentation now says so.
+- **Four drills whose assertions are about real durations**: the background window's parking, a real capture's preemption, and the max-pause bound and escalation delay at the scheduler.
+
+Fifty-four host classes had carried `[DoNotParallelize]` with no reason recorded. While nothing ran in parallel it did nothing, and it had been copied from class to class; forty-eight lost it. One failure in the first parallel run found a hook the audit had missed. That failure is why the hooks are named above rather than assumed away.
+
+The audit also found a defect in the product, not a test. The scanner's owner and group name cache was unlocked, so the writer pool's concurrent scans could corrupt it or record the wrong name. It is fixed under FR-MAN-003, drilled by `Filesystem.Tests/PosixNameCacheTests`.
+
+Measured on Linux with four cores, each suite alone on the machine, as the duration the test run reports. Before is the same build with parallelisation switched off at run time, once for Hosts.Tests and three times for Repository.Tests. After is three runs each.
+
+| Suite | Before | After | Tests |
+|---|---|---|---|
+| Hosts.Tests | 8m00s | 2m49s to 2m53s | 605 before and after |
+| Repository.Tests | 53s to 59s | 25s to 26s | 738 before and after (731 passed, 7 skipped) |
+
+A whole-solution run is not a baseline for one assembly, because the other assemblies share the machine during it. In one, Hosts.Tests reported 9m01s, against 8m00s alone.
+
+What runs alone is paid for in full. In one parallel Hosts.Tests run, the 556 tests that run concurrently took 117 seconds, and the 49 that run alone took 57 more. MSTest starts them only once the concurrent batch has finished, and they never overlap one another.
+
+To rule concurrency in or out of a failure, run the suite serially without editing it: `dotnet test` with `-- RunConfiguration.DisableParallelization=true` after its other arguments.
+
+This record's own rule after a framework-level change is to compare the counts, and they match.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | 966 tests across thirteen projects; count verified identical before and after |
+| 2026-09 | Amended | Hosts.Tests and Repository.Tests run their classes concurrently; what runs alone says why beside `[DoNotParallelize]`; on Linux, each suite alone, 8m00s to under 3m and under 1m to under 30s, counts identical before and after |

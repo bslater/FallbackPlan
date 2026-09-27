@@ -33,6 +33,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
+// Alone: real captures park when the window shuts and self-cancel at the max-pause cap, both on the wall clock that concurrent classes would slow.
 [DoNotParallelize]
 public sealed class BackgroundWindowTests : IDisposable
 {

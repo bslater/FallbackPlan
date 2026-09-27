@@ -22,6 +22,12 @@ dotnet test  FallbackPlan.slnx -c Release
   `Assert.Contains(substring, value, StringComparison.Ordinal)`,
   `Assert.IsInstanceOfType<T>(value, out var typed)`,
   `Assert.ThrowsExactly<T>(...)`.
+- Hosts.Tests and Repository.Tests run their classes concurrently
+  ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md) amendment). A test
+  that shares process state (an environment variable a host reads, a
+  process-wide listener or culture, a static test hook such as
+  `ServiceRuntime.ArchiveFormatVersion`, an assertion about real durations)
+  runs alone: `[DoNotParallelize]`, with the reason beside it. Nothing else should.
 - **Tests first.** Fixes and features start with named failing tests; a
   compile error against a not-yet-written API counts as the red.
 

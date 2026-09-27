@@ -27,7 +27,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </summary>
 /// <remarks>Does not establish FR-DRL-001: nothing here recovers content to a person.</remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class FormatUpgradeTests : IDisposable
 {
     private static readonly byte[] WriterId = [.. Enumerable.Repeat((byte)23, 16)];
@@ -49,6 +48,8 @@ public sealed class FormatUpgradeTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task AnUpgradeRecord_WrittenAtTheSource_ReachesALocalPathDestinationOnTheNextOrdinaryPass()
     {
         // Created at format 2, which is where every repository written before
@@ -110,6 +111,8 @@ public sealed class FormatUpgradeTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task ASetUpgradedBetweenBackups_SealsTheNewerFormatAndStillRestoresTheOlder()
     {
         // The whole point of the record, through the real service. The
@@ -201,6 +204,8 @@ public sealed class FormatUpgradeTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task AnUpgrade_CommandedWhileTheServiceRuns_SealsTheNewerFormatOnTheVeryNextBackup()
     {
         // The effective version is fixed when the archive opens and the
@@ -251,6 +256,8 @@ public sealed class FormatUpgradeTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task AnUpgrade_WithADestinationThatRefusesTheWrite_IsStillRecordedLocally()
     {
         // The record goes to the set's own store, never through the ship

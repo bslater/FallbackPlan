@@ -22,7 +22,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// every new local-path set has.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class CompactionRetentionTests : IDisposable
 {
     private readonly HostHarness _harness = new();

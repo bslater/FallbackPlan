@@ -13,7 +13,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// one catch-up. The due-ness-keeps-flowing half of FR-SVC-012.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class SchedulerStarvationTests : IDisposable
 {
     private readonly HostHarness _harness = new();

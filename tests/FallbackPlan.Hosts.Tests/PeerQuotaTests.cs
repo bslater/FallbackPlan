@@ -13,7 +13,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// before the first refusal would (FR-QUOTA-001/002).
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerQuotaTests : IDisposable
 {
     private readonly HostHarness _source = new();

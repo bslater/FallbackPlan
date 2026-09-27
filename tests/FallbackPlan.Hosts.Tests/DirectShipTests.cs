@@ -20,7 +20,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DEST-004 and FR-DEST-014.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipTests : IDisposable
 {
     private readonly HostHarness _harness = new();

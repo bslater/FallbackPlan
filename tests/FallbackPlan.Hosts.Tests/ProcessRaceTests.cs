@@ -15,7 +15,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// because the lock is on the state directory and never the repository.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class ProcessRaceTests : IDisposable
 {
     private readonly HostHarness _harness = new();

@@ -19,7 +19,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// actually running.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class JournalReconciliationTests : IDisposable
 {
     private readonly HostHarness _harness = new();

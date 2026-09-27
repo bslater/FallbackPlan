@@ -21,7 +21,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// Establishes FR-SVC-005.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class RemoteConsoleTests : IDisposable
 {
     private readonly HostHarness _harness = new();

@@ -39,7 +39,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipPeerTests : IDisposable
 {
     private readonly HostHarness _harness = new();
@@ -263,6 +262,8 @@ public sealed class DirectShipPeerTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task DirectShipSet_AnUpgradeRecordWrittenAtTheSource_ReachesTheReplicaOnTheNextPass()
     {
         // The descriptor cannot carry a format upgrade to a peer: 03 §5 has

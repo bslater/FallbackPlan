@@ -16,7 +16,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// overrides against the sink.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipConvergeSpareTests : IDisposable
 {
     private readonly HostHarness _harness = new();

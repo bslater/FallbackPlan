@@ -38,7 +38,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class PeerReadBackVerificationTests : IDisposable
 {
     private readonly HostHarness _harness = new();
@@ -151,6 +150,8 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task Pass_AWriteOnlySetsSealedBlobsAtThePeer_AreProvedByDigestAndSaidSo()
     {
         // The digest tier over the wire: every set setup produces is
@@ -206,6 +207,8 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets FanOut.ReadBackBudget, which every read-back the process runs meanwhile would be held to.
+    [DoNotParallelize]
     public async Task Pass_TheReadBack_RotatesThroughThePeersInventoryAcrossPasses()
     {
         // A random draw per pass never reaches most of a large inventory and
@@ -231,6 +234,8 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task Pass_AFormatThreeSetsSealedBlobsAtThePeer_AreProvedByChunkAndTheBlobDoesNotCross()
     {
         // The whole point of the slice, end to end over the real wire. A
@@ -261,6 +266,8 @@ public sealed class PeerReadBackVerificationTests : IDisposable
     }
 
     [TestMethod]
+    // Alone: it sets ServiceRuntime.ArchiveFormatVersion, which every archive the process creates meanwhile would be created at.
+    [DoNotParallelize]
     public async Task Pass_AFormatThreeBlobRottedUnderASealedRecordAtThePeer_FailsByChunk()
     {
         // The chunk tier has to bite, or it is a cheaper way of stamping

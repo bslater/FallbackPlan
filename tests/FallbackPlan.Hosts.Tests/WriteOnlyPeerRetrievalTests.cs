@@ -22,7 +22,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// open. The passphrase is the recovery factor; the service never held it.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class WriteOnlyPeerRetrievalTests : IDisposable
 {
     private const string PassphraseText = "the over-the-wire write-only passphrase";

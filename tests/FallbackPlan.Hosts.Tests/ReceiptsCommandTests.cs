@@ -19,7 +19,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// scope may read it.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class ReceiptsCommandTests : IDisposable
 {
     private static readonly byte[] RepositoryId =

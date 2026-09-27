@@ -16,7 +16,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// durable notice. The destination's word is never the evidence.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DestinationVerificationTests : IDisposable
 {
     private readonly HostHarness _source = new();

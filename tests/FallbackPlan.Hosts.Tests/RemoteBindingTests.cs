@@ -18,7 +18,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// Establishes FR-SVC-004.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class RemoteBindingTests : IDisposable
 {
     private readonly HostHarness _harness = new();

@@ -23,7 +23,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// that number grows.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipFaultSweepTests
 {
     /// <summary>A generous ceiling so a runaway put count fails loudly instead of looping.</summary>

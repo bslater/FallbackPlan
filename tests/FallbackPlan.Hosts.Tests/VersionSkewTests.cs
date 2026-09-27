@@ -22,7 +22,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </list>
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class VersionSkewTests : IDisposable
 {
     private readonly string _root =

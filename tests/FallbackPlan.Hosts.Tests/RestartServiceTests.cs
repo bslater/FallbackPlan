@@ -13,7 +13,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// <c>AgentServiceLifetimeTests</c>.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class RestartServiceTests : IDisposable
 {
     private readonly HostHarness _harness = new();

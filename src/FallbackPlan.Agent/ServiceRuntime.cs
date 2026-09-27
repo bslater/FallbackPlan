@@ -122,7 +122,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// stand an archive up at an older format through the real pipeline —
     /// which is what the digest tier and the upgrade record both need, since
     /// neither has anything to say about a repository already at the latest.
-    /// The service never sets it.
+    /// The service never sets it. It belongs to the whole process, so a test
+    /// that sets it runs alone (<c>[DoNotParallelize]</c> on the method):
+    /// every archive the process creates meanwhile is created at it.
     /// </summary>
     internal static ushort ArchiveFormatVersion { get; set; } = Domain.FormatLimits.FormatVersion;
 

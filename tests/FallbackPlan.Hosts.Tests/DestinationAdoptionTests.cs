@@ -22,7 +22,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// <c>eng/recovery-drill.sh</c> step 8 runs on the Release binaries.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class DestinationAdoptionTests : IDisposable
 {
     private const string Vault = "vault";

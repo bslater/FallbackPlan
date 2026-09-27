@@ -27,7 +27,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// it. Each link still asserts by name, so a break says which link.
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class AlternateSiteTests : IDisposable
 {
     private readonly HostHarness _siteOne = new();

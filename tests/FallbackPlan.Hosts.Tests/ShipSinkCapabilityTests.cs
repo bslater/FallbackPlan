@@ -24,7 +24,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// establish NFR-COMP-005.
 /// </summary>
 [TestClass]
-[DoNotParallelize]
 public sealed class ShipSinkCapabilityTests : IDisposable
 {
     private readonly HostHarness _harness = new();

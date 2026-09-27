@@ -41,7 +41,6 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// </remarks>
 [TestClass]
-[DoNotParallelize]
 public sealed class DirectShipVerificationTests : IDisposable
 {
     private readonly HostHarness _harness = new();
