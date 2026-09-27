@@ -93,6 +93,54 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordSuccess_HandedTheProofOfTheCopy_CallsThePairInSyncOnlyAsProved()
+    {
+        // A pass that proved what it copied records both in the write that
+        // calls the pair in sync. Written as two, the first said the
+        // destination held a snapshot nothing had proved, and a reader
+        // between them reported that snapshot durable (FR-SNP-003).
+        var written = new List<DestinationSyncRecord>();
+        var store = DestinationSyncStore.Open(_state, written.Add);
+
+        store.RecordSuccess(
+            SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42,
+            verified: new VerificationStamp(
+                Objects: 4, Population: 12, VerifiedSequence: 42, SampleCursor: "blobs/7f", Sealed: 3, Digest: 1));
+
+        var row = Assert.ContainsSingle(written);
+        Assert.AreEqual(DestinationSyncState.InSync, row.State);
+        Assert.AreEqual(42UL, row.SyncedSequence);
+        Assert.AreEqual(1_000UL, row.VerifiedAt);
+        Assert.AreEqual(42UL, row.VerifiedSequence);
+        Assert.AreEqual(4, row.VerifiedObjects);
+        Assert.AreEqual(12, row.VerifiedPopulation);
+        Assert.AreEqual(3, row.VerifiedSealed);
+        Assert.AreEqual(1, row.VerifiedDigest);
+        Assert.AreEqual("blobs/7f", row.SampleCursor);
+        Assert.AreEqual(row, DestinationSyncStore.Open(_state).Find(SetId, "vault"), "the row observed is the row saved");
+    }
+
+    [TestMethod]
+    public void RecordSuccess_HandedAnOlderProof_KeepsTheNewerVerifiedSequence()
+    {
+        // Riding the success does not change the verification's own rule:
+        // the verified sequence only advances, like the synced one beside it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordVerification(
+            SetId, "vault", objects: 4, population: 12, verifiedSequence: 50, sampleCursor: null,
+            nowUnixMilliseconds: 1_000);
+
+        store.RecordSuccess(
+            SetId, "vault", objects: 7, nowUnixMilliseconds: 2_000, syncedSequence: 42,
+            verified: new VerificationStamp(Objects: 2, Population: 12, VerifiedSequence: 42, SampleCursor: null));
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreEqual(50UL, record.VerifiedSequence);
+        Assert.AreEqual(2_000UL, record.VerifiedAt);
+        Assert.AreEqual(2, record.VerifiedObjects);
+    }
+
+    [TestMethod]
     public void RecordFailure_KeepsTheStampsAndTheLastSuccess()
     {
         // A failed attempt does not un-prove bytes that were proven, nor

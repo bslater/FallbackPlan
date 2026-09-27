@@ -331,6 +331,24 @@ public sealed record DestinationSyncRecord
 }
 
 /// <summary>
+/// What a passed verification proved, as the ledger stamps it on a pair's
+/// row (FR-VER-003).
+/// </summary>
+/// <param name="Objects">Ranges the pass proved.</param>
+/// <param name="Population">Objects eligible when the sample was drawn — the coverage denominator.</param>
+/// <param name="VerifiedSequence">The highest publication sequence the pass's sample covered.</param>
+/// <param name="SampleCursor">
+/// Where the next pass's rotation resumes; null when this pass reached the
+/// end of the key space and the rotation starts over.
+/// </param>
+/// <param name="Sealed">How many of <paramref name="Objects"/> were proved by a record's AEAD tag.</param>
+/// <param name="Digest">How many of <paramref name="Objects"/> were proved by the signed whole-blob digest.</param>
+/// <param name="Chunk">How many of <paramref name="Objects"/> were proved by one leaf of the signed Merkle commitment.</param>
+public sealed record VerificationStamp(
+    int Objects, int Population, ulong VerifiedSequence, string? SampleCursor,
+    int Sealed = 0, int Digest = 0, int Chunk = 0);
+
+/// <summary>
 /// The on-disk shape of <c>destinations.json</c>: a version and the rows.
 /// </summary>
 /// <remarks>
@@ -540,6 +558,13 @@ public sealed class DestinationSyncStore
     /// The newest snapshot this destination held when its baseline completed.
     /// Recorded once, with the baseline, and never moved after.
     /// </param>
+    /// <param name="verified">
+    /// What the same pass proved of the copy, or null when it proved nothing.
+    /// Stamped in this write rather than a second one: between two, the row
+    /// would call the pair in sync with nothing saying the copy was proved,
+    /// and a reader there would report a snapshot this pass did prove as
+    /// merely durable (FR-SNP-003).
+    /// </param>
     public DestinationSyncRecord RecordSuccess(
         string setId,
         string destination,
@@ -548,40 +573,46 @@ public sealed class DestinationSyncStore
         ulong syncedSequence = 0,
         string? keepFingerprint = null,
         bool reconciled = false,
-        string? baselineSnapshotId = null)
+        string? baselineSnapshotId = null,
+        VerificationStamp? verified = null)
     {
-        // Everything not named here is carried forward by `with` — including
-        // the verification stamps, which outlive the sync that earned them:
-        // they say when bytes were last proven, which a newer copy does not
-        // undo.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
+        // Everything not named here is carried forward by `with` — including,
+        // on a pass that proved nothing, the verification stamps, which
+        // outlive the sync that earned them: they say when bytes were last
+        // proven, which a newer copy does not undo.
+        return Mutate(setId, destination, previous =>
         {
-            State = DestinationSyncState.InSync,
-            LastAttemptAt = nowUnixMilliseconds,
-            LastSuccessAt = nowUnixMilliseconds,
-            Objects = objects,
-            ConsecutiveFailures = 0,
-            // Success clears the last failure's message. Stated, because `with`
-            // would otherwise carry it forward and `status` would repeat a
-            // resolved error verbatim forever.
-            LastError = null,
-            // A later sync never un-holds what an earlier one delivered.
-            SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
-            // The first success is the full copy that establishes the
-            // baseline (a staging-model sync converges the whole archive);
-            // later successes never move it — it records the first full.
-            BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
-            BaselineSnapshotId = previous?.BaselineSnapshotId ?? baselineSnapshotId,
-            NeedsFull = false,
-            // Carried forward when the caller computed none: a run recorded by
-            // the ship sink knows nothing about retention, and clearing the
-            // fingerprint there would make the next pass see a keep-set that
-            // had moved when it had not.
-            KeepFingerprint = keepFingerprint ?? previous?.KeepFingerprint,
-            // Carried forward, never cleared: an incremental pass leaves the
-            // last reading-through standing, which is exactly what its own
-            // expiry is measured from.
-            LastReconciledAt = reconciled ? nowUnixMilliseconds : previous?.LastReconciledAt,
+            var synced = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
+            {
+                State = DestinationSyncState.InSync,
+                LastAttemptAt = nowUnixMilliseconds,
+                LastSuccessAt = nowUnixMilliseconds,
+                Objects = objects,
+                ConsecutiveFailures = 0,
+                // Success clears the last failure's message. Stated, because `with`
+                // would otherwise carry it forward and `status` would repeat a
+                // resolved error verbatim forever.
+                LastError = null,
+                // A later sync never un-holds what an earlier one delivered.
+                SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
+                // The first success is the full copy that establishes the
+                // baseline (a staging-model sync converges the whole archive);
+                // later successes never move it — it records the first full.
+                BaselineCompletedAt = previous?.BaselineCompletedAt ?? nowUnixMilliseconds,
+                BaselineSnapshotId = previous?.BaselineSnapshotId ?? baselineSnapshotId,
+                NeedsFull = false,
+                // Carried forward when the caller computed none: a run recorded by
+                // the ship sink knows nothing about retention, and clearing the
+                // fingerprint there would make the next pass see a keep-set that
+                // had moved when it had not.
+                KeepFingerprint = keepFingerprint ?? previous?.KeepFingerprint,
+                // Carried forward, never cleared: an incremental pass leaves the
+                // last reading-through standing, which is exactly what its own
+                // expiry is measured from.
+                LastReconciledAt = reconciled ? nowUnixMilliseconds : previous?.LastReconciledAt,
+            };
+
+            return verified is null ? synced : Stamp(synced, verified, nowUnixMilliseconds);
         });
     }
 
@@ -708,6 +739,8 @@ public sealed class DestinationSyncStore
     /// the destination just now (FR-VER-005's happy half). The failure half
     /// goes through <see cref="RecordFailure"/> — a failed proof is a sync
     /// failure, and the stamps here keep saying when bytes were LAST proven.
+    /// A pass that also copied hands its proof to <see cref="RecordSuccess"/>
+    /// instead, so that the copy and the proof are one write.
     /// </summary>
     /// <param name="setId">The backup set.</param>
     /// <param name="destination">The destination's declared name.</param>
@@ -730,22 +763,31 @@ public sealed class DestinationSyncStore
         // state, attempt, success, the synced sequence — is carried forward
         // untouched, because proving bytes says nothing about when they
         // arrived.
-        //
-        // The cursor rides with the stamps rather than with the sync, and only
-        // on a pass that passed: advancing it after a failure would walk the
-        // rotation past objects nobody proved anything about.
-        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        return Mutate(setId, destination, previous => Stamp(
+            Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind),
+            new VerificationStamp(objects, population, verifiedSequence, sampleCursor, @sealed, digest, chunk),
+            nowUnixMilliseconds));
+    }
+
+    /// <summary>The row with a passed verification's stamps on it.</summary>
+    /// <remarks>
+    /// The cursor rides with the stamps rather than with the sync, and only
+    /// on a pass that passed: advancing it after a failure would walk the
+    /// rotation past objects nobody proved anything about.
+    /// </remarks>
+    private static DestinationSyncRecord Stamp(
+        DestinationSyncRecord row, VerificationStamp proof, ulong nowUnixMilliseconds) =>
+        row with
         {
             VerifiedAt = nowUnixMilliseconds,
-            VerifiedSequence = Math.Max(verifiedSequence, previous?.VerifiedSequence ?? 0),
-            VerifiedObjects = objects,
-            VerifiedPopulation = population,
-            VerifiedSealed = @sealed,
-            VerifiedDigest = digest,
-            VerifiedChunk = chunk,
-            SampleCursor = sampleCursor,
-        });
-    }
+            VerifiedSequence = Math.Max(proof.VerifiedSequence, row.VerifiedSequence),
+            VerifiedObjects = proof.Objects,
+            VerifiedPopulation = proof.Population,
+            VerifiedSealed = proof.Sealed,
+            VerifiedDigest = proof.Digest,
+            VerifiedChunk = proof.Chunk,
+            SampleCursor = proof.SampleCursor,
+        };
 
     /// <summary>
     /// Records one segment of a deep sweep: how far it got, and whether that
