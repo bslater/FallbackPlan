@@ -186,7 +186,10 @@ public sealed class JobStateStore
 
         try
         {
-            var jobs = JsonSerializer.Deserialize<List<JobRecord>>(File.ReadAllText(path), SerializerOptions) ?? [];
+            // Read sharing deletion because another process may open the
+            // journal while the service replaces it: `status` given a
+            // repository reads it without the writer role.
+            var jobs = JsonSerializer.Deserialize<List<JobRecord>>(AtomicFile.ReadAllText(path), SerializerOptions) ?? [];
             return new JobStateStore(path, jobs);
         }
         catch (JsonException)
