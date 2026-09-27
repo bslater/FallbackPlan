@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One class at a time, for the test assemblies that are not CI's critical path
+     (ADR-0032 Amendment 4). tests/Directory.Build.props applies it on CI only. -->
+<RunSettings>
+  <MSTest>
+    <Parallelize>
+      <Workers>1</Workers>
+      <Scope>ClassLevel</Scope>
+    </Parallelize>
+  </MSTest>
+</RunSettings>

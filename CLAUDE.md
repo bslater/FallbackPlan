@@ -24,7 +24,9 @@ dotnet test  FallbackPlan.slnx -c Release
   `Assert.ThrowsExactly<T>(...)`.
 - Every test project but PerformanceTests and Web.DomTests runs its classes
   concurrently ([ADR-0032](docs/adr/0032-mstest-as-the-test-framework.md)
-  amendments), and a new one gets the same `Parallelism.cs`. A test
+  amendments), and a new one gets the same `Parallelism.cs`. On CI only
+  Hosts.Tests does, because the step waits for it alone
+  (`tests/off-critical-path.runsettings`). A test
   that shares process state (an environment variable a host reads, a
   process-wide listener or culture, an assertion about real durations) runs
   alone: `[DoNotParallelize]`, with the reason beside it. Nothing else should.

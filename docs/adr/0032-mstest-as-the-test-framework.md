@@ -134,6 +134,28 @@ Measured on Linux with four cores, Hosts.Tests alone, three runs after the chang
 
 In each run all nine methods ran inside the concurrent batch, each overlapping tests of other classes.
 
+## Amendment 4 (2026-09): on CI, only the critical path runs concurrently
+
+Amendment 2 measured each suite alone and expected CI to gain less. On two platforms CI gained less than nothing. The baseline is the run for Amendment 1, when only Hosts.Tests and Repository.Tests ran concurrently. Over the next two runs the Windows test step went from 7m35s to 9m42s and 9m53s, and the macOS one from 7m01s to 9m06s and 8m14s. Linux varied too much between runs to say either way: 5m03s, then 7m31s for the same tests.
+
+CI now keeps every test's timing, and the timings show why. Every assembly shares one three- or four-core runner, and the step ends when Hosts.Tests does.
+
+- On Windows, its four workers were busy from the first minute to the eighth.
+- Meanwhile the other assemblies, concurrent since Amendment 2, kept up to eleven more tests in flight, and finished at eight minutes.
+- Hosts.Tests' concurrent batch took 500 seconds there, against 122 on a quiet machine.
+
+The other assemblies were never the critical path: they finish before Hosts.Tests either way. Running their classes concurrently only moved CPU from the one assembly the step waits for to the ones it does not.
+
+So on CI, where `CI` is set to true as GitHub Actions sets it, every test project but Hosts.Tests runs one class at a time. `tests/Directory.Build.props` names `off-critical-path.runsettings` for them there. Elsewhere nothing changes: every suite runs its classes concurrently, as Amendment 2 measured, and the classes are exactly as audited. A concurrency defect in one of those suites would therefore show on a developer's machine first, not on CI.
+
+Checked locally, with `CI` set and without it:
+
+- Retention.Tests ran one test at a time with it (no overlapping pairs, 1m27s) and concurrently without it (270 pairs, 41s).
+- Hosts.Tests stayed concurrent with it.
+- The settings file combines with CI's coverage collector and results logger, giving one report and one results file per run.
+
+The next runs will report what CI makes of it, and the status history will record the result.
+
 ## Status history
 
 | Date | Status | Note |
@@ -142,3 +164,4 @@ In each run all nine methods ran inside the concurrent batch, each overlapping t
 | 2026-09 | Amended | Hosts.Tests and Repository.Tests run their classes concurrently; what runs alone says why beside `[DoNotParallelize]`; on Linux, each suite alone, 8m00s to under 3m and under 1m to under 30s, counts identical before and after |
 | 2026-09 | Amended | Every test project but PerformanceTests and Web.DomTests runs its classes concurrently; on Linux, Retention.Tests 1m28s to 42s or less and Cli.Tests 28s to 16s or less, counts identical before and after |
 | 2026-09 | Amended | The two test hooks belong to the flow that sets them, held by `Hosts.Tests/TestHookScopeTests`; the nine methods that set them leave the alone phase, which falls from 57s to 34s or less, and Hosts.Tests from 2m49s to 2m37s or less |
+| 2026-09 | Amended | On CI only Hosts.Tests runs its classes concurrently: the other assemblies' concurrency took cores from the critical path, and the Windows test step went from 7m35s to 9m42s and 9m53s |
