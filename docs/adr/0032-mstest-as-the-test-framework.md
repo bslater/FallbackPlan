@@ -179,6 +179,22 @@ The Windows step is faster but not back to Amendment 1's 7m35s, because Cli.Test
 
 Why Cli.Tests is so much slower on Windows is not yet known, and it is what to look at next.
 
+### What the Windows finding was (2026-09)
+
+Most of it was one wait, paid by every CLI command. A command asks for a local service before it takes direct mode. On Windows a named pipe that does not exist raised no error of its own, so the client waited out its two-second connect timeout before it was told. These tests run commands against state directories with no service, so every command paid it, as every command on a person's machine with no service did. [ADR-0028](0028-service-boundary-and-deployment-topologies.md)'s conformance fix of the same month ended it, under NFR-OPS-009: the client now checks that the pipe exists before it waits for one.
+
+Here are the two CI runs of the commit that fixed it, against the two runs of the commit before it, on Windows:
+
+| | Before | After |
+|---|---|---|
+| The no-service connect | 2.01 s and 2.00 s | 0.004 s and 0.006 s |
+| `CommandTests` | 136 s and 57 s | 15 s and 60 s |
+| Cli.Tests, first test to last | 207 s and 167 s | 54 s and 131 s |
+
+The Test step took 4m47s and 8m37s before, and 6m17s and 7m07s after. It waits for Hosts.Tests, whose own run took anywhere from 4m18s to 7m52s over these four, so the step shows nothing either way about this change.
+
+The wait before Cli.Tests' first test is a separate cost, and the fix did not touch it. It was 55 and 9 seconds before, and 5 and 276 after. It is not Cli.Tests' own. In one of the runs before, ArchitectureTests waited 144 seconds instead, and in each run at most one assembly waited longer than 30 seconds. What an assembly waits for before its first test on Windows is not yet known, and it is what to look at next.
+
 ## Status history
 
 | Date | Status | Note |
@@ -189,3 +205,4 @@ Why Cli.Tests is so much slower on Windows is not yet known, and it is what to l
 | 2026-09 | Amended | The two test hooks belong to the flow that sets them, held by `Hosts.Tests/TestHookScopeTests`; the nine methods that set them leave the alone phase, which falls from 57s to 34s or less, and Hosts.Tests from 2m49s to 2m37s or less |
 | 2026-09 | Amended | On CI only Hosts.Tests runs its classes concurrently: the other assemblies' concurrency took cores from the critical path, and the Windows test step went from 7m35s to 9m42s and 9m53s |
 | 2026-09 | Amended (Amendment 4 measured) | First CI run with the cap: the test step took 8m49s on Windows (from 9m42s and 9m53s), 6m00s on macOS (from 9m06s and 8m14s) and 7m40s on Linux (from 5m03s and 7m31s); on Windows Cli.Tests is now a second critical path, for a reason not yet known |
+| 2026-09 | Amended (Windows finding) | Cli.Tests' Windows slowness was mostly a two-second wait that every CLI command paid for a service pipe that did not exist, ended by ADR-0028's conformance fix under NFR-OPS-009: the no-service connect fell from 2 s to under 10 ms, and CommandTests from 136 s and 57 s to 15 s and 60 s. The wait some assembly makes before its first test on Windows is separate and not yet explained |
