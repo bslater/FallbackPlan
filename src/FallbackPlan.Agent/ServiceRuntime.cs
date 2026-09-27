@@ -85,6 +85,15 @@ public sealed record ServiceOptions
     internal Action<DestinationSyncRecord>? DestinationSyncObserver { get; init; }
 
     /// <summary>
+    /// Awaited by every backup run the moment it enters Scanning, with the
+    /// run's job id and cancellation token: a test harness's way to hold a
+    /// run live at a known point, so a test that acts on a running job is not
+    /// racing it to the finish. A cancel that lands while it waits takes the
+    /// run's own cancellation path. Null, the production value, holds nothing.
+    /// </summary>
+    internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.

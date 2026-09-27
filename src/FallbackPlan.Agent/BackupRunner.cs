@@ -97,6 +97,11 @@ public static class BackupRunner
             jobs.Transition(jobId, JobState.Scanning, nowMs);
             progress.Enter(JobState.Scanning);
 
+            if (runtime.Options.EnteredScanning is { } entered)
+            {
+                await entered(jobId, cancellationToken).ConfigureAwait(false);
+            }
+
             // The set's archive — staging, or a direct-ship sink over the
             // metadata store — created on its first backup; either way it is
             // internal, so nobody runs `init` for it (ADR-0034 §1, ADR-0046).
