@@ -432,8 +432,22 @@ internal static class RecoveryDrillJob
                     break;
                 }
 
-                var entry = directory.Entries[draw.Next(directory.Entries.Count)];
-                var next = path.Length == 0 ? entry.Name : $"{path}/{entry.Name}";
+                // Drawn from what this drill has not already chosen or left: a
+                // draw that lands on a file it already has spends an attempt,
+                // and on a small snapshot that can be every attempt left,
+                // leaving files the descent never reached. Directories stay on
+                // offer, because the descent does not know which are spent.
+                var offered = directory.Entries
+                    .Where(candidate => candidate.Kind == "directory"
+                        || !(seen.Contains(Child(path, candidate.Name)) || skipped.Contains(Child(path, candidate.Name))))
+                    .ToList();
+                if (offered.Count == 0)
+                {
+                    break;
+                }
+
+                var entry = offered[draw.Next(offered.Count)];
+                var next = Child(path, entry.Name);
                 if (entry.Kind == "directory")
                 {
                     path = next;
@@ -443,7 +457,7 @@ internal static class RecoveryDrillJob
                 // Only a file proves anything: a symlink or a device node
                 // restores its record, not content, so a drill that sampled
                 // one would pass without reading a segment.
-                if (entry.Kind != "file" || seen.Contains(next))
+                if (entry.Kind != "file")
                 {
                     break;
                 }
@@ -467,6 +481,9 @@ internal static class RecoveryDrillJob
 
         return (chosen, skipped.Count);
     }
+
+    /// <summary>A snapshot path one entry below <paramref name="path"/>; the root is the empty path.</summary>
+    private static string Child(string path, string name) => path.Length == 0 ? name : $"{path}/{name}";
 
     private static long BytesUnder(string directory)
     {
