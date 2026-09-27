@@ -206,6 +206,37 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    [FallbackPlan.TestSupport.PlatformCondition(FallbackPlan.TestSupport.TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void Open_WhileAWriteHoldsTheLedgerForDeletion_StillReadsIt()
+    {
+        // `status` given a repository opens the ledger without the writer
+        // role, so a running service may be replacing the file as it reads.
+        // A replace renames the new file into place and holds it open for
+        // deletion until the rename returns, and an open in that moment must
+        // still read the old rows or the new ones rather than fail the
+        // command that asked.
+        //
+        // The handle below is that moment held still, as in AtomicFileTests;
+        // delete-on-close is how .NET asks for deletion access. The first
+        // assertion is the control: a read that does not share deletion is
+        // refused under that handle, so the second one proves something.
+        DestinationSyncStore.Open(_state)
+            .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
+        var path = Path.Combine(_state, "destinations.json");
+
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            Assert.Throws<IOException>(
+                () => File.ReadAllText(path),
+                "the held handle must refuse a reader that does not share deletion, or this test proves nothing");
+            Assert.AreEqual(42UL, DestinationSyncStore.Open(_state).Find(SetId, "vault")?.SyncedSequence);
+        }
+    }
+
+    [TestMethod]
     public void Open_UnreadableGarbage_SetsTheFileAsideAndStartsEmpty()
     {
         // Neither the versioned shape nor the legacy bare array: the ledger
