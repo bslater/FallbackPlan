@@ -1,5 +1,6 @@
 using FallbackPlan.Api;
 using FallbackPlan.Repository.Crypto;
+using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
 
@@ -23,6 +24,24 @@ public sealed partial class ServiceCommandHandler
         + "makes the archives readable at all — so setup runs exactly once (ADR-0044, ADR-0042 §11).";
 
     private ServiceResult ProvisionInstallation(ProvisionInstallationCommand command)
+    {
+        var answer = ProvisionInstallationCore(command);
+
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        if (log.IsEnabled(LogLevel.Debug))
+        {
+            Log.ProvisionOutcome(log, answer switch
+            {
+                ConfigurationChangeResult => "provisioned",
+                ServiceError error => error.Reason.ToString(),
+                _ => answer.GetType().Name,
+            });
+        }
+
+        return answer;
+    }
+
+    private ServiceResult ProvisionInstallationCore(ProvisionInstallationCommand command)
     {
         if (Scope == CallerScope.Remote)
         {

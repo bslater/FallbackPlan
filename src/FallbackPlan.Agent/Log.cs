@@ -181,6 +181,23 @@ internal static partial class Log
         Message = "Background window {Window} shut over {Runs} running capture(s); each parks at its next file boundary")]
     internal static partial void BackgroundWindowParked(ILogger logger, string window, int runs);
 
+    // Trace: one line per command at the seam every verb crosses, so a
+    // service log read end to end is a conversation. Type names only, never
+    // the command's content — several commands carry paths.
+    [LoggerMessage(
+        EventId = 3784, Level = LogLevel.Trace,
+        Message = "{Command} answered {Result} in {ElapsedMilliseconds} ms")]
+    internal static partial void CommandExecuted(
+        ILogger logger, string command, string result, long elapsedMilliseconds);
+
+    // Debug: how the setup verb classified a ceremony. A console stuck on its
+    // setup screen shows a toast and nothing else says why; this does, and it
+    // carries the classification only — the envelope is sealed and stays so.
+    [LoggerMessage(
+        EventId = 3785, Level = LogLevel.Debug,
+        Message = "Setup provisioning answered '{Outcome}'")]
+    internal static partial void ProvisionOutcome(ILogger logger, string outcome);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

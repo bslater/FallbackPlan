@@ -11,12 +11,12 @@ namespace FallbackPlan.Web;
 /// console is a relay — the work it reports on happens in the service, which
 /// logs it there, and duplicating a command's life on both sides of a socket
 /// produces two accounts of one event that disagree the moment either
-/// changes. The trace tier (4110–4114) does not break that rule, because it
-/// reports what only this process knows: that a request arrived and what
-/// status answered it, how a setup ceremony was classified, and which asset
-/// bytes were served. Outcomes and names, never bodies — three of these
-/// endpoints carry a passphrase, and no message here takes one as a
-/// parameter in any form (ADR-0043).
+/// changes. The trace tier (4110–4114, 4112 aside) does not break that rule,
+/// because it reports what only this process knows: that a request arrived
+/// and what status answered it, how a setup ceremony was classified, and
+/// which asset bytes were served. Outcomes and names, never bodies — a body
+/// here can carry a passphrase or a password, and no message here takes one
+/// as a parameter in any form (ADR-0043).
 /// <para>
 /// The 401 path is not among them. A request without the run's token is the
 /// ordinary state of a browser that has not been handed the URL yet, it happens
@@ -63,7 +63,28 @@ internal static partial class Log
         Message = "Event stream ended after {Events} event(s)")]
     internal static partial void EventStreamEnded(ILogger logger, long events);
 
+    [LoggerMessage(
+        EventId = 4110, Level = LogLevel.Trace,
+        Message = "{Endpoint} answered {StatusCode} in {ElapsedMilliseconds} ms")]
+    internal static partial void RequestHandled(
+        ILogger logger, string endpoint, int statusCode, long elapsedMilliseconds);
 
+    [LoggerMessage(
+        EventId = 4111, Level = LogLevel.Debug,
+        Message = "Setup answered '{Outcome}'")]
+    internal static partial void SetupOutcome(ILogger logger, string outcome);
 
+    // 4112 was the recovery-kit rebuild's outcome. The kit went (ADR-0060),
+    // and the id goes unused rather than meaning something else in a log
+    // written before it did.
+    [LoggerMessage(
+        EventId = 4113, Level = LogLevel.Trace,
+        Message = "Relayed {Command}; the service answered {Result} in {ElapsedMilliseconds} ms")]
+    internal static partial void CommandRelayed(
+        ILogger logger, string command, string result, long elapsedMilliseconds);
 
+    [LoggerMessage(
+        EventId = 4114, Level = LogLevel.Trace,
+        Message = "Served {Path} ({ByteCount} bytes, embedded at build time)")]
+    internal static partial void StaticAssetServed(ILogger logger, string path, int byteCount);
 }
