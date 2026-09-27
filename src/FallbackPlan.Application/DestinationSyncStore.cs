@@ -440,7 +440,10 @@ public sealed class DestinationSyncStore
             return new DestinationSyncStore(path, []);
         }
 
-        var text = File.ReadAllText(path);
+        // Read sharing deletion because another process may open the ledger
+        // while the service replaces it: `status` given a repository reads it
+        // without the writer role.
+        var text = AtomicFile.ReadAllText(path);
         try
         {
             var file = JsonSerializer.Deserialize<LedgerFile>(text, SerializerOptions);
