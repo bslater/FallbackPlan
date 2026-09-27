@@ -194,6 +194,36 @@ public sealed class PeerRecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_ADrawThatKeepsLandingOnOneFile_StillReachesTheOther()
+    {
+        // The descent draws at random, so any draw may land on a file the
+        // drill already has, and on a small snapshot every draw left can.
+        // Here the draw always takes the first entry it is offered, which is
+        // that worst case held still: the drill must still restore both
+        // files, because a file it already has is no longer on offer.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, drillIntervalDays: 7);
+        _harness.WriteSourceFile("docs/one.txt", new string('1', 40_000));
+        _harness.WriteSourceFile("docs/two.txt", new string('2', 40_000));
+
+        await using var runtime = await StartAsync();
+        await ShipAsync(runtime);
+
+        var outcome = await RecoveryDrillJob.RunAsync(
+            runtime, runtime.Configuration.BackupSets[0], "friend",
+            (ulong)DateTimeOffset.Now.ToUnixTimeMilliseconds(), budget: null, new FirstEntry(), Timeout);
+
+        Assert.IsNull(outcome.Failure, outcome.Failure);
+        Assert.AreEqual(2, outcome.Files, "a file the drill already had was drawn again in place of the other");
+    }
+
+    /// <summary>A draw that always takes the first entry it is offered.</summary>
+    private sealed class FirstEntry : Random
+    {
+        public override int Next(int maxValue) => 0;
+    }
+
+    [TestMethod]
     public async Task Drill_ALocalPathIsNotCapped()
     {
         // The cap is a peer's, not a drill's: a local path is this machine's
