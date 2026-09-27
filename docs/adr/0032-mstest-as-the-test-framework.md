@@ -156,6 +156,27 @@ Checked locally, with `CI` set and without it:
 
 The next runs will report what CI makes of it, and the status history will record the result.
 
+### The first run with it (2026-09)
+
+The run for the commit that made the change, against the two runs before it:
+
+| Test step | Before | After |
+|---|---|---|
+| Windows | 9m42s and 9m53s | 8m49s |
+| macOS | 9m06s and 8m14s | 6m00s |
+| Linux | 5m03s and 7m31s | 7m40s |
+
+Hosts.Tests' concurrent batch fell from 500 seconds to 431 on Windows and from 382 to 281 on macOS. On Linux it held at 368, against 361. The macOS step is the fastest it has been, and the Linux one is where the last run left it.
+
+The Windows step is faster but not back to Amendment 1's 7m35s, because Cli.Tests is now a second critical path there:
+
+- Its first test started 152 seconds after its run did. On macOS and Linux the wait was 6 and 13 seconds.
+- Run one class at a time, it then took 362 seconds; run concurrently, it had taken 266.
+- It finished at 511 seconds, beside Hosts.Tests at 516.
+- Most of that time is its `CommandTests` class: 285 seconds on Windows, against 47 on Linux and 23 on macOS.
+
+Why Cli.Tests is so much slower on Windows is not yet known, and it is what to look at next.
+
 ## Status history
 
 | Date | Status | Note |
@@ -165,3 +186,4 @@ The next runs will report what CI makes of it, and the status history will recor
 | 2026-09 | Amended | Every test project but PerformanceTests and Web.DomTests runs its classes concurrently; on Linux, Retention.Tests 1m28s to 42s or less and Cli.Tests 28s to 16s or less, counts identical before and after |
 | 2026-09 | Amended | The two test hooks belong to the flow that sets them, held by `Hosts.Tests/TestHookScopeTests`; the nine methods that set them leave the alone phase, which falls from 57s to 34s or less, and Hosts.Tests from 2m49s to 2m37s or less |
 | 2026-09 | Amended | On CI only Hosts.Tests runs its classes concurrently: the other assemblies' concurrency took cores from the critical path, and the Windows test step went from 7m35s to 9m42s and 9m53s |
+| 2026-09 | Amended (Amendment 4 measured) | First CI run with the cap: the test step took 8m49s on Windows (from 9m42s and 9m53s), 6m00s on macOS (from 9m06s and 8m14s) and 7m40s on Linux (from 5m03s and 7m31s); on Windows Cli.Tests is now a second critical path, for a reason not yet known |
