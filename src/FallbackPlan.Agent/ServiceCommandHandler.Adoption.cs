@@ -887,7 +887,20 @@ public sealed partial class ServiceCommandHandler
                 continue;
             }
 
-            return RepositoryDescriptorCodec.Parse(File.ReadAllBytes(descriptorPath)) is DescriptorParseResult.Ok parsed
+            // Shared for deletion: a store publishes this file by renaming it
+            // into place, and the rename holds it open for deletion until the
+            // rename returns. Windows refuses, for that moment, any reader that
+            // does not share deletion, and a set's first backup publishes its
+            // store while clients are listing sets.
+            byte[] bytes;
+            using (var stream = new FileStream(
+                descriptorPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            {
+                bytes = new byte[stream.Length];
+                stream.ReadExactly(bytes);
+            }
+
+            return RepositoryDescriptorCodec.Parse(bytes) is DescriptorParseResult.Ok parsed
                 ? parsed.Descriptor
                 : null;
         }
