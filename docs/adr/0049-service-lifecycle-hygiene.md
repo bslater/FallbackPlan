@@ -116,9 +116,53 @@ Amendment 3), so reconciliation changes what is *reported*, not what runs.
 - **Cancelled as the sweep's landing state.** Nobody cancelled anything;
   `FailedRecoverable` both says what happened and schedules the retry.
 
+## Amendment (2026-09): a pass that cannot run is lost, not the service
+
+The run loop called `Scheduler.RunPassAsync` with no catch of its own, and a
+pass reads the configuration first. So a `config.json` that stopped loading
+under a running service threw out of the loop into the host's start-up
+catches, which print the reason and exit 1. The file might have been
+hand-edited into bad JSON, made unreadable, or hit by a disk error. On
+Windows, until the configuration read shared deletion, a save's rename
+landing on the read was enough. What the exit did depended on the
+registration (decision 4):
+- systemd and launchd started the service again, into the same file, which
+  it refused again;
+- on Windows the SCM host went to Stopped and stayed there.
+
+Every listener went with it, so the console and the CLI lost the service
+they would have used to learn what was wrong.
+
+A running service now keeps its listeners when a pass fails on its
+configuration or its state (FR-SVC-019): a `ClientStateException`, an
+`IOException` or an `UnauthorizedAccessException`. The pass is lost, and
+the service:
+- raises the notice `scheduler-pass-lost`. It names the defect, says that
+  nothing is backed up until a pass can run, and is refreshed while the
+  failure lasts.
+- logs event 3786 (Warning) and prints the reason on the run's error
+  stream.
+- tries again at the next tick.
+
+The first pass that runs resolves the notice, including one an earlier
+process left standing. It also logs event 3787 and prints "passes run
+again".
+
+Unchanged:
+- Start-up still refuses a configuration that will not load, by name
+  (NFR-OPS-003).
+- `--once` still exits 1 on a failed pass, because it is a person at a
+  terminal.
+- An exception of any other type still leaves the loop as before, because
+  it is a defect in the code, not a condition of the machine.
+- When the state directory itself has failed, the notice cannot be written
+  either. That failure still leaves the loop, after the log line and the
+  error line have recorded why.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Written from the 2026-08 stuck-job field report and the owner's restart and diagnostics asks |
 | 2026-08 | Built | The startup sweep and notice (`JobStateStore`, `ServiceRuntime`), the orphan-settling cancel and queue-aware delete guard (`ServiceCommandHandler`), the in-process recycle loop (`AgentHost`) with the Owner-gated `restart_service` verb (contract 1.21) surfaced on the console's Maintenance view and the CLI's `restart`, and the startup configuration record (events 3760–3763) — pinned by `Repository.Tests/ApplicationServiceTests`, `Hosts.Tests/JournalReconciliationTests`, `Hosts.Tests/RestartServiceTests`, `Hosts.Tests/AuthenticationGateTests`, `Hosts.Tests/AgentServiceLifetimeTests` (the shipped apphost recycling in place), `Hosts.Tests/AgentHostTests`, `Cli.Tests/SessionVerbTests` and `Web.Tests/ConsoleAdminScriptTests` |
+| 2026-09 | Amended | A running service loses a pass it cannot run, not itself (FR-SVC-019). The run loop in `AgentHost` catches a pass's configuration and state failures, raises the scheduler-pass-lost notice, logs event 3786 and retries at the next tick. The first pass that runs resolves the notice and logs event 3787. Start-up and a single run still refuse by name. Pinned by `Hosts.Tests/AgentHostTests` |
