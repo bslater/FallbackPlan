@@ -47,6 +47,31 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
+      # File-system cost is most of the Windows leg's gap to the other two:
+      # Repository.Tests takes about thirteen minutes there against a minute
+      # and a quarter on Linux, and every test writes under the temp
+      # directory. The profile's temp is on C:, while the runner's own temp
+      # directory sits on its local D: disk beside the workspace, and
+      # real-time scanning inspects every file a test creates. Both are
+      # properties of the runner, not of the code under test, so the tests
+      # write to D: and neither directory is scanned. A refused exclusion is
+      # a warning rather than a failure: the run is still valid, only slower.
+      - name: Keep test I/O on the local disk and out of the scanner (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          "TEMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$temp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $status = Get-MpComputerStatus -ErrorAction SilentlyContinue
+          Write-Host "Real-time protection: $($status.RealTimeProtectionEnabled)"
+          try {
+            Add-MpPreference -ExclusionPath $temp, $env:GITHUB_WORKSPACE -ErrorAction Stop
+            Write-Host "Excluded from scanning: $temp and $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "::warning::Scanning exclusions were refused: $($_.Exception.Message)"
+          }
       # Locked mode: the committed packages.lock.json files are the restore
       # (NFR-SUP-003). A dependency change that forgot to update them fails
       # here rather than silently resolving something new.
