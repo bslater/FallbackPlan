@@ -198,6 +198,16 @@ internal static partial class Log
         Message = "Setup provisioning answered '{Outcome}'")]
     internal static partial void ProvisionOutcome(ILogger logger, string outcome);
 
+    [LoggerMessage(
+        EventId = 3786, Level = LogLevel.Warning,
+        Message = "A scheduled pass could not run; the service keeps serving and tries again in {PollSeconds} s")]
+    internal static partial void PassLost(ILogger logger, int pollSeconds, Exception exception);
+
+    [LoggerMessage(
+        EventId = 3787, Level = LogLevel.Information,
+        Message = "Scheduled passes run again, after {LostPasses} that could not in this process")]
+    internal static partial void PassesResumed(ILogger logger, int lostPasses);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

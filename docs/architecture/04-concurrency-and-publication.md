@@ -151,6 +151,11 @@ The boundaries are not the only interruption points: a store can die at *every i
 | `verified` | Durability independently confirmed — [`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification) |
 | `degraded` | Previously durable, now failing verification or partially missing |
 
+A pass that proves what it copied records the copy and the proof in one
+ledger write. Were they two, the first would call the pair in sync with
+nothing yet saying the copy was proved, and a reader between them would
+report as `durable` a snapshot the pass did verify (FR-SNP-003).
+
 Two per-pair facts ride beside these states since sync-ledger schema 2
 ([ADR-0047 §6](../adr/0047-backup-pool-and-priorities.md)), surfaced by
 contract 1.19: **when the destination's baseline completed** — its first

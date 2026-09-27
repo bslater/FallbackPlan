@@ -8,7 +8,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// rule, the <c>--once</c> exit-code contract, and the error mapping that
 /// must produce a stated reason rather than a stack trace. The pass itself
 /// is covered by AgentPassTests; this covers everything around it, which
-/// until now nothing could call.
+/// until now nothing could call, including FR-SVC-019: a running service
+/// outlives a pass it cannot run.
 /// </summary>
 [TestClass]
 public sealed class AgentHostTests : IDisposable
@@ -364,6 +365,61 @@ public sealed class AgentHostTests : IDisposable
         finally
         {
             File.Delete(occupied);
+        }
+    }
+
+    [TestMethod]
+    public async Task AgentHost_APassThatCannotRun_IsRetriedWhileTheServiceKeepsServing()
+    {
+        // FR-SVC-019. A running service reads its configuration at the start
+        // of every pass. When that fails, the pass is lost, not the service:
+        // it keeps its listeners, says what is wrong where a client will see
+        // it, and tries again at the next tick. Start-up is different, and
+        // AgentHost_AConfigurationThatWillNotLoad_StillStartsLogging pins its
+        // refusal.
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        new ClientConfiguration { SchemaVersion = ClientConfiguration.CurrentSchemaVersion }.Save(configuration);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var running = AgentHost.RunAsync(
+            ["run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--poll-seconds", "1"],
+            output, error, stop.Token);
+
+        await UntilAsync(() => output.ToString().Contains("listening on", StringComparison.Ordinal));
+
+        // Whole, so the pass reads the broken file rather than a half-written
+        // one. Two failed passes, not one: only a service that outlived the
+        // first can report the second.
+        Domain.AtomicFile.WriteAllText(configuration, "{ this is not json");
+        await UntilAsync(() => error.ToString().Split('\n')
+            .Count(line => line.Contains("config.json", StringComparison.Ordinal)) >= 2);
+
+        var raised = await RunAsync("notices", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, raised.ExitCode, raised.Error);
+        Assert.Contains("config.json", raised.Output, StringComparison.Ordinal);
+
+        new ClientConfiguration { SchemaVersion = ClientConfiguration.CurrentSchemaVersion }.Save(configuration);
+        await UntilAsync(() => output.ToString().Contains("passes run again", StringComparison.Ordinal));
+
+        var resolved = await RunAsync("notices", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, resolved.ExitCode, resolved.Error);
+        Assert.DoesNotContain("config.json", resolved.Output, StringComparison.Ordinal);
+
+        stop.Cancel();
+        Assert.AreEqual(0, await running, error.ToString());
+
+        async Task UntilAsync(Func<bool> condition)
+        {
+            while (!condition())
+            {
+                Assert.IsFalse(
+                    running.IsCompleted,
+                    $"the service exited ({(running.IsCompleted ? await running : 0)}) instead of serving: {error}");
+                await Task.Delay(25, timeout.Token);
+            }
         }
     }
 

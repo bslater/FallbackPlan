@@ -1,6 +1,6 @@
 # Requirements: a faster Argon2id in Bodu
 
-**Status: Implemented upstream on a branch, not yet released** — against `Bodu.Security.Cryptography` **1.0.0**, the
+**Status: Answered upstream for 1.1.0; FallbackPlan adopts it once 1.1.0 is on NuGet** — against `Bodu.Security.Cryptography` **1.0.0**, the
 package FallbackPlan makes every passphrase- and password-based derivation
 through.
 **Audience:** the Bodu maintainer and FallbackPlan contributors ·
@@ -239,6 +239,9 @@ shared memory bus of §2.1 becomes the limit.
 
 ## 7. Open questions for the maintainer
 
+> **Answered 2026-09-27** by the maintainer's implementation plan for 1.1.0.
+> §8 records each answer.
+
 1. **Threads by default, or on request?** Filling lanes in parallel is the
    latency win of ARG-N-001, but a host running many derivations at once
    gains nothing from it (§2.1). FallbackPlan's preference is parallel by
@@ -256,13 +259,21 @@ shared memory bus of §2.1 becomes the limit.
 
 Raised 2026-09-27, from the test-cost investigation whose numbers are §2.3.
 
-Implemented the same day on the bodu branch
-[`claude/new-session-ujlem9`](https://github.com/bslater/bodu/tree/claude/new-session-ujlem9):
-seven commits on `40068ba`, ending at
-[`9a3949e`](https://github.com/bslater/bodu/commit/9a3949e).
+Answered the same day by the maintainer's plan,
+[`plans/argon2-performance.md`](https://github.com/bslater/bodu/blob/182b257/plans/argon2-performance.md),
+and implemented against it for **1.1.0** on the bodu branch
+`claude/argon2-prototype-co27tu`, at `182b257`. Nothing is merged or
+released yet. FallbackPlan still consumes 1.0.0, and adopts the change with
+the version bump once 1.1.0 is on NuGet (§5). The decisions are below the
+tables.
 
-- Nothing is merged or released yet. FallbackPlan still consumes 1.0.0, and
-  adopting the change waits on a release (question 3).
+A first implementation on the bodu branch `claude/new-session-ujlem9`
+(seven commits on `40068ba`, ending at `9a3949e`) came before the plan. It
+answered question 2 differently, with a pooled managed array, and put the
+bound in `Argon2Parameters` rather than on the instance. The plan's
+implementation supersedes it. It is recorded here because the tables below
+were measured with it.
+
 - The figures below were measured as §2.1's were, on the same machine and
   against the same parameters.
 - Each is set against §2.1's figures for 1.0.0: 209 to 213 ms wall and
@@ -270,13 +281,13 @@ seven commits on `40068ba`, ending at
 
 | ID | Requirement | Disposition |
 |----|-------------|-------------|
-| ARG-F-001 | Output unchanged | Met. RFC 9106's vectors, the reference implementation's 21, and 25 regression vectors captured from the published 1.0.0 pass through every kernel at one thread, two, and one per lane. With the branch's assembly in place of 1.0.0's, FallbackPlan's committed `argon2id.json` vectors and its cross-verification against Konscious pass. |
+| ARG-F-001 | Output unchanged | Met. RFC 9106's vectors, the reference implementation's 21, and 25 regression vectors captured from the published 1.0.0 pass through every kernel at one thread, two, and one per lane. With the first implementation's assembly in place of 1.0.0's, FallbackPlan's committed `argon2id.json` vectors and its cross-verification against Konscious pass. |
 | ARG-F-002 | API unchanged | Met. One property is added, and nothing changes signature or meaning. |
-| ARG-F-003 | A caller-set thread bound | Met for every entry point that takes `Argon2Parameters`: `MaxDegreeOfParallelism`, with `MerkleTree`'s contract. `Verify` reads its parameters from the PHC string and uses the default; see question 4 below. |
+| ARG-F-003 | A caller-set thread bound | Met by the first implementation for every entry point that takes `Argon2Parameters`, but not for `Verify`, which reads its parameters from the PHC string. 1.1.0 puts the bound on the instance and adds a bounded `Verify` (decision 4). |
 | ARG-N-001 | Lanes on cores | Met: 32 to 38 ms, which is 15 to 18 % of 1.0.0. |
 | ARG-N-002 | Vector compression | Met on x64 with AVX2: 71 to 75 ms of CPU with the lanes on one thread, and 82 to 87 ms with them spread, which is 32 to 42 %. The 128-bit kernel, used on x64 without AVX2, took 119 to 123 ms before the matrix was pooled. The same kernel serves Arm64, where its speed is not measured. |
 | ARG-N-003 | No regression without the hardware | Met: the scalar kernel took 156 to 162 ms of CPU before the matrix was pooled. |
-| ARG-N-004 | No matrix per call | Met: 2 to 28 KB allocated per derivation, and no gen2 collections. The matrix is rented from the runtime's shared array pool (question 2). |
+| ARG-N-004 | No matrix per call | Met: 2 to 28 KB allocated per derivation, and no gen2 collections. The first implementation rented the matrix from the runtime's shared array pool. 1.1.0 holds it in native memory instead (decision 2). |
 | ARG-N-005 | Concurrency no worse | Met: four at once took 24 to 26 ms each, 4.3 to 4.6 times 1.0.0's throughput. |
 | ARG-N-006 | Password-derived state cleared | Met: the matrix before it goes back to the pool. Also the stack scratch, H0's expansion and the final block, which 1.0.0 left on the stack. |
 | ARG-N-007 | The data-independent half stays so | Met by construction. Every kernel is additions, rotations, XORs and a fixed-latency multiplication, with no branch or table lookup on the data. Threads divide the lanes, which the parameters fix. |
@@ -284,15 +295,23 @@ seven commits on `40068ba`, ending at
 | ARG-N-009 | A benchmark | Met: `Argon2Benchmarks`. |
 | ARG-N-010 | Nothing new to depend on | Met. |
 
-§5's "measure again" was run against the branch without waiting for a
-release.
-- The branch's `Bodu.Security.Cryptography.dll` replaced 1.0.0's in the test
-  outputs. The assembly identity is the same, and between the 1.0.0 release
-  and the branch's base the package's sources differ only in doc comments.
+The plan records its own implementation's figures in its §10. They come
+from a different machine, a four-vCPU Xeon, with 1.0.0 measured in the same
+session. One derivation took 30.7 ms of wall time with AVX2 and threads,
+12 % of 1.0.0's 247.5 ms, and 37 % of its CPU. It allocated 26 KiB, with no
+gen2 collections.
+
+§5's "measure again" was run against the first implementation without
+waiting for a release, and runs again against 1.1.0 when FallbackPlan
+takes it.
+- The first implementation's `Bodu.Security.Cryptography.dll` replaced
+  1.0.0's in the test outputs. The assembly identity is the same, and
+  between the 1.0.0 release and its base the package's sources differ only
+  in doc comments.
 - Each suite ran alone, and the two largest twice. Every test passed on both
   assemblies.
 
-| Suite | 1.0.0 | The branch |
+| Suite | 1.0.0 | The first implementation |
 |---|---|---|
 | Hosts.Tests | 2m35s, 2m37s | 1m49s, 1m47s |
 | Cli.Tests | 16 s, 16 s | 5 s, 5 s |
@@ -300,21 +319,50 @@ release.
 | Repository.Tests | 28 s | 25 s |
 | Repository.ConformanceTests | 3 s | 2 s |
 
-The branch settles questions 1 and 2 provisionally, and they remain the
-maintainer's:
+### The maintainer's decisions
 
-1. **The default bound is -1**, FallbackPlan's preference. `MerkleTree`
-   defaults to 1. Either way, a derivation with less than 1 MiB of memory per
-   lane fills its lanes on one thread, because below that the handoff cost more
-   than it saved.
-2. **The matrix is rented from `ArrayPool<ulong>.Shared`** and cleared before it
-   goes back. That avoids the zeroing and the collector without unsafe code.
-   The cost is that a buffer stays resident per thread that derived, until the
-   runtime trims idle buffers.
-3. **The version is unchanged** on the branch. The added property suggests a
-   minor version.
-4. **`Verify` has no thread bound.** A server verifying many logins at once has
-   no way to ask for one thread there.
+These are the plan's §3, confirmed in the code of `claude/argon2-prototype-co27tu` at `182b257`.
+
+1. **Threads by default** (question 1), as this document preferred. A
+   derivation fills its lanes on up to p threads, bounded by the processor
+   count, the calling thread included. It divides a slice only once a
+   segment is at least 256 blocks, a lane of 1 MiB. Below that it stays on
+   the calling thread, because dispatching costs more than it spreads.
+   `MerkleTree` still defaults to one thread, and the difference is
+   deliberate. There, parallelism is an opt-in trade. Here, p is the
+   caller's own statement of how many lanes may run at once.
+2. **The matrix lives in native memory, reused through a small bounded pool**
+   (question 2). Buffers are 64-byte aligned and cleared every time they are
+   returned. The pool keeps at most one per processor, each of at most
+   256 MiB, and frees any left idle for 30 seconds. The `AppContext` switch
+   `Bodu.Security.Cryptography.Argon2.DisableMatrixReuse` turns retention
+   off. At FallbackPlan's parameters that is at most processor count × 64 MiB
+   of zeroed memory, for 30 seconds after the last derivation. The plan
+   preferred native memory to a pooled array for three reasons:
+   - A trimmed buffer goes back at once, where a dropped array waits for a
+     gen2 collection.
+   - It is 64-byte aligned, so no vector load straddles a cache line.
+   - It never moves.
+
+   The price is `AllowUnsafeBlocks` for the project, with the pointer code
+   confined to one type.
+3. **Version 1.1.0** (question 3), a minor version, since the API change is
+   additive. It ships with the next lock-step wave, or alone through Bodu's
+   out-of-band route if FallbackPlan cannot wait for the wave.
+4. **The bound lives on the instance, and `Verify` takes one too.** The
+   additions are `new Argon2id(parameters, maxDegreeOfParallelism)` (and the
+   same for Argon2i and Argon2d), a `MaxDegreeOfParallelism` property, and
+   `Argon2.Verify(encoded, password, secret, maxDegreeOfParallelism)`.
+   `Argon2Parameters` is unchanged. A PHC string cannot carry the bound, and
+   the bound is not part of the result. -1, the default, lets the library
+   choose. 1 confines a derivation to the calling thread, as 1.0.0 ran.
+
+For FallbackPlan this changes nothing in §5. Every derivation it makes goes
+through the one-shot `Argon2id.DeriveKey` (`KekDerivation` and
+`PasswordHash`; `WriteOnlyDerivation` goes through `KekDerivation`). That
+method keeps its signature and takes the default bound, so adopting 1.1.0
+is the version bump alone. The committed vectors and the cross-verification
+against Konscious prove the output.
 
 ## Appendix: how the numbers were measured
 

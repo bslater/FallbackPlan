@@ -254,10 +254,9 @@ public static class FanOut
 
         var (syncedSequence, _) = await StagingPublicationSequenceAsync(archive, cancellationToken)
             .ConfigureAwait(false);
-        ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
-        ledger.RecordVerification(
-            set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence, plan.NextCursor, nowMs,
-            verification.Sealed, verification.Digest, verification.Chunk);
+        ledger.RecordSuccess(
+            set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence,
+            verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
         return true;
     }
 
@@ -624,19 +623,14 @@ public static class FanOut
                     return;
                 }
 
-                ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
-                if (verification.ProvedSomething)
-                {
-                    ledger.RecordVerification(
-                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
-                }
-
-                // Else: every sample was skipped because staging could not read
-                // its own ground truth — a pass that established nothing. It is
-                // not a destination fault, so the sync stands; but it is not
-                // proof either, so no stamp is written and the trim gate stays
-                // shut until one is.
+                // A pass that proved nothing — every sample skipped because
+                // staging could not read its own ground truth — is not a
+                // destination fault, so the sync stands; but it is not proof
+                // either, so it carries no stamp and the trim gate stays shut
+                // until one does.
+                ledger.RecordSuccess(
+                    set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence,
+                    verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
                 return;
             }
 
@@ -1136,14 +1130,8 @@ public static class FanOut
 
                 ledger.RecordSuccess(
                     set.Id, destination.Name, copied, nowMs, syncedSequence,
-                    keepFingerprint, reconciled, newestSnapshot);
-                if (verification.ProvedSomething)
-                {
-                    ledger.RecordVerification(
-                        set.Id, destination.Name, verification.Passed, plan.Population, syncedSequence,
-                        plan.NextCursor, nowMs, verification.Sealed, verification.Digest);
-                }
-
+                    keepFingerprint, reconciled, newestSnapshot,
+                    ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
                 return;
             }
 
@@ -1653,6 +1641,23 @@ public static class FanOut
             + "configured to drop until staging is repaired — run `check` to find the damage.",
             nowMs);
     }
+
+    /// <summary>
+    /// The stamp a passed verification hands the success it proved, so the
+    /// two reach the ledger in one write; null when it proved nothing, which
+    /// is no proof at all.
+    /// </summary>
+    /// <param name="verification">The pass's outcome, with no failures.</param>
+    /// <param name="population">Objects eligible when the sample was drawn.</param>
+    /// <param name="syncedSequence">The sequence the sync covered, stamped as the one the sample covered.</param>
+    /// <param name="nextCursor">Where the next pass's rotation resumes.</param>
+    private static VerificationStamp? ProofOf(
+        Replication.VerificationOutcome verification, int population, ulong syncedSequence, string? nextCursor) =>
+        verification.ProvedSomething
+            ? new VerificationStamp(
+                verification.Passed, population, syncedSequence, nextCursor,
+                verification.Sealed, verification.Digest, verification.Chunk)
+            : null;
 
     /// <summary>
     /// A failed proof is a durable finding, never a silent retry (FR-VER-005):

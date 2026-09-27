@@ -78,6 +78,13 @@ public sealed record ServiceOptions
     internal Func<string, string?>? PhysicalDiskOverride { get; init; }
 
     /// <summary>
+    /// A test harness's view of the destination-sync ledger: each row as it
+    /// is written, so every state a reader could have read — which polling
+    /// can only hope to catch. Null, the production value, observes nothing.
+    /// </summary>
+    internal Action<DestinationSyncRecord>? DestinationSyncObserver { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -547,7 +554,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             return ValueTask.FromResult(
                 new ServiceRuntime(options, writerRole, state, jobs)
                 {
-                    DestinationSync = DestinationSyncStore.Open(options.StateDirectory),
+                    DestinationSync = DestinationSyncStore.Open(options.StateDirectory, options.DestinationSyncObserver),
                     Notices = notices,
                 });
         }

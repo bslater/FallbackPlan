@@ -60,6 +60,26 @@ public static class AtomicFile
         }
     }
 
+    /// <summary>Reads a file this type writes, whole, even while a replace of it is in flight.</summary>
+    /// <param name="path">The file to read.</param>
+    /// <returns>The file's text, from the version its name held when the read began.</returns>
+    /// <remarks>
+    /// A replace renames the new file into place, and the rename holds that
+    /// file open for deletion until it returns. Windows refuses any open that
+    /// does not share deletion with such a handle, and <c>File.ReadAllText</c>
+    /// shares reading only, so a reader arriving in that moment would fail
+    /// where it should read one version or the other. Sharing deletion changes
+    /// nothing else about the read: it sees one whole version, never a mixture.
+    /// </remarks>
+    public static string ReadAllText(string path)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     /// <summary>
     /// The number of replace attempts before a contended destination is
     /// reported as a failure rather than retried again.

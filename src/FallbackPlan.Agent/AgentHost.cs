@@ -30,6 +30,12 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 public static class AgentHost
 {
+    /// <summary>
+    /// The notice a running service raises when a scheduled pass cannot run,
+    /// and resolves when one does (FR-SVC-019).
+    /// </summary>
+    internal const string PassLostNoticeKey = "scheduler-pass-lost";
+
     /// <summary>Runs the service with the given command line.</summary>
     /// <param name="args">The command line, as the process received it.</param>
     /// <param name="output">Where run lines and help are written.</param>
@@ -998,15 +1004,56 @@ public static class AgentHost
                 }
 
             var failed = 0;
+            var lostPasses = 0;
             while (!lifetime.IsCancellationRequested)
             {
                 // `--once` is a person at a terminal, so the background
                 // window does not hold it (ADR-0069): gating an operator who
                 // typed the command would be the same mistake as making a
                 // restore wait for a backup.
-                var result = await Scheduler
-                    .RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token, userInitiated: once)
-                    .ConfigureAwait(false);
+                AgentPassResult result;
+                try
+                {
+                    result = await Scheduler
+                        .RunPassAsync(runtime, DateTimeOffset.Now, lifetime.Token, userInitiated: once)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (!once
+                    && exception is ClientStateException or IOException or UnauthorizedAccessException)
+                {
+                    // A running service loses the pass, not itself (FR-SVC-019).
+                    // The catches below refuse start-up by name; reached from
+                    // here they would take every listener down over a file the
+                    // operator can mend while the service answers, and a service
+                    // manager would restart it into the same file. The notice is
+                    // how a client learns it, since diagnostics never carry what
+                    // an operator must act on (NFR-OPS-007). It is written
+                    // last: when the state directory is what failed, the notice
+                    // cannot be written either, and that failure leaves the loop
+                    // as it always did, after the record of why.
+                    lostPasses++;
+                    Log.PassLost(hostLog, pollSeconds, exception);
+                    error.WriteLine($"{DateTimeOffset.Now:u}  the pass did not run: {exception.Message}");
+                    runtime.Notices.Raise(
+                        PassLostNoticeKey,
+                        $"No scheduled pass can run: {exception.Message} Nothing is backed up until one can; "
+                        + $"the service tries again every {pollSeconds.ToString(CultureInfo.InvariantCulture)} s.",
+                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    await Task.Delay(TimeSpan.FromSeconds(pollSeconds), lifetime.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                // Resolved on every pass that runs, not only after a loss seen
+                // here: a notice raised before a restart stands until a pass
+                // runs in the new process.
+                var cleared = runtime.Notices.Resolve(
+                    PassLostNoticeKey, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                if (lostPasses > 0 || cleared)
+                {
+                    Log.PassesResumed(hostLog, lostPasses);
+                    output.WriteLine($"{DateTimeOffset.Now:u}  passes run again");
+                    lostPasses = 0;
+                }
 
                 foreach (var set in result.Sets)
                 {

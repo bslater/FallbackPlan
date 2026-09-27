@@ -144,6 +144,31 @@ public sealed class AtomicFileTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void ReadAllText_WhileAReplaceHoldsTheFileForDeletion_StillReadsIt()
+    {
+        // A replace renames the new file into place, and the rename holds that
+        // file open for deletion until it returns. A reader that opens it then
+        // without sharing deletion is refused, so a state file read while it
+        // is being saved would fail instead of reading one version or the other.
+        //
+        // The handle below is that moment held still: opened for deletion,
+        // sharing everything, as the rename's own is. Delete-on-close is how
+        // .NET asks for deletion access, so the file goes when it closes,
+        // after the read this test is about.
+        var path = Path.Combine(_root, "state.json");
+        AtomicFile.WriteAllText(path, "whole");
+
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            Assert.AreEqual("whole", AtomicFile.ReadAllText(path));
+        }
+    }
+
+    [TestMethod]
     public void IsReplaceContention_ContentionAndDefects_AreToldApart()
     {
         // The classification is the part of the retry a test can reach.

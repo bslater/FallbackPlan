@@ -93,6 +93,54 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordSuccess_HandedTheProofOfTheCopy_CallsThePairInSyncOnlyAsProved()
+    {
+        // A pass that proved what it copied records both in the write that
+        // calls the pair in sync. Written as two, the first said the
+        // destination held a snapshot nothing had proved, and a reader
+        // between them reported that snapshot durable (FR-SNP-003).
+        var written = new List<DestinationSyncRecord>();
+        var store = DestinationSyncStore.Open(_state, written.Add);
+
+        store.RecordSuccess(
+            SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42,
+            verified: new VerificationStamp(
+                Objects: 4, Population: 12, VerifiedSequence: 42, SampleCursor: "blobs/7f", Sealed: 3, Digest: 1));
+
+        var row = Assert.ContainsSingle(written);
+        Assert.AreEqual(DestinationSyncState.InSync, row.State);
+        Assert.AreEqual(42UL, row.SyncedSequence);
+        Assert.AreEqual(1_000UL, row.VerifiedAt);
+        Assert.AreEqual(42UL, row.VerifiedSequence);
+        Assert.AreEqual(4, row.VerifiedObjects);
+        Assert.AreEqual(12, row.VerifiedPopulation);
+        Assert.AreEqual(3, row.VerifiedSealed);
+        Assert.AreEqual(1, row.VerifiedDigest);
+        Assert.AreEqual("blobs/7f", row.SampleCursor);
+        Assert.AreEqual(row, DestinationSyncStore.Open(_state).Find(SetId, "vault"), "the row observed is the row saved");
+    }
+
+    [TestMethod]
+    public void RecordSuccess_HandedAnOlderProof_KeepsTheNewerVerifiedSequence()
+    {
+        // Riding the success does not change the verification's own rule:
+        // the verified sequence only advances, like the synced one beside it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordVerification(
+            SetId, "vault", objects: 4, population: 12, verifiedSequence: 50, sampleCursor: null,
+            nowUnixMilliseconds: 1_000);
+
+        store.RecordSuccess(
+            SetId, "vault", objects: 7, nowUnixMilliseconds: 2_000, syncedSequence: 42,
+            verified: new VerificationStamp(Objects: 2, Population: 12, VerifiedSequence: 42, SampleCursor: null));
+
+        var record = store.Find(SetId, "vault")!;
+        Assert.AreEqual(50UL, record.VerifiedSequence);
+        Assert.AreEqual(2_000UL, record.VerifiedAt);
+        Assert.AreEqual(2, record.VerifiedObjects);
+    }
+
+    [TestMethod]
     public void RecordFailure_KeepsTheStampsAndTheLastSuccess()
     {
         // A failed attempt does not un-prove bytes that were proven, nor
@@ -155,6 +203,37 @@ public sealed class DestinationSyncStoreTests
         // oldest installs re-shipping everything a direct-ship flip touches.
         Assert.AreEqual(1000UL, record.BaselineCompletedAt, "the legacy row's success must seed its baseline");
         Assert.IsFalse(record.NeedsFull);
+    }
+
+    [TestMethod]
+    [FallbackPlan.TestSupport.PlatformCondition(FallbackPlan.TestSupport.TestPlatforms.Windows,
+        "a rename holds the file it renamed open for deletion until it returns, and only Windows refuses "
+        + "a reader that does not share deletion with that handle")]
+    public void Open_WhileAWriteHoldsTheLedgerForDeletion_StillReadsIt()
+    {
+        // `status` given a repository opens the ledger without the writer
+        // role, so a running service may be replacing the file as it reads.
+        // A replace renames the new file into place and holds it open for
+        // deletion until the rename returns, and an open in that moment must
+        // still read the old rows or the new ones rather than fail the
+        // command that asked.
+        //
+        // The handle below is that moment held still, as in AtomicFileTests;
+        // delete-on-close is how .NET asks for deletion access. The first
+        // assertion is the control: a read that does not share deletion is
+        // refused under that handle, so the second one proves something.
+        DestinationSyncStore.Open(_state)
+            .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
+        var path = Path.Combine(_state, "destinations.json");
+
+        using (File.OpenHandle(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, FileOptions.DeleteOnClose))
+        {
+            Assert.Throws<IOException>(
+                () => File.ReadAllText(path),
+                "the held handle must refuse a reader that does not share deletion, or this test proves nothing");
+            Assert.AreEqual(42UL, DestinationSyncStore.Open(_state).Find(SetId, "vault")?.SyncedSequence);
+        }
     }
 
     [TestMethod]

@@ -188,6 +188,61 @@ public sealed class ServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task FanOut_ThatProvesWhatItCopied_NeverWritesTheVaultInSyncAheadOfTheProof()
+    {
+        // FR-SNP-003: a pass that proved what it copied is verified from the
+        // first moment the ledger says the vault is in sync. Were the sync and
+        // its proof two writes, a reader between them — a status poll, a
+        // snapshot listing, the test above — would see the vault hold a
+        // snapshot nobody had proved, and report it durable.
+        //
+        // Polling cannot show that that moment never exists, only that it was
+        // missed, so the observer is handed every row as it is written, and
+        // each one is a state some reader could have read.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", new string('x', 200_000));
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        var written = new List<DestinationSyncRecord>();
+        await using var runtime = await StartAsync(row =>
+        {
+            lock (written)
+            {
+                written.Add(row);
+            }
+        });
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<JobAcceptedResult>(
+            await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token));
+        await WaitForAsync(() =>
+            runtime.DestinationSync.Find(_harness.DocsSetId, "vault")
+                is { State: DestinationSyncState.InSync, VerifiedAt: not null });
+
+        List<DestinationSyncRecord> inSync;
+        lock (written)
+        {
+            inSync = [.. written.Where(row =>
+                row.SetId == _harness.DocsSetId
+                && row.Destination == "vault"
+                && row.State == DestinationSyncState.InSync)];
+        }
+
+        Assert.IsTrue(
+            inSync.Exists(row => row.SyncedSequence > 0),
+            "the pass under test never wrote the vault in sync holding a snapshot");
+        foreach (var row in inSync)
+        {
+            Assert.IsGreaterThanOrEqualTo(
+                row.SyncedSequence, row.VerifiedSequence,
+                $"the ledger wrote the vault in sync through sequence {row.SyncedSequence} while its proof "
+                + $"reached only {row.VerifiedSequence}: a reader then would have seen the snapshot durable, "
+                + "not verified");
+        }
+    }
+
+    [TestMethod]
     public async Task CancelJob_JobIsRunning_StopsItAndReportsTheCancelledState()
     {
         await _harness.CreateRepositoryAsync();
@@ -958,7 +1013,7 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(before, await File.ReadAllTextAsync(configurationPath, _timeout.Token));
     }
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(Action<DestinationSyncRecord>? ledgerWrites = null)
     {
         await _harness.SetupAsync();
 
@@ -971,6 +1026,7 @@ public sealed class ServiceTests : IDisposable
                 // fixture's every path shares one real volume — the vaults are
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+                DestinationSyncObserver = ledgerWrites,
             },
             _timeout.Token);
     }
