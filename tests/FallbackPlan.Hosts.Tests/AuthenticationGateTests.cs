@@ -406,6 +406,43 @@ public sealed class AuthenticationGateTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AcknowledgeReplicaClaim_IsTheOwnersAlone()
+    {
+        // The fourth Owner-only privilege (FR-DR-005): acknowledging a claim
+        // lets a device that proved only a passphrase delete from a replica
+        // stored here. Whether to trust that claim is the owner's decision.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var command = new AcknowledgeReplicaClaimCommand(new string('c', 32));
+        var refused = (ServiceError)await operatorConnection.ExecuteAsync(command, CancellationToken.None);
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.Contains("owner", refused.Message, StringComparison.OrdinalIgnoreCase);
+
+        var before = _inner.Executed;
+        Assert.IsInstanceOfType<AcknowledgedResult>(await owner.ExecuteAsync(command, CancellationToken.None));
+        Assert.AreEqual(before + 1, _inner.Executed, "the owner's acknowledgement must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task AcknowledgeReplicaClaim_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
+    {
+        // As for the re-point: nobody owns the decision until the first
+        // account exists.
+        var refused = (ServiceError)await Connect().ExecuteAsync(
+            new AcknowledgeReplicaClaimCommand(new string('c', 32)), CancellationToken.None);
+
+        Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+        Assert.AreEqual(0, _inner.Executed, "the inner service was never reached");
+    }
+
+    [TestMethod]
     public async Task RestartService_BeforeAnyAccountExists_IsRefusedNotBootstrapped()
     {
         // The bootstrap window admits exactly the verbs that create the
