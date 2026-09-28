@@ -15,6 +15,8 @@ public sealed class PairingCeremonyProcessTests : IDisposable
     private readonly string _scratch =
         Path.Combine(Path.GetTempPath(), "fbp-pair-process", Guid.NewGuid().ToString("n"));
 
+    private readonly List<Process> _processes = [];
+
     private static string ApphostPath(string name)
     {
         var fileName = OperatingSystem.IsWindows() ? name + ".exe" : name;
@@ -23,7 +25,7 @@ public sealed class PairingCeremonyProcessTests : IDisposable
         return path;
     }
 
-    private static Process Start(string apphost, params string[] arguments)
+    private Process Start(string apphost, params string[] arguments)
     {
         var info = new ProcessStartInfo
         {
@@ -39,7 +41,9 @@ public sealed class PairingCeremonyProcessTests : IDisposable
             info.ArgumentList.Add(argument);
         }
 
-        return Process.Start(info)!;
+        var process = Process.Start(info)!;
+        _processes.Add(process);
+        return process;
     }
 
     [TestMethod]
@@ -87,6 +91,44 @@ public sealed class PairingCeremonyProcessTests : IDisposable
         Assert.Contains("paired with", await consoleOutput, StringComparison.Ordinal);
         Assert.IsTrue(File.Exists(Path.Combine(serviceState, "peers.json")));
         Assert.IsTrue(File.Exists(Path.Combine(consoleState, "peers.json")));
+    }
+
+    [TestMethod]
+    public async Task Cleanup_AfterATestThatLeftAPairingProcessRunning_StopsIt()
+    {
+        // A test that fails part-way can leave its processes running, and the
+        // service's `pair` never stops by itself: it waits for a console for
+        // as long as it is left. Cleanup is what stops it. A second instance
+        // of this class stands in for the failed test: it starts the service's
+        // pairing, sees it announce its port, and is disposed while the
+        // service is still waiting.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
+        Process service;
+        using (var failed = new PairingCeremonyProcessTests())
+        {
+            var started = failed.Start(
+                ApphostPath("FallbackPlan.Agent"),
+                "pair", "--state", Path.Combine(failed._scratch, "service-state"),
+                "--remote-interface", "127.0.0.1", "--remote-port", "0", "--label", "service");
+            await ReadUntilAsync(started.StandardOutput, [], line => TryParsePort(line, out _), timeout.Token);
+
+            // A Process of this test's own, which the failed test's cleanup
+            // does not dispose, so it can still say whether the process exited.
+            service = Process.GetProcessById(started.Id);
+        }
+
+        using (service)
+        {
+            var survived = !service.HasExited;
+            if (survived)
+            {
+                service.Kill(entireProcessTree: true);
+                service.WaitForExit(TimeSpan.FromSeconds(30));
+            }
+
+            Assert.IsFalse(survived, "cleanup left running the process its test started");
+        }
     }
 
     private static bool TryParsePort(string? line, out int port)
