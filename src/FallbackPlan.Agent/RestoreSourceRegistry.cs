@@ -98,7 +98,6 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
         {
             try
             {
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
                 Directory.Delete(CacheDirectory, recursive: true);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

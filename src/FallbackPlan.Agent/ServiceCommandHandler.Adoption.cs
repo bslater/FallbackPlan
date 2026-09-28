@@ -377,7 +377,6 @@ public sealed partial class ServiceCommandHandler
         var cataloguePath = Path.Combine(runtime.Options.StateDirectory, $"catalogue-{repositoryIdHex}.db");
         if (File.Exists(cataloguePath))
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             File.Delete(cataloguePath);
         }
 
