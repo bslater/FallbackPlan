@@ -13,6 +13,12 @@ namespace FallbackPlan.Application.Tests;
 /// instructions is the peer that would like the key they are checked against
 /// to be its own.
 /// </para>
+/// <para>
+/// And a claim that moves an attribution (peer-protocol 03 §6) is held for
+/// this destination's operator to acknowledge before the claimant may delete
+/// anything (FR-DR-005): the store records the hold, keeps it across restarts,
+/// and releases it only on the acknowledgement.
+/// </para>
 /// </summary>
 [TestClass]
 public sealed class ReplicaOwnerStoreTests : IDisposable
@@ -222,6 +228,109 @@ public sealed class ReplicaOwnerStoreTests : IDisposable
 
         Assert.IsFalse(store.Reattribute(RepoA, "peer-rebuilt"));
         Assert.IsNull(store.Find(RepoA));
+    }
+
+    [TestMethod]
+    public void Claim_ThatMovesTheReplica_HoldsItForTheOperatorsAcknowledgement()
+    {
+        // A claim hands the replica to whoever proved the owner's passphrase
+        // (03 §6), and a passphrase can be stolen. So the move is recorded as
+        // awaiting this destination's operator: reading is the claimant's at
+        // once, deleting waits (06 §3). The previous owner comes back so the
+        // operator can be told whom the replica left.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", new string('a', 64), new string('e', 64)));
+
+        Assert.AreEqual("peer-one", store.Claim(RepoA, "peer-rebuilt"));
+
+        var owner = store.Find(RepoA)!;
+        Assert.AreEqual("peer-rebuilt", owner.Fingerprint);
+        Assert.IsTrue(owner.ClaimAwaitingAcknowledgement);
+        Assert.AreEqual(new string('a', 64), owner.ReclaimPublicKey);
+        Assert.AreEqual(new string('e', 64), owner.ClaimPublicKey);
+
+        // Durable: a restart must not acknowledge a claim on the operator's
+        // behalf.
+        Assert.IsTrue(ReplicaOwnerStore.Open(_stateDirectory).Find(RepoA)!.ClaimAwaitingAcknowledgement);
+    }
+
+    [TestMethod]
+    public void Claim_ByTheDeviceThatAlreadyOwnsTheReplica_MovesNothingAndHoldsNothing()
+    {
+        // A claimant repeating a claim that already succeeded, or claiming
+        // what it has owned all along, changes nobody's authority, so there
+        // is nothing for the operator to acknowledge.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        Assert.IsTrue(store.TryAttribute(RepoA, "peer-one", claimPublicKey: new string('e', 64)));
+
+        Assert.IsNull(store.Claim(RepoA, "peer-one"));
+        Assert.IsFalse(store.Find(RepoA)!.ClaimAwaitingAcknowledgement);
+
+        Assert.IsNull(store.Claim(RepoB, "peer-one"));
+        Assert.IsNull(store.Find(RepoB));
+    }
+
+    [TestMethod]
+    public void AcknowledgeClaim_ReleasesTheHold_AndIsDurable()
+    {
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        store.TryAttribute(RepoA, "peer-one", claimPublicKey: new string('e', 64));
+        store.Claim(RepoA, "peer-rebuilt");
+
+        Assert.IsTrue(store.AcknowledgeClaim(RepoA));
+
+        var owner = store.Find(RepoA)!;
+        Assert.IsFalse(owner.ClaimAwaitingAcknowledgement);
+        Assert.AreEqual("peer-rebuilt", owner.Fingerprint, "acknowledging a claim confirms it; it does not undo it");
+        Assert.IsFalse(ReplicaOwnerStore.Open(_stateDirectory).Find(RepoA)!.ClaimAwaitingAcknowledgement);
+
+        // Nothing is left to acknowledge, and a replica never claimed never
+        // had anything to.
+        Assert.IsFalse(store.AcknowledgeClaim(RepoA));
+        store.TryAttribute(RepoB, "peer-one");
+        Assert.IsFalse(store.AcknowledgeClaim(RepoB));
+        Assert.IsFalse(store.AcknowledgeClaim(new string('c', 32)));
+    }
+
+    [TestMethod]
+    public void Claim_MovingAnAcknowledgedReplicaAgain_IsHeldAgain()
+    {
+        // An acknowledgement answers for one claim by one device. A later
+        // claim to another device is a new question for the operator.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        store.TryAttribute(RepoA, "peer-one", claimPublicKey: new string('e', 64));
+        store.Claim(RepoA, "peer-rebuilt");
+        store.AcknowledgeClaim(RepoA);
+
+        Assert.AreEqual("peer-rebuilt", store.Claim(RepoA, "peer-stranger"));
+        Assert.IsTrue(store.Find(RepoA)!.ClaimAwaitingAcknowledgement);
+    }
+
+    [TestMethod]
+    public void Reattribute_TheOperatorsOwnMove_IsNotHeldForAcknowledgement()
+    {
+        // The operator re-pointing a replica by hand (ADR-0053 §3) is already
+        // the operator's decision; there is nobody else to wait for.
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+        store.TryAttribute(RepoA, "peer-one");
+
+        Assert.IsTrue(store.Reattribute(RepoA, "peer-rebuilt"));
+        Assert.IsFalse(store.Find(RepoA)!.ClaimAwaitingAcknowledgement);
+    }
+
+    [TestMethod]
+    public void Open_AFileRecordedBeforeClaimsWereHeld_ReadsWithNothingAwaiting()
+    {
+        // A claim made before the hold existed was never held, and an
+        // attribution without the field reads as exactly that.
+        File.WriteAllText(
+            Path.Combine(Directory.CreateDirectory(_stateDirectory).FullName, "replica-owners.json"),
+            $$"""{ "{{RepoA}}": { "Fingerprint": "peer-rebuilt", "ClaimPublicKey": "{{new string('e', 64)}}" } }""");
+
+        var store = ReplicaOwnerStore.Open(_stateDirectory);
+
+        Assert.IsFalse(File.Exists(Path.Combine(_stateDirectory, "replica-owners.json.corrupt")));
+        Assert.IsFalse(store.Find(RepoA)!.ClaimAwaitingAcknowledgement);
     }
 
     [TestMethod]
