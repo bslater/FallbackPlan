@@ -24,6 +24,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// (<see cref="Drill_TheStagingArchiveIsRuined_StillPassesFromTheReplica"/>).
 /// </para>
 /// <para>
+/// A drill says nothing only when the service is stopping or the pass that
+/// ran it was cancelled (ADR-0054 Amendments 1 and 4). Anything else that ends
+/// one is a drill that did not complete, and the tests that inject such a
+/// fault do it between the drill and the service it talks to, so the fault
+/// is the only thing that differs from a clean drill.
+/// </para>
+/// <para>
 /// What the in-process drill cannot prove is stated in ADR-0054 and belongs to
 /// <c>eng/recovery-drill.sh</c>: the kit file's own parse, the standalone
 /// tool's dependency closure, and the machine actually being gone.
@@ -199,6 +206,151 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_ADisposedObjectMetWhileTheServiceRuns_IsADrillThatDidNotComplete()
+    {
+        // FR-DRL-002 as amended (ADR-0054 Amendment 4). A disposed object means
+        // shutdown only while the service is stopping. Met while it runs, it is
+        // a fault in the road back, and the drill that met it did not complete,
+        // which is what it must now say. Silence here is how the SQLite pool
+        // race hid in CI: a drill that left no trace.
+        await using var runtime = await StartDrilledAsync();
+        var at = DateTimeOffset.Now.AddDays(40);
+
+        var outcome = await DrillThroughAsync(
+            runtime, at, command => command is RunRestoreCommand,
+            () => throw new ObjectDisposedException("SQLitePCL.sqlite3"));
+
+        var record = Pair(runtime);
+        Assert.AreEqual((ulong)at.ToUnixTimeMilliseconds(), record.DrilledAt, "a drill that did not complete was still a try");
+        Assert.IsNotNull(record.DrillFailure);
+        Assert.Contains("did not complete", record.DrillFailure, StringComparison.Ordinal);
+        Assert.Contains("SQLitePCL.sqlite3", record.DrillFailure, StringComparison.Ordinal);
+        Assert.AreEqual(outcome.Failure, record.DrillFailure);
+        Assert.ContainsSingle(DrillNotices(runtime));
+    }
+
+    [TestMethod]
+    public async Task Drill_ACommandCancelledWhileTheServiceRuns_IsADrillThatDidNotComplete()
+    {
+        // The same rule for a cancelled answer. The failure names the step
+        // that came back cancelled, because "the operation was cancelled" is
+        // otherwise all a reader has to go on.
+        await using var runtime = await StartDrilledAsync();
+        var at = DateTimeOffset.Now.AddDays(40);
+
+        await DrillThroughAsync(runtime, at, command => command is RunRestoreCommand, Cancelled);
+
+        var record = Pair(runtime);
+        Assert.AreEqual((ulong)at.ToUnixTimeMilliseconds(), record.DrilledAt);
+        Assert.IsNotNull(record.DrillFailure);
+        Assert.Contains("did not complete", record.DrillFailure, StringComparison.Ordinal);
+        Assert.Contains("restoring", record.DrillFailure, StringComparison.Ordinal);
+        Assert.ContainsSingle(DrillNotices(runtime));
+    }
+
+    [TestMethod]
+    public async Task Drill_TheServiceStopsWhileItLists_SaysNothing()
+    {
+        // Amendment 1's case, one command further into the drill than its own
+        // test reaches. A listing that comes back cancelled is not an empty
+        // folder. Read as one, a drill cut short while it chose its files
+        // reported that the snapshot had nothing it could sample, and raised
+        // the loudest notice there is on the way out of an orderly stop.
+        await using var runtime = await StartDrilledAsync();
+        var drilled = Pair(runtime);
+
+        await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is ListDirectoryCommand,
+            async () =>
+            {
+                await runtime.Queue.DisposeAsync();
+                return await Cancelled();
+            },
+            once: false);
+
+        AssertUntouched(runtime, drilled);
+    }
+
+    [TestMethod]
+    public async Task Drill_AListingCancelledWhileTheServiceRuns_IsADrillThatDidNotComplete()
+    {
+        // And while the service runs, the same misreading blamed the snapshot:
+        // "none could be sampled" for a replica whose files were all there,
+        // behind listings that never came back.
+        await using var runtime = await StartDrilledAsync();
+
+        await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is ListDirectoryCommand, Cancelled, once: false);
+
+        var failure = Pair(runtime).DrillFailure;
+        Assert.IsNotNull(failure);
+        Assert.Contains("did not complete", failure, StringComparison.Ordinal);
+        Assert.Contains("listing", failure, StringComparison.Ordinal);
+        Assert.ContainsSingle(DrillNotices(runtime));
+    }
+
+    [TestMethod]
+    public async Task Drill_AFailureReachedWhileTheServiceStops_IsNotRecorded()
+    {
+        // A refusal that arrives while the service is taking itself apart is
+        // about the service, not the replica. The pair keeps its last answer,
+        // and the next start drills it again.
+        await using var runtime = await StartDrilledAsync();
+        var drilled = Pair(runtime);
+
+        await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is RunRestoreCommand,
+            async () =>
+            {
+                await runtime.Queue.DisposeAsync();
+                return new ServiceError(ServiceErrorReason.Failed, "the store is closing");
+            });
+
+        AssertUntouched(runtime, drilled);
+    }
+
+    [TestMethod]
+    public async Task Drill_ThePassCancelledUnderneathIt_SaysNothing()
+    {
+        // The other half of a real stop. The pass that ran the drill runs on
+        // the service's lifetime, so its cancellation is the service stopping,
+        // even before the queue has heard.
+        await using var runtime = await StartDrilledAsync();
+        var drilled = Pair(runtime);
+        using var pass = new CancellationTokenSource();
+
+        await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is RunRestoreCommand,
+            async () =>
+            {
+                await pass.CancelAsync();
+                return await Cancelled();
+            },
+            pass.Token);
+
+        AssertUntouched(runtime, drilled);
+    }
+
+    [TestMethod]
+    public async Task Drill_ADisposedObjectMetWhileTheServiceStops_SaysNothing()
+    {
+        // What Amendment 1 was for, kept: once the service is stopping, a
+        // disposed object is the runtime taking itself apart.
+        await using var runtime = await StartDrilledAsync();
+        var drilled = Pair(runtime);
+
+        await DrillThroughAsync(
+            runtime, DateTimeOffset.Now.AddDays(40), command => command is RunRestoreCommand,
+            async () =>
+            {
+                await runtime.Queue.DisposeAsync();
+                throw new ObjectDisposedException("SQLitePCL.sqlite3");
+            });
+
+        AssertUntouched(runtime, drilled);
+    }
+
+    [TestMethod]
     public async Task Drill_ADestinationNoPassHasReached_IsNeverDue()
     {
         // Nothing has been copied there, so there is nothing to restore from.
@@ -340,6 +492,81 @@ public sealed class RecoveryDrillTests : IDisposable
                 },
             ],
         }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
+    }
+
+    /// <summary>A set-up installation whose one pair has converged and passed a clean drill.</summary>
+    private async Task<ServiceRuntime> StartDrilledAsync()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
+
+        var runtime = await StartAsync();
+        try
+        {
+            var first = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+            await first.Transfers.WaitAsync(Timeout);
+            await first.Drills.WaitAsync(Timeout);
+
+            var drilled = Pair(runtime);
+            Assert.IsNotNull(drilled.DrilledAt, $"the clean drill must pass first: {drilled.DrillFailure}");
+            Assert.IsNull(drilled.DrillFailure);
+            return runtime;
+        }
+        catch
+        {
+            await runtime.DisposeAsync();
+            throw;
+        }
+    }
+
+    private DestinationSyncRecord Pair(ServiceRuntime runtime) =>
+        runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+
+    private static IEnumerable<Notice> DrillNotices(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.Where(notice => notice.Key.StartsWith("drill-failed:", StringComparison.Ordinal));
+
+    private void AssertUntouched(ServiceRuntime runtime, DestinationSyncRecord before)
+    {
+        var after = Pair(runtime);
+        Assert.AreEqual(
+            before.DrilledAt, after.DrilledAt, $"a drill cut short by a stop leaves the last answer standing: {after.DrillFailure}");
+        Assert.AreEqual(before.DrillFailure, after.DrillFailure);
+        Assert.AreEqual(before.DrillLimit, after.DrillLimit);
+        Assert.IsEmpty(DrillNotices(runtime));
+    }
+
+    private static ValueTask<ServiceResult> Cancelled() =>
+        ValueTask.FromResult<ServiceResult>(new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled."));
+
+    /// <summary>Drills the pair at <paramref name="at"/> with a fault put between the drill and the service.</summary>
+    private Task<RecoveryDrillJob.DrillOutcome> DrillThroughAsync(
+        ServiceRuntime runtime, DateTimeOffset at, Func<ServiceCommand, bool> picks,
+        Func<ValueTask<ServiceResult>> fault, CancellationToken? pass = null, bool once = true) =>
+        RecoveryDrillJob.RunAsync(
+            runtime, new Interposed(new ServiceCommandHandler(runtime, RemoteBindingState.Off), picks, fault, once),
+            runtime.Configuration.BackupSets[0], "vault", (ulong)at.ToUnixTimeMilliseconds(),
+            budget: null, Random.Shared, pass ?? Timeout);
+
+    /// <summary>
+    /// The service a drill talks to, with a fault in the way: the command the
+    /// predicate picks, the first one or every one, is answered by the fault
+    /// instead, and everything else, the drill's closing of its source
+    /// included, goes through to the service.
+    /// </summary>
+    private sealed class Interposed(
+        IFallbackPlanService service, Func<ServiceCommand, bool> picks, Func<ValueTask<ServiceResult>> fault, bool once)
+        : IFallbackPlanService
+    {
+        private int _struck;
+
+        public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken) =>
+            picks(command) && (!once || Interlocked.Exchange(ref _struck, 1) == 0)
+                ? fault()
+                : service.ExecuteAsync(command, cancellationToken);
+
+        public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken) =>
+            service.WatchAsync(cancellationToken);
     }
 
     private async Task<ServiceRuntime> StartAsync()
