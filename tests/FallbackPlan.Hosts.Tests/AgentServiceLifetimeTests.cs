@@ -19,6 +19,7 @@ public sealed class AgentServiceLifetimeTests : IDisposable
     private const int Sigkill = 9;
 
     private readonly HostHarness _harness = new();
+    private readonly List<Process> _agents = [];
 
     [DllImport("libc", SetLastError = true)]
     private static extern int kill(int pid, int sig);
@@ -32,21 +33,19 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         _harness.WriteSourceFile("notes.txt", "hello");
         _harness.WriteConfiguration("every 1h");
 
-        using (var agent = StartAgentRun())
-        {
-            await WaitForListeningAsync(agent);
+        var agent = StartAgentRun();
+        await WaitForListeningAsync(agent);
 
-            // The signal systemd and launchd send to stop a service. Process.Kill
-            // would send SIGKILL, which proves nothing about a graceful stop.
-            Assert.AreEqual(0, kill(agent.Id, Sigterm), "kill(SIGTERM) failed");
+        // The signal systemd and launchd send to stop a service. Process.Kill
+        // would send SIGKILL, which proves nothing about a graceful stop.
+        Assert.AreEqual(0, kill(agent.Id, Sigterm), "kill(SIGTERM) failed");
 
-            Assert.IsTrue(agent.WaitForExit(TimeSpan.FromSeconds(30)), "the agent did not exit after SIGTERM");
-            Assert.AreEqual(0, agent.ExitCode, "SIGTERM is a clean shutdown, so exit 0");
-        }
+        Assert.IsTrue(agent.WaitForExit(TimeSpan.FromSeconds(30)), "the agent did not exit after SIGTERM");
+        Assert.AreEqual(0, agent.ExitCode, "SIGTERM is a clean shutdown, so exit 0");
 
         // The writer lock is free: a fresh run acquires it and comes up. If the
         // first agent had left it held, this one would refuse and never listen.
-        using var second = StartAgentRun();
+        var second = StartAgentRun();
         await WaitForListeningAsync(second);
         _ = kill(second.Id, Sigterm);
         second.WaitForExit(TimeSpan.FromSeconds(30));
@@ -67,7 +66,7 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         _harness.WriteSourceFile("notes.txt", "hello");
         _harness.WriteConfiguration("every 1h");
 
-        using var agent = StartAgentRun();
+        var agent = StartAgentRun();
         await WaitForListeningAsync(agent);
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -131,6 +130,13 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         Assert.IsFalse(survived, "cleanup left running the agent its test started");
     }
 
+    /// <summary>
+    /// Starts the agent apphost under <c>run</c> for this class's harness.
+    /// </summary>
+    /// <remarks>
+    /// The class owns the process: cleanup stops it if the test did not, so
+    /// a test that fails before its own SIGTERM leaves nothing running.
+    /// </remarks>
     private Process StartAgentRun()
     {
         var fileName = OperatingSystem.IsWindows() ? "FallbackPlan.Agent.exe" : "FallbackPlan.Agent";
@@ -161,7 +167,9 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         info.Environment[_harness.PassphraseVariable] =
             Environment.GetEnvironmentVariable(_harness.PassphraseVariable);
 
-        return Process.Start(info)!;
+        var agent = Process.Start(info)!;
+        _agents.Add(agent);
+        return agent;
     }
 
     /// <summary>
@@ -192,6 +200,18 @@ public sealed class AgentServiceLifetimeTests : IDisposable
 
     public void Dispose()
     {
+        // Before the harness, whose directories a running agent still holds.
+        foreach (var agent in _agents)
+        {
+            if (!agent.HasExited)
+            {
+                agent.Kill(entireProcessTree: true);
+                agent.WaitForExit(TimeSpan.FromSeconds(30));
+            }
+
+            agent.Dispose();
+        }
+
         _harness.Dispose();
     }
 }
