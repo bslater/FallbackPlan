@@ -1,8 +1,8 @@
 # ADR-0053 — A rebuilt machine claims its peer replica, and its backup set's shape survives with it
 
-**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message), [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else) and [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb)
+**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message), [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else), [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb) and [Amendment 4](#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it)
 **Date:** 2026-09
-**Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005
+**Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005, FR-DR-005 (Amendment 4)
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership), [peer-protocol 07 §4](../../specifications/peer-protocol/07-retrieval.md)
 
 ---
@@ -479,6 +479,79 @@ control, or stopping the service and running the verb again. Pinned by a test
 that stands the gate in front of the handler and checks that neither the
 runtime's ledger nor the file moved.
 
+## Amendment 4 (2026-09) — a claim is held until the destination's operator acknowledges it
+
+Amendment 2's claim re-pointed an attribution outright, and from that moment
+the claimant could instruct retention like any owner. The record this one
+superseded had decided otherwise, in its seventh decision: reading is
+unattended and deleting is not ([ADR-0070](0070-replica-claim-after-total-loss.md)
+decision 7). The peer protocol carried that across ([07 §5.9](../../specifications/peer-protocol/07-retrieval.md#59-what-a-claim-does-and-does-not-carry),
+[06 §3](../../specifications/peer-protocol/06-retention.md#3-what-the-spoke-validates)),
+and so did the threat model ([T-21](../threat-model.md#t-21-a-stolen-passphrase-claims-a-peers-replica)).
+The ceremony built here did not. FR-DR-005 is that property, and it is now
+built on this record's ceremony rather than the superseded one's.
+
+### What it is
+
+A claim that moves an attribution is **held**. The ledger records it as
+awaiting acknowledgement (`Application/ReplicaOwnerStore`'s `Claim`, beside
+the operator's unheld `Reattribute`). A re-claim by the device that already
+owns the replica moves nothing and holds nothing, and the operator's own
+re-point (Amendment 3) is not held, because the operator is the person the
+hold waits for.
+
+Every claim that moves an attribution raises a durable notice,
+`replica-claimed:<id>`, naming the claimant, the former owner and the two
+ways to answer it. It is raised after the ledger moves and before the
+claimant is told the claim succeeded, so nothing the claimant learns runs
+ahead of what the operator is shown.
+
+While the hold stands, a retention instruction for the replica is refused
+whole, as `terms_refused`, before any page of it is weighed. The refusal
+names the unacknowledged claim within the 256 bytes a refusal's reason
+carries, because that is all the claimant sees, and nothing is deleted.
+Reading is untouched, and so is pushing: the rebuilt machine restores, adopts
+and backs up while the far household sleeps.
+
+The acknowledgement is `acknowledge_replica_claim {repository_id}` (contract
+1.41), `fallbackplan-agent acknowledge-claim --state <dir> --repository <hex>`
+at the destination's shell, and an Acknowledge claim control on the console,
+beside the replica's row and beside the claim's notice. It takes the same gate
+as Amendment 3's verb: Owner-only, refused before any account exists, local
+callers only. It resolves the notice, and from then on the claimant's
+instructions are served like any owner's, still held to its grant's floor.
+The listing says which replicas are held (`claim_awaiting_acknowledgement`).
+
+### Acknowledging the notice is not acknowledging the claim
+
+The notice has its own Acknowledge, as every notice does, and it says only
+that the notice was seen. It releases nothing. The console offers an
+"acknowledge all" for notices, and a hold that a sweep of the notice list
+could release would be a hold nobody looked at. The notice's text and the
+console's control both name the difference.
+
+### What building it moved first
+
+The listener raised its notices by opening the notice ledger afresh beside
+the one the runtime holds. That ledger keeps its list in memory and writes it
+whole, so the listener's notices were a second copy: the running service
+never listed them until it restarted, and its next write of its own dropped
+them. A claim's notice could not be allowed that fate. The listener now raises
+into the runtime's ledger (`ServiceRuntime.Notices`), as Amendment 3 made it
+serve from the runtime's attribution ledger. The same move fixed the same loss
+for the two notices it already raised, an invite redeemed and a peering
+ended.
+
+### The limit
+
+A friend who never acknowledges leaves the claimant unable to age its replica
+there. At the claimant, that is a destination refusing retention with the
+reason in its words, which is the stated cost: it is preferred to a stolen
+passphrase deleting a household's last copy unattended. An attacker who holds
+the passphrase *and* the operator's acknowledgement ages the replica within
+the floor, which is the owner's own authority. T-21 records that residual,
+and nothing the recovery model preserves could decide between the two.
+
 ## Consequences
 
 **Positive**
@@ -529,6 +602,7 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-09 | Amended (claims held) | [Amendment 4](#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it): a claim that moves an attribution is held until the destination's operator acknowledges it, FR-DR-005 and ADR-0070's decision 7 carried onto this record's ceremony. The ledger's `Claim` records the hold, `Agent/ClaimResponder` raises the notice before answering, `Agent/ReplicationResponder` refuses the claimant's retention whole until the acknowledgement, which is contract 1.41's `acknowledge_replica_claim`, the agent's `acknowledge-claim` and the console's Acknowledge claim control. The listener raises into the runtime's notices. `Hosts.Tests/ClaimedReplicaRetentionTests`, `Hosts.Tests/ClaimAcknowledgementTests`, `Application.Tests/ReplicaOwnerStoreTests`, `Hosts.Tests/UnpairCommandTests`, `Web.Tests/ConsolePairingScriptTests` |
 | 2026-09 | Amended (§3 built) | [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb): the operator's re-attribution is `reattribute_replica` / `list_replica_attributions` (contract 1.31), `fallbackplan-agent reattribute` and the console's Re-point control, with `Agent/ReplicaReattribution` behind all three and the ledger now the runtime's (`ServiceRuntime.ReplicaOwners`); refused by name for a replica that carries a claim key. `Hosts.Tests/ReplicaReattributionTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Web.Tests/ConsolePairingScriptTests`. Every decision of this record is now built or closed |
 | 2026-09 | Amended | The intent of §4 is met otherwise: the set's shape travels in the archive's policy manifest and a rebuilt machine adopts a claimed replica back under its original ids ([ADR-0061](0061-adopt-a-destinations-archives.md)); `Hosts.Tests/PeerAdoptionTests` runs the drill after the claim. §3's operator re-attribution remains unbuilt |
 | 2026-09 | Amended (passphrase only) | [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else): the kit is withdrawn, so the claimant holds the passphrase and nothing else. The ceremony is two phases in one session — `ReplicationClaimOpen`, `ReplicationClaimParameters` (the destination serves the distinct KDF salts and costs behind its claimable replicas), a multi-entry `ReplicationClaim`, `ReplicationClaimAccepted` — with `replica-claim` redefined rather than versioned. `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder` and `Cli/CliApplication` carry it; `Hosts.Tests/PeerClaimTests` runs the drill with the state directory destroyed. §4 closes as will-not-do |

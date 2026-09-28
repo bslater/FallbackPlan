@@ -77,7 +77,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0050](adr/0050-completed-run-record-and-drill-down.md) | The completed-run record and drill-down: terminal numbers persisted on every journal row, the run diff (`job_changes`) and failure listing (`job_failures`) read from the repository on demand (contract 1.22), the bounded `list_jobs`, every behind demotion carrying its cause with the compared operand on the wire, the live feed naming the file being processed, and the error-manifest decoder brought to specification 06 §8.1 | Built | `Application/JobStateStore` · `Agent/BackupRunner` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Repository/SnapshotPublication` · `Repository.Format/Manifests/PolicyManifest.cs` · `Hosts.Tests/JobDrilldownTests`, `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Cli.Tests/JobsVerbTests` |
 | [0051](adr/0051-local-destination-placement.md) | A local destination lives on its own drive: drive separation as the condition of choosing (volume hard, physical drive where the platform can say), and the protection boundary moved from machine to volume — a second drive earns `protected` with its residue named | Built | `Application/LocalDestinationPlacement` · `Filesystem.Local/PhysicalDisk` · `Agent/ServiceCommandHandler` · `Application/StatusModel` · `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` |
 | [0052](adr/0052-relocatable-records-format-v3.md) | Format v3: a sealed record stops encoding where it lives — and, with [ADR-0065](adr/0065-merkle-commitment-and-chunk-possession.md), the index commits to a blob in a form a party with neither the blob nor a key can check | **Partly built** | `Domain/FormatVersions` · `Repository.Crypto/RecordKeyDeriver` · `Repository.Packing/SealedRecordKey`, `Repository.Packing/RecordFraming`, `Repository.Packing/SealedContentKeyOpener` · `Repository.Packing/BlobWriter`, `Repository.Packing/BlobReader` · `Repository.Tests/Packing/RelocatableBlobTests`, `Repository.ConformanceTests/FixtureRepositoryV3Tests` · [notes](#0052--the-record-blob-and-index-planes-are-built-and-the-compactor-they-were-for) |
-| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
+| [0053](adr/0053-peer-claim-and-configuration-recovery.md) | Peer replica claim, and the set's shape in the kit | **Built** | `Protocol/PeerReplicationMessages`, `Agent/ClaimResponder`, `Cli/CliApplication`, `Application/ReplicaOwnerStore`, `Repository.Crypto/WriteOnlyDerivation` — the two-phase ceremony and the key; `Agent/ReplicaReattribution` and `Agent/AgentHost` — §3's operator re-attribution on the contract, at the shell and on the console; `Agent/ReplicationResponder` and `Agent/RemoteServiceListener` — Amendment 4's claim held for the destination operator's acknowledgement, FR-DR-005; §4 closed as will-not-do, its intent met by ADR-0061; [notes](#0053--the-claim-is-built-the-shape-is-not) |
 | [0054](adr/0054-scheduled-restore-drills.md) | Recovery drilled on a cadence: a sampled file restored out of each local destination's own replica, recorded per pair with its age and its reason, three states kept apart on the wire (contract 1.25) and in the console, a failure raising a notice rather than blaming the copy, (Amendment 1) an interrupted drill recording nothing at all, and (Amendment 3) a peer drilled on a cadence its source's operator states, never by default, under a byte cap | Built | `Agent/RecoveryDrillJob` · `Agent/Scheduler` · `Application/DestinationSyncStore` · `Application/DestinationConfiguration` · `Api/Results.cs` · `Hosts.Tests/RecoveryDrillTests`, `Hosts.Tests/PeerRecoveryDrillTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleDestinationCardTests`; [notes](#0054--what-the-scheduled-drill-does-not-prove) |
 | [0055](adr/0055-reclaim-authority.md) | Reclaim authority: tombstones signed under their own derivation domain, withheld from a write-only service's write credential, announced by a required repository feature, granted for one collection run at a time, and carried to a keyless peer as a published public key its retention instructions are signed against | Built | `Repository.Crypto/RepositoryWriteCredential` · `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/ReclaimAuthority` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Format/Descriptor/RepositoryDescriptorCodec.cs` · `Retention/StagingSweep` · `Agent/ServiceCommandHandler.WriteOnly.cs` · `Protocol/PeerReplicationMessages.cs` · `Application/ReplicaOwnerStore` · `Repository.Tests/ReclaimAuthorityTests`, `Retention.Tests/ReclaimAuthoritySweepTests`, `Retention.Tests/PeerRetentionTests`, `Hosts.Tests/WriteOnlySetTests`, `Protocol.Tests/ReplicationMessageTests`, `Application.Tests/ReplicaOwnerStoreTests`; [notes](#0055--what-the-split-defends-and-what-it-does-not) |
 | [0056](adr/0056-incremental-reconciliation.md) | A replication pass costs what changed: each dependency phase listed under its own prefix, a gate that skips a pair the last pass left level, a reading-through that comes due on its own cadence, and the publication sequence recorded by the run that shipped it | Built | `Replication/StoreToStoreCopier` · `Application/ReconciliationGate` · `Application/DestinationSyncStore` · `Agent/DestinationShipSink` · `Agent/FanOut` · `Retention/DestinationConvergence` · `Replication.Tests/CopierListingCostTests`, `Application.Tests/ReconciliationGateTests`, `Hosts.Tests/IncrementalSyncTests`; [notes](#0056--what-a-skip-claims-and-what-checks-it) |
@@ -376,6 +376,23 @@ Owner-only, local callers only. §4, the set's shape in the kit, **will not
 be**: there is no kit, and the shape travels in the archive itself
 ([ADR-0061](adr/0061-adopt-a-destinations-archives.md)), which is how a
 claimed replica is adopted back under its original ids.
+
+**A claim is now held** ([Amendment 4](adr/0053-peer-claim-and-configuration-recovery.md#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it)),
+which is FR-DR-005 and the one decision of the superseded ADR-0070 this
+record's ceremony did not have. A claim that moves an attribution records it
+as awaiting acknowledgement and raises a notice before the claimant is told it
+succeeded. Until the destination's Owner acknowledges it — contract 1.41's
+`acknowledge_replica_claim`, `fallbackplan-agent acknowledge-claim`, or the
+console's Acknowledge claim control beside the row and the notice — the
+claimant's retention instructions are refused whole and nothing is deleted.
+Reading, adopting and pushing are untouched. `Hosts.Tests/ClaimedReplicaRetentionTests`
+runs it end to end: a rebuilt machine claims with the verb, adopts and
+restores while nobody at the friend's end does anything, and its deletion is
+refused until the operator acknowledges. The notice forced a fix on the way:
+the listener had been raising notices into a second copy of the ledger beside
+the runtime's, invisible to the running service and overwritten by its next
+write. It now raises into the runtime's, which fixed the same loss for the
+invite-redeemed and peering-ended notices (`Hosts.Tests/UnpairCommandTests`).
 
 An earlier latent trap this record closed still stands:
 `Repository.Format/RecoveryKit` decided "is this an installation kit" by
@@ -1262,6 +1279,12 @@ their negotiated feature, the ledger's token and public-key fields, the
 recovers over the wire. The one requirement it still owes — FR-DR-005 —
 carries an honest unbuilt marker in the
 [traceability matrix](requirements/traceability.md) until then.
+
+**FR-DR-005 is built (2026-09)**, on ADR-0053's ceremony rather than this
+record's, which the merge removed: this record's decision 7, reading
+unattended and deleting only once the destination's operator acknowledges
+the claim, is [ADR-0053 Amendment 4](adr/0053-peer-claim-and-configuration-recovery.md#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it).
+See [0053's notes](#0053--the-claim-is-built-the-shape-is-not).
 
 ### 0072 — the two things live capture cannot do
 
