@@ -228,7 +228,21 @@ public sealed class LocalServiceClient : IFallbackPlanClient
         Task<Stream?> opening,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var stream = await opening.ConfigureAwait(false);
+        // A watch belongs to a client that has already connected, so a
+        // service it cannot reach, or loses in the handshake, is a service
+        // that stopped — the same end a failed read below meets, one step
+        // earlier. Callers redial on the end; a throw would reach them as a
+        // failure instead.
+        Stream? stream;
+        try
+        {
+            stream = await opening.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or ServiceConnectionException)
+        {
+            yield break;
+        }
+
         if (stream is null)
         {
             yield break;

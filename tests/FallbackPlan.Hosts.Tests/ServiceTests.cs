@@ -246,17 +246,13 @@ public sealed class ServiceTests : IDisposable
     public async Task CancelJob_JobIsRunning_StopsItAndReportsTheCancelledState()
     {
         await _harness.CreateRepositoryAsync();
-
-        // Enough barely-compressible content that the job is still mid-run
-        // when the cancel lands after Scanning is observed on the stream.
-        for (var i = 0; i < 24; i++)
-        {
-            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
-        }
-
+        _harness.WriteSourceFile("notes.txt", "content the held run never reaches");
         _harness.WriteConfiguration("every 1h");
 
-        await using var runtime = await StartAsync();
+        // Held as it enters Scanning, so the cancel lands on a running job by
+        // construction (RunHold says why a sighting on the stream could not).
+        var hold = new RunHold();
+        await using var runtime = await StartAsync(enteredScanning: hold.EnterAsync);
         var seen = new List<JobState>();
 
         // Subscribed before the backup is commanded, for the same reason as
@@ -277,14 +273,7 @@ public sealed class ServiceTests : IDisposable
 
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<JobAcceptedResult>(await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
-
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Scanning);
-            }
-        });
+        Assert.AreEqual(accepted.JobId, await hold.Held.WaitAsync(_timeout.Token));
 
         // The T-2 positive path (ADR-0029 §4): cancellation is a command with
         // an acknowledged outcome, not a signal whose effect nobody reports.
@@ -338,10 +327,7 @@ public sealed class ServiceTests : IDisposable
     public async Task CancelJob_QueuedBehindAnotherSet_RecordsCancelledImmediately()
     {
         await _harness.CreateRepositoryAsync();
-        for (var i = 0; i < 24; i++)
-        {
-            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
-        }
+        _harness.WriteSourceFile("notes.txt", "content the first run captures once released");
 
         // A pool of one, so the second set queues behind the first rather
         // than running beside it (ADR-0047's default is two).
@@ -349,7 +335,10 @@ public sealed class ServiceTests : IDisposable
         var configurationPath = Path.Combine(_harness.StateDirectory, "config.json");
         (ClientConfiguration.Load(configurationPath) with { MaxConcurrentBackups = 1 }).Save(configurationPath);
 
-        await using var runtime = await StartAsync();
+        // The first set's run is held as it enters Scanning, so the second
+        // queues behind a running job by construction.
+        var hold = new RunHold();
+        await using var runtime = await StartAsync(enteredScanning: hold.EnterAsync);
         var seen = new List<JobState>();
         var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
         var watching = Task.Run(
@@ -368,14 +357,7 @@ public sealed class ServiceTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<JobAcceptedResult>(
             await handler.ExecuteAsync(new RunBackupCommand("docs", Full: false), _timeout.Token), out var first);
-
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Scanning);
-            }
-        });
+        Assert.AreEqual(first.JobId, await hold.Held.WaitAsync(_timeout.Token));
 
         // The second set queues behind the pool's single worker.
         Assert.IsInstanceOfType<JobAcceptedResult>(
@@ -402,7 +384,8 @@ public sealed class ServiceTests : IDisposable
             await handler.ExecuteAsync(new CancelJobCommand(second.JobId), _timeout.Token), out var error);
         Assert.AreEqual(ServiceErrorReason.NotFound, error.Reason);
 
-        // The running job was never disturbed: it still completes.
+        // The running job was never disturbed: released, it still completes.
+        hold.Release();
         await WaitForAsync(() =>
         {
             lock (seen)
@@ -419,14 +402,13 @@ public sealed class ServiceTests : IDisposable
     public async Task SchedulerPass_ASetWithALiveJob_ReportsAlreadyRunningAndAddsNothing()
     {
         await _harness.CreateRepositoryAsync();
-        for (var i = 0; i < 24; i++)
-        {
-            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
-        }
-
+        _harness.WriteSourceFile("notes.txt", "content the held run never reaches");
         _harness.WriteConfiguration("every 1h");
 
-        await using var runtime = await StartAsync();
+        // Held as it enters Scanning, so the pass meets a live job by
+        // construction.
+        var hold = new RunHold();
+        await using var runtime = await StartAsync(enteredScanning: hold.EnterAsync);
         var seen = new List<JobState>();
         var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
         var watching = Task.Run(
@@ -445,14 +427,7 @@ public sealed class ServiceTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<JobAcceptedResult>(
             await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var accepted);
-
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Scanning);
-            }
-        });
+        Assert.AreEqual(accepted.JobId, await hold.Held.WaitAsync(_timeout.Token));
 
         // A never-completed set is due, so before per-set coalescing this
         // pass queued a duplicate behind the running job — and a set slower
@@ -517,14 +492,13 @@ public sealed class ServiceTests : IDisposable
     public async Task RunBackup_WhileAJobForTheSetIsLive_JoinsItRatherThanQueuingASecond()
     {
         await _harness.CreateRepositoryAsync();
-        for (var i = 0; i < 24; i++)
-        {
-            _harness.WriteSourceFile($"bulk/file-{i:d2}.txt", RandomText(seed: i, length: 1_000_000));
-        }
-
+        _harness.WriteSourceFile("notes.txt", "content the held run never reaches");
         _harness.WriteConfiguration("every 1h");
 
-        await using var runtime = await StartAsync();
+        // Held as it enters Scanning, so the second request meets a live job
+        // by construction, however late this test is scheduled.
+        var hold = new RunHold();
+        await using var runtime = await StartAsync(enteredScanning: hold.EnterAsync);
         var seen = new List<JobState>();
         var progressEvents = runtime.Progress.WatchAsync(_timeout.Token);
         var watching = Task.Run(
@@ -543,14 +517,7 @@ public sealed class ServiceTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<JobAcceptedResult>(
             await handler.ExecuteAsync(new RunBackupCommand(null, Full: false), _timeout.Token), out var first);
-
-        await WaitForAsync(() =>
-        {
-            lock (seen)
-            {
-                return seen.Contains(JobState.Scanning);
-            }
-        });
+        Assert.AreEqual(first.JobId, await hold.Held.WaitAsync(_timeout.Token));
 
         // One live job per set: the second request joins the job already
         // doing the work instead of minting a duplicate behind it. Backup ids
@@ -566,7 +533,6 @@ public sealed class ServiceTests : IDisposable
             await handler.ExecuteAsync(new ListJobsCommand(ActiveOnly: false), _timeout.Token), out var jobs);
         Assert.ContainsSingle(jobs.Jobs.Where(descriptor => !JobStateStore.IsSettled(descriptor.State)));
 
-        // End it promptly rather than packing 24 MB for nothing.
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await handler.ExecuteAsync(new CancelJobCommand(first.JobId), _timeout.Token));
         await WaitForCancelledAsync(runtime, first.JobId, seen);
@@ -1013,7 +979,9 @@ public sealed class ServiceTests : IDisposable
         Assert.AreEqual(before, await File.ReadAllTextAsync(configurationPath, _timeout.Token));
     }
 
-    private async Task<ServiceRuntime> StartAsync(Action<DestinationSyncRecord>? ledgerWrites = null)
+    private async Task<ServiceRuntime> StartAsync(
+        Action<DestinationSyncRecord>? ledgerWrites = null,
+        Func<string, CancellationToken, ValueTask>? enteredScanning = null)
     {
         await _harness.SetupAsync();
 
@@ -1027,22 +995,39 @@ public sealed class ServiceTests : IDisposable
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
                 DestinationSyncObserver = ledgerWrites,
+                EnteredScanning = enteredScanning,
             },
             _timeout.Token);
     }
 
-    private static string RandomText(int seed, int length)
+    /// <summary>
+    /// Holds each backup run as it enters Scanning until released, and says
+    /// which run it held first — so a test acts on a job that is running by
+    /// construction rather than one it hopes it is still in time to catch.
+    /// </summary>
+    /// <remarks>
+    /// A sighting of Scanning on the progress stream cannot stand in for this,
+    /// however much work the job is given: it arrives through a watcher task
+    /// and a poll, so on a loaded runner it can arrive after the job has
+    /// finished, and whatever the test does next meets a settled job.
+    /// </remarks>
+    private sealed class RunHold
     {
-        // Printable and barely compressible: the point is pipeline work per
-        // byte, so the job is still running when the cancel arrives.
-        var random = new Random(seed);
-        var characters = new char[length];
-        for (var i = 0; i < characters.Length; i++)
+        private readonly TaskCompletionSource<string> _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The job id of the first run held.</summary>
+        public Task<string> Held => _held.Task;
+
+        /// <summary>The <see cref="ServiceOptions.EnteredScanning"/> callback.</summary>
+        public async ValueTask EnterAsync(string jobId, CancellationToken cancellationToken)
         {
-            characters[i] = (char)('!' + random.Next(94));
+            _held.TrySetResult(jobId);
+            await _released.Task.WaitAsync(cancellationToken);
         }
 
-        return new string(characters);
+        /// <summary>Lets every held run, and every later one, go on.</summary>
+        public void Release() => _released.TrySetResult();
     }
 
     /// <summary>

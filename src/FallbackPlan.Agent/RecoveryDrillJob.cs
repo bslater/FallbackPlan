@@ -131,12 +131,33 @@ internal static class RecoveryDrillJob
     /// <param name="nowMs">The clock.</param>
     /// <param name="budget">What the sample may read, or null for no cap.</param>
     /// <param name="cancellationToken">Cancels the drill.</param>
-    public static async Task<DrillOutcome> RunAsync(
+    public static Task<DrillOutcome> RunAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
         ulong nowMs,
         SampleBudget? budget,
+        CancellationToken cancellationToken) =>
+        RunAsync(runtime, set, destinationName, nowMs, budget, Random.Shared, cancellationToken);
+
+    /// <summary>
+    /// Drills one (set, destination) pair with the draw the sample's descent
+    /// makes — a test's way to hold the descent's choices still.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="budget">What the sample may read, or null for no cap.</param>
+    /// <param name="draw">Chooses among the entries the descent is offered at each step.</param>
+    /// <param name="cancellationToken">Cancels the drill.</param>
+    internal static async Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        SampleBudget? budget,
+        Random draw,
         CancellationToken cancellationToken)
     {
         var scratch = Path.Combine(
@@ -147,7 +168,7 @@ internal static class RecoveryDrillJob
         try
         {
             var outcome = await DrillAsync(
-                handler, set, destinationName, scratch, budget, id => sourceId = id, cancellationToken)
+                handler, set, destinationName, scratch, budget, draw, id => sourceId = id, cancellationToken)
                 .ConfigureAwait(false);
 
             runtime.DestinationSync.RecordDrill(
@@ -216,6 +237,7 @@ internal static class RecoveryDrillJob
         string destinationName,
         string scratch,
         SampleBudget? budget,
+        Random draw,
         Action<string> keepSourceId,
         CancellationToken cancellationToken)
     {
@@ -249,7 +271,7 @@ internal static class RecoveryDrillJob
         }
 
         var (paths, skipped) = await SampleAsync(
-            handler, source.SourceId, newest.SnapshotId, budget, cancellationToken).ConfigureAwait(false);
+            handler, source.SourceId, newest.SnapshotId, budget, draw, cancellationToken).ConfigureAwait(false);
         if (paths.Count == 0)
         {
             // A snapshot of an empty tree is not a failure to restore from —
@@ -389,6 +411,7 @@ internal static class RecoveryDrillJob
         string sourceId,
         string snapshotId,
         SampleBudget? budget,
+        Random draw,
         CancellationToken cancellationToken)
     {
         var chosen = new List<string>();
@@ -409,8 +432,22 @@ internal static class RecoveryDrillJob
                     break;
                 }
 
-                var entry = directory.Entries[Random.Shared.Next(directory.Entries.Count)];
-                var next = path.Length == 0 ? entry.Name : $"{path}/{entry.Name}";
+                // Drawn from what this drill has not already chosen or left: a
+                // draw that lands on a file it already has spends an attempt,
+                // and on a small snapshot that can be every attempt left,
+                // leaving files the descent never reached. Directories stay on
+                // offer, because the descent does not know which are spent.
+                var offered = directory.Entries
+                    .Where(candidate => candidate.Kind == "directory"
+                        || !(seen.Contains(Child(path, candidate.Name)) || skipped.Contains(Child(path, candidate.Name))))
+                    .ToList();
+                if (offered.Count == 0)
+                {
+                    break;
+                }
+
+                var entry = offered[draw.Next(offered.Count)];
+                var next = Child(path, entry.Name);
                 if (entry.Kind == "directory")
                 {
                     path = next;
@@ -420,7 +457,7 @@ internal static class RecoveryDrillJob
                 // Only a file proves anything: a symlink or a device node
                 // restores its record, not content, so a drill that sampled
                 // one would pass without reading a segment.
-                if (entry.Kind != "file" || seen.Contains(next))
+                if (entry.Kind != "file")
                 {
                     break;
                 }
@@ -444,6 +481,9 @@ internal static class RecoveryDrillJob
 
         return (chosen, skipped.Count);
     }
+
+    /// <summary>A snapshot path one entry below <paramref name="path"/>; the root is the empty path.</summary>
+    private static string Child(string path, string name) => path.Length == 0 ? name : $"{path}/{name}";
 
     private static long BytesUnder(string directory)
     {

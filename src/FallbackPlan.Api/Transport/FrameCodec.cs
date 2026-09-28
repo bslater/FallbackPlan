@@ -54,6 +54,11 @@ public static class FrameCodec
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The frame, or <see langword="null"/> at end of stream.</returns>
     /// <exception cref="InvalidDataException">The peer sent something that is not a frame.</exception>
+    /// <exception cref="EndOfStreamException">
+    /// The stream ended inside a frame: the connection closed, which is an end
+    /// rather than bad data, and is an <see cref="IOException"/> so that every
+    /// reader which ends on a closed connection ends on this too.
+    /// </exception>
     public static async ValueTask<WireFrame?> ReadAsync(Stream stream, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(stream);
@@ -73,7 +78,7 @@ public static class FrameCodec
         var payload = new byte[length];
         if (!await ReadExactlyAsync(stream, payload, cancellationToken).ConfigureAwait(false))
         {
-            throw new InvalidDataException(Strings.FrameCodec_FrameEndedBeforeDeclaredLength);
+            throw new EndOfStreamException(Strings.FrameCodec_FrameEndedBeforeDeclaredLength);
         }
 
         try
@@ -97,7 +102,7 @@ public static class FrameCodec
             if (got == 0)
             {
                 return read != 0
-                    ? throw new InvalidDataException(Strings.FrameCodec_PeerClosedMidFrame)
+                    ? throw new EndOfStreamException(Strings.FrameCodec_PeerClosedMidFrame)
                     : false;
             }
 

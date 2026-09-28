@@ -131,12 +131,24 @@ public sealed class AgentServiceLifetimeTests : IDisposable
         return Process.Start(info)!;
     }
 
-    private static async Task WaitForListeningAsync(Process agent)
+    /// <summary>
+    /// Reads the agent's output up to the service's own "listening on" line
+    /// for this state directory, which each start prints exactly once.
+    /// </summary>
+    /// <remarks>
+    /// Not any line containing the phrase: under <c>run</c> the logger echoes
+    /// to the same stream, and its "Service listening on the local binding"
+    /// comes first. A wait that matched it would leave this start's own line
+    /// for the next wait to find, and a test waiting out a restart would then
+    /// talk to the service it had just told to stop.
+    /// </remarks>
+    private async Task WaitForListeningAsync(Process agent)
     {
+        var listening = $"listening on {Api.Transport.LocalEndpoint.AddressFor(_harness.StateDirectory)}";
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         while (await agent.StandardOutput.ReadLineAsync(timeout.Token).ConfigureAwait(false) is { } line)
         {
-            if (line.Contains("listening on", StringComparison.Ordinal))
+            if (line.Contains(listening, StringComparison.Ordinal))
             {
                 return;
             }
