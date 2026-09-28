@@ -146,6 +146,12 @@ substance: all three still produce the same tree and all three still need
 nuget.org, as they always did. Nothing about the Windows/Visual Studio flow
 that prompted this record regresses.
 
+> **Amended 2026-09 by [Amendment 3](#amendment-3-2026-09--a-package-released-alone-is-taken-alone).**
+> A package upstream releases alone is taken alone when every dependency its
+> package declares is at the version pinned here. `Bodu.Security.Cryptography`
+> is at 1.1.0 on that rule, and the other five stay at 1.0.0. The verification
+> below is unchanged, and it gated that move too.
+
 **The upgrade, and why the verification is the whole of it.** All six move
 together at one version, as they always have: upstream versions them in
 lock-step and a mixed set pairs assemblies never built or tested against each
@@ -179,6 +185,93 @@ dialect is **specified** ([ADR-0024](0024-include-exclude-rule-dialect.md),
 `FallbackPlan.Domain.PathRules`, and the specification defines the dialect,
 never the library.
 
+## Amendment 3 (2026-09) — A package released alone is taken alone
+
+Amendment 2's upgrade rule reads:
+
+> All six move together at one version, as they always have: upstream
+> versions them in lock-step and a mixed set pairs assemblies never built or
+> tested against each other.
+
+Upstream has now released one package outside the lock-step:
+`Bodu.Security.Cryptography` **1.1.0**, alone. It came through the
+out-of-band route the maintainer named when answering
+[the Argon2id requirements](../bodu-argon2-requirements.md#the-maintainers-decisions)
+(decision 3), and it carries the faster Argon2id those requirements asked
+for. The other five have no 1.1.0 to take. This repository takes it, so
+`Bodu.Security.Cryptography` is pinned at 1.1.0 and the other five stay at
+1.0.0.
+
+**Why the rule's reason still holds.** The rule protects what each assembly
+was built against, not matching version numbers. A mixed set is a hazard
+when an assembly meets a version of another that it was never built or
+tested with. 1.1.0's package declares one dependency, `Bodu.Core` 1.0.0, for
+both of its target frameworks, and that is the version pinned here. No other
+Bodu package here depends on `Bodu.Security.Cryptography`: the lockfiles list
+every declared dependency, and none of them names it. So every Bodu assembly
+still runs against exactly the versions it was built against. The numbers
+differ, but nothing is paired that upstream did not pair.
+
+**The rule, restated.**
+- The six move together at one version.
+- A package upstream releases alone is taken alone when every dependency its
+  package declares is at the version pinned here.
+- One that declares a newer version of another Bodu package waits for the
+  wave. Taking it would move that package beneath the others built against
+  the older one, which is the mixed set the rule refuses.
+- Central transitive pinning turns that case into a restore failure
+  (NU1109, a package downgrade) rather than a quiet upgrade.
+
+**The verification is Amendment 2's, and it is still the whole of it.**
+Argon2id is beneath every repository key, so this release is the one that
+would move a fixture if any would. None moved:
+- The generator reproduced every vector file byte-identically.
+- Both frozen fixtures read back.
+- The Argon2id cross-verification against Konscious passed.
+- The full suite was green, in the default culture and under tr-TR.
+- `eng/recovery-drill.sh` recovered eleven files byte-identical from the
+  passphrase alone on the Release binaries, and the rebuilt machine resumed
+  both sets incrementally.
+
+None of that leans on upstream's own run, and it did not need to. Bodu's CI
+at the release commit was red on one test, on net8.0 only: a `MerkleTree`
+memory probe that measured no growth where it expects some. No output
+assertion failed there, and its Arm64 job passed.
+
+The conformance suite, which holds the vectors, the cross-verification and
+both fixtures, also passed with each Argon2 kernel an x64 machine can select:
+- AVX2;
+- the 128-bit kernel, under `DOTNET_EnableAVX2=0`;
+- the scalar one, under `DOTNET_EnableHWIntrinsic=0`.
+
+**It is not only Argon2id.** The release carries the same techniques
+through the rest of the package. Three of the primitives it reworks are ones
+this repository uses:
+- X25519 key generation now goes through Ed25519's fixed-base table;
+- Ed25519 verification compares points in projective coordinates;
+- `MerkleTree`'s internals changed.
+
+Upstream holds that work to byte-identical output, and here each of the three
+sits beneath a committed vector file that passed unchanged:
+- `write-only.json` covers the X25519 sealing key a write-only root derives;
+- `ed25519.json` covers the repository signatures;
+- `merkle.json` and fixture v3's covered roots cover `MerkleTree`.
+
+The release also fixes two AEAD conformance defects, in AES-256-GCM-SIV's key
+derivation and in SIV's empty-plaintext case. This repository uses neither
+mode: its content AEAD is the platform's AES-GCM.
+
+FallbackPlan calls one Argon2id entry point, the one-shot `Argon2id.DeriveKey`,
+and it kept its signature and meaning. A reflection diff of the two public
+surfaces finds eighteen members added, and none removed or changed. So the
+move is the version and the lockfiles, with no source change.
+
+What it bought is measured in
+[the requirements document](../bodu-argon2-requirements.md#110-as-published):
+- one derivation takes 14 to 17 % of 1.0.0's wall time and 34 to 40 % of its
+  CPU;
+- the seven suites that derive keys finish in 40 % less time.
+
 ## Status history
 
 | Date | Status | Note |
@@ -186,3 +279,4 @@ never the library.
 | 2026-08 | Accepted | Submodule replaced by committed `external/packages` feed; ADR-0019 §6 mechanics superseded, dependency policy unchanged |
 | 2026-08 | Accepted (amended) | Amendment 1: `Bodu.Core` becomes the solution-wide guard-clause vocabulary; its containment canary is replaced by a rule on the recovery tool's closure |
 | 2026-09 | Accepted (amended) | Amendment 2: upstream published to nuget.org, so the committed feed is deleted and all six packages come from nuget.org at 0.7.0 — the migration this record's own last alternative forecast as "a source-mapping change". The `Bodu.*` source mapping survives, pointing at nuget.org |
+| 2026-09 | Accepted (amended) | Amendment 3: upstream released `Bodu.Security.Cryptography` 1.1.0 alone, and it is taken alone because its one declared dependency, `Bodu.Core` 1.0.0, is the version pinned here. The other five stay at 1.0.0. Amendment 2's verification gated the move and passed unchanged |

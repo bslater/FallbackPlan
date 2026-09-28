@@ -1,8 +1,12 @@
 # Requirements: a faster Argon2id in Bodu
 
-**Status: Answered upstream for 1.1.0; FallbackPlan adopts it once 1.1.0 is on NuGet** — against `Bodu.Security.Cryptography` **1.0.0**, the
-package FallbackPlan makes every passphrase- and password-based derivation
-through.
+**Status: Answered upstream, and adopted** — raised against
+`Bodu.Security.Cryptography` **1.0.0**, the package FallbackPlan makes every
+passphrase- and password-based derivation through. **1.1.0** answered it, and
+FallbackPlan consumes it since 2026-09-28, ahead of the other five Bodu
+packages ([ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)
+Amendment 3). §2's figures are 1.0.0's, and
+[§8](#110-as-published) has the published package measured against them.
 **Audience:** the Bodu maintainer and FallbackPlan contributors ·
 **Raised:** 2026-09-27
 
@@ -257,6 +261,21 @@ shared memory bus of §2.1 becomes the limit.
 
 ## 8. Disposition
 
+> **Released 2026-09-28 as 1.1.0, and adopted the same day.** Upstream
+> published `Bodu.Security.Cryptography` 1.1.0 alone, through the
+> out-of-band route of decision 3. It is built from Bodu's master at
+> [`b5cc004`](https://github.com/bslater/bodu/tree/b5cc004452bb805007bec1cb13d4832ccf418673).
+> The plan's Argon2id reached master in
+> [#710](https://github.com/bslater/bodu/pull/710), together with a
+> successor plan that carried the same techniques through the package's
+> other primitives. FallbackPlan took the release with the version bump alone
+> (§5), under
+> [ADR-0021](adr/0021-consume-bodu-via-committed-package-feed.md)
+> Amendment 3, and §5's "measure again" ran against it.
+> [1.1.0 as published](#110-as-published) has the figures. Everything between
+> this note and that section is kept as it was written before the release,
+> so its figures are the first implementation's.
+
 Raised 2026-09-27, from the test-cost investigation whose numbers are §2.3.
 
 Answered the same day by the maintainer's plan,
@@ -364,6 +383,103 @@ method keeps its signature and takes the default bound, so adopting 1.1.0
 is the version bump alone. The committed vectors and the cross-verification
 against Konscious prove the output.
 
+### 1.1.0 as published
+
+§5's "measure again", run against the published package on 2026-09-28 with
+the appendix's harness.
+
+**The machine is not §2.1's.** It is a 4-vCPU Intel Xeon at 2.8 GHz with
+AVX2 and AVX-512, on .NET 10.0.12. 1.0.0 takes more than twice as long here
+as it did there: 438 to 465 ms a derivation, against 209 to 213 ms. So each
+figure below is set against 1.0.0 measured in the same session, on the same
+machine and with the same harness, and the ratios are what carry over.
+
+The harness was built twice, once against each version, and the two builds
+ran in alternating order. Each range spans every run of its case, two to
+eight of them. Every case produced the same tag as Konscious at p = 4 and
+p = 1, and a bounded derivation produced the same tag as an unbounded one.
+
+| | Wall per call | CPU per call | Cores used | Allocated per call | Gen2 collections per call |
+|---|---|---|---|---|---|
+| 1.0.0, p = 4 | 438–465 ms | 443–469 ms | 1.0 | 64.0 MiB | 0.5 |
+| 1.0.0, p = 1 | 455–487 ms | 443–478 ms | 1.0 | 64.0 MiB | 0.5 |
+| 1.1.0, p = 4 | 65–74 ms | 159–178 ms | 2.4–2.6 | 26 KiB | 0 |
+| 1.1.0, p = 4, bound 1 | 134–162 ms | 134–162 ms | 1.0 | 0.3 KiB | 0 |
+| 1.1.0, p = 4, 128-bit kernel | 92–99 ms | 247–255 ms | 2.6–2.7 | 26 KiB | 0 |
+| 1.1.0, p = 4, scalar | 111–119 ms | 301–305 ms | 2.5–2.7 | 26 KiB | 0 |
+| 1.1.0, p = 4, no matrix reuse | 80–90 ms | 203–220 ms | 2.4–2.5 | 26 KiB | 0 |
+| Konscious 1.3.1, p = 4 | 144–177 ms | 439–487 ms | 2.8–3.1 | 64.5 MiB | 0.7–0.8 |
+
+How each variant was selected:
+- **The 128-bit kernel** is the one x64 takes without AVX2, and was selected
+  with `DOTNET_EnableAVX2=0`. Arm64 runs the same kernel over AdvSimd, and
+  its speed there is still not measured.
+- **Scalar** is `SimdCapabilities`' opt-out switch.
+- **No matrix reuse** is the `Bodu.Security.Cryptography.Argon2.DisableMatrixReuse`
+  switch.
+
+1.1.0 at p = 1 costs what the bound of 1 does, 132 to 158 ms.
+
+With four derivations at once, each on its own thread:
+- 1.0.0 took 125 to 127 ms each on average;
+- 1.1.0 took 41 to 49 ms each, and 38 to 41 ms each with the bound at 1;
+- Konscious took 116 to 121 ms each.
+
+| ID | Requirement | 1.1.0 as published |
+|----|-------------|--------------------|
+| ARG-F-001 | Output unchanged | Met at FallbackPlan's boundary. The committed `argon2id.json` vectors, both frozen fixtures and the cross-verification against Konscious pass with each kernel an x64 machine can select: AVX2, the 128-bit kernel under `DOTNET_EnableAVX2=0`, and the scalar one under `DOTNET_EnableHWIntrinsic=0`. |
+| ARG-F-002 | API unchanged | Met. FallbackPlan builds against 1.1.0 with no source change and warnings as errors. A reflection diff of the two public surfaces finds eighteen members added, and none removed or changed. |
+| ARG-F-003 | A caller-set thread bound | Met. A bound of 1 keeps a derivation on the calling thread, at 1.0 cores used, with the same tag. |
+| ARG-N-001 | Lanes on cores | Met: 14 to 17 % of 1.0.0's wall time. |
+| ARG-N-002 | Vector compression | Met on x64 with AVX2: 34 to 40 % of 1.0.0's CPU with the lanes spread, and 29 to 36 % on one thread. The 128-bit kernel takes 53 to 58 % spread and 46 to 50 % on one thread. |
+| ARG-N-003 | No regression without the hardware | Met: the scalar path takes 64 to 69 % of 1.0.0's CPU spread, and 59 to 64 % on one thread. |
+| ARG-N-004 | No matrix per call | Met: 0.3 KiB allocated on one thread and 26 KiB with the lanes spread, and no gen2 collections. |
+| ARG-N-005 | Concurrency no worse | Met: four at once reach 2.5 to 3.1 times 1.0.0's throughput, and 3.1 to 3.4 times with the bound at 1. |
+| ARG-N-008 | Every path held to the vectors | Met on x64 as the first table says. Bodu's CI now runs the cryptography suites on an Arm64 runner as well, and that job passed at `b5cc004`. The x64 job there failed on one test, on net8.0 only: a `MerkleTree` memory probe that measured no growth where it expects some. No output assertion failed, and every Argon2, X25519 and Ed25519 test passed on both frameworks. |
+| ARG-N-010 | Nothing new to depend on | Met. The package declares the same one dependency, `Bodu.Core` 1.0.0, for the same two target frameworks, and the assembly still declares itself trimmable and AOT-compatible. |
+
+ARG-N-006, ARG-N-007 and ARG-N-009 are properties of the library's code,
+which a consumer cannot observe from outside. They were read in the published
+source at `b5cc004`:
+- **ARG-N-006.** The matrix is cleared before it goes back to the pool. So
+  are H0, the input and output blocks of H′, the final block, each segment's
+  scratch and the BLAKE2b state. The Argon2 cores are `[SkipLocalsInit]`, so
+  the scratch is no longer zeroed for every block as §2.2 found.
+- **ARG-N-007.** The kernels branch only on whether a pass XORs into the
+  block it overwrites, which the pass number and the version decide, and
+  their loops run a fixed number of times.
+- **ARG-N-009.** `Argon2Benchmarks` and `Argon2FirstCallBenchmarks`.
+
+1.1.0's Argon2id is the plan's implementation at `182b257` with two changes.
+Each moves a part of it into code that the package's other primitives now
+share:
+- its matrix pool became `NativeBufferPool`, under decision 2's limits and
+  switch;
+- its BLAKE2b compression, which H0 and H′ run through, became the package's
+  `Blake2bCore`.
+
+FallbackPlan's suites, on the same machine:
+- The same Release build ran with each version's assembly in every output,
+  so nothing else differed between the runs.
+- Each suite ran alone, in two rounds of opposite order.
+- Every test passed on both assemblies.
+
+| Suite | 1.0.0 | 1.1.0 |
+|---|---|---|
+| Hosts.Tests | 270 s, 272 s | 141 s, 142 s |
+| Cli.Tests | 33 s, 36 s | 10 s, 10 s |
+| Retention.Tests | 51 s, 54 s | 41 s, 42 s |
+| Repository.Tests | 52 s, 54 s | 48 s, 49 s |
+| Repository.ConformanceTests | 5.6 s, 5.9 s | 3.9 s, 3.9 s |
+| Web.Tests | 9.7 s, 10.3 s | 6.9 s, 7.1 s |
+| InterruptionTests | 16.6 s, 17.4 s | 13.2 s, 13.0 s |
+| **All seven** | **438 s, 450 s** | **264 s, 267 s** |
+
+The seven suites finish in 40 % less time. Hosts.Tests, which makes most of
+the derivations, takes 48 % less, and Cli.Tests takes less than a third of
+its time. The suites whose time is mostly not Argon2id gain least:
+Repository.Tests takes 8 to 10 % less.
+
 ## Appendix: how the numbers were measured
 
 A console application on .NET 10.0.12 referencing the published
@@ -403,3 +519,16 @@ Measure("Konscious 1.3.1 p=4", () => new Konscious.Security.Cryptography.Argon2i
 The counts in §2.3 came from a temporary probe around FallbackPlan's two call
 sites, recording each derivation's parameters, a digest of its inputs, and
 its duration. The probe was removed afterwards and was never committed.
+
+[1.1.0 as published](#110-as-published) used the same harness, built once
+against each package, with the builds run in alternating order. It adds three
+things:
+- the bounded case, `new Argon2id(parameters, 1).GetBytes(password, salt)`;
+- each variant's switch, set before the first derivation;
+- a check that the bounded tag equals the unbounded one.
+
+Its suite timings used one Release build of FallbackPlan. Each suite ran
+alone with `dotnet test --no-build`, once with 1.0.0's
+`Bodu.Security.Cryptography.dll` in every output and once with 1.1.0's. The
+assembly version rises from 1.0.0.0 to 1.1.0.0, which the runtime binds in
+place of the lower version it was compiled against.
