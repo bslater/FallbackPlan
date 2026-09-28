@@ -113,6 +113,51 @@ public sealed class ClaimedReplicaRetentionTests : IDisposable
         await OpenReplicaAsync(rebuilt, repositoryId);
     }
 
+    [TestMethod]
+    public async Task ARestoreFromAClaimedReplica_CompletesBeforeAnyoneAcknowledgesTheClaim()
+    {
+        // The acceptance itself, the way a person gets there: the machine is
+        // lost, a rebuilt one claims its replica with the verb, adopts it,
+        // and restores the file — while, as far as this recovery is
+        // concerned, the friend is asleep. Nobody at that end does anything.
+        var repositoryIdHex = Convert.ToHexStringLower(await SeedAsync());
+        await RebuildSourceAsync();
+
+        var claim = await HostHarness.RunAsync(
+            (arguments, output, error, _) => Cli.CliApplication.RunAsync(
+                arguments,
+                new System.CommandLine.InvocationConfiguration
+                {
+                    Output = output, Error = error, EnableDefaultExceptionHandler = false,
+                }),
+            "claim", $"{_endpoint!.Address}:{_endpoint.Port}",
+            "--state", _source.StateDirectory, "--passphrase-env", _source.PassphraseVariable);
+        Assert.AreEqual(0, claim.ExitCode, claim.All);
+
+        await using var rebuilt = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = _source.ArchivesRoot, StateDirectory = _source.StateDirectory },
+            Timeout);
+        var handler = new ServiceCommandHandler(rebuilt, RemoteBindingState.Off);
+        await AdoptAsync(handler, repositoryIdHex);
+
+        var source = await _source.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", "friend", Timeout);
+        var recovered = Path.Combine(_source.WorkPath, "recovered");
+        Assert.IsInstanceOfType<Api.RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    source.Snapshots[0].SnapshotId, null, recovered, Source: source.SourceId, InPlace: true),
+                Timeout),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.AreEqual(
+            "the only copy, once the machine is gone",
+            File.ReadAllText(Path.Combine(recovered, "docs", "report.txt")));
+
+        // All of it with the claim still waiting on the friend's operator.
+        Assert.IsTrue(_runtime!.ReplicaOwners.Find(repositoryIdHex)!.ClaimAwaitingAcknowledgement);
+        Assert.IsTrue(_runtime.Notices.Unacknowledged.Any(notice => notice.Key == $"replica-claimed:{repositoryIdHex}"));
+    }
+
     /// <summary>
     /// Starts the friend's service, provisions the source, and backs the
     /// source up to the friend, direct to the peer.
@@ -200,7 +245,7 @@ public sealed class ClaimedReplicaRetentionTests : IDisposable
         Assert.IsTrue(new InstallationCredentialStore(_source.StateDirectory).TrySave(provisioning));
     }
 
-    private void WriteSourceConfiguration() => new ClientConfiguration
+    private void WriteSourceConfiguration(bool withDocsSet = true) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -214,19 +259,82 @@ public sealed class ClaimedReplicaRetentionTests : IDisposable
                 Endpoint = $"{_endpoint!.Address}:{_endpoint.Port}",
             },
         ],
-        BackupSets =
-        [
-            new BackupSetConfiguration
-            {
-                Id = _source.DocsSetId,
-                Name = "docs",
-                Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
-                Schedule = "every 1h",
-                Destinations = [new SetDestinationReference { Ref = "friend" }],
-                DirectShip = true,
-            },
-        ],
+        BackupSets = withDocsSet
+            ?
+            [
+                new BackupSetConfiguration
+                {
+                    Id = _source.DocsSetId,
+                    Name = "docs",
+                    Roots = [new BackupRootConfiguration { Path = _source.SourceRoot }],
+                    Schedule = "every 1h",
+                    Destinations = [new SetDestinationReference { Ref = "friend" }],
+                    DirectShip = true,
+                },
+            ]
+            : [],
     }.Save(Path.Combine(_source.StateDirectory, "config.json"));
+
+    /// <summary>
+    /// The source machine is lost and rebuilt: a fresh installation under the
+    /// same passphrase and a new salt, paired with the friend both ways, its
+    /// configuration naming the friend and no set — where a person is before
+    /// they have claimed anything.
+    /// </summary>
+    private async Task RebuildSourceAsync()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(_source.StateDirectory, recursive: true);
+        Directory.CreateDirectory(_source.StateDirectory);
+        var setup = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "setup", "--archives", _source.ArchivesRoot, "--state", _source.StateDirectory,
+            "--passphrase-env", _source.PassphraseVariable, "--acknowledge-loss",
+            "--user", HostHarness.OwnerUser, "--password-env", _source.PasswordVariable);
+        Assert.AreEqual(0, setup.ExitCode, setup.All);
+
+        using var rebuilt = PeerKeypairStore.Open(_source.StateDirectory);
+        _destinationGrants!.Pin(new PeerGrant(
+            rebuilt.Identity, "rebuilt-source", PeerRole.StoresHere, PeerTerms.None, PairedAt));
+        PeerGrantStore.Open(_source.StateDirectory).Pin(new PeerGrant(
+            _destinationIdentity!, "destination", PeerRole.StoresForUs, PeerTerms.None, PairedAt));
+        WriteSourceConfiguration(withDocsSet: false);
+    }
+
+    /// <summary>
+    /// Discovers the claimed replica at the friend and adopts it, sealing the
+    /// passphrase's derivation under the replica's own salt to the rebuilt
+    /// service, as the console's recovery does.
+    /// </summary>
+    private async Task AdoptAsync(ServiceCommandHandler handler, string repositoryIdHex)
+    {
+        Assert.IsInstanceOfType<ArchivesDiscoveredResult>(
+            await handler.ExecuteAsync(new DiscoverArchivesCommand("friend"), Timeout), out var discovered);
+        var row = Assert.ContainsSingle(discovered.Archives);
+        Assert.AreEqual(repositoryIdHex, row.RepositoryId);
+
+        var parameters = new Argon2Parameters
+        {
+            MemoryKiB = row.KdfMemoryKib, Iterations = row.KdfIterations, Parallelism = row.KdfParallelism,
+        };
+        var salt = Convert.FromHexString(row.KdfSalt);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), Timeout), out var description);
+
+        string envelope;
+        using (var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_source.PassphraseVariable)!))
+        using (var authority = WriteOnlyDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository))
+        {
+            envelope = Convert.ToHexStringLower(WriteOnlyProvisioning.SealProvision(
+                Convert.FromHexString(description.RestoreGrantRecipient!), authority, salt, parameters));
+        }
+
+        Assert.IsInstanceOfType<ArchiveAdoptedResult>(
+            await handler.ExecuteAsync(new AdoptArchiveCommand("friend", repositoryIdHex, envelope), Timeout),
+            out var adopted,
+            "adoption of the claimed replica refused");
+        Assert.AreEqual("docs", adopted.SetName);
+    }
 
     /// <summary>A fresh installation after the source is lost, paired with the friend as any new peer is.</summary>
     private PeerKeypair PairRebuiltMachine()
