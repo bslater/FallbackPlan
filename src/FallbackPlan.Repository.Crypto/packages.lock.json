@@ -10,9 +10,9 @@
       },
       "Bodu.Security.Cryptography": {
         "type": "Direct",
-        "requested": "[1.0.0, )",
-        "resolved": "1.0.0",
-        "contentHash": "Qd5I8c76hWWDnrNSxs/vM1bqk1o5HHtILDI8nWPaooUXpH6bV7kh08huXKBtuQd3g2aIcf5F6UhZtCwLP6gp2w==",
+        "requested": "[1.1.0, )",
+        "resolved": "1.1.0",
+        "contentHash": "qiCCdHN9sU+MlYG1Av0LvYcM3CIjBXw+eM3LFBLTbkoQCGCqrXxXu1okEYgbTl8AtgvjgLYh889zdgWlJ/QlwQ==",
         "dependencies": {
           "Bodu.Core": "1.0.0"
         }
