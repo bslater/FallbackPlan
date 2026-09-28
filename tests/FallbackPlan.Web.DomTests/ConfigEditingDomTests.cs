@@ -6,9 +6,10 @@ namespace FallbackPlan.Web.DomTests;
 
 /// <summary>
 /// The configuration view's editors, walked by real clicks: the destination
-/// editor, the set editor's selection tree, the typed-word delete, and the
-/// write-only provisioning ceremony — each asserting the command its dialog
-/// claims to send.
+/// editor, the set editor's selection tree, the typed-word delete, the
+/// acknowledgement of a claim held on a replica stored here (FR-DR-005), and
+/// the write-only provisioning ceremony — each asserting the command its
+/// dialog claims to send.
 /// </summary>
 /// <remarks>
 /// Re-homed onto the sectioned set editor when this line merged: the single
@@ -143,6 +144,48 @@ public sealed class ConfigEditingDomTests
         var deleted = await harness.ReceivedAsync<DeleteBackupSetCommand>();
         Assert.AreEqual("docs", deleted.Name);
         await Expect(page.GetByText("Backup set removed")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task AHeldClaim_TheTypedWordArmsItsAcknowledgement_AndTheCommandNamesTheReplica()
+    {
+        // FR-DR-005: a replica a claim moved is held until this machine's
+        // Owner acknowledges the claim. Its row says so, and the Owner's
+        // button opens a dialog the typed word alone arms.
+        var repositoryId = new string('c', 32);
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner") with { SignedInRole = "Owner" },
+            ListDestinationsCommand => new DestinationsResult([Vault]),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListReplicaAttributionsCommand => new ReplicaAttributionsResult(
+            [
+                new ReplicaAttributionDescriptor(
+                    repositoryId, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "rebuilt-laptop", true,
+                    ClaimAwaitingAcknowledgement: true),
+            ]),
+            AcknowledgeReplicaClaimCommand => new ConfigurationChangeResult(["Acknowledged the claim."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await Expect(page.GetByText("claim awaiting acknowledgement")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"claim-ack-open\"]");
+        await Expect(page.GetByText("rebuilt-laptop", new() { Exact = true }).Last).ToBeVisibleAsync();
+
+        var acknowledge = page.Locator("#claim-ack-go");
+        await Expect(acknowledge).ToBeDisabledAsync();
+        await page.FillAsync("#confirm-word", "acknowledge");
+        await Expect(acknowledge).ToBeEnabledAsync();
+        await acknowledge.ClickAsync();
+
+        var sent = await harness.ReceivedAsync<AcknowledgeReplicaClaimCommand>();
+        Assert.AreEqual(repositoryId, sent.RepositoryId);
+        await Expect(page.GetByText("Claim acknowledged")).ToBeVisibleAsync();
     }
 
     [TestMethod]

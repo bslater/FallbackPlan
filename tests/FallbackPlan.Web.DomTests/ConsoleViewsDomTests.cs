@@ -144,6 +144,37 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Notices_AClaimsNotice_CarriesItsAcknowledgement_ForTheReplicaItNames()
+    {
+        // FR-DR-005: the notice a claim raises asks a question its own
+        // Acknowledge does not answer — that only dismisses it. The Owner is
+        // offered the claim's acknowledgement beside it, for the replica the
+        // notice's key names.
+        var repositoryId = new string('d', 32);
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner") with { SignedInRole = "Owner" },
+            ListNoticesCommand => new NoticesResult(
+                [new NoticeDescriptor("n-1", $"replica-claimed:{repositoryId}", "'rebuilt-laptop' claimed a replica.", NowMs, null)]),
+            AcknowledgeReplicaClaimCommand => new ConfigurationChangeResult(["Acknowledged the claim."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#notices");
+
+        await Expect(page.GetByText("'rebuilt-laptop' claimed a replica.")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"claim-ack-open\"]");
+        await page.FillAsync("#confirm-word", "acknowledge");
+        await page.ClickAsync("#claim-ack-go");
+
+        var sent = await harness.ReceivedAsync<AcknowledgeReplicaClaimCommand>();
+        Assert.AreEqual(repositoryId, sent.RepositoryId);
+    }
+
+    [TestMethod]
     public async Task Diagnostics_RenderTheRing_AndSetLevelSendsTheCommand()
     {
         var now = NowMs;
