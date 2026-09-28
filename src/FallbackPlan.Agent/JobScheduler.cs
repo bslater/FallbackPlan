@@ -56,6 +56,15 @@ public enum JobLane
 /// turn comes, with a token already cancelled — which fan-out and the sweep
 /// rely on, their runners settling their own cancellation.
 /// </param>
+/// <param name="OnSettled">
+/// Called once the job's run has ended, however it ended, and the queue has
+/// released its identity — never before, so whoever it answers can ask for
+/// the same job again at once and be queued rather than coalesced into the
+/// run that has just finished. A run's own ending is not that point: the
+/// identity is released after the run returns. Not called for a job taken out
+/// of play before it started; <paramref name="OnCancelledBeforeStart"/> is
+/// that job's ending.
+/// </param>
 public sealed record QueuedJob(
     string JobId,
     JobLane Lane,
@@ -64,7 +73,8 @@ public sealed record QueuedJob(
     Func<CancellationToken, ValueTask> Run,
     int Priority = 0,
     PauseGate? PauseGate = null,
-    Action? OnCancelledBeforeStart = null);
+    Action? OnCancelledBeforeStart = null,
+    Action? OnSettled = null);
 
 /// <summary>
 /// Service-level concurrency (ADR-0029 §4). ADR-0028 gave the service the sole
@@ -602,6 +612,7 @@ public sealed class JobScheduler : IAsyncDisposable
             finally
             {
                 Complete(job!.JobId);
+                Settle(job);
             }
         }
     }
@@ -762,6 +773,8 @@ public sealed class JobScheduler : IAsyncDisposable
                     tracked.Dispose();
                 }
             }
+
+            Settle(job);
         }
     }
 
@@ -900,6 +913,23 @@ public sealed class JobScheduler : IAsyncDisposable
             {
                 cancellation.Dispose();
             }
+        }
+    }
+
+    /// <summary>
+    /// Tells whoever the job answers that it has settled. Outside the gate,
+    /// because the callback may enqueue; and a callback that throws is the
+    /// job's failure to log, not the worker's to die of.
+    /// </summary>
+    private void Settle(QueuedJob job)
+    {
+        try
+        {
+            job.OnSettled?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            Log.JobFaulted(_log, job.JobId, job.Description, exception);
         }
     }
 

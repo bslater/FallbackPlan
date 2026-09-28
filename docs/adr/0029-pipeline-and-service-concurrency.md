@@ -285,6 +285,29 @@ builds it into the scheduler that stayed, and the tests are back:
 `Hosts.Tests/JobSchedulerTests` drills the three cases against the queue, and
 `Hosts.Tests/ServiceTests` drills the journal end to end.
 
+#### Amendment 6 (2026-09): a job answers once it has left the queue
+
+The coalescing rule counts a job as queued-or-running until a worker releases
+its identity, and the worker released it only after the run had returned.
+Fan-out and the sweep answered whoever was waiting on them from inside the
+run, so for a moment after a sync said it was over, its pair still counted as
+running. A request for the same pair in that moment was coalesced into a run
+that had already finished, and came back with nothing queued. The next pass
+picks the pair up again, so the scheduler lost nothing but a pass; a person
+who pressed *sync now* was told the pair was already syncing, and nothing ran.
+`Hosts.Tests/IncrementalSyncTests` caught it, asking for a sync straight after
+the last one answered.
+
+A queued job may now carry a settlement callback. The queue calls it on every
+lane once the run has ended, however it ended, and only after the identity is
+released. Fan-out and the sweep answer from it, a failed sync's exception
+carried across unchanged. A job taken out of play before it started is not
+settled; Amendment 5's callback is that job's ending. Backups and the command
+jobs on the reader and writer lanes still answer from inside the run: their
+identities are new every time, so nothing can be coalesced into one that has
+finished. `Hosts.Tests/JobSchedulerTests` drills settlement on all three lanes,
+including a run that throws.
+
 ### 5. Progress is emitted, not inferred
 
 The client contract needs per-job progress that nothing currently produces.
@@ -501,3 +524,4 @@ cost is no longer a question worth asking.
 | 2026-09 | Accepted (amended) | The 2026-09 amendment: NFR-PERF-013's CPU cap was never built, and neither were its disk, network or time-window limits — `Domain/Configuration/CapturePolicy`'s `Concurrency` is the only configured bound and bounds parallel work rather than CPU. The requirement's yielding half is built; its measurable half does not exist |
 | 2026-09 | Accepted (amended) | One of the four is now built: the **time window** ([ADR-0069](0069-the-background-window.md)), out of this record's own §4 pause gate rather than beside it. CPU, disk and network remain unbuilt, and the CPU cap's acceptance stays machine-dependent in a way a container cannot settle |
 | 2026-09 | Accepted (amended) | Amendment 5: a job cancelled before it has started is taken out of the queue and journalled `Cancelled` at the command, when it carries its own record of cancellation; started jobs, and queued ones without that record, keep the cooperative path. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests` |
+| 2026-09 | Accepted (amended) | Amendment 6: a job answers whoever waits on it only once the queue has released its identity, so the next request for the same pair is queued rather than coalesced into a run that has already ended. `Agent/JobScheduler`, `Agent/FanOut`, `Agent/ReplicaSweepJob`; `Hosts.Tests/JobSchedulerTests` |
