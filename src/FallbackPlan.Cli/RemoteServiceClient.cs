@@ -152,7 +152,9 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
     /// binding's does, and a caller redials on the end. A throw would reach
     /// that caller as a failure instead. A refusal of the watch's own
     /// connection ends it too, as a refused hello ends the local binding's
-    /// watch; connecting again is what reports the refusal.
+    /// watch; connecting again is what reports the refusal. An answer from a
+    /// service other than the pinned one is different: a changed identity is
+    /// a hard failure (FR-SVC-004), so it reaches the caller.
     /// </remarks>
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -211,10 +213,25 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
     /// Whether a failure opening the watch says its service cannot be reached:
     /// nothing listening, the connection closed during the handshake, or a
     /// refusal. These are the failures <see cref="RemotePeer"/> reports as a
-    /// service it could not reach when a console connects.
+    /// service it could not reach when a console connects, less an answer
+    /// from a service other than the pinned one.
     /// </summary>
     private static bool IsUnreachable(Exception exception) =>
-        exception is ServiceConnectionException or IOException or SocketException;
+        exception is IOException or SocketException
+        || (exception is ServiceConnectionException && !IsNotThePinnedService(exception));
+
+    /// <summary>
+    /// Whether this console refused the service that answered because it is
+    /// not the one pinned: a different key, or the pinned key without proof
+    /// of holding it. A refusal the service sent is not this: that is the
+    /// pinned service declining, as a revoked pairing does.
+    /// </summary>
+    private static bool IsNotThePinnedService(Exception exception) =>
+        exception.InnerException is PeerProtocolException
+        {
+            ReceivedFromPeer: false,
+            Reason: PeerRefusalReason.IdentityChanged or PeerRefusalReason.AuthenticationFailed,
+        };
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
