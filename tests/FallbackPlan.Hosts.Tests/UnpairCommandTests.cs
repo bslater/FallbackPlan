@@ -129,6 +129,12 @@ public sealed class UnpairCommandTests : IDisposable
         using var heldKeypair = paired.KeypairTwo;
         var siteOne = paired.IdentityOne.Fingerprint;
 
+        // The listener raises its notice once its own side of the ceremony is
+        // done, which can be after the dialler's side has returned, so it is
+        // waited for — on the running service's ledger, which is the point: a
+        // notice raised into a second copy never arrives here at all.
+        await WaitForAsync(() => two.Notices.Unacknowledged
+            .Any(notice => notice.Key == $"pairing-invite-redeemed:{siteOne}"));
         Assert.IsInstanceOfType<NoticesResult>(
             await paired.HandlerTwo.ExecuteAsync(new ListNoticesCommand(), _timeout.Token), out var afterPairing);
         var redeemed = Assert.ContainsSingle(
