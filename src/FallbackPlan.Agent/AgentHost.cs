@@ -923,7 +923,8 @@ public static class AgentHost
                         peerKeypair, grants, endpoint, "fallbackplan-agent/0.1",
                         log: logging.Factory.CreateLogger<RemoteServiceListener>(),
                         replicationStateDirectory: stateDirectory,
-                        owners: runtime.ReplicaOwners);
+                        owners: runtime.ReplicaOwners,
+                        notices: runtime.Notices);
                     bindingState = RemoteBindingState.On(remoteListener.Endpoint.ToString());
                 }
 

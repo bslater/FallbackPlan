@@ -295,22 +295,24 @@ public sealed class ReplicaOwnerStore
     }
 
     /// <summary>
-    /// Points a replica at a new device identity, the claim ceremony having
-    /// proved the claimant is the same owner (ADR-0053 §2).
+    /// Points a replica at another device identity on the word of this
+    /// destination's operator
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// §3). Nothing holds the move for acknowledgement: the operator is the
+    /// person a claim's hold waits for.
     /// </summary>
     /// <remarks>
-    /// The only writer here that changes a fingerprint, and the one place
-    /// <see cref="TryAttribute"/>'s "already stored here for another peer"
-    /// rule is deliberately set aside. It is set aside on <em>proof</em>, and
-    /// the proof is not this store's to check — the store holds no
-    /// cryptography and knows no keys, so a caller that skipped the signature
-    /// would be a caller that skipped the ceremony. The two recorded public
-    /// keys are kept exactly as they were: the same passphrase re-derives
-    /// them, so a claimant that could replace them could only replace them
-    /// with themselves, and anyone else must not.
+    /// With <see cref="Claim"/>, one of the two writers here that change a
+    /// fingerprint, and so one of the two places <see cref="TryAttribute"/>'s
+    /// "already stored here for another peer" rule is deliberately set aside.
+    /// Whether the operator may make the move — never for a replica its owner
+    /// can claim — is not this store's to decide, because it knows no keys
+    /// and no people. The two recorded public keys are kept exactly as they
+    /// were: they are what the owner published while its machine still
+    /// existed, and moving the replica makes them nobody else's.
     /// </remarks>
     /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
-    /// <param name="fingerprint">The claimant's fingerprint.</param>
+    /// <param name="fingerprint">The fingerprint of the device the operator named.</param>
     /// <returns><see langword="false"/> when no such repository is attributed here.</returns>
     public bool Reattribute(string repositoryIdHex, string fingerprint)
     {

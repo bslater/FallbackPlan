@@ -48,6 +48,15 @@ namespace FallbackPlan.Agent;
 /// reads through the ordinary retrieval session, and can only open with the
 /// passphrase it already proved it has.
 /// </para>
+/// <para>
+/// A pointer moved this way is held (07 §5.9, FR-DR-005): the claimant reads
+/// at once and deletes only once this destination's operator has
+/// acknowledged the claim, because the passphrase that proved it can be
+/// stolen. The ledger records the hold and the retention path enforces it;
+/// this puts each moved replica in front of the operator as a notice, before
+/// the claimant is told the claim succeeded, so nothing the claimant learns
+/// can run ahead of what the operator is shown.
+/// </para>
 /// </remarks>
 internal static class ClaimResponder
 {
@@ -56,14 +65,18 @@ internal static class ClaimResponder
     /// <param name="stream">The open session stream, positioned after the claimant's open.</param>
     /// <param name="peer">The authenticated claimant.</param>
     /// <param name="owners">The replica attribution ledger (peer-protocol 05 §2).</param>
+    /// <param name="notices">Where a claim that moved a replica is put in front of the operator.</param>
+    /// <param name="grants">The pairings, for the notice's names.</param>
     /// <param name="sessionId">This session's identifier (02 §3.5).</param>
     /// <param name="cancellationToken">Stops serving.</param>
-    /// <returns>The repositories re-attributed.</returns>
+    /// <returns>The repositories the claim was accepted for, including any the claimant already owned.</returns>
     public static async Task<IReadOnlyList<string>> ServeAsync(
         string replicasRoot,
         Stream stream,
         PeerGrant peer,
         Application.ReplicaOwnerStore owners,
+        Application.NoticeStore notices,
+        PeerGrantStore grants,
         ReadOnlyMemory<byte> sessionId,
         CancellationToken cancellationToken)
     {
@@ -71,6 +84,8 @@ internal static class ClaimResponder
         ThrowHelper.ThrowIfNull(stream);
         ThrowHelper.ThrowIfNull(peer);
         ThrowHelper.ThrowIfNull(owners);
+        ThrowHelper.ThrowIfNull(notices);
+        ThrowHelper.ThrowIfNull(grants);
 
         try
         {
@@ -118,9 +133,17 @@ internal static class ClaimResponder
                     "No replica here is claimable under that key.");
             }
 
+            // Every claim that moves a replica raises a notice (07 §5.9): the
+            // operator's is the acknowledgement the claimant's deletions now
+            // wait for. A replica the claimant already owned moves nothing,
+            // holds nothing, and has nothing to say.
+            var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             foreach (var repositoryIdHex in claimed)
             {
-                owners.Reattribute(repositoryIdHex, peer.Identity.Fingerprint);
+                if (owners.Claim(repositoryIdHex, peer.Identity.Fingerprint) is { } previousOwner)
+                {
+                    ReplicaReattribution.RaiseClaimed(notices, grants, peer, repositoryIdHex, previousOwner, now);
+                }
             }
 
             var accepted = claimed.ToList();

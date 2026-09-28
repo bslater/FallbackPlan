@@ -188,7 +188,7 @@ internal static class ReplicaReattribution
 
         // The notice asked for exactly this, so the acknowledgement answers
         // it. Resolving keeps it on record rather than deleting it.
-        notices.Resolve($"replica-claimed:{id}", nowUnixMilliseconds);
+        notices.Resolve(ClaimNoticeKey(id), nowUnixMilliseconds);
 
         return new ConfigurationChangeResult(
         [
@@ -197,6 +197,45 @@ internal static class ReplicaReattribution
             "Reading it was never held. Nothing else changed.",
         ]);
     }
+
+    /// <summary>
+    /// Puts a claim that moved a replica in front of this machine's operator
+    /// (peer-protocol 07 §5.9): who claimed it, whose it was, that reading is
+    /// the claimant's already, and the acknowledgement that releases deleting.
+    /// </summary>
+    /// <remarks>
+    /// Keyed to the replica, so a second claim before the first is
+    /// acknowledged refreshes the one notice rather than stacking another,
+    /// and the acknowledgement resolves it whichever claimant it names. The
+    /// notice and the claim are acknowledged separately, because dismissing
+    /// a notice says only that it was seen — the console's "acknowledge all"
+    /// must not be a way to release a hold nobody looked at.
+    /// </remarks>
+    /// <param name="notices">The runtime's notices.</param>
+    /// <param name="grants">The pairings, for the former owner's label.</param>
+    /// <param name="claimant">The paired device the claim moved the replica to.</param>
+    /// <param name="repositoryIdHex">The replica's repository id, lower-hex.</param>
+    /// <param name="previousOwner">The fingerprint the replica was attributed to before the claim.</param>
+    /// <param name="nowUnixMilliseconds">When.</param>
+    internal static void RaiseClaimed(
+        NoticeStore notices,
+        PeerGrantStore grants,
+        PeerGrant claimant,
+        string repositoryIdHex,
+        string previousOwner,
+        ulong nowUnixMilliseconds) =>
+        notices.Raise(
+            ClaimNoticeKey(repositoryIdHex),
+            $"'{claimant.Label}' ({claimant.Identity.Fingerprint}) proved it holds the owner's passphrase and "
+            + $"claimed replica {repositoryIdHex}, which was stored here for {Describe(grants, previousOwner)}. "
+            + "It can read the replica now; it cannot delete from it until you acknowledge the claim itself, from "
+            + "the console or with the agent's `acknowledge-claim` verb. Acknowledging this notice only dismisses "
+            + "it. If you were not expecting a claim, the passphrase may be in the wrong hands: leave the claim "
+            + $"unacknowledged and end the pairing with '{claimant.Label}'.",
+            nowUnixMilliseconds);
+
+    /// <summary>The one notice a replica's claim raises and its acknowledgement resolves.</summary>
+    private static string ClaimNoticeKey(string repositoryIdHex) => $"replica-claimed:{repositoryIdHex}";
 
     /// <summary>A peer's label and fingerprint, or the fingerprint alone when no pairing with it remains.</summary>
     private static string Describe(PeerGrantStore grants, string fingerprint) =>
