@@ -266,8 +266,18 @@ public sealed record PairingsResult(IReadOnlyList<PairingDescriptor> Pairings) :
 /// can claim it with the passphrase alone (peer-protocol 03 §6) and the
 /// operator's override is refused. The key itself never crosses.
 /// </param>
+/// <param name="ClaimAwaitingAcknowledgement">
+/// Whether a claim moved it here to its owner and this machine's owner has
+/// not yet acknowledged the claim (contract 1.41, FR-DR-005): the owner may
+/// read it and may not instruct retention for it. False from a pre-1.41
+/// service, which never held a claim.
+/// </param>
 public sealed record ReplicaAttributionDescriptor(
-    string RepositoryId, string OwnerFingerprint, string? OwnerLabel, bool Claimable);
+    string RepositoryId,
+    string OwnerFingerprint,
+    string? OwnerLabel,
+    bool Claimable,
+    bool ClaimAwaitingAcknowledgement = false);
 
 /// <summary>The replicas stored here, ids ascending.</summary>
 /// <param name="Attributions">One row per attributed repository.</param>

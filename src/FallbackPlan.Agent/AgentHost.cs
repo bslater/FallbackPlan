@@ -65,6 +65,7 @@ public static class AgentHost
                   fallbackplan-agent pairings --state <dir>
                   fallbackplan-agent unpair --state <dir> --fingerprint <fp> [--to <host:port>] [--no-notify]
                   fallbackplan-agent reattribute --state <dir> --repository <hex> --to <fingerprint>
+                  fallbackplan-agent acknowledge-claim --state <dir> --repository <hex>
                   fallbackplan-agent install --archives <root> --state <dir> [--user <account>]
                                             [--name <svc>] [--target systemd|launchd|windows]
                                             [--remote-interface <ip> --remote-port <n>]
@@ -147,6 +148,14 @@ public static class AgentHost
                 replica that carries a claim key is refused: its owner claims it
                 with the passphrase. Through the running service when one is
                 listening; directly on the ledger otherwise.
+
+                `acknowledge-claim` is this machine's operator accepting a claim
+                that moved a replica stored here to a rebuilt machine
+                (FR-DR-005). The claimant could read it at once; until the
+                claim is acknowledged, its retention instructions are refused
+                and nothing is deleted. Acknowledge only a claim you recognise:
+                a claim proves the passphrase, and a passphrase can be stolen.
+                Routed like `reattribute`.
                 """);
             return 0;
         }
@@ -227,10 +236,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "acknowledge-claim" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `acknowledge-claim`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
             return 1;
         }
 
@@ -326,6 +335,15 @@ public static class AgentHost
         if (args[0] == "reattribute")
         {
             return await ReattributeAsync(stateDirectory, Get("--repository"), Get("--to"), output, error, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // `acknowledge-claim` releases a held claim (FR-DR-005), routed as
+        // `reattribute` is and for the same reason: the live service's ledger
+        // is the one its retention gate reads.
+        if (args[0] == "acknowledge-claim")
+        {
+            return await AcknowledgeClaimAsync(stateDirectory, Get("--repository"), output, error, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -1503,6 +1521,73 @@ public static class AgentHost
 
             default:
                 error.WriteLine($"error: the service answered a re-attribution with {result.GetType().Name}.");
+                return 1;
+        }
+    }
+
+    private static async Task<int> AcknowledgeClaimAsync(
+        string stateDirectory,
+        string? repositoryId,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryId))
+        {
+            error.WriteLine("error: usage is `acknowledge-claim --state <dir> --repository <hex>`.");
+            return 1;
+        }
+
+        ServiceResult result;
+        try
+        {
+            // The running service's ledger is the one its retention gate
+            // reads: releasing the hold in the file beside it would change
+            // nothing the gate sees, and the service's next write would put
+            // the hold back.
+            await using var client = await LocalServiceClient.ConnectAsync(
+                stateDirectory, "fallbackplan-agent", cancellationToken).ConfigureAwait(false);
+            result = await client.ExecuteAsync(new AcknowledgeReplicaClaimCommand(repositoryId), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (result is ServiceError { Reason: ServiceErrorReason.Refused } gate
+                && gate.Message.Contains("signed in", StringComparison.Ordinal))
+            {
+                error.WriteLine($"error: {gate.Message}");
+                error.WriteLine(
+                    "The running service answers this verb only to a signed-in owner. Acknowledge the claim from "
+                    + "the console (Pairings → Replicas stored here), or stop the service and run this verb again: "
+                    + "with no service listening it edits the ledger directly.");
+                return 1;
+            }
+        }
+        catch (ServiceConnectionException)
+        {
+            // No service holds the state directory; the ledger is ours to touch.
+            result = ReplicaReattribution.AcknowledgeClaim(
+                FallbackPlan.Application.ReplicaOwnerStore.Open(stateDirectory),
+                PeerGrantStore.Open(stateDirectory),
+                FallbackPlan.Application.NoticeStore.Open(stateDirectory),
+                repositoryId,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
+
+        switch (result)
+        {
+            case ConfigurationChangeResult changed:
+                foreach (var line in changed.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+
+            case ServiceError refusal:
+                error.WriteLine($"error: {refusal.Message}");
+                return 1;
+
+            default:
+                error.WriteLine($"error: the service answered an acknowledgement with {result.GetType().Name}.");
                 return 1;
         }
     }
