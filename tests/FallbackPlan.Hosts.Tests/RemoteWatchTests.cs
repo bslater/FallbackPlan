@@ -15,7 +15,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// the handshake, or loses part-way through a frame is a service that
 /// stopped. A caller redials on the end; a throw would reach it as a failure
 /// instead. The exception is an answer from a service other than the one
-/// pinned, which is a hard failure (FR-SVC-004) the caller must hear.
+/// pinned, which is a hard failure (FR-SVC-004) the caller must hear. And,
+/// as the local watch does, it connects when asked for, so nothing the
+/// service reports before its first pull is lost.
 /// </summary>
 /// <remarks>
 /// The service is a stand-in speaking the real handshake — TLS, the peer
@@ -144,6 +146,39 @@ public sealed class RemoteWatchTests : IDisposable
             }
 
             Assert.AreEqual(cutShort == "progress" ? 1 : 0, await watching);
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_ConnectsWhenCalled_SoProgressReportedBeforeTheFirstPullIsDelivered()
+    {
+        // A watch connects when it is asked for, not when it is first read,
+        // so what the service reports in between is not lost. The stand-in
+        // takes the watch and reports progress before anything has pulled. A
+        // watch that waited for its first pull would not have dialled yet,
+        // and the accept below would wait out the test's timeout instead.
+        var (console, command) = await ConnectAsync();
+        await using (console)
+        await using (command)
+        {
+            var events = console.WatchAsync(Timeout);
+
+            var (connection, stream) = await AcceptSessionAsync();
+            await using (connection)
+            {
+                Assert.IsInstanceOfType<HelloFrame>(await FrameCodec.ReadAsync(stream, Timeout));
+                await FrameCodec.WriteAsync(stream, Accepted, Timeout);
+                Assert.IsInstanceOfType<WatchFrame>(await FrameCodec.ReadAsync(stream, Timeout));
+                await FrameCodec.WriteAsync(stream, Progress, Timeout);
+            }
+
+            var delivered = 0;
+            await foreach (var _ in events)
+            {
+                delivered++;
+            }
+
+            Assert.AreEqual(1, delivered);
         }
     }
 
