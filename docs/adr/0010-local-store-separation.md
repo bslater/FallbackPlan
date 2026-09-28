@@ -155,6 +155,11 @@ down and records no outcome. That is the likeliest reading of a drill in CI
 that left no trace. The race itself was caught where it cannot hide, as a
 catalogue open that failed outright.
 
+> **Amended (2026-09):** a drill now takes a disposed object for shutdown
+> only while the service is stopping. Met while the service runs, it is a
+> drill that did not complete, and the drill records that
+> ([ADR-0054 Amendment 4](0054-scheduled-restore-drills.md#amendment-4--a-drill-that-did-not-complete-says-so-2026-09)).
+
 The catalogue now opens its connections with pooling off. A connection that
 belongs to no pool is out of reach of any clear, and it releases its file
 when it is disposed, which is all the clears were for, so the service no

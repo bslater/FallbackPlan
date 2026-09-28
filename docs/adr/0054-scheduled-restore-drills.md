@@ -51,6 +51,10 @@ disk — it is the most expensive scheduled thing in the service, and what it
 watches for (a read path that has stopped working) changes far more slowly
 than rot does.
 
+> **Amended (2026-09):** a drill that did not complete is not left for the
+> whole interval: it is due again on a back-off from an hour, never later
+> than the interval — see [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09).
+
 ### 2 The replica is opened the way a stranger would open it
 
 The drill runs through the ordinary guided-restore verbs — `open_restore_source`
@@ -221,6 +225,11 @@ silence rather than a fourth state: a drill that is interrupted records
 **nothing at all** — no stamp, no reason, no notice — and the row keeps
 whatever the last completed drill said.
 
+> **Amended (2026-09):** the silence is for the service stopping and for
+> nothing else. A cancellation or a disposed object met while the service
+> runs is a drill that did not complete, and it says so — see
+> [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09).
+
 The case is ordinary rather than exotic. A drill's commands run on the
 service's job queue, and stopping the service cancels them; the handler answers
 a cancelled command as a refusal like any other, so a drill that read that
@@ -325,6 +334,55 @@ scheduler. Proof row 91 was the table's only Unproved row for it.
 §6's heading stands as written — the default is still that a peer is not
 drilled — with the amendment's blockquote beside it.
 
+## Amendment 4 — a drill that did not complete says so (2026-09)
+
+Amendment 1 gave the drill its silence for the case it named: the service
+stopping while a drill was in flight. The build drew the line by exception
+type instead. Any cancellation and any disposed object ended a drill in
+silence, whatever caused it, and FR-DRL-002 wrote that down as "the service
+stopping, or anything else that cancels its commands". The second half let a
+fault inside a running service pass for a shutdown. The SQLite pool race
+([ADR-0010 Amendment 3](0010-local-store-separation.md#amendment-3-2026-09--the-catalogues-connections-are-not-pooled))
+could dispose a connection under a running drill, and it is the likeliest
+reading of a drill in CI that left no trace. Silence also moved no stamp, so a pair past its interval stayed due, and a
+fault that lasted re-ran the drill at every pass, a minute apart by default
+and over a peer's link as readily as a local disk, with nothing said each
+time.
+
+**Decision.**
+
+- **Silence is for a real stop.** A drill states nothing when the pass that
+  ran it has been cancelled, or when the service has begun stopping: its
+  runtime's disposal has started, or its queue has stopped taking work. Then
+  nothing it met on the way out is evidence. That goes for a cancellation, a
+  disposed object, and a failure it had already reached, because the store
+  or the source it was reading may be going away underneath it.
+- **Anything else is a drill that did not complete.** While the service
+  runs, whatever ends a drill without an answer about the replica is
+  recorded as a failed drill in its own words, naming the step when a
+  command came back cancelled, and it raises the `drill-failed` notice. §4
+  holds: it was a try, so the stamp moves.
+- **It is retried on a back-off, not at the interval.** The ledger counts
+  drills in a row that did not complete. The pair is due again an hour after
+  the first, then after two, four and so on, never later than its interval,
+  a peer's stated cadence included. The next drill that completes, passing
+  or failing, ends the count. There is no drill-now verb, so without this a
+  fault that passed in a minute would leave the notice standing for a
+  month; with it, the fault is cleared within the hour, and one that lasts
+  backs off instead of drilling every pass. A drill that completed and found
+  damage still waits its full interval: drilling a broken replica every hour
+  would repeat the notice, not add evidence.
+- **A listing answered as cancelled is not an empty folder.** Read as one,
+  it ended every descent of the sample, and the drill blamed the snapshot
+  for having nothing it could sample, both at a stop and while the service
+  ran.
+
+`Agent/RecoveryDrillJob` decides silence in one place, from the stopping
+state `Agent/ServiceRuntime` now reports. `Application/DestinationSyncStore`
+carries the count, in ledger schema 5, and `Agent/Scheduler` reads it.
+`Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the
+service it talks to, so a fault is all that differs from a clean drill.
+
 ## Status history
 
 | Date | Status | Note |
@@ -334,3 +392,4 @@ drilled — with the amendment's blockquote beside it.
 | 2026-09 | Amended | [Amendment 1](#amendment-1--an-interrupted-drill-is-not-a-failed-drill-2026-09): an interrupted drill states nothing. `Agent/RecoveryDrillJob` translates a cancelled command answer back into a cancellation, `Agent/AgentPass` waits for the drill phase, and `Agent/JobScheduler` refuses work once stopped instead of posting to disposed semaphores |
 | 2026-09 | Amended | [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09): on a write-only set the scheduled drill proves the road back as far as the sealed content and states that limit as a pass, never as a failure. `Agent/RecoveryDrillJob` recognises a sealed-only refusal and confirms the plan finds every segment; `Application/DestinationSyncStore` and contract 1.27 carry `drill_limit`; `Hosts.Tests/RecoveryDrillTests` runs on a set-up installation |
 | 2026-09 | Amended (kit withdrawn) | The requirements this record carries are FR-DRL-001/002, the drills re-homed from FR-KIT-006/007 by [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md); §5's first "does not exercise" bullet is moot because there is no kit file, and `eng/recovery-drill.sh` is rewritten passphrase-only |
+| 2026-09 | Amended | [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09): a drill states nothing only when the service is stopping or its pass is cancelled; any other ending is a drill that did not complete, recorded as a failure and retried on a back-off from an hour, never later than the interval. `Agent/RecoveryDrillJob` decides silence from the stopping state of `Agent/ServiceRuntime`; `Application/DestinationSyncStore` counts the drills that did not complete; `Agent/Scheduler` backs off; `Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the service |

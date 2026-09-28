@@ -211,8 +211,8 @@ public sealed class RecoveryDrillTests : IDisposable
         // FR-DRL-002 as amended (ADR-0054 Amendment 4). A disposed object means
         // shutdown only while the service is stopping. Met while it runs, it is
         // a fault in the road back, and the drill that met it did not complete,
-        // which is what it must now say. Silence here is how the SQLite pool
-        // race hid in CI: a drill that left no trace.
+        // which is what it must now say. Silence here is the likeliest way the
+        // SQLite pool race hid in CI, as a drill that left no trace.
         await using var runtime = await StartDrilledAsync();
         var at = DateTimeOffset.Now.AddDays(40);
 
