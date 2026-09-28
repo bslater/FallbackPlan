@@ -227,9 +227,9 @@ internal static class RecoveryDrillJob
             // cancellation or a disposed object is not shutdown unless the
             // service is stopping; met while it runs, it is a fault on the
             // road back, and silence would hide it for as long as it lasted.
-            var outcome = new DrillOutcome(
-                0, 0, $"the drill did not complete: {exception.Message.ReplaceLineEndings(" ")}");
-            runtime.DestinationSync.RecordDrill(set.Id, destinationName, 0, 0, outcome.Failure, limit: null, nowMs);
+            var failure = $"the drill did not complete: {exception.Message.ReplaceLineEndings(" ")}";
+            runtime.DestinationSync.RecordIncompleteDrill(set.Id, destinationName, failure, nowMs);
+            var outcome = new DrillOutcome(0, 0, failure);
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -244,6 +244,29 @@ internal static class RecoveryDrillJob
             TryDelete(scratch);
         }
     }
+
+    /// <summary>
+    /// When a pair whose last drill did not complete is due again: an hour
+    /// after the first such drill, doubling with each one after it, and never
+    /// later than the pair's own interval (ADR-0054 Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// Sooner than the interval, because there is no drill-now verb and a
+    /// fault that passed in a minute should not stand as a failed drill for a
+    /// month. Not every pass, because a fault that lasts would then drill
+    /// every minute, and a peer's drill reads over somebody else's link.
+    /// </remarks>
+    /// <param name="consecutiveIncomplete">Drills in a row that did not complete; one or more.</param>
+    /// <param name="intervalMs">The pair's drill interval.</param>
+    /// <returns>How long after the last drill the pair is due again.</returns>
+    internal static ulong IncompleteRetryMs(int consecutiveIncomplete, ulong intervalMs)
+    {
+        var doublings = Math.Clamp(consecutiveIncomplete - 1, 0, 30);
+        return Math.Min(IncompleteRetryFirstMs << doublings, intervalMs);
+    }
+
+    /// <summary>The first retry after a drill that did not complete: an hour.</summary>
+    private const ulong IncompleteRetryFirstMs = 3_600_000;
 
     /// <summary>What a drill that states nothing returns: no files, no failure, no limit, and nothing recorded.</summary>
     private static DrillOutcome Unrecorded { get; } = new(0, 0, null);
