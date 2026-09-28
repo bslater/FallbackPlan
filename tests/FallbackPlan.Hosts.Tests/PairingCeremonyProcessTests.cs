@@ -168,6 +168,21 @@ public sealed class PairingCeremonyProcessTests : IDisposable
 
     public void Dispose()
     {
+        // Every process a test started is stopped here, whether or not the
+        // test got as far as its end: the service's pair waits for a console
+        // for as long as it is left. Before the scratch directory, which a
+        // running process may still hold.
+        foreach (var process in _processes)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(TimeSpan.FromSeconds(30));
+            }
+
+            process.Dispose();
+        }
+
         if (Directory.Exists(_scratch))
         {
             try
