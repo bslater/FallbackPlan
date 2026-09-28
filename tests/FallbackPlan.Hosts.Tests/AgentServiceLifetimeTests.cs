@@ -16,6 +16,7 @@ namespace FallbackPlan.Hosts.Tests;
 public sealed class AgentServiceLifetimeTests : IDisposable
 {
     private const int Sigterm = 15;
+    private const int Sigkill = 9;
 
     private readonly HostHarness _harness = new();
 
@@ -96,6 +97,38 @@ public sealed class AgentServiceLifetimeTests : IDisposable
 
         _ = kill(agent.Id, Sigterm);
         agent.WaitForExit(TimeSpan.FromSeconds(30));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix,
+        "the apphost harness reads the agent's stdout line protocol; kept beside the tests whose cleanup it pins")]
+    public async Task Cleanup_AfterATestThatLeftItsAgentRunning_StopsIt()
+    {
+        // A test that fails part-way never reaches its own SIGTERM, and the
+        // agent it started keeps its listener and writer lock until whoever
+        // runs the tests kills it. Cleanup is what stops it. A second
+        // instance of this class stands in for the failed test: it starts an
+        // agent, sees it listen, and is disposed without stopping it.
+        int pid;
+        using (var failed = new AgentServiceLifetimeTests())
+        {
+            await failed._harness.CreateRepositoryAsync();
+            failed._harness.WriteSourceFile("notes.txt", "hello");
+            failed._harness.WriteConfiguration("every 1h");
+
+            var agent = failed.StartAgentRun();
+            await failed.WaitForListeningAsync(agent);
+            pid = agent.Id;
+        }
+
+        // Signal 0 sends nothing: kill only answers whether the process exists.
+        var survived = kill(pid, 0) == 0;
+        if (survived)
+        {
+            _ = kill(pid, Sigkill);
+        }
+
+        Assert.IsFalse(survived, "cleanup left running the agent its test started");
     }
 
     private Process StartAgentRun()
