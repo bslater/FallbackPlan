@@ -3,6 +3,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Protocol;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using ProtocolIdentity = FallbackPlan.Protocol.PeerIdentity;
 
@@ -144,23 +145,58 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// A watch belongs to a console that has already connected, so a service
+    /// it cannot reach, or loses in the handshake or part-way through the
+    /// stream, is a service that stopped: the watch ends, as the local
+    /// binding's does, and a caller redials on the end. A throw would reach
+    /// that caller as a failure instead. A refusal of the watch's own
+    /// connection ends it too, as a refused hello ends the local binding's
+    /// watch; connecting again is what reports the refusal.
+    /// </remarks>
     public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // A watch takes its own connection and its own full peer handshake: a
         // stream and a command exchange have different lifetimes, exactly as on
         // the local binding.
-        var (connection, session) = await OpenSessionAsync(
-            _host, _port, _keypair, _grants, _expected, cancellationToken).ConfigureAwait(false);
+        PeerTlsConnection connection;
+        PeerSession session;
+        try
+        {
+            (connection, session) = await OpenSessionAsync(
+                _host, _port, _keypair, _grants, _expected, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsUnreachable(exception))
+        {
+            yield break;
+        }
 
         await using (connection.ConfigureAwait(false))
         {
-            await HelloAsync(session.Stream, "fallbackplan-cli-watch", cancellationToken).ConfigureAwait(false);
-            await FrameCodec.WriteAsync(session.Stream, new WatchFrame(_serviceSession), cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await HelloAsync(session.Stream, "fallbackplan-cli-watch", cancellationToken).ConfigureAwait(false);
+                await FrameCodec.WriteAsync(session.Stream, new WatchFrame(_serviceSession), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (IsUnreachable(exception))
+            {
+                yield break;
+            }
 
             while (true)
             {
-                var frame = await FrameCodec.ReadAsync(session.Stream, cancellationToken).ConfigureAwait(false);
+                WireFrame? frame;
+                try
+                {
+                    frame = await FrameCodec.ReadAsync(session.Stream, cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    yield break;
+                }
+
                 if (frame is not ProgressFrame progress)
                 {
                     yield break;
@@ -170,6 +206,15 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
             }
         }
     }
+
+    /// <summary>
+    /// Whether a failure opening the watch says its service cannot be reached:
+    /// nothing listening, the connection closed during the handshake, or a
+    /// refusal. These are the failures <see cref="RemotePeer"/> reports as a
+    /// service it could not reach when a console connects.
+    /// </summary>
+    private static bool IsUnreachable(Exception exception) =>
+        exception is ServiceConnectionException or IOException or SocketException;
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
