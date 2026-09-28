@@ -321,13 +321,62 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void Open_ASchemaFourLedger_ReadsItsDrillsAndCountsNoneIncomplete()
+    {
+        // Schema 5 added the count of drills that did not complete, as a
+        // plain additive column. A schema-4 row reads it as zero, which is
+        // true of it: nothing counted them.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 4, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "last_success_at": 1000, "synced_sequence": 42,
+                  "drilled_at": 2000, "drill_files": 0, "drill_bytes": 0,
+                  "drill_failure": "the drill did not complete: an older fault" } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-4 ledger must migrate, not quarantine");
+        Assert.IsFalse(File.Exists(path + ".corrupt"));
+        Assert.AreEqual(2_000UL, record.DrilledAt);
+        Assert.AreEqual("the drill did not complete: an older fault", record.DrillFailure);
+        Assert.AreEqual(0, record.ConsecutiveIncompleteDrills);
+    }
+
+    [TestMethod]
+    public void RecordIncompleteDrill_StampsTheTry_CountsIt_AndACompletedDrillEndsTheCount()
+    {
+        // ADR-0054 Amendment 4. A drill that did not complete is a failed
+        // drill on the row like any other, stamp and reason and all, and it
+        // is counted: the count is what brings the next drill forward and
+        // backs it off while the fault lasts, so it has to outlive a restart.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        store.RecordIncompleteDrill(SetId, "vault", "the drill did not complete: listing the snapshot was cancelled", 2_000);
+        store.RecordIncompleteDrill(SetId, "vault", "the drill did not complete: restoring 'a' was cancelled", 3_000);
+
+        var twice = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(2, twice.ConsecutiveIncompleteDrills);
+        Assert.AreEqual(3_000UL, twice.DrilledAt);
+        Assert.AreEqual("the drill did not complete: restoring 'a' was cancelled", twice.DrillFailure);
+        Assert.AreEqual(0, twice.DrillFiles);
+        Assert.IsNull(twice.DrillLimit);
+        Assert.AreEqual(1_000UL, twice.LastSuccessAt, "the sync half of the row is left alone");
+
+        store.RecordDrill(SetId, "vault", files: 1, bytes: 10, failure: null, limit: null, nowUnixMilliseconds: 4_000);
+        Assert.AreEqual(0, store.Find(SetId, "vault")!.ConsecutiveIncompleteDrills, "a drill that completes ends the count");
+    }
+
+    [TestMethod]
     public void Open_AFileOneSchemaAhead_IsSetAside()
     {
         // The downgrade rule, pinned at the edge rather than at 99: the very
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 5, "destinations": [
+            { "schema_version": 6, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -363,7 +412,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 4", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 5", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

@@ -351,6 +351,71 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_ThatDidNotComplete_IsTriedAgainAfterAnHour_NotAtItsInterval()
+    {
+        // A drill that did not complete is due again an hour later, not a
+        // month later (ADR-0054 Amendment 4). There is no drill-now verb to
+        // clear its notice, and a fault that has passed should not stand as a
+        // failed drill until the pair's interval comes round.
+        await using var runtime = await StartDrilledAsync();
+        var at = DateTimeOffset.Now.AddDays(40);
+        await DrillThroughAsync(
+            runtime, at, command => command is RunRestoreCommand,
+            () => throw new ObjectDisposedException("SQLitePCL.sqlite3"));
+        var incomplete = Pair(runtime);
+        Assert.AreEqual(1, incomplete.ConsecutiveIncompleteDrills);
+
+        await PassAsync(runtime, at.AddMinutes(30));
+        Assert.AreEqual(incomplete.DrilledAt, Pair(runtime).DrilledAt, "inside the hour it is not due");
+
+        var retry = at.AddMinutes(61);
+        await PassAsync(runtime, retry);
+        var record = Pair(runtime);
+        Assert.AreEqual((ulong)retry.ToUnixTimeMilliseconds(), record.DrilledAt, "an hour on, it is drilled again");
+        Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.AreEqual(0, record.ConsecutiveIncompleteDrills, "a drill that completes ends the back-off");
+        Assert.IsEmpty(DrillNotices(runtime), "and resolves the notice");
+    }
+
+    [TestMethod]
+    public async Task Drill_ThatFoundDamage_WaitsItsFullInterval()
+    {
+        // The back-off is for a drill that did not complete. One that
+        // completed and found damage has answered, and is not asked again
+        // until its interval says so (§4): drilling a broken replica every
+        // hour would repeat the notice, not add evidence.
+        await using var runtime = await StartDrilledAsync();
+        TamperEveryDataBlob(Assert.ContainsSingle(Directory.GetDirectories(Vault)));
+
+        var at = DateTimeOffset.Now.AddDays(40);
+        await PassAsync(runtime, at);
+        var failed = Pair(runtime);
+        Assert.IsNotNull(failed.DrillFailure, "the damage must be found first");
+        Assert.AreEqual(0, failed.ConsecutiveIncompleteDrills);
+
+        await PassAsync(runtime, at.AddHours(2));
+        Assert.AreEqual(failed.DrilledAt, Pair(runtime).DrilledAt);
+    }
+
+    [TestMethod]
+    public void IncompleteRetry_StartsAtAnHour_Doubles_AndNeverWaitsPastTheInterval()
+    {
+        const ulong Hour = 3_600_000;
+        const ulong Month = 30 * 24 * Hour;
+        Assert.AreEqual(Hour, RecoveryDrillJob.IncompleteRetryMs(1, Month));
+        Assert.AreEqual(2 * Hour, RecoveryDrillJob.IncompleteRetryMs(2, Month));
+        Assert.AreEqual(4 * Hour, RecoveryDrillJob.IncompleteRetryMs(3, Month));
+        Assert.AreEqual(512 * Hour, RecoveryDrillJob.IncompleteRetryMs(10, Month));
+        Assert.AreEqual(Month, RecoveryDrillJob.IncompleteRetryMs(11, Month), "1,024 hours is past a month's interval");
+        Assert.AreEqual(Month, RecoveryDrillJob.IncompleteRetryMs(int.MaxValue, Month), "and a long run of them cannot overflow");
+
+        // A peer's cadence is its operator's, and the back-off stays under it
+        // too, which is what keeps a lasting fault off somebody else's link.
+        const ulong Week = 7 * 24 * Hour;
+        Assert.AreEqual(Week, RecoveryDrillJob.IncompleteRetryMs(9, Week));
+    }
+
+    [TestMethod]
     public async Task Drill_ADestinationNoPassHasReached_IsNeverDue()
     {
         // Nothing has been copied there, so there is nothing to restore from.
@@ -533,7 +598,15 @@ public sealed class RecoveryDrillTests : IDisposable
             before.DrilledAt, after.DrilledAt, $"a drill cut short by a stop leaves the last answer standing: {after.DrillFailure}");
         Assert.AreEqual(before.DrillFailure, after.DrillFailure);
         Assert.AreEqual(before.DrillLimit, after.DrillLimit);
+        Assert.AreEqual(before.ConsecutiveIncompleteDrills, after.ConsecutiveIncompleteDrills);
         Assert.IsEmpty(DrillNotices(runtime));
+    }
+
+    private async Task PassAsync(ServiceRuntime runtime, DateTimeOffset at)
+    {
+        var pass = await Scheduler.RunPassAsync(runtime, at, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
     }
 
     private static ValueTask<ServiceResult> Cancelled() =>
