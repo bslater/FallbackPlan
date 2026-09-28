@@ -316,11 +316,16 @@ public sealed class BackgroundWindowTests : IDisposable
         // installation for hours and the only way to find out was the
         // service's log, which is not where "why did nothing run last night"
         // gets asked (contract 1.37).
-        await using var shutRuntime = await StartAsync(ShutWindow);
+        //
+        // The window is read once: each read of ShutWindow is taken from the
+        // clock, so a minute turning between the configuration and the
+        // comparison would compare two different windows.
+        var configured = ShutWindow;
+        await using var shutRuntime = await StartAsync(configured);
         Assert.IsInstanceOfType<StatusResult>(await StatusAsync(shutRuntime), out var shut);
 
         Assert.IsNotNull(shut.BackgroundWindow);
-        Assert.AreEqual(ShutWindow, shut.BackgroundWindow.Text);
+        Assert.AreEqual(configured, shut.BackgroundWindow.Text);
         Assert.IsFalse(shut.BackgroundWindow.Open);
         Assert.IsGreaterThan(
             shut.ObservedAt,
