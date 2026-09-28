@@ -547,6 +547,26 @@ internal static class ReplicationResponder
         var drops = new List<string>();
         var pageDigests = new List<ReadOnlyMemory<byte>>();
         var repositoryIdHex = Convert.ToHexStringLower(offeredRepositoryId.Span);
+
+        // A claim hands the claimant reading at once and deleting only once
+        // this destination's operator has acknowledged it (06 §3, FR-DR-005):
+        // the passphrase that proved it can be stolen, and this replica may
+        // be the copy that outlived the machine it was stolen from. Refused
+        // before a page is weighed, because nothing a page could say would
+        // make it one to act on. Comparing the sender with the claimant would
+        // add nothing: this session's offer was accepted only from the
+        // replica's owner, so the sender is the claimant, or the owner a
+        // claim has since moved the replica away from. The text is whole
+        // within a refusal's 256 bytes, because the claimant sees no more.
+        if (owners.Find(repositoryIdHex)?.ClaimAwaitingAcknowledgement == true)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.TermsRefused,
+                $"Replica {repositoryIdHex} was claimed, and this destination's operator has not yet "
+                + "acknowledged the claim, so it deletes nothing from it (06 §3); ask them to acknowledge it. "
+                + "Nothing was deleted, and pushing to it is unaffected.");
+        }
+
         var page = RetentionOffer.Read(firstBody);
         while (true)
         {

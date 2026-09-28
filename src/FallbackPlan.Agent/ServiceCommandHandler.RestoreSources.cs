@@ -517,7 +517,6 @@ public sealed partial class ServiceCommandHandler
     {
         try
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(cacheDirectory))
             {
                 Directory.Delete(cacheDirectory, recursive: true);

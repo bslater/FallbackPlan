@@ -8,8 +8,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// keeps the original run-with-cancelled-token path (fan-out and the sweep
 /// depend on it — their runners handle their own cancellation); a queued job
 /// WITH it is taken out of play at the command; and a job that has already
-/// started never takes the callback path. Everything gates on task
-/// completions, never on delays, so the drills cannot flake on timing.
+/// started never takes the callback path. And settlement (Amendment 6): a
+/// job's <see cref="QueuedJob.OnSettled"/> runs only once its identity is
+/// free again, however its run ended, so whoever it answers can ask for the
+/// same job at once. Everything gates on task completions, never on delays,
+/// so the drills cannot flake on timing.
 /// </summary>
 [TestClass]
 public sealed class JobSchedulerTests
@@ -125,5 +128,51 @@ public sealed class JobSchedulerTests
 
         await observedCancel.Task.WaitAsync(Patience);
         Assert.AreEqual(0, callbacks, "a started job is stopped through its token, not the callback");
+    }
+
+    [TestMethod]
+    public async Task Settled_IsCalledOnceTheIdentityIsFree_SoTheSameJobCanBeAskedForAtOnce()
+    {
+        // A run ending is not the job leaving: the queue releases the
+        // identity after the run returns, so a caller told from inside the
+        // run that the work is done could ask for the same identity again
+        // before then, and be coalesced into the run that had just finished.
+        // A pair's sync asked for again the moment the last one answered is
+        // exactly that. The settled callback is where the identity is free,
+        // on every lane.
+        await using var scheduler = new JobScheduler();
+        foreach (var lane in new[] { JobLane.Transfer, JobLane.Reader, JobLane.Writer })
+        {
+            var id = $"pair-{lane}";
+            var askedAgain = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.IsTrue(scheduler.Enqueue(new QueuedJob(
+                id, lane, UserInitiated: false, $"test {id}", _ => ValueTask.CompletedTask,
+                OnSettled: () => askedAgain.SetResult(scheduler.Enqueue(
+                    new QueuedJob(id, lane, UserInitiated: false, $"again {id}", _ => ValueTask.CompletedTask))))));
+
+            Assert.IsTrue(
+                await askedAgain.Task.WaitAsync(Patience),
+                $"the {lane} lane still held {id} when it said the job had settled");
+        }
+    }
+
+    [TestMethod]
+    public async Task Settled_IsCalledForARunThatThrew()
+    {
+        // Whoever waits on a job is answered however its run ended, or a run
+        // that failed would leave them waiting for ever.
+        await using var scheduler = new JobScheduler();
+        foreach (var lane in new[] { JobLane.Transfer, JobLane.Writer })
+        {
+            var id = $"faulting-{lane}";
+            var settled = Signal();
+            scheduler.Enqueue(new QueuedJob(
+                id, lane, UserInitiated: false, $"test {id}",
+                _ => throw new InvalidOperationException("the run's own failure"),
+                OnSettled: () => settled.SetResult()));
+
+            await settled.Task.WaitAsync(Patience);
+            Assert.IsFalse(scheduler.IsActive(id));
+        }
     }
 }

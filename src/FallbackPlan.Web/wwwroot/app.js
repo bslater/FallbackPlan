@@ -425,6 +425,7 @@ async function refreshDesc() {
     }
     S.setupState = result.setupState ?? null;
     S.signedInUser = result.signedInUser ?? null;
+    const roleChanged = (result.signedInRole ?? null) !== S.signedInRole;
     S.signedInRole = result.signedInRole ?? null;
 
     // Signing in is asked for when the installation has accounts and this
@@ -439,6 +440,12 @@ async function refreshDesc() {
     renderSignIn();
     if (S.view === "maintenance") renderMaintenance();
     if (S.view === "diagnostics") renderDiagnostics();
+    // The role gates controls in the notices and configuration views as
+    // well, and either may have rendered before this answer arrived: a
+    // console opened straight onto one asks for its data and for this at
+    // once, and the Owner's controls must not wait for the next poll.
+    if (roleChanged && S.view === "notices" && S.notices) renderNotices();
+    if (roleChanged && S.view === "config") renderConfigBody();
   }
 }
 
@@ -1054,6 +1061,8 @@ function renderNotices() {
               ? `<button type="button" class="btn small" data-action="retire-staging" data-key="${esc(notice.key)}">Retire staging…</button>` : ""}
             ${!notice.acknowledgedAt && notice.key?.startsWith("format-upgradable:")
               ? `<button type="button" class="btn small" data-action="upgrade-format" data-key="${esc(notice.key)}">Upgrade format…</button>` : ""}
+            ${!notice.acknowledgedAt && S.signedInRole === "Owner" && notice.key?.startsWith("replica-claimed:")
+              ? `<button type="button" class="btn small" data-action="claim-ack-open" data-repository="${esc(notice.key.slice("replica-claimed:".length))}">Acknowledge claim…</button>` : ""}
             ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
           </div>`).join("")}</div>`}`;
 }
@@ -2544,6 +2553,49 @@ const actions = {
     });
   },
 
+  // A claim held for this machine's operator (FR-DR-005, contract 1.41),
+  // reached from the replica's row and from the notice the claim raised.
+  // The claimant proved the owner's passphrase and reads the replica
+  // already; acknowledging lets it delete from it as well, still held to
+  // its pairing's floor. The typed word is about intent: the claimant may
+  // be the owner's rebuilt machine, or whoever took the passphrase.
+  "claim-ack-open"(el) {
+    const repository = el.dataset.repository;
+    const row = S.attributions.find(candidate => candidate.repositoryId === repository);
+    const claimant = row ? row.ownerLabel ?? `${row.ownerFingerprint.slice(0, 10)}…` : null;
+    openDialog(`
+      <h3>Acknowledge the claim on replica ${esc(repository.slice(0, 12))}…</h3>
+      <p class="dlg-sub">A paired device proved it holds this replica's owner's passphrase and claimed it. It can
+      read the replica already; until you acknowledge the claim, it cannot delete anything from it. Acknowledging
+      lets it instruct deletions like any owner, still held to its pairing's retention floor. Acknowledge only if
+      you know the claim is the owner's own — their rebuilt machine, say. If you were not expecting one, the
+      passphrase may be in the wrong hands: cancel, leave the claim unacknowledged, and end the pairing with the
+      claimant.</p>
+      ${claimant ? `<p class="sub">Claimed by <b>${esc(claimant)}</b></p>` : ""}
+      <label class="field" for="confirm-word">Type <b>acknowledge</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="acknowledge" data-enables="claim-ack-go">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="claim-ack-go" data-action="claim-ack-go" data-repository="${esc(repository)}" disabled>Acknowledge the claim</button>
+      </div>`);
+    document.getElementById("confirm-word")?.focus();
+  },
+
+  async "claim-ack-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run({
+        command: "acknowledge_replica_claim",
+        repositoryId: el.dataset.repository,
+      }, { errToast: "The service refused to acknowledge the claim" });
+      if (result?.result === "configuration_change") {
+        closeDialog();
+        reportDialog("Claim acknowledged", result.lines);
+        refreshConfigData(); refreshNotices(); refreshStatus();
+      }
+    });
+  },
+
   async "notice-ack"(el) {
     await withBusy(el, async () => {
       const result = await run(
@@ -2753,14 +2805,21 @@ function renderConfigBody() {
   // move it. The Re-point control is the operator's override (ADR-0053 §3):
   // for the Owner alone, and only on a replica recorded without a claim
   // key — one that carries a key is its owner's to claim, and the service
-  // refuses the override for it anyway.
+  // refuses the override for it anyway. A replica a claim moved is held
+  // (FR-DR-005): its claimant reads it and may not delete from it until the
+  // Owner acknowledges the claim, which is the row's other control.
   const attributions = S.attributions.map(row => `
     <tr>
       <td class="mono" title="${esc(row.repositoryId)}">${esc(row.repositoryId.slice(0, 12))}…</td>
       <td>${row.ownerLabel ? esc(row.ownerLabel) : `<span class="detail">no pairing</span>`}
-          <span class="mono detail" title="${esc(row.ownerFingerprint)}">${esc(row.ownerFingerprint.slice(0, 10))}…</span></td>
+          <span class="mono detail" title="${esc(row.ownerFingerprint)}">${esc(row.ownerFingerprint.slice(0, 10))}…</span>
+          ${row.claimAwaitingAcknowledgement ? `<span class="badge warn"
+             title="Claimed with its owner's passphrase: the claimant reads it now, and deletes nothing from it until the claim is acknowledged">claim awaiting acknowledgement</span>` : ""}</td>
       <td class="detail">${row.claimable ? "its owner, with the passphrase" : "the operator only — no claim key on record"}</td>
-      <td>${S.signedInRole === "Owner" && row.claimable === false
+      <td>${S.signedInRole === "Owner" && row.claimAwaitingAcknowledgement
+        ? `<button type="button" class="btn small" data-action="claim-ack-open"
+             data-repository="${esc(row.repositoryId)}">Acknowledge claim…</button>`
+        : ""}${S.signedInRole === "Owner" && row.claimable === false
         ? `<button type="button" class="btn small" data-action="reattribute-open"
              data-repository="${esc(row.repositoryId)}" data-owner="${esc(row.ownerFingerprint)}"
              data-label="${esc(row.ownerLabel ?? row.ownerFingerprint.slice(0, 10))}">Re-point…</button>`

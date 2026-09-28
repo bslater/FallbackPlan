@@ -1,37 +1,8 @@
 using Bodu;
 using FallbackPlan.Domain;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace FallbackPlan.Application;
-
-/// <summary>
-/// What a destination knows about one replica it holds: who it belongs to, and
-/// the credential by which someone could prove it is theirs again.
-/// </summary>
-/// <param name="Fingerprint">The owning peer's fingerprint.</param>
-/// <param name="ClaimTokenHex">
-/// The token this destination minted for the replica (peer-protocol 07 §5.3),
-/// lower-hex. Not a secret — its job is to be <em>unique to this
-/// destination</em>, so a proof produced here is inert anywhere else. Null
-/// until the replica is first accepted under the claim feature.
-/// </param>
-/// <param name="ClaimPublicKeyHex">
-/// The public half the source registered against that token, lower-hex. Null
-/// for a replica stored before the ceremony, or by a source that does not
-/// implement it — which is why an unclaimable replica says so by name rather
-/// than failing as a wrong passphrase.
-/// </param>
-/// <param name="ClaimAwaitingAcknowledgement">
-/// Whether a claim moved this attribution and the destination's operator has
-/// not yet acknowledged it. While true, retention instructions from the
-/// claiming identity are refused, deleting nothing (peer-protocol 06 §3).
-/// </param>
-public sealed record ReplicaAttribution(
-    [property: JsonPropertyName("fingerprint")] string Fingerprint,
-    [property: JsonPropertyName("claim_token")] string? ClaimTokenHex = null,
-    [property: JsonPropertyName("claim_public_key")] string? ClaimPublicKeyHex = null,
-    [property: JsonPropertyName("claim_awaiting_acknowledgement")] bool ClaimAwaitingAcknowledgement = false);
 
 /// <summary>
 /// Which peer each replica repository belongs to: <c>replica-owners.json</c>
@@ -86,8 +57,18 @@ public sealed record ReplicaAttribution(
 /// because the quota and the retrieval gate are.
 /// </para>
 /// </param>
+/// <param name="ClaimAwaitingAcknowledgement">
+/// Whether a claim moved this attribution (peer-protocol 03 §6) and this
+/// destination's operator has not yet acknowledged it. While it is set, the
+/// claimant may read the replica and may not delete from it: its retention
+/// instructions are refused whole (06 §3, FR-DR-005). False for every
+/// attribution made by an offer or by the operator's own hand.
+/// </param>
 public sealed record ReplicaOwner(
-    string Fingerprint, string? ReclaimPublicKey = null, string? ClaimPublicKey = null);
+    string Fingerprint,
+    string? ReclaimPublicKey = null,
+    string? ClaimPublicKey = null,
+    bool ClaimAwaitingAcknowledgement = false);
 
 /// <inheritdoc cref="ReplicaOwnerStore"/>
 public sealed class ReplicaOwnerStore
@@ -147,43 +128,6 @@ public sealed class ReplicaOwnerStore
             }
         }
     }
-
-    /// <summary>
-    /// Reads either shape this file has had. Before the claim ceremony each
-    /// value was the owning fingerprint as a bare string; it is now an object.
-    /// </summary>
-    /// <remarks>
-    /// The older shape is <b>migrated, never discarded</b>. Deserialising it as
-    /// the newer one would throw, and the catch above would move a perfectly
-    /// good ledger aside as corrupt — silently unattributing every replica the
-    /// destination holds, which is the quota gone and every retention command
-    /// unvalidatable until each peer happened to return. A format change is not
-    /// damage and must not be mistaken for it.
-    /// </remarks>
-    private static Dictionary<string, ReplicaAttribution> Read(string json)
-    {
-        using var document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
-        {
-            throw new JsonException("The attribution ledger is not a JSON object.");
-        }
-
-        var owners = Empty();
-        foreach (var entry in document.RootElement.EnumerateObject())
-        {
-            owners[entry.Name] = entry.Value.ValueKind switch
-            {
-                JsonValueKind.String => new ReplicaAttribution(entry.Value.GetString()!),
-                JsonValueKind.Object => entry.Value.Deserialize<ReplicaAttribution>(SerializerOptions)
-                    ?? throw new JsonException("An attribution entry is null."),
-                _ => throw new JsonException("An attribution entry is neither a fingerprint nor a record."),
-            };
-        }
-
-        return owners;
-    }
-
-    private static Dictionary<string, ReplicaAttribution> Empty() => new(StringComparer.Ordinal);
 
     /// <summary>
     /// Attributes a repository to a peer, or confirms an existing attribution.
@@ -351,22 +295,24 @@ public sealed class ReplicaOwnerStore
     }
 
     /// <summary>
-    /// Points a replica at a new device identity, the claim ceremony having
-    /// proved the claimant is the same owner (ADR-0053 §2).
+    /// Points a replica at another device identity on the word of this
+    /// destination's operator
+    /// ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)
+    /// §3). Nothing holds the move for acknowledgement: the operator is the
+    /// person a claim's hold waits for.
     /// </summary>
     /// <remarks>
-    /// The only writer here that changes a fingerprint, and the one place
-    /// <see cref="TryAttribute"/>'s "already stored here for another peer"
-    /// rule is deliberately set aside. It is set aside on <em>proof</em>, and
-    /// the proof is not this store's to check — the store holds no
-    /// cryptography and knows no keys, so a caller that skipped the signature
-    /// would be a caller that skipped the ceremony. The two recorded public
-    /// keys are kept exactly as they were: the same passphrase re-derives
-    /// them, so a claimant that could replace them could only replace them
-    /// with themselves, and anyone else must not.
+    /// With <see cref="Claim"/>, one of the two writers here that change a
+    /// fingerprint, and so one of the two places <see cref="TryAttribute"/>'s
+    /// "already stored here for another peer" rule is deliberately set aside.
+    /// Whether the operator may make the move — never for a replica its owner
+    /// can claim — is not this store's to decide, because it knows no keys
+    /// and no people. The two recorded public keys are kept exactly as they
+    /// were: they are what the owner published while its machine still
+    /// existed, and moving the replica makes them nobody else's.
     /// </remarks>
     /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
-    /// <param name="fingerprint">The claimant's fingerprint.</param>
+    /// <param name="fingerprint">The fingerprint of the device the operator named.</param>
     /// <returns><see langword="false"/> when no such repository is attributed here.</returns>
     public bool Reattribute(string repositoryIdHex, string fingerprint)
     {
@@ -386,6 +332,79 @@ public sealed class ReplicaOwnerStore
             }
 
             _owners[repositoryIdHex] = owner with { Fingerprint = fingerprint };
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Points a replica at the device that proved it holds the owner's
+    /// passphrase (peer-protocol 03 §6), and holds the move for this
+    /// destination's operator to acknowledge.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same move as <see cref="Reattribute"/>, with one difference: a
+    /// passphrase can be stolen, so a claim is not the owner's word the way an
+    /// operator's hand is. Reading is the claimant's at once. Deleting waits
+    /// for the operator (06 §3, FR-DR-005), because a stolen passphrase must
+    /// not be able to quietly destroy the copy that outlived the machine it
+    /// was taken from.
+    /// </para>
+    /// <para>
+    /// Like <see cref="Reattribute"/>, this checks no proof: the caller must
+    /// have verified the claim, and the recorded keys stay as they were.
+    /// </para>
+    /// </remarks>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    /// <param name="fingerprint">The claimant's fingerprint.</param>
+    /// <returns>
+    /// The fingerprint the replica was attributed to, when the claim moved it;
+    /// <see langword="null"/> when the claimant already owned it, which moves
+    /// nobody's authority and holds nothing, or when no such repository is
+    /// attributed here.
+    /// </returns>
+    public string? Claim(string repositoryIdHex, string fingerprint)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(fingerprint);
+
+        lock (_gate)
+        {
+            if (!_owners.TryGetValue(repositoryIdHex, out var owner)
+                || string.Equals(owner.Fingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            _owners[repositoryIdHex] = owner with { Fingerprint = fingerprint, ClaimAwaitingAcknowledgement = true };
+            AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
+            return owner.Fingerprint;
+        }
+    }
+
+    /// <summary>
+    /// The operator's acknowledgement of a claim (FR-DR-005): the claimant's
+    /// retention instructions are served again, still held to the grant's
+    /// floor like anyone's.
+    /// </summary>
+    /// <param name="repositoryIdHex">The repository's identity, lower-hex.</param>
+    /// <returns>
+    /// <see langword="false"/> when no claim on that repository awaits
+    /// acknowledgement, including when it is not attributed here.
+    /// </returns>
+    public bool AcknowledgeClaim(string repositoryIdHex)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(repositoryIdHex);
+
+        lock (_gate)
+        {
+            if (!_owners.TryGetValue(repositoryIdHex, out var owner) || !owner.ClaimAwaitingAcknowledgement)
+            {
+                return false;
+            }
+
+            _owners[repositoryIdHex] = owner with { ClaimAwaitingAcknowledgement = false };
             AtomicFile.WriteAllText(_path, JsonSerializer.Serialize(_owners, SerializerOptions));
             return true;
         }

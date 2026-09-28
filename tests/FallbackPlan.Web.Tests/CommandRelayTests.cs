@@ -94,6 +94,39 @@ public sealed class CommandRelayTests
     }
 
     [TestMethod]
+    public async Task ClaimAcknowledgement_RelaysLikeEveryOther_NoConsoleChangeNeeded()
+    {
+        // Contract 1.41 (FR-DR-005): the listing's held-claim flag reaches
+        // the page camelCased, and the acknowledgement arrives typed with the
+        // replica it names — the two names the console's control depends on.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command is ListReplicaAttributionsCommand
+            ? new ReplicaAttributionsResult(
+            [
+                new ReplicaAttributionDescriptor(
+                    new string('c', 32), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "rebuilt", true,
+                    ClaimAwaitingAcknowledgement: true),
+            ])
+            : new ConfigurationChangeResult(["acknowledged"]);
+
+        using var list = harness.Command("""{"command":"list_replica_attributions"}""");
+        using var listed = await harness.Http.SendAsync(list);
+        Assert.AreEqual(HttpStatusCode.OK, listed.StatusCode);
+        using (var body = JsonDocument.Parse(await listed.Content.ReadAsStringAsync()))
+        {
+            var row = body.RootElement.GetProperty("attributions")[0];
+            Assert.IsTrue(row.GetProperty("claimAwaitingAcknowledgement").GetBoolean());
+        }
+
+        using var acknowledge = harness.Command(
+            $$"""{"command":"acknowledge_replica_claim","repositoryId":"{{new string('c', 32)}}"}""");
+        using var acknowledged = await harness.Http.SendAsync(acknowledge);
+        Assert.AreEqual(HttpStatusCode.OK, acknowledged.StatusCode);
+        Assert.IsInstanceOfType<AcknowledgeReplicaClaimCommand>(harness.Clients.Client.Received[^1], out var command);
+        Assert.AreEqual(new string('c', 32), command.RepositoryId);
+    }
+
+    [TestMethod]
     public async Task Receipts_RelayLikeEveryOther_NoConsoleChangeNeeded()
     {
         // Contract 1.33 (ADR-0064): the receipts card rides the generic

@@ -24,6 +24,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
 [JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
+[JsonDerivedType(typeof(AcknowledgeReplicaClaimCommand), "acknowledge_replica_claim")]
 [JsonDerivedType(typeof(ListReceiptsCommand), "list_receipts")]
 [JsonDerivedType(typeof(CreatePairingInviteCommand), "create_pairing_invite")]
 [JsonDerivedType(typeof(ListPairingInvitesCommand), "list_pairing_invites")]
@@ -345,6 +346,19 @@ public sealed record ListReceiptsCommand(
 /// <param name="RepositoryId">The replica's repository id, lower-hex — the name of its directory under <c>replicas</c>.</param>
 /// <param name="Fingerprint">The new owner's fingerprint, or an unambiguous prefix of it; it must be paired here as a device that stores here.</param>
 public sealed record ReattributeReplicaCommand(string RepositoryId, string Fingerprint) : ServiceCommand;
+
+/// <summary>
+/// Acknowledges the claim that moved a replica stored here (contract 1.41,
+/// FR-DR-005): the device that proved the owner's passphrase may then
+/// instruct retention for it, held to its grant's retention floor like any
+/// owner. Until then its instructions are refused whole
+/// (peer-protocol 06 §3). Reading was never held. Owner-only and local
+/// callers only, like the operator's re-attribution: whether to trust a
+/// claim is this machine's owner's decision. A replica with no claim
+/// awaiting acknowledgement answers that nothing changed.
+/// </summary>
+/// <param name="RepositoryId">The replica's repository id, lower-hex — the name of its directory under <c>replicas</c>.</param>
+public sealed record AcknowledgeReplicaClaimCommand(string RepositoryId) : ServiceCommand;
 
 /// <summary>Runs a backup now, outside the schedule.</summary>
 /// <param name="SetName">The set to run; null runs the default set.</param>

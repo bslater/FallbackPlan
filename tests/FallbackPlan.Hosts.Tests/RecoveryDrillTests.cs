@@ -278,7 +278,13 @@ public sealed class RecoveryDrillTests : IDisposable
         await pass.Transfers.WaitAsync(Timeout);
         await pass.Drills.WaitAsync(Timeout);
 
+        // The premise, said with the pair's row: a pass that never drilled
+        // the pair and a drill that ran without meeting the seal both leave
+        // the limit empty below, and only the row tells the two apart.
         var record = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+        var evidence = $"{record}; pass: {string.Join("; ", pass.Sets.Select(set => $"{set.SetName} {set.Outcome} {set.Detail}"))}";
+        Assert.IsNotNull(record.DrilledAt, $"the pass did not drill the pair: {evidence}");
+
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<StatusResult>(
             await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
@@ -288,7 +294,7 @@ public sealed class RecoveryDrillTests : IDisposable
         Assert.AreEqual(record.DrillFiles, row.DrillFiles);
         Assert.IsNull(row.DrillFailure);
         Assert.AreEqual(record.DrillLimit, row.DrillLimit, "the limit reaches the matrix beside the stamp (contract 1.27)");
-        Assert.IsNotNull(row.DrillLimit);
+        Assert.IsNotNull(row.DrillLimit, $"a write-only set's drill states how far it could prove: {evidence}");
     }
 
     private static void TamperEveryDataBlob(string replicaRoot)

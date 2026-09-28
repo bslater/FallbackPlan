@@ -37,6 +37,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly string? _spoolRoot;
     private readonly string? _stateDirectory;
     private readonly FallbackPlan.Application.ReplicaOwnerStore? _owners;
+    private readonly FallbackPlan.Application.NoticeStore? _notices;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
@@ -52,7 +53,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         ILogger log,
         string? replicationStateDirectory,
         IReadOnlyList<string>? offeredFeatures,
-        FallbackPlan.Application.ReplicaOwnerStore? owners)
+        FallbackPlan.Application.ReplicaOwnerStore? owners,
+        FallbackPlan.Application.NoticeStore? notices)
     {
         _keypair = keypair;
         _grants = grants;
@@ -75,6 +77,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             // leaves a prefix nobody closed — is noticed at all.
             PartialSpool.Sweep(_spoolRoot, DateTimeOffset.UtcNow);
             _owners = owners ?? FallbackPlan.Application.ReplicaOwnerStore.Open(replicationStateDirectory);
+            _notices = notices ?? FallbackPlan.Application.NoticeStore.Open(replicationStateDirectory);
         }
     }
 
@@ -133,6 +136,16 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// <paramref name="replicationStateDirectory"/>, which is only right for a
     /// listener with no runtime beside it.
     /// </param>
+    /// <param name="notices">
+    /// The notice ledger to raise into, when the process already holds one —
+    /// the service runtime's (<see cref="ServiceRuntime.Notices"/>), so what
+    /// this listener raises is what the running service lists, and an
+    /// operator's acknowledgement is what resolves it. The ledger is held in
+    /// memory and written whole, so a second one opened over the same file
+    /// is invisible to the runtime and is overwritten by its next write. Null
+    /// opens one of its own over <paramref name="replicationStateDirectory"/>,
+    /// which is only right for a listener with no runtime beside it.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
@@ -141,7 +154,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         ILogger? log = null,
         string? replicationStateDirectory = null,
         IReadOnlyList<string>? offeredFeatures = null,
-        FallbackPlan.Application.ReplicaOwnerStore? owners = null)
+        FallbackPlan.Application.ReplicaOwnerStore? owners = null,
+        FallbackPlan.Application.NoticeStore? notices = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -154,7 +168,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
                 keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
-                replicationStateDirectory, offeredFeatures, owners);
+                replicationStateDirectory, offeredFeatures, owners, notices);
         }
         catch
         {
@@ -278,7 +292,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                 // Durable, not just a log line: the issuing operator learns who
                 // redeemed their invite even if they were away (FR-DEST-008's
                 // posture, applied to arrivals).
-                FallbackPlan.Application.NoticeStore.Open(_stateDirectory).Raise(
+                _notices!.Raise(
                     $"pairing-invite-redeemed:{grant.Identity.Fingerprint}",
                     $"'{grant.Label}' ({grant.Identity.Fingerprint}) redeemed a pairing invite and is now "
                     + $"paired as {DescribeRole(grant.Role)}.",
@@ -419,7 +433,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     }
 
                     var claimed = await ClaimResponder.ServeAsync(
-                        _replicasRoot, session.Stream, session.Peer, _owners!, session.Binding, _stopping.Token)
+                        _replicasRoot, session.Stream, session.Peer, _owners!, _notices!, _grants,
+                        session.Binding, _stopping.Token)
                         .ConfigureAwait(false);
                     Log.ReplicaClaimed(_log, peer, claimed.Count);
                     return;
@@ -471,7 +486,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     // that peer is its own to keep or evict on its own
                     // timetable (01 §3, ADR-0030 Amendment 2).
                     var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    FallbackPlan.Application.NoticeStore.Open(_stateDirectory!).Raise(
+                    _notices!.Raise(
                         $"peering-terminated:{session.Peer.Identity.Fingerprint}",
                         $"Peer '{session.Peer.Label}' ({session.Peer.Identity.Fingerprint}) ended the peering"
                         + $"{(termination.Reason.Length > 0 ? $": {termination.Reason}" : string.Empty)}. "

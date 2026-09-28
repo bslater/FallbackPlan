@@ -136,6 +136,14 @@ public sealed class AuthenticatingService : IFallbackPlanService
             {
                 return NotTheOwner("re-point a replica stored here");
             }
+
+            // The fourth (FR-DR-005): acknowledging a claim lets a device
+            // that proved only a passphrase delete from a replica stored
+            // here. Whether to trust that claim is the owner's decision.
+            if (command is AcknowledgeReplicaClaimCommand && !_users.MayManageAccounts(session.User))
+            {
+                return NotTheOwner("acknowledge a claim on a replica stored here");
+            }
         }
         else if (command is ListUsersCommand or CreateUserCommand or DeleteUserCommand or ChangePasswordCommand)
         {
@@ -163,6 +171,13 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 ServiceErrorReason.Refused,
                 "The installation has no accounts yet, so nobody owns the replicas stored here. Finish "
                 + "setup — the first account is the owner — and re-point the replica as that account.");
+        }
+        else if (command is AcknowledgeReplicaClaimCommand)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "The installation has no accounts yet, so nobody owns the replicas stored here. Finish "
+                + "setup — the first account is the owner — and acknowledge the claim as that account.");
         }
 
         return await _inner.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);

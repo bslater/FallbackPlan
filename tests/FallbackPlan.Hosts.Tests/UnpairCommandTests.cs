@@ -113,6 +113,56 @@ public sealed class UnpairCommandTests : IDisposable
         Assert.IsTrue(grantsOne.IsRevoked(paired.IdentityTwo));
     }
 
+    [TestMethod]
+    public async Task TheNoticesTheListenerRaises_AreTheRunningServicesOwn()
+    {
+        // Site two's listener raises two notices of its own — an invite
+        // redeemed, a peering ended — into the store the host hands it, which
+        // is the runtime's. Both must be what the running service lists, and
+        // neither may be lost to a write the runtime makes afterwards: a
+        // second copy of the ledger opened beside the runtime's is invisible
+        // to it and is overwritten by its next save.
+        var paired = await PairAsync();
+        await using var one = paired.RuntimeOne;
+        await using var two = paired.RuntimeTwo;
+        await using var heldListener = paired.Listener;
+        using var heldKeypair = paired.KeypairTwo;
+        var siteOne = paired.IdentityOne.Fingerprint;
+
+        // The listener raises its notice once its own side of the ceremony is
+        // done, which can be after the dialler's side has returned, so it is
+        // waited for — on the running service's ledger, which is the point: a
+        // notice raised into a second copy never arrives here at all.
+        await WaitForAsync(() => two.Notices.Unacknowledged
+            .Any(notice => notice.Key == $"pairing-invite-redeemed:{siteOne}"));
+        Assert.IsInstanceOfType<NoticesResult>(
+            await paired.HandlerTwo.ExecuteAsync(new ListNoticesCommand(), _timeout.Token), out var afterPairing);
+        var redeemed = Assert.ContainsSingle(
+            afterPairing.Notices.Where(notice => notice.Key == $"pairing-invite-redeemed:{siteOne}"));
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await paired.HandlerOne.ExecuteAsync(
+                new UnpairCommand(paired.IdentityTwo.Fingerprint, Notify: true, Endpoint: paired.Endpoint),
+                _timeout.Token));
+        await WaitForAsync(() => paired.GrantsTwo.Grants.Count == 0);
+
+        Assert.IsInstanceOfType<NoticesResult>(
+            await paired.HandlerTwo.ExecuteAsync(new ListNoticesCommand(), _timeout.Token), out var afterEnding);
+        Assert.ContainsSingle(afterEnding.Notices.Where(notice => notice.Key == $"peering-terminated:{siteOne}"));
+
+        // The runtime's own write, and then the ledger as the next start of
+        // the service will read it.
+        Assert.IsInstanceOfType<AcknowledgedResult>(
+            await paired.HandlerTwo.ExecuteAsync(new AcknowledgeNoticeCommand(redeemed.Id), _timeout.Token));
+        var reopened = NoticeStore.Open(_siteTwo.StateDirectory).Notices;
+        Assert.IsNotNull(
+            Assert.ContainsSingle(reopened.Where(notice => notice.Key == $"pairing-invite-redeemed:{siteOne}"))
+                .AcknowledgedAt);
+        Assert.IsNull(
+            Assert.ContainsSingle(reopened.Where(notice => notice.Key == $"peering-terminated:{siteOne}"))
+                .AcknowledgedAt);
+    }
+
     private sealed record PairedSites(
         ServiceRuntime RuntimeOne,
         ServiceRuntime RuntimeTwo,
@@ -137,12 +187,13 @@ public sealed class UnpairCommandTests : IDisposable
 
         // The listener holds this keypair for its lifetime, so it is returned
         // for the test to dispose — a `using` here would close the key under
-        // the listener's feet before the termination dial arrives.
+        // the listener's feet before the termination dial arrives. It raises
+        // into the runtime's notices, as the host wires it.
         var keypairTwo = PeerKeypairStore.Open(_siteTwo.StateDirectory);
         var grantsTwo = PeerGrantStore.Open(_siteTwo.StateDirectory);
         var listener = RemoteServiceListener.Start(
             keypairTwo, grantsTwo, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
-            replicationStateDirectory: _siteTwo.StateDirectory);
+            replicationStateDirectory: _siteTwo.StateDirectory, notices: runtimeTwo.Notices);
         var handlerTwo = new ServiceCommandHandler(
             runtimeTwo, RemoteBindingState.On(listener.Endpoint.ToString()));
         listener.Bind(handlerTwo);

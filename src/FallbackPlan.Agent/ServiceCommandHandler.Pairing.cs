@@ -278,6 +278,21 @@ public sealed partial class ServiceCommandHandler
                 (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
     /// <summary>
+    /// The operator's acknowledgement of a claim (contract 1.41, FR-DR-005),
+    /// shared with the agent's <c>acknowledge-claim</c> verb through
+    /// <see cref="ReplicaReattribution"/> so the two cannot drift.
+    /// </summary>
+    private ServiceResult AcknowledgeReplicaClaim(AcknowledgeReplicaClaimCommand command) =>
+        Scope == CallerScope.Remote
+            ? NotARemoteDecision("acknowledge a claim on a replica this service stores")
+            : ReplicaReattribution.AcknowledgeClaim(
+                runtime.ReplicaOwners,
+                PeerGrantStore.Open(runtime.Options.StateDirectory),
+                runtime.Notices,
+                command.RepositoryId,
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+    /// <summary>
     /// Whose replica a machine stores is that machine's operator's decision
     /// (ADR-0053 §3): a paired console may watch this service but not hand
     /// out what it holds for others — the same line restart_service draws

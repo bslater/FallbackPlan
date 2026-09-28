@@ -356,8 +356,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// the field, and a pre-1.40 service never sends it, which a client reads
     /// as "the archive recorded none", as it could not have.
     /// </para>
+    /// <para>
+    /// 1.41 adds `acknowledge_replica_claim` and `claim_awaiting_acknowledgement`
+    /// on each `replica_attributions` row (FR-DR-005). A claim that moves a
+    /// replica stored here is held: the claimant reads it at once, and its
+    /// retention instructions are refused, deleting nothing, until this
+    /// machine's owner acknowledges the claim with the new command. The
+    /// command is owner-only and local, like `reattribute_replica` beside it.
+    /// The flag is additive with a false default. A pre-1.41 client ignores
+    /// it, and a pre-1.41 service never sends it, which is true of a service
+    /// that never held a claim.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 40);
+    public static ContractVersion Current { get; } = new(1, 41);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

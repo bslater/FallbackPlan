@@ -7,7 +7,10 @@ namespace FallbackPlan.Web.Tests;
 /// the Re-point control renders for the Owner alone and only on a replica
 /// its owner cannot claim with the passphrase, the dialog offers only
 /// devices that store here behind a confirm word, and the go-handler sends
-/// <c>reattribute_replica</c> and nothing else.
+/// <c>reattribute_replica</c> and nothing else. A claim held for this
+/// machine's operator (FR-DR-005) shows on its row, and its acknowledgement
+/// renders beside the row and beside the claim's notice, for the Owner
+/// alone, behind a confirm word, sending <c>acknowledge_replica_claim</c>.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleAdminScriptTests"/>: no browser, the script's own
@@ -92,5 +95,61 @@ public sealed class ConsolePairingScriptTests
         Assert.Contains("repositoryId:", go, StringComparison.Ordinal);
         Assert.Contains("fingerprint:", go, StringComparison.Ordinal);
         Assert.DoesNotContain("unpair", go, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void AHeldClaim_ShowsOnItsRow_AndItsAcknowledgementIsForTheOwnerAlone()
+    {
+        // FR-DR-005: a replica a claim moved is held — readable by the
+        // claimant, not deletable — until this machine's operator
+        // acknowledges the claim. The row says so, and the acknowledgement
+        // sits beside it.
+        var body = FunctionBody(AppJs(), "renderConfigBody");
+
+        Assert.Contains("row.claimAwaitingAcknowledgement ?", body, StringComparison.Ordinal,
+            "a held claim must show on its row, where the operator looks at what is stored here");
+        Assert.Contains("data-action=\"claim-ack-open\"", body, StringComparison.Ordinal);
+        Assert.Contains("signedInRole === \"Owner\" && row.claimAwaitingAcknowledgement", body, StringComparison.Ordinal,
+            "the service refuses anyone but the Owner, so the button renders for the Owner alone, and only on a "
+            + "claim that is held");
+    }
+
+    [TestMethod]
+    public void TheClaimsNotice_CarriesTheAcknowledgement_BesideItsOwnDismissal()
+    {
+        // The notice a claim raises asks for a decision, and its own
+        // Acknowledge only dismisses it — so the decision renders beside it,
+        // where the operator reads the question.
+        var body = FunctionBody(AppJs(), "renderNotices");
+
+        Assert.Contains("notice.key?.startsWith(\"replica-claimed:\")", body, StringComparison.Ordinal);
+        Assert.Contains("data-action=\"claim-ack-open\"", body, StringComparison.Ordinal);
+        Assert.Contains("S.signedInRole === \"Owner\" && notice.key?.startsWith(\"replica-claimed:\")", body,
+            StringComparison.Ordinal, "the same Owner-only rule as the row's button");
+    }
+
+    [TestMethod]
+    public void TheAcknowledgement_IsTyped_AndSaysWhatItReleases()
+    {
+        var open = ActionBody(AppJs(), "claim-ack-open");
+
+        Assert.Contains("data-word=\"acknowledge\"", open, StringComparison.Ordinal,
+            "letting whoever proved the passphrase delete from somebody's last copy is typed, never one-clicked");
+        Assert.Contains("data-enables=\"claim-ack-go\"", open, StringComparison.Ordinal);
+        Assert.Contains("delete", open, StringComparison.Ordinal,
+            "the dialog must say that deleting is what acknowledging releases");
+        Assert.Contains("passphrase may be in the wrong hands", open, StringComparison.Ordinal,
+            "the dialog must say what a claim nobody expected means, and that cancelling is the answer to it");
+    }
+
+    [TestMethod]
+    public void TheAcknowledgementGo_SendsTheVerbAndNothingElse()
+    {
+        var go = ActionBody(AppJs(), "claim-ack-go");
+
+        Assert.Contains("command: \"acknowledge_replica_claim\"", go, StringComparison.Ordinal);
+        Assert.Contains("repositoryId:", go, StringComparison.Ordinal);
+        Assert.DoesNotContain("acknowledge_notice", go, StringComparison.Ordinal,
+            "the service resolves the claim's notice itself; the console dismissing it too would be a second write");
     }
 }

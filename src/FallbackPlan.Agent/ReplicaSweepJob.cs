@@ -49,18 +49,12 @@ internal static class ReplicaSweepJob
             JobLane.Transfer,
             userInitiated,
             $"verify {set.Name} -> {destinationName}",
-            async token =>
-            {
-                try
-                {
-                    await RunAsync(runtime, set, destinationName, (ulong)now.ToUnixTimeMilliseconds(), token)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    completion.TrySetResult();
-                }
-            }));
+            async token => await RunAsync(runtime, set, destinationName, (ulong)now.ToUnixTimeMilliseconds(), token)
+                .ConfigureAwait(false),
+            // As the pair's sync is: answered once the queue has let the
+            // segment's identity go, so the next segment can be asked for at
+            // once.
+            OnSettled: () => completion.TrySetResult()));
 
         return queued ? completion.Task : null;
     }

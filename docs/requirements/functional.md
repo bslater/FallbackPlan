@@ -117,18 +117,22 @@ The recovery kit above answers the case where the *store* survives and the machi
 | FR-DR-006 **[new]** | The repository shall record, with every publication, the backup set's own retention policy beside its shape (FR-MAN-018), so that a set re-declared from its archive deletes by the policy it was captured under. A retention override the set declares for one destination shall not be recorded, because it names the destination (FR-DEST-006). | A service run's newest policy manifest carries the set's retention, and a set that defers retention records none; adopting the archive on a machine with no configuration re-declares the set with that retention and reports it; a destination's override does not come back. |
 | FR-DR-009 **[new]** | A recovered configuration shall be presented for confirmation before it takes effect, with each root's recorded path shown as a hint and flagged where it does not resolve on this machine. | Reconstruction cannot complete without confirming the roots; a recorded path that does not exist is reported rather than captured from, and the retention policy is shown before it can delete anything. |
 
-FR-DR-005 and FR-DR-009 are **unbuilt**, and deliberately so. They are the two properties of the
-disaster-recovery review that the claim ceremony this repository *did* build does
-not have. Nothing today stops a successful claimant issuing deletions: the
-refusals that exist are the reclaim-signature ones of
+FR-DR-005 and FR-DR-009 were left **unbuilt**, and deliberately so. They are the two properties of the
+disaster-recovery review that the claim ceremony this repository *did* build did
+not have. **FR-DR-005 is now built** ([ADR-0053 Amendment 4](../adr/0053-peer-claim-and-configuration-recovery.md#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it)):
+a claim that moves an attribution is held, the destination raises a notice, and
+the claimant's retention instructions are refused, deleting nothing, until the
+destination's operator acknowledges the claim. That refusal answers a
+different question from the reclaim-signature ones of
 [ADR-0055](../adr/0055-reclaim-authority.md) and
-[ADR-0059](../adr/0059-session-bound-deletion-authority.md), which answer a
-different question — who signed the instruction, not whether the destination's
-operator has acknowledged who is now asking. And a recovered configuration is
-reported and then acted on rather than confirmed first; `Api/Results.cs` says so
-in as many words, "reported, not refused". Neither has a proof obligation yet,
-because the proof page tracks invariants the product claims and it does not yet
-claim these.
+[ADR-0059](../adr/0059-session-bound-deletion-authority.md): not who signed the
+instruction, but whether the destination's operator has acknowledged who is
+now asking, and the claimant holds the key that signs. FR-DR-009 is still
+unbuilt: a recovered configuration is reported and then acted on rather than
+confirmed first, and `Api/Results.cs` says so in as many words, "reported, not
+refused". FR-DR-005 has a proof obligation now that the product claims it;
+FR-DR-009 has none, because the proof page tracks invariants the product
+claims and it does not yet claim this one.
 
 **FR-DR-006 arrived with its work.** The review also found that the repository
 did not carry the set's **retention policy** as part of its recorded shape, so a

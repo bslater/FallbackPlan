@@ -132,6 +132,44 @@ setting is held by reading it back from the engine:
 `Repository.Tests/Catalogue/CatalogueTests` fails if the catalogue opens
 with anything but WAL and `NORMAL`.
 
+## Amendment 3 (2026-09) — the catalogue's connections are not pooled
+
+Microsoft.Data.Sqlite pools connections by default, and the catalogue took
+the default. The pool has a race. When it hands out a connection it marks
+the connection active before it records who holds it, and it counts a
+connection that is active with nobody holding it as leaked. A pool clear
+that lands between those two writes reclaims the connection it has just
+handed out and disposes its handle, and the caller's next command fails on
+a disposed handle. The race is in 10.0.10, which this repository pins, and
+in 10.0.12, the newest release. The library's 10.0 branch has swapped the
+two writes, and no release carries that yet.
+
+This process clears pools often, and every clear reaches every pool in it.
+The service cleared them itself so that it could delete a catalogue file a
+pooled connection still held: when a restore source closed, when a
+catalogue was recreated for another repository, and when an adoption
+rebuilt one. The service also opens catalogues from many operations at
+once. Where the victim is a restore drill, nothing is said at all:
+`Agent/RecoveryDrillJob` treats a disposed object as the runtime shutting
+down and records no outcome. That is the likeliest reading of a drill in CI
+that left no trace. The race itself was caught where it cannot hide, as a
+catalogue open that failed outright.
+
+The catalogue now opens its connections with pooling off. A connection that
+belongs to no pool is out of reach of any clear, and it releases its file
+when it is disposed, which is all the clears were for, so the service no
+longer makes them. Nothing measurable was given up. On the container this
+was measured in, 3,000 opens of one catalogue, each with a query and a
+dispose, cost 537 to 614 µs apiece unpooled and 546 to 625 µs pooled,
+because every open already runs the pragmas and the compatibility check.
+Windows was not measured.
+
+`Repository.Tests/Catalogue/CataloguePoolingTests` holds this. It opens
+catalogues on four threads while two others clear every pool in the
+process. With pooling on it failed three runs of three within about two
+seconds, after 2,242 to 2,898 clean opens. With pooling off it runs its full
+five seconds clean.
+
 ## Status history
 
 | Date | Status | Note |
@@ -140,3 +178,4 @@ with anything but WAL and `NORMAL`.
 | 2026-08 | Accepted | Built and held to: `LocalStateSeparationTests` deletes the catalogue and asserts device identity and configuration survive, which is the whole claim. Nothing about the three-way split awaits a later phase. |
 | 2026-08 | Accepted (amended) | Amendment 1: destinations are configuration, sync state and notices are sacrificial journals beside `jobs.json` ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-09 | Accepted (amended) | Amendment 2: the catalogue's commits are atomic but no longer flushed one by one, so a power loss can take the newest of them and leave it behind the store, which costs a rewrite. Set in `Repository.Catalogue/Catalogue`, read back from SQLite by `CatalogueTests`. |
+| 2026-09 | Accepted (amended) | Amendment 3: the catalogue's connections are not pooled, so a pool clear anywhere in the process cannot dispose one under the operation that opened it, and the service no longer clears pools to delete a catalogue file. Set in `Repository.Catalogue/Catalogue`, held by `CataloguePoolingTests`. |

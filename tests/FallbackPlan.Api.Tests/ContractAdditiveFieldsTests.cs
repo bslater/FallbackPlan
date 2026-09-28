@@ -160,6 +160,34 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheClaimAcknowledgementWireNames_AreThePublishedOnes()
+    {
+        // Contract 1.41 (FR-DR-005): a replica a claim moved is held until
+        // this destination's operator acknowledges it, and the listing says
+        // which. The command names the replica and nothing else; the flag is
+        // additive with a false default, which a pre-1.41 service never sent
+        // because it never held a claim.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new ReplicaAttributionsResult(
+            [
+                new ReplicaAttributionDescriptor(
+                    new string('c', 32), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "laptop", true, ClaimAwaitingAcknowledgement: true),
+            ]),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"claim_awaiting_acknowledgement\":true", listed, StringComparison.Ordinal);
+
+        var older = (ReplicaAttributionsResult)JsonSerializer.Deserialize<ServiceResult>(
+            $$"""{"result":"replica_attributions","attributions":[{"repository_id":"{{new string('c', 32)}}","owner_fingerprint":"ABCDEF","owner_label":null,"claimable":true}]}""",
+            FrameCodec.SerializerOptions)!;
+        Assert.IsFalse(Assert.ContainsSingle(older.Attributions).ClaimAwaitingAcknowledgement);
+
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new AcknowledgeReplicaClaimCommand(new string('c', 32)), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"acknowledge_replica_claim\"", command, StringComparison.Ordinal);
+        Assert.Contains("\"repository_id\":\"cccc", command, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheReceiptsWireNames_AreThePublishedOnes()
     {
         // Contract 1.33 (ADR-0063, ADR-0064): the receipts filed here, both

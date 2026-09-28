@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.40
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.41
 
 ---
 
@@ -41,12 +41,12 @@ touches a byte already written.
   system; the remote binding by pinned pairing; person-identity rides inside
   either as a session ([ADR-0045](../../docs/adr/0045-client-authentication.md)).
   Some verbs are local-only (`set_log_level`, `provision_installation`,
-  `restart_service`, `list_replica_attributions`, `reattribute_replica`) and
-  say so when refused.
+  `restart_service`, `list_replica_attributions`, `reattribute_replica`,
+  `acknowledge_replica_claim`) and say so when refused.
 
 ## Verbs, by area
 
-The register as of 1.40 — 56 commands. One line each; parameters, results
+The register as of 1.41 — 57 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -96,7 +96,10 @@ descriptor).
 `list_pairing_invites` / `revoke_pairing_invite` / `pair_with_invite`,
 `unpair` (ADR-0030/0039); `list_replica_attributions` /
 `reattribute_replica` (1.33, ADR-0053 §3 — the operator's view of the
-replicas stored here, and the override for one the passphrase cannot claim).
+replicas stored here, and the override for one the passphrase cannot claim);
+`acknowledge_replica_claim` (1.41, FR-DR-005 — the operator accepting a
+claim that moved a replica here, which until then may read it and may not
+delete from it).
 
 **Notices and diagnostics** — `list_notices` / `acknowledge_notice`
 (ADR-0039), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043);
@@ -146,3 +149,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.38 | `upgrade_set_format {set_name}` ([ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md)): one set's repository moved to the latest format this build writes, answering `configuration_change` so no result shape moves. The move is an **appended signed record**, not a rewritten descriptor: a destination seeds a descriptor only if absent and a peer keeps the copy it has, so a rewrite would carry the source alone and leave every copy claiming the older format over newer blobs. It takes no version — the service upgrades to the one version it writes, so a client cannot ask for a format this build could not read back. Refused by name for a set already at that version, for a set with no archive yet (one created here is born at the latest format), and while a run holds the set. What it changes is what the set **seals next**: everything already sealed stays exactly as it is, and the record reaches each destination on the next reconciling pass. Additive |
 | 1.39 | `background_window` on `status` ([ADR-0069](../../docs/adr/0069-the-background-window.md)): the configured window, whether background work may start right now, and when that next changes. The window is the first of NFR-PERF-013's four named limits to exist and it can hold every backup on an installation for hours; before this the only way to find out was the service's log, which is not where "why did nothing run last night" gets asked. One nullable descriptor rather than three loose fields, so a client tests "is there a window" once. Null from a service with no window configured **and** from one older than 1.39 — deliberately the same answer, because a client does nothing different in the two cases and an absent window has always meant always open. Reporting only: the window is edited in the configuration file, as `max_concurrent_backups` is, and a console control for it is owed. The state is evaluated at the instant `observed_at` names, from the same parsed window the scheduler's pass uses, so a client cannot catch the two disagreeing across a boundary. Additive |
 | 1.40 | `retention` on `archive_adopted` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 1, FR-DR-006): the set's own retention policy as the adopted set is now configured, taken from the archive's newest policy manifest, which records it from this version on. The same descriptor the set listing carries, null when the set defers retention; a destination's override is never in it, because it names the destination (FR-DEST-006). Additive with a null default: a pre-1.40 service never sends it, which a client reads as "the archive recorded none" |
+| 1.41 | `acknowledge_replica_claim {repository_id}` and `claim_awaiting_acknowledgement` on each `replica_attributions` row (FR-DR-005, [peer-protocol 06 §3](../peer-protocol/06-retention.md#3-what-the-spoke-validates)): a claim that moves a replica stored here is held — the claimant reads it at once, and its retention instructions are refused, deleting nothing, until this machine's owner acknowledges the claim. Owner-only and local callers only, like `reattribute_replica`; a replica with nothing held answers `configuration_change` saying nothing changed. The flag is additive with a false default, which a pre-1.41 service, never having held a claim, would have sent had it known the field. |

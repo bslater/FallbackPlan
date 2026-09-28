@@ -109,6 +109,7 @@ public static class FanOut
             runtime.Configuration.FindDestination(destinationName));
 
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? failure = null;
         var accepted = runtime.Queue.Enqueue(new QueuedJob(
             JobIdFor(set.Id, destinationName),
             JobLane.Transfer,
@@ -120,15 +121,29 @@ public static class FanOut
                 {
                     await RunAsync(runtime, set, destinationName, (ulong)now.ToUnixTimeMilliseconds(), cancellationToken)
                         .ConfigureAwait(false);
-                    completion.SetResult();
                 }
                 catch (Exception exception)
                 {
-                    completion.SetException(exception);
+                    failure = exception;
                     throw;
                 }
             },
-            Priority: priority));
+            Priority: priority,
+            // Answered once the queue has let the pair go, not as the run
+            // returns: whoever is told this sync is over may ask for the
+            // pair's next one at once, and must be queued rather than
+            // coalesced into the run that has just ended.
+            OnSettled: () =>
+            {
+                if (failure is null)
+                {
+                    completion.SetResult();
+                }
+                else
+                {
+                    completion.SetException(failure);
+                }
+            }));
 
         return accepted ? completion.Task : null;
     }

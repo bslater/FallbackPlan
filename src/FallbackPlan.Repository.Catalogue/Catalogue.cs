@@ -104,7 +104,6 @@ public sealed class Catalogue : IDisposable
         if (!IsCompatible(connection, repositoryId))
         {
             connection.Dispose();
-            SqliteConnection.ClearAllPools();
             File.Delete(path);
             connection = Connect(path);
             disposition = "discarded and recreated — schema version or repository identity did not match";
@@ -986,10 +985,16 @@ public sealed class Catalogue : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
 
+        // Unpooled. Microsoft.Data.Sqlite's pool marks a connection it hands
+        // out active before it records who holds it, and a pool clear that
+        // lands between the two disposes the connection under the caller
+        // (ADR-0010 Amendment 3). An unpooled connection is in no pool for a
+        // clear to reach, and lets go of its file when disposed.
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
         }.ToString());
         connection.Open();
 
