@@ -224,43 +224,135 @@ public sealed class LocalBindingTests : IDisposable
         // only then acknowledges its hello — so the client writes its watch
         // frame to a service that has already gone, every time, and the write
         // fails as it does against one that stopped.
-        var address = LocalEndpoint.AddressFor(_state);
-        var accepted = new HelloAcknowledgementFrame(ContractVersion.Current.ToString(), Accepted: true, Message: null);
-        using var standIn = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        standIn.Bind(new UnixDomainSocketEndPoint(address));
-        standIn.Listen();
-        try
+        using var standIn = ListenAsStandIn();
+        var serving = ServeAsStandIn(standIn, async (watch, stream) =>
         {
-            var serving = Task.Run(
-                async () =>
-                {
-                    using var command = await standIn.AcceptAsync(Timeout);
-                    await using var commandStream = new NetworkStream(command);
-                    await FrameCodec.ReadAsync(commandStream, Timeout);
-                    await FrameCodec.WriteAsync(commandStream, accepted, Timeout);
+            watch.Shutdown(SocketShutdown.Receive);
+            await FrameCodec.WriteAsync(stream, Accepted, Timeout);
+        });
 
-                    using var watch = await standIn.AcceptAsync(Timeout);
-                    await using var watchStream = new NetworkStream(watch);
-                    await FrameCodec.ReadAsync(watchStream, Timeout);
-                    watch.Shutdown(SocketShutdown.Receive);
-                    await FrameCodec.WriteAsync(watchStream, accepted, Timeout);
-                },
-                Timeout);
+        Assert.AreEqual(0, await CountWatchedAsync());
+        await serving;
+    }
 
-            await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
-            var delivered = 0;
-            await foreach (var _ in client.WatchAsync(Timeout))
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix,
+        "the service is a stand-in on a Unix socket, which is what lets it stop at a chosen byte")]
+    [DataRow("acknowledgement")]
+    [DataRow("progress")]
+    public async Task Watch_WhenTheServiceStopsPartWayThroughAFrame_EndsRatherThanThrowing(string cutShort)
+    {
+        // A service that stops while it is writing leaves the watch a frame
+        // whose length prefix promised more than the connection delivered.
+        // That is the connection ending, whether it falls on the hello's
+        // acknowledgement or on a progress frame later, and the watch ends as
+        // it does on any other stopped service.
+        using var standIn = ListenAsStandIn();
+        var serving = ServeAsStandIn(standIn, async (_, stream) =>
+        {
+            if (cutShort == "acknowledgement")
             {
-                delivered++;
+                await WriteCutShortAsync(stream, Accepted);
+                return;
             }
 
-            Assert.AreEqual(0, delivered);
-            await serving;
-        }
-        finally
+            await FrameCodec.WriteAsync(stream, Accepted, Timeout);
+            await FrameCodec.ReadAsync(stream, Timeout);
+            await WriteCutShortAsync(
+                stream,
+                new ProgressFrame(new JobProgressEvent(1, new JobProgress("job-1", JobState.Scanning, 1, 0, 0, 0, 0, 0))));
+        });
+
+        Assert.AreEqual(0, await CountWatchedAsync());
+        await serving;
+    }
+
+    [TestMethod]
+    [DataRow(2, DisplayName = "in the length prefix")]
+    [DataRow(4, DisplayName = "right after the length prefix")]
+    [DataRow(10, DisplayName = "in the payload")]
+    public async Task ReadFrame_WhenTheStreamEndsPartWayThroughAFrame_SaysTheStreamEnded(int bytesDelivered)
+    {
+        // A connection that closes inside a frame has ended; it has not sent
+        // something that is not a frame. Readers end on the one and report
+        // the other, so the two must not share an exception.
+        using var whole = new MemoryStream();
+        await FrameCodec.WriteAsync(whole, Accepted, Timeout);
+        using var cutShort = new MemoryStream(whole.ToArray()[..bytesDelivered]);
+
+        await Assert.ThrowsExactlyAsync<EndOfStreamException>(() => FrameCodec.ReadAsync(cutShort, Timeout).AsTask());
+    }
+
+    [TestMethod]
+    public async Task ReadFrame_WhoseBytesAreNotAFrame_IsStillInvalidData()
+    {
+        // The other side of the distinction: a whole frame that does not
+        // decode is the peer's error, reported as one, never read as an end.
+        using var garbage = new MemoryStream([0, 0, 0, 3, (byte)'{', (byte)'{', (byte)'{']);
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => FrameCodec.ReadAsync(garbage, Timeout).AsTask());
+    }
+
+    private static readonly HelloAcknowledgementFrame Accepted =
+        new(ContractVersion.Current.ToString(), Accepted: true, Message: null);
+
+    /// <summary>A stand-in service listening on this state directory's socket.</summary>
+    /// <remarks>
+    /// The socket file is removed at cleanup: on macOS the address can fall
+    /// back to a short path under <c>/tmp</c>, outside the state directory.
+    /// </remarks>
+    private Socket ListenAsStandIn()
+    {
+        _standInAddress = LocalEndpoint.AddressFor(_state);
+        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        socket.Bind(new UnixDomainSocketEndPoint(_standInAddress));
+        socket.Listen();
+        return socket;
+    }
+
+    private string? _standInAddress;
+
+    /// <summary>
+    /// Answers the command connection as a service does, then hands the watch
+    /// connection, its hello already read, to <paramref name="onWatch"/>, and
+    /// closes it when that returns.
+    /// </summary>
+    private Task ServeAsStandIn(Socket standIn, Func<Socket, NetworkStream, Task> onWatch) =>
+        Task.Run(
+            async () =>
+            {
+                using var command = await standIn.AcceptAsync(Timeout);
+                await using var commandStream = new NetworkStream(command);
+                await FrameCodec.ReadAsync(commandStream, Timeout);
+                await FrameCodec.WriteAsync(commandStream, Accepted, Timeout);
+
+                using var watch = await standIn.AcceptAsync(Timeout);
+                await using var watchStream = new NetworkStream(watch);
+                await FrameCodec.ReadAsync(watchStream, Timeout);
+                await onWatch(watch, watchStream);
+            },
+            Timeout);
+
+    /// <summary>Connects, watches to the end, and says how many events arrived.</summary>
+    private async Task<int> CountWatchedAsync()
+    {
+        await using var client = await LocalServiceClient.ConnectAsync(_state, "test", Timeout);
+        var delivered = 0;
+        await foreach (var _ in client.WatchAsync(Timeout))
         {
-            File.Delete(address);
+            delivered++;
         }
+
+        return delivered;
+    }
+
+    /// <summary>Writes the length prefix and half the payload of <paramref name="frame"/>.</summary>
+    private async Task WriteCutShortAsync(Stream stream, WireFrame frame)
+    {
+        using var whole = new MemoryStream();
+        await FrameCodec.WriteAsync(whole, frame, Timeout);
+        var bytes = whole.ToArray();
+        await stream.WriteAsync(bytes.AsMemory(0, 4 + ((bytes.Length - 4) / 2)), Timeout);
     }
 
     [TestMethod]
@@ -390,6 +482,10 @@ public sealed class LocalBindingTests : IDisposable
         try
         {
             Directory.Delete(_state, recursive: true);
+            if (_standInAddress is not null)
+            {
+                File.Delete(_standInAddress);
+            }
         }
         catch (IOException)
         {
