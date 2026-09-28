@@ -146,26 +146,72 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
 
     /// <inheritdoc/>
     /// <remarks>
+    /// <para>
+    /// The connection is opened and the watch registered here, at the call,
+    /// as <see cref="LocalServiceClient.WatchAsync"/> does, rather than in
+    /// the streaming body. An async iterator runs none of its body until
+    /// something pulls it, so anything the service reported before the first
+    /// pull would be sent to nobody. For the same reason as there, a failure
+    /// to connect still surfaces from the first pull, and a caller that asks
+    /// to watch and never enumerates leaves the connection open until
+    /// finalisation.
+    /// </para>
+    /// <para>
     /// A watch belongs to a console that has already connected, so a service
     /// it cannot reach, or loses in the handshake or part-way through the
     /// stream, is a service that stopped: the watch ends, as the local
     /// binding's does, and a caller redials on the end. A throw would reach
     /// that caller as a failure instead. A refusal of the watch's own
     /// connection ends it too, as a refused hello ends the local binding's
-    /// watch; connecting again is what reports the refusal.
+    /// watch; connecting again is what reports the refusal. An answer from a
+    /// service other than the pinned one is different: a changed identity is
+    /// a hard failure (FR-SVC-004), so it reaches the caller.
+    /// </para>
     /// </remarks>
-    public async IAsyncEnumerable<JobProgressEvent> WatchAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken)
+    {
+        var opening = OpenWatchAsync(cancellationToken);
+        return StreamAsync(opening, cancellationToken);
+    }
+
+    /// <summary>
+    /// Opens the watch's connection and completes its handshake: the peer
+    /// session, the command contract's hello, and the watch frame.
+    /// </summary>
+    private async Task<(PeerTlsConnection Connection, Stream Stream)> OpenWatchAsync(
+        CancellationToken cancellationToken)
     {
         // A watch takes its own connection and its own full peer handshake: a
         // stream and a command exchange have different lifetimes, exactly as on
         // the local binding.
-        PeerTlsConnection connection;
-        PeerSession session;
+        var (connection, session) = await OpenSessionAsync(
+            _host, _port, _keypair, _grants, _expected, cancellationToken).ConfigureAwait(false);
+
         try
         {
-            (connection, session) = await OpenSessionAsync(
-                _host, _port, _keypair, _grants, _expected, cancellationToken).ConfigureAwait(false);
+            await HelloAsync(session.Stream, "fallbackplan-cli-watch", cancellationToken).ConfigureAwait(false);
+            await FrameCodec.WriteAsync(session.Stream, new WatchFrame(_serviceSession), cancellationToken)
+                .ConfigureAwait(false);
+            return (connection, session.Stream);
+        }
+        catch
+        {
+            // The connection is this method's until the stream takes it, so a
+            // handshake that throws closes it here.
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async IAsyncEnumerable<JobProgressEvent> StreamAsync(
+        Task<(PeerTlsConnection Connection, Stream Stream)> opening,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        PeerTlsConnection connection;
+        Stream stream;
+        try
+        {
+            (connection, stream) = await opening.ConfigureAwait(false);
         }
         catch (Exception exception) when (IsUnreachable(exception))
         {
@@ -174,23 +220,12 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
 
         await using (connection.ConfigureAwait(false))
         {
-            try
-            {
-                await HelloAsync(session.Stream, "fallbackplan-cli-watch", cancellationToken).ConfigureAwait(false);
-                await FrameCodec.WriteAsync(session.Stream, new WatchFrame(_serviceSession), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception exception) when (IsUnreachable(exception))
-            {
-                yield break;
-            }
-
             while (true)
             {
                 WireFrame? frame;
                 try
                 {
-                    frame = await FrameCodec.ReadAsync(session.Stream, cancellationToken).ConfigureAwait(false);
+                    frame = await FrameCodec.ReadAsync(stream, cancellationToken).ConfigureAwait(false);
                 }
                 catch (IOException)
                 {
@@ -211,10 +246,25 @@ public sealed class RemoteServiceClient : IFallbackPlanClient
     /// Whether a failure opening the watch says its service cannot be reached:
     /// nothing listening, the connection closed during the handshake, or a
     /// refusal. These are the failures <see cref="RemotePeer"/> reports as a
-    /// service it could not reach when a console connects.
+    /// service it could not reach when a console connects, less an answer
+    /// from a service other than the pinned one.
     /// </summary>
     private static bool IsUnreachable(Exception exception) =>
-        exception is ServiceConnectionException or IOException or SocketException;
+        exception is IOException or SocketException
+        || (exception is ServiceConnectionException && !IsNotThePinnedService(exception));
+
+    /// <summary>
+    /// Whether this console refused the service that answered because it is
+    /// not the one pinned: a different key, or the pinned key without proof
+    /// of holding it. A refusal the service sent is not this: that is the
+    /// pinned service declining, as a revoked pairing does.
+    /// </summary>
+    private static bool IsNotThePinnedService(Exception exception) =>
+        exception.InnerException is PeerProtocolException
+        {
+            ReceivedFromPeer: false,
+            Reason: PeerRefusalReason.IdentityChanged or PeerRefusalReason.AuthenticationFailed,
+        };
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()

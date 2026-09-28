@@ -14,7 +14,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// that has already connected, so a service the watch cannot reach, loses in
 /// the handshake, or loses part-way through a frame is a service that
 /// stopped. A caller redials on the end; a throw would reach it as a failure
-/// instead.
+/// instead. The exception is an answer from a service other than the one
+/// pinned, which is a hard failure (FR-SVC-004) the caller must hear. And,
+/// as the local watch does, it connects when asked for, so nothing the
+/// service reports before its first pull is lost.
 /// </summary>
 /// <remarks>
 /// The service is a stand-in speaking the real handshake — TLS, the peer
@@ -143,6 +146,132 @@ public sealed class RemoteWatchTests : IDisposable
             }
 
             Assert.AreEqual(cutShort == "progress" ? 1 : 0, await watching);
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_ConnectsWhenCalled_SoProgressReportedBeforeTheFirstPullIsDelivered()
+    {
+        // A watch connects when it is asked for, not when it is first read,
+        // so what the service reports in between is not lost. The stand-in
+        // takes the watch and reports progress before anything has pulled. A
+        // watch that waited for its first pull would not have dialled yet,
+        // and the accept below would wait out the test's timeout instead.
+        var (console, command) = await ConnectAsync();
+        await using (console)
+        await using (command)
+        {
+            var events = console.WatchAsync(Timeout);
+
+            var (connection, stream) = await AcceptSessionAsync();
+            await using (connection)
+            {
+                Assert.IsInstanceOfType<HelloFrame>(await FrameCodec.ReadAsync(stream, Timeout));
+                await FrameCodec.WriteAsync(stream, Accepted, Timeout);
+                Assert.IsInstanceOfType<WatchFrame>(await FrameCodec.ReadAsync(stream, Timeout));
+                await FrameCodec.WriteAsync(stream, Progress, Timeout);
+            }
+
+            var delivered = 0;
+            await foreach (var _ in events)
+            {
+                delivered++;
+            }
+
+            Assert.AreEqual(1, delivered);
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_WhenAnotherServiceAnswersIt_ThrowsTheChangedIdentity()
+    {
+        // The console pinned one service, and a different key answers the
+        // watch's dial. A changed identity is a hard failure (FR-SVC-004), so
+        // it reaches the caller: a watch that ended here would read as a
+        // service that stopped, and the caller would redial into it.
+        var (console, command) = await ConnectAsync();
+        await using (console)
+        await using (command)
+        {
+            var watching = CountWatchedAsync(console);
+
+            using var impostor = PeerKeypair.Generate();
+            var impostorGrants = PeerGrantStore.Open(Path.Combine(_root, "impostor"));
+            impostorGrants.Pin(new PeerGrant(
+                _console.Identity, "console", PeerRole.StoresForUs, PeerTerms.None, 1_722_600_000_000));
+
+            var socket = await _listener.AcceptAsync(Timeout);
+            await using (var connection = await PeerTlsConnection.AcceptAsync(socket, DateTimeOffset.UtcNow, Timeout))
+            {
+                // The console refuses the impostor, whose side of the
+                // handshake fails with it.
+                await Assert.ThrowsAsync<Exception>(() => PeerSessionDriver.AcceptAsync(
+                    connection, impostor, impostorGrants, "impostor", cancellationToken: Timeout).AsTask());
+            }
+
+            var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(() => watching);
+            Assert.IsInstanceOfType<PeerProtocolException>(failure.InnerException, out var refusal);
+            Assert.AreEqual(PeerRefusalReason.IdentityChanged, refusal.Reason);
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_WhenTheAnswerCannotProveItHoldsThePinnedIdentity_Throws()
+    {
+        // Something answers the watch's dial with the pinned service's key
+        // but cannot prove it holds that key: a relay, or a copy of the
+        // public key. It is not the paired service either, and it is the
+        // harder case to spot, so it must not end more quietly than a
+        // different key does.
+        var (console, command) = await ConnectAsync();
+        await using (console)
+        await using (command)
+        {
+            var watching = CountWatchedAsync(console);
+
+            var socket = await _listener.AcceptAsync(Timeout);
+            await using (var connection = await PeerTlsConnection.AcceptAsync(socket, DateTimeOffset.UtcNow, Timeout))
+            {
+                await PeerFrame.WriteAsync(connection.Stream, SessionAuth.Create(_service.Identity), Timeout);
+                await PeerFrame.WriteAsync(
+                    connection.Stream, new SessionAuthProof(new byte[PeerKeypair.SignatureLength]), Timeout);
+
+                // The console's claim, its proof, and then its refusal.
+                while (await PeerFrame.ReadAsync(connection.Stream, Timeout) is { } frame
+                    && frame.Type != PeerMessageType.SessionRefuse)
+                {
+                }
+            }
+
+            var failure = await Assert.ThrowsExactlyAsync<ServiceConnectionException>(() => watching);
+            Assert.IsInstanceOfType<PeerProtocolException>(failure.InnerException, out var refusal);
+            Assert.AreEqual(PeerRefusalReason.AuthenticationFailed, refusal.Reason);
+        }
+    }
+
+    [TestMethod]
+    public async Task Watch_WhenTheServiceHasRevokedThePairing_EndsRatherThanThrowing()
+    {
+        // The other side of that line: the pinned service answers, proves
+        // itself, and refuses. Revocation ends access at once (FR-SVC-004),
+        // and it is the service choosing to, so the watch ends as it does on
+        // any service it cannot have. Connecting again is what reports it.
+        var (console, command) = await ConnectAsync();
+        await using (console)
+        await using (command)
+        {
+            _serviceGrants.Revoke(_console.Identity);
+            var watching = CountWatchedAsync(console);
+
+            var socket = await _listener.AcceptAsync(Timeout);
+            await using (var connection = await PeerTlsConnection.AcceptAsync(socket, DateTimeOffset.UtcNow, Timeout))
+            {
+                var refused = await Assert.ThrowsExactlyAsync<PeerProtocolException>(() => PeerSessionDriver.AcceptAsync(
+                    connection, _service, _serviceGrants, "stand-in", cancellationToken: Timeout).AsTask());
+                Assert.AreEqual(PeerRefusalReason.Revoked, refused.Reason);
+            }
+
+            Assert.AreEqual(0, await watching);
         }
     }
 
