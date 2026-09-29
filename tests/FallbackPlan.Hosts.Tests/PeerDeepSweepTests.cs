@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -21,6 +22,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// and a push only creates. So damage found there is named with the one remedy
 /// that exists — the peer's owner removes the objects, and the next sync sends
 /// them again whole — and the push that sends them is what clears them.
+/// </para>
+/// <para>
+/// A peer gone between syncs is met by the sweep's own dial before any sync
+/// meets it, and is recorded unreachable as the fan-out records one, so the
+/// next pass does not dial it again. One that drops a read stalls the circuit
+/// as a local bad sector does (ADR-0035 Amendment 1).
 /// </para>
 /// <para>
 /// Does not establish FR-VER-007: nothing at a peer is repaired from here.
@@ -215,6 +222,136 @@ public sealed class PeerDeepSweepTests : IDisposable
         Assert.IsGreaterThanOrEqualTo(1, scheduled.Examined);
     }
 
+    [TestMethod]
+    public async Task APeerThatHasGoneAway_IsRecordedUnreachable_KeepsItsCircuit_AndIsNotRedialledEveryPass()
+    {
+        // Gone between syncs: the pair in sync, nothing owed, its challenge
+        // hours off, so no sync will meet the outage for a while. The sweep's
+        // own dial meets it instead — refused at the socket, which is not an
+        // I/O error — and records it as the fan-out records one: unreachable.
+        // So the next pass does not spend the one transfer worker dialling
+        // again; the sync's back-off decides when the peer is next tried, and
+        // the circuit waits where it stopped.
+        WriteRandomSourceFile("docs/large.bin", 8 * 1024 * 1024);
+        await using var runtime = await StartAsync(cadenceDays: 30, transferLimit: "64 KiB/s");
+        await BackUpAsync(runtime);
+
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var open = Row(runtime);
+        Assert.IsNotNull(open.SweepCursor, "the control: a minute at the peer's limit leaves the circuit open");
+        Assert.AreEqual(DestinationSyncState.InSync, open.State, open.LastError);
+
+        await StopPeerAsync();
+        await PassAsync(runtime, start.AddMinutes(1));
+
+        var gone = Row(runtime);
+        Assert.AreEqual(DestinationSyncState.Unavailable, gone.State, "an unreached peer is recorded as the fan-out records one");
+        Assert.IsNotNull(gone.LastError);
+        Assert.AreEqual(open.SweepCursor, gone.SweepCursor, "the circuit resumes where it stopped once the peer is back");
+        Assert.AreEqual(0, gone.SweepStalls, "a peer not reached has not stalled a read");
+        Assert.IsNull(gone.DamagedKeys);
+        Assert.IsFalse(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key.StartsWith("deep-verify-", StringComparison.Ordinal)),
+            "unreached is neither a finding, a refusal nor a stall");
+
+        await PassAsync(runtime, start.AddMinutes(2));
+        var after = Row(runtime);
+        Assert.AreEqual(gone.LastAttemptAt, after.LastAttemptAt, "not dialled again on the next pass");
+        Assert.AreEqual(gone.ConsecutiveFailures, after.ConsecutiveFailures);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_APeerThatHasGoneAway_SaysItCouldNotBeRead_AndCountsNothingAgainstIt()
+    {
+        await using var runtime = await StartAsync(cadenceDays: null);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        await StopPeerAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand(null, "friend", Full: true), Timeout),
+            out var result);
+
+        Assert.AreEqual(0L, result.Damaged, "a replica that could not be read has not been found damaged");
+        var line = Assert.ContainsSingle(result.Lines);
+        Assert.Contains("not deeply verifiable now", line, StringComparison.Ordinal);
+        Assert.Contains("could not be read", line, StringComparison.Ordinal);
+        Assert.AreEqual(
+            DestinationSyncState.InSync, Row(runtime).State,
+            "a person's read records no outage: whether the peer is there is the sync's to say");
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_OneSegmentOfAPeerWithNoCadence_DoesNotPromiseTheSweepResumesIt()
+    {
+        // Nothing sweeps a peer whose operator stated no cadence, so a
+        // person's segment that stops short says what continues it: the next
+        // time a person asks.
+        ReplicaSweepJob.SegmentBudget = 1;
+        await using var runtime = await StartAsync(cadenceDays: null);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand(null, "friend", Full: false), Timeout),
+            out var result);
+
+        var line = Assert.ContainsSingle(result.Lines);
+        Assert.Contains("more remain", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("the sweep resumes", line, StringComparison.Ordinal, "nothing sweeps a peer with no cadence");
+        Assert.Contains("verify-destination", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_APeerWithNoCadence_WhoseBlobWillNotRead_DoesNotPromiseTheSweepTriesAgain()
+    {
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(cadenceDays: null);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        unreadable = BlobKeys(await PeerReplicaAsync())[0];
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand(null, "friend", Full: true), Timeout),
+            out var result);
+
+        Assert.AreEqual(0L, result.Damaged);
+        var line = Assert.ContainsSingle(result.Lines);
+        Assert.Contains(unreadable, line, StringComparison.Ordinal);
+        Assert.DoesNotContain("the sweep tries it again", line, StringComparison.Ordinal, "nothing sweeps a peer with no cadence");
+        Assert.Contains("verify-destination", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task APeerBlobThatWillNotRead_StallsTheCircuitUnderBackOff_AsALocalOneDoes()
+    {
+        // Across the wire as off a disk: the segment stops at the blob, what
+        // it read stands, and the retry waits the sync's back-off instead of
+        // redialling the peer on every pass to meet the same blob.
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await SyncAsync(runtime);
+        unreadable = BlobKeys(await PeerReplicaAsync())[0];
+
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+
+        var stalled = Row(runtime);
+        Assert.AreEqual(1, stalled.SweepStalls);
+        Assert.AreEqual(unreadable, stalled.SweepStalledOn);
+        Assert.AreNotEqual(DestinationSyncState.Failed, stalled.State, "a blob that would not be read has not been found altered");
+
+        await PassAsync(runtime, start.AddMinutes(1));
+        Assert.AreEqual(stalled.SweepStalledAt, Row(runtime).SweepStalledAt, "not redialled on the next pass");
+    }
+
     public void Dispose()
     {
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -275,6 +412,29 @@ public sealed class PeerDeepSweepTests : IDisposable
         await pass.Transfers.WaitAsync(Timeout);
         await pass.Drills.WaitAsync(Timeout);
     }
+
+    /// <summary>One sync and no sweep, so a test can choose what the sweep will meet.</summary>
+    private async Task SyncAsync(ServiceRuntime runtime)
+    {
+        var sync = FanOut.Enqueue(
+            runtime, runtime.Configuration.BackupSets.Single(), "friend", DateTimeOffset.Now, userInitiated: true);
+        Assert.IsNotNull(sync, "nothing else was syncing, so the sync cannot have been coalesced away");
+        await sync.WaitAsync(Timeout);
+        Assert.AreEqual(DestinationSyncState.InSync, Row(runtime).State, Row(runtime).LastError);
+    }
+
+    /// <summary>The peer goes away: its listener closes, so a dial is refused at the socket.</summary>
+    private async Task StopPeerAsync()
+    {
+        await _listener!.DisposeAsync();
+        _listener = null;
+    }
+
+    /// <summary>The replica's blob keys, in the order a circuit reads them.</summary>
+    private static List<string> BlobKeys(string replicaRoot) =>
+        [.. Directory.GetFiles(Path.Combine(replicaRoot, "blobs"), "*", SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(replicaRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Order(StringComparer.Ordinal)];
 
     private static string PathOf(string root, string key) =>
         Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar));
