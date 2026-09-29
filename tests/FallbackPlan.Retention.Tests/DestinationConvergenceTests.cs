@@ -580,8 +580,8 @@ public sealed class DestinationConvergenceTests : IDisposable
     [TestMethod]
     public async Task VerifyDestinationVerb_APeerDestination_SaysWhyItCannotRatherThanSkipping()
     {
-        // A peer replica lives behind the wire with no store to read. Silently
-        // reporting nothing would read as "checked and fine".
+        // A peer's replica is sampled at sync time, not re-read in full.
+        // Silently reporting nothing would read as "checked and fine".
         var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
         await BackUpAsync(day1);
         AddPeerDestination();

@@ -28,8 +28,34 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 internal static class ReplicaSweepJob
 {
-    /// <summary>Days between segments when a destination states no preference.</summary>
+    /// <summary>
+    /// Days between one finished circuit and the start of the next, when a
+    /// destination states no preference. A circuit that has begun is carried
+    /// on every pass until it closes; the interval rests between circuits,
+    /// never between segments (ADR-0035 Amendment 1).
+    /// </summary>
     public const int DefaultIntervalDays = 7;
+
+    /// <summary>
+    /// How long a background segment of a limited destination reads for: a
+    /// segment holds the process's one transfer worker while it reads, so
+    /// under a limit it reads about this long at the limit's rate.
+    /// </summary>
+    private const long SegmentSeconds = 60;
+
+    /// <summary>
+    /// Blobs per segment. A test hook scoped to the flow that sets it, as
+    /// <see cref="FanOut.ReadBackBudget"/> is: a runtime started after it is
+    /// set reads its segments at this size, and one anywhere else still reads
+    /// the default.
+    /// </summary>
+    internal static int SegmentBudget
+    {
+        get => SegmentBudgetInFlow.Value ?? ReplicaSweep.DefaultBudget;
+        set => SegmentBudgetInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<int?> SegmentBudgetInFlow = new();
 
     /// <summary>The job identity, distinct from the pair's sync job so the two never displace each other.</summary>
     public static string JobIdFor(string setId, string destinationName) =>
@@ -69,7 +95,7 @@ internal static class ReplicaSweepJob
     /// logic rather than a second implementation, so the two cannot disagree
     /// about what counts as damage.
     /// </remarks>
-    public static async Task<(int Examined, int Damaged)> RunFullAsync(
+    public static async Task<(int Examined, int Damaged, int Repaired)> RunFullAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
@@ -78,6 +104,7 @@ internal static class ReplicaSweepJob
     {
         var examined = 0;
         var damaged = 0;
+        var repaired = 0;
 
         // Bounded by the number of segments a circuit can take, not by trust
         // that one will close: a cursor that somehow failed to advance must
@@ -91,6 +118,7 @@ internal static class ReplicaSweepJob
                 .ConfigureAwait(false);
             examined += outcome.Examined;
             damaged += outcome.Damaged;
+            repaired += outcome.Repaired;
 
             if (outcome.CompletedCircuit || outcome.Cursor is null || outcome.Cursor == previousCursor)
             {
@@ -100,7 +128,7 @@ internal static class ReplicaSweepJob
             previousCursor = outcome.Cursor;
         }
 
-        return (examined, damaged);
+        return (examined, damaged, repaired);
     }
 
     /// <summary>Reads the next segment and records what it found.</summary>
@@ -113,7 +141,7 @@ internal static class ReplicaSweepJob
     /// through the destination's transfer limit (NFR-PERF-013, ADR-0074).
     /// </param>
     /// <param name="cancellationToken">Cancels the segment.</param>
-    public static async Task<(int Examined, int Damaged, string? Cursor, bool CompletedCircuit)> RunAsync(
+    public static async Task<(int Examined, int Damaged, int Repaired, string? Cursor, bool CompletedCircuit)> RunAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
@@ -124,13 +152,13 @@ internal static class ReplicaSweepJob
         if (runtime.Configuration.FindDestination(destinationName) is not
             { Kind: DestinationKind.LocalPath } destination)
         {
-            return (0, 0, null, false);
+            return (0, 0, 0, null, false);
         }
 
         var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
         if (archive is null)
         {
-            return (0, 0, null, false);
+            return (0, 0, 0, null, false);
         }
 
         var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
@@ -139,7 +167,7 @@ internal static class ReplicaSweepJob
             // Unreachable right now. Fan-out owns saying so — its shortfall and
             // availability signals already cover a replica that has gone, and
             // a second voice saying it would be a second notice to acknowledge.
-            return (0, 0, null, false);
+            return (0, 0, 0, null, false);
         }
 
         // The set gate, for the same reason fan-out takes it: a retention apply
@@ -159,15 +187,16 @@ internal static class ReplicaSweepJob
             runtime.Progress.Report(new JobProgress(
                 JobIdFor(set.Id, destinationName), JobState.Verifying, 0, 0, 0, 0, 0, 0));
 
+            var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
+            var replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
             var result = await ReplicaSweep.RunAsync(
                 archive.Repository.RepositoryId,
                 archive.Repository.Keys,
-                PacedObjectStore.Over(
-                    StoreComposition.OpenLocal(replicaRoot),
-                    userInitiated ? null : runtime.Pacing.ForDestination(destination)),
+                replica,
                 archive.Store,
                 previous?.SweepCursor,
-                ReplicaSweep.DefaultBudget,
+                SegmentBudget,
+                limiter is null ? ReplicaSweep.DefaultByteBudget : Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds),
                 cancellationToken).ConfigureAwait(false);
 
             if (result.Findings.Count > 0)
@@ -176,44 +205,85 @@ internal static class ReplicaSweepJob
                 // raises a warning requiring action. The cursor still advances
                 // — a damaged blob must not park the sweep on itself forever,
                 // re-reporting the same object while the rest goes unchecked.
+                // The keys go on the ledger before anything is done about
+                // them, so a repair cut short leaves them to the next sync
+                // rather than forgotten (FR-VER-007).
                 ledger.RecordSweep(
                     set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
+                ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, resolved: [], nowMs);
+
+                IReadOnlyList<ReplicaRepairOutcome> outcomes;
+                await using (var repairer = new ReplicaRepairer(runtime, set, destinationName, archive, userInitiated))
+                {
+                    outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
+                var outstanding = ledger.RecordDamage(
+                    set.Id, destinationName, unrepaired: [], [.. repaired.Select(outcome => outcome.Key)], nowMs)
+                    .DamagedKeys;
+
                 ledger.RecordFailure(
                     set.Id, destinationName, DestinationSyncState.Failed,
-                    $"deep verification found {result.Findings.Count} damaged object(s): {result.Findings[0]}", nowMs);
+                    $"deep verification found {result.Findings.Count} damaged object(s): {result.Findings[0]}; "
+                    + (outstanding is { Count: > 0 }
+                        ? DestinationSyncStore.DamageStatement(outstanding)
+                        : "each was replaced from a sound copy and re-verified, and the next sync re-checks the destination"),
+                    nowMs);
                 runtime.Notices.Raise(
                     $"deep-verify-failed:{set.Id}:{destinationName}",
-                    $"destination '{destinationName}' of set '{set.Name}' holds {result.Findings.Count} object(s) "
-                    + $"that no longer match what was sealed: {string.Join("; ", result.Findings.Take(3))}. "
-                    + "Those bytes cannot be restored from there — treat this destination as damaged until the "
-                    + "objects are re-copied and re-verified.",
+                    Finding(set, destinationName, result.Findings, outcomes),
                     nowMs);
-                return (result.Examined, result.Findings.Count, result.NextCursor, result.CompletedCircuit);
+                return (result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit);
             }
 
+            // A clean circuit no longer withdraws an earlier finding (ADR-0035
+            // Amendment 1). Its objects may be sound now — a repair makes them
+            // so at once — but the device altered a backup once, which is a
+            // person's to hear about, and a notice withdrawn by the next clean
+            // circuit could be withdrawn before anyone had read it.
             ledger.RecordSweep(
                 set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
-
-            // A clean circuit withdraws an earlier finding: the objects that
-            // were damaged have been re-read and are sound now. A partial
-            // segment does not — it has not looked at everything yet.
-            if (result.CompletedCircuit)
-            {
-                runtime.Notices.Resolve($"deep-verify-failed:{set.Id}:{destinationName}", nowMs);
-            }
-
-            return (result.Examined, 0, result.NextCursor, result.CompletedCircuit);
+            return (result.Examined, 0, 0, result.NextCursor, result.CompletedCircuit);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // The disk went away mid-segment. The cursor is not advanced, so
             // the next pass re-reads the same run; fan-out reports the
             // destination's availability.
-            return (0, 0, null, false);
+            return (0, 0, 0, null, false);
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    /// <summary>
+    /// The notice a finding raises: what no longer matched, what replaced it,
+    /// and what nothing could — then the device, which is the person's to
+    /// look at whatever the service managed to tidy up.
+    /// </summary>
+    private static string Finding(
+        BackupSetConfiguration set, string destinationName, IReadOnlyList<string> findings,
+        IReadOnlyList<ReplicaRepairOutcome> outcomes)
+    {
+        var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
+        var unrepaired = outcomes.Where(outcome => !outcome.Repaired).ToList();
+        var sources = string.Join(", ", repaired.Select(outcome => outcome.RepairedFrom).Distinct(StringComparer.Ordinal));
+
+        var said = $"destination '{destinationName}' of set '{set.Name}' was found holding {findings.Count} object(s) "
+            + $"that no longer match what was sealed: {string.Join("; ", findings.Take(3))}. ";
+        said += unrepaired.Count == 0
+            ? $"Each was replaced from a sound copy ({sources}) and re-verified where it landed, so the destination "
+                + "is whole again. "
+            : (repaired.Count > 0
+                ? $"{repaired.Count} were replaced from a sound copy ({sources}) and re-verified; "
+                : string.Empty)
+                + $"{unrepaired.Count} could not be, because no sound copy of them could be found "
+                + $"({unrepaired[0].Detail}). Those bytes cannot be restored from there until they are replaced. ";
+        return said + "Its storage altered a backup once and may again: check the device, the filesystem, and "
+            + "anything else that writes there before counting on it.";
     }
 }

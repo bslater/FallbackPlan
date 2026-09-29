@@ -147,9 +147,11 @@ public sealed record DestinationConfiguration
     /// checks them against their seals, in days; absent takes the default.
     /// </summary>
     /// <remarks>
-    /// A sweep is bounded per pass and resumes, so this sets how often a
-    /// <i>segment</i> runs, not how long a full circuit takes — a large archive
-    /// on a slow disk takes many segments to come round. Zero or negative is
+    /// The days rest between circuits, counted from when the last one closed.
+    /// A circuit that has begun is carried on every pass, one bounded segment
+    /// at a time, until every stored blob has been read ([ADR-0035](../../docs/adr/0035-destination-fitness.md)
+    /// Amendment 1). This used to set how often a <i>segment</i> ran, which
+    /// put a large archive's full circuit years away. Zero or negative is
     /// refused at load rather than silently meaning "never".
     /// </remarks>
     [JsonPropertyName("deep_verify_interval_days")]

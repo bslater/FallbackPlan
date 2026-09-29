@@ -164,6 +164,25 @@ public sealed class DeepSweepTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Sweep_ADirectShipSet_NamesTheDestinationItRepairedFrom()
+    {
+        // The other way round: the sound copy is the one the set's read path
+        // would answer from first. A repair that asked that path would still
+        // land the right bytes, and would then tell the person they came from
+        // a staging archive this set does not have.
+        await using var runtime = await StartAsync(directShip: true, ("vault", 1), ("spare", 10));
+        await BackUpAsync(runtime);
+        Rot(ReplicaRoot(Vault));
+
+        var outcome = await SweepAsync(runtime, "vault");
+
+        Assert.AreEqual(1, outcome.Repaired);
+        var notice = DeepVerifyNotice(runtime).Message;
+        Assert.Contains("destination 'spare'", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("staging", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Sweep_ADirectShipSetWithAPeer_RepairsTheLocalPathFromThePeersReplica()
     {
         // The household shape: a drive by the machine and a friend's house.
