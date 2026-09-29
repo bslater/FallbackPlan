@@ -15,7 +15,8 @@ namespace FallbackPlan.Api.Tests;
 /// the wire half of FR-SVC-013, FR-DEST-014's status surface, and
 /// FR-SVC-006's plan. Later additions ride here too, among them contract
 /// 1.40's adoption answer naming the retention an archive recorded, the wire
-/// half of FR-DR-006.
+/// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
+/// half of FR-DR-009.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -283,6 +284,46 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.Contains("\"kdf_salt\":\"0000", sets, StringComparison.Ordinal);
         Assert.Contains("\"kdf_parallelism\":4", sets, StringComparison.Ordinal);
         Assert.Contains("\"sealing_public_key\":\"1111", sets, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void TheAdoptionPreviewWireNames_AreThePublishedOnes()
+    {
+        // Contract 1.42 (FR-DR-009): the preview verb, its answer, and the
+        // confirmation adoption now carries, pinned on the bytes.
+        var preview = JsonSerializer.Serialize<ServiceCommand>(
+            new PreviewAdoptionCommand("vault", new string('c', 32), "ab"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"preview_adoption\"", preview, StringComparison.Ordinal);
+        Assert.Contains("\"destination_name\":\"vault\"", preview, StringComparison.Ordinal);
+        Assert.Contains("\"repository_id\":\"cccc", preview, StringComparison.Ordinal);
+        Assert.Contains("\"envelope\":\"ab\"", preview, StringComparison.Ordinal);
+
+        var adopt = JsonSerializer.Serialize<ServiceCommand>(
+            new AdoptArchiveCommand("vault", new string('c', 32), "ab", Confirmation: new string('9', 64)),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"confirmation\":\"9999", adopt, StringComparison.Ordinal);
+
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new AdoptionPreviewResult(
+                "vault", new string('c', 32), new string('a', 32), "docs",
+                [new RecoveredRootDescriptor("/src", "src", Resolves: false)],
+                "every 1h", [], ["**/*.tmp"], new RetentionPolicyDescriptor(KeepDaily: 7), 1,
+                new string('5', 32), 9000, AlreadyAdopted: false, Confirmation: new string('9', 64), Lines: []),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"adoption_preview\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"recorded_path\":\"/src\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"label\":\"src\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"resolves\":false", answered, StringComparison.Ordinal);
+        Assert.Contains("\"retention\":{", answered, StringComparison.Ordinal);
+        Assert.Contains("\"already_adopted\":false", answered, StringComparison.Ordinal);
+        Assert.Contains("\"confirmation\":\"9999", answered, StringComparison.Ordinal);
+
+        // And both survive the round trip as themselves.
+        Assert.IsInstanceOfType<PreviewAdoptionCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(preview, FrameCodec.SerializerOptions));
+        Assert.IsInstanceOfType<AdoptionPreviewResult>(
+            JsonSerializer.Deserialize<ServiceResult>(answered, FrameCodec.SerializerOptions), out var read);
+        Assert.IsFalse(Assert.ContainsSingle(read.Roots).Resolves);
     }
 
     [TestMethod]

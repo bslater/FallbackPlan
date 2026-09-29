@@ -12,8 +12,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// with the passphrase (ADR-0053), and then discovers and adopts it through
 /// the same verbs a local path takes — the peer's owner inventory is the
 /// enumerator, the retrieval session is the store, and the next backup
-/// ships incrementally to the peer. Does not establish FR-REP-001, which
-/// the claim tests hold.
+/// ships incrementally to the peer. The recorded shape is previewed over
+/// the retrieval session and confirmed before it takes effect, as at a
+/// local path (FR-DR-009). Does not establish FR-REP-001, which the claim
+/// tests hold.
 /// </summary>
 [TestClass]
 public sealed class PeerAdoptionTests : IDisposable
@@ -117,9 +119,14 @@ public sealed class PeerAdoptionTests : IDisposable
                 Convert.FromHexString(description.RestoreGrantRecipient!), authority, Convert.FromHexString(row.KdfSalt), parameters));
         }
 
+        // Previewed over the retrieval session exactly as a directory is
+        // (FR-DR-009): the recorded shape comes back before anything does.
+        var (preview, result) = await HostHarness.PreviewThenAdoptAsync(
+            handler.ExecuteAsync, new AdoptArchiveCommand(Friend, repositoryId, envelope), Timeout);
+        Assert.AreEqual("docs", preview.SetName);
+        Assert.IsTrue(Assert.ContainsSingle(preview.Roots).Resolves);
         Assert.IsInstanceOfType<ArchiveAdoptedResult>(
-            await handler.ExecuteAsync(new AdoptArchiveCommand(Friend, repositoryId, envelope), Timeout),
-            out var adopted, "adoption from the peer refused");
+            result, out var adopted, (result as ServiceError)?.Message ?? "adoption from the peer refused");
         Assert.AreEqual(_harness.DocsSetId, adopted.SetId);
         Assert.AreEqual("docs", adopted.SetName);
         Assert.AreEqual(_harness.SourceRoot, Assert.ContainsSingle(adopted.Roots).Path);

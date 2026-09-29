@@ -549,6 +549,7 @@ public sealed partial class ServiceCommandHandler(
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
         DiscoverArchivesCommand discover => await DiscoverArchivesAsync(discover, cancellationToken).ConfigureAwait(false),
         AdoptArchiveCommand adopt => await AdoptArchiveAsync(adopt, cancellationToken).ConfigureAwait(false),
+        PreviewAdoptionCommand preview => await PreviewAdoptionAsync(preview, cancellationToken).ConfigureAwait(false),
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),

@@ -2218,18 +2218,26 @@ public static class CliApplication
             {
                 Description = "The set's schedule, instead of the one the archive recorded.",
             };
+            var confirmOption = new Option<bool>("--confirm")
+            {
+                Description = "Adopt the set as the preview shows it. Without this, adopt only shows what the archive "
+                    + "recorded and adopts nothing (FR-DR-009).",
+            };
             var command = new Command(
                 "adopt",
                 "Take one of a destination's archives back under its original repository and set ids, with the "
-                + "passphrase it was written with (ADR-0061). The set is re-declared from the shape the archive "
-                + "records and its next backup is incremental. The passphrase is derived HERE against the archive's "
-                + "own salt, proved against its sealing key, and only a sealed envelope reaches the service.");
+                + "passphrase it was written with (ADR-0061). It first shows the set the archive records — each "
+                + "root folder's recorded path and whether it is on this machine, the schedule, the rules and "
+                + "what the set would delete by — and adopts only with --confirm; the next backup is then "
+                + "incremental. The passphrase is derived HERE against the archive's own salt, proved against its "
+                + "sealing key, and only a sealed envelope reaches the service.");
             command.Options.Add(destinationOption);
             command.Options.Add(repositoryOption);
             command.Options.Add(passphraseEnvOption);
             command.Options.Add(nameOption);
             command.Options.Add(rootsOption);
             command.Options.Add(scheduleOption);
+            command.Options.Add(confirmOption);
             command.Options.Add(stateOption);
             command.Options.Add(connectOption);
             command.Options.Add(fingerprintOption);
@@ -2302,6 +2310,47 @@ public static class CliApplication
                                 }));
                     }
 
+                    // What the archive recorded, shown before anything takes
+                    // effect (FR-DR-009): the preview writes nothing, and
+                    // without --confirm nothing more is asked of the service.
+                    var preview = await AskAsync<AdoptionPreviewResult>(
+                        client, new PreviewAdoptionCommand(destination, archive.RepositoryId, envelope), cancellationToken)
+                        .ConfigureAwait(false);
+                    output.WriteLine(
+                        $"archive {preview.RepositoryId} at '{destination}' records "
+                        + (preview.SetName is { } recordedName ? $"set '{recordedName}' ({preview.SetId})" : "no set name"));
+                    foreach (var recorded in preview.Roots)
+                    {
+                        output.WriteLine(
+                            $"  root      {recorded.RecordedPath}{(recorded.Label is { } label ? $"  [{label}]" : string.Empty)}"
+                            + (recorded.Resolves ? "  (on this machine)" : "  (NOT on this machine)"));
+                    }
+
+                    output.WriteLine($"  schedule  {preview.Schedule ?? "(manual)"}");
+                    foreach (var rule in preview.IncludeRules)
+                    {
+                        output.WriteLine($"  include   {rule}");
+                    }
+
+                    foreach (var rule in preview.ExcludeRules)
+                    {
+                        output.WriteLine($"  exclude   {rule}");
+                    }
+
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  history   {preview.SnapshotCount} snapshot(s)"));
+                    foreach (var line in preview.Lines)
+                    {
+                        output.WriteLine($"  {line}");
+                    }
+
+                    if (!parse.GetValue(confirmOption))
+                    {
+                        output.WriteLine(
+                            "Nothing was adopted: re-run with --confirm to adopt the set as shown (--name, --root and "
+                            + "--schedule change what is adopted).");
+                        return 2;
+                    }
+
                     var roots = parse.GetValue(rootsOption) is { Length: > 0 } given
                         ? given.Select(path => new BackupRootDescriptor(path)).ToList()
                         : null;
@@ -2309,7 +2358,8 @@ public static class CliApplication
                         client,
                         new AdoptArchiveCommand(
                             destination, archive.RepositoryId, envelope,
-                            SetName: parse.GetValue(nameOption), Roots: roots, Schedule: parse.GetValue(scheduleOption)),
+                            SetName: parse.GetValue(nameOption), Roots: roots, Schedule: parse.GetValue(scheduleOption),
+                            Confirmation: preview.Confirmation),
                         cancellationToken).ConfigureAwait(false);
 
                     output.WriteLine(

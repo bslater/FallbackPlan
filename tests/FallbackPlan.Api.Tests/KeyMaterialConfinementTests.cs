@@ -154,6 +154,10 @@ public sealed class KeyMaterialConfinementTests
         // carve-out's fence: the fields must stay string-typed (never raw
         // bytes), and must not quietly spread to other verbs.
         //
+        // preview_adoption joined adopt_archive by decision (FR-DR-009): the
+        // shape a preview shows is sealed metadata, so it takes the envelope
+        // adoption takes, and opens nothing else with it.
+        //
         // claim_replicas is the fourth, added by decision (ADR-0070). It is
         // the same shape and the same reason as the three above: the Argon2id
         // root is derived where the passphrase was typed, and what crosses is
@@ -176,13 +180,16 @@ public sealed class KeyMaterialConfinementTests
                 nameof(ProvisionInstallationCommand),
                 nameof(OpenRestoreSourceCommand),
                 nameof(AdoptArchiveCommand),
+                nameof(PreviewAdoptionCommand),
             },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
             "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation, "
-            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup) and "
+            + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup), "
             + "adopt_archive (ADR-0061: the same provisioning envelope, sealed against a discovered archive's "
-            + "descriptor) — nowhere else. This list grows only by decision, which is what keeps it a fence; "
-            + "widening it to a pattern that admits any verb named plausibly would not be one.");
+            + "descriptor) and preview_adoption (FR-DR-009: the same envelope, because the shape it shows is "
+            + "sealed metadata only the passphrase's derivation reads) — nowhere else. This list grows only by "
+            + "decision, which is what keeps it a fence; widening it to a pattern that admits any verb named "
+            + "plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

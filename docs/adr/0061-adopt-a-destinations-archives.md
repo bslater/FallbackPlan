@@ -125,6 +125,15 @@ configured against this very archive is acknowledged rather than repeated —
 its destination reference, ledger row and credential are made sure of — and
 one configured against a different archive is refused by name.
 
+> **Amended 2026-09 ([Amendment 2](#amendment-2-2026-09--a-recovered-configuration-is-confirmed-before-it-takes-effect)).**
+> The report now comes first. `preview_adoption` shows the recorded shape,
+> each root flagged where it does not resolve on this machine, and
+> `adopt_archive` takes effect only with the confirmation that preview
+> answered. A missing root is still not refused at adoption. It can be
+> re-pointed at confirmation, to a path the person typed, and a backup of a
+> set whose root is absent fails naming it. Still nothing silently rewrites
+> a path.
+
 ### 4. The writer identity is resumed when that is safe
 
 Adoption takes over the archive's writer identity when this state directory
@@ -282,9 +291,90 @@ adoption failing on a field the command gives no way to correct.
 
 Priority and destinations remain unrecorded, for §1's reasons.
 
+## Amendment 2 (2026-09) — a recovered configuration is confirmed before it takes effect
+
+§3 re-declared the set from its archive and acted on it in one call. A
+missing root, and since Amendment 1 the retention, were reported only in the
+answer, after the set was configured. FR-DR-009 asks for the other order:
+the recovered configuration is shown first, each root's recorded path as a
+hint and flagged where it does not resolve on this machine, the retention
+before it can delete anything, and only a confirmation makes it take effect.
+
+**The preview.** `preview_adoption {destination_name, repository_id,
+envelope}` takes the envelope adoption takes. It runs adoption's steps in
+adoption's order up to the proof of the derived sealing key, so a wrong
+passphrase or a foreign archive is refused at the preview, as it is at
+adoption. It then reads the recorded shape and writes nothing to the state
+directory. The shape can only be read through a catalogue, and adoption's
+first write is its catalogue at the runtime's real path, so the preview
+rebuilds one in a scratch directory and deletes it before it answers. The
+answer, `adoption_preview`, carries:
+- the set's id and name;
+- each root's recorded path, with `resolves`;
+- the schedule and rules;
+- the set's own retention, which is what the set would delete by;
+- the snapshot count and the newest snapshot;
+- what adoption would say about this installation: already adopted,
+  configured against a different archive, or a name already taken;
+- a `confirmation`.
+
+**The confirmation.** It is a SHA-256 digest over a length-prefixed canonical
+encoding of what the preview showed, with the snapshot count and the newest
+snapshot's id and time. It is not a secret and authorises nothing: the
+envelope still does that. It names what was seen. The newest snapshot is in
+it so that an archive written again between the preview and the
+confirmation — the old machine still running, say — no longer matches, even
+when its shape did not change.
+
+**Adoption requires it.** `adopt_archive` gains `confirmation`.
+- Without one, it is refused before any envelope is opened, naming the
+  preview. The destination, id, presence and schedule refusals stay ahead
+  of it, in the order they had.
+- With one the archive no longer matches, it is refused as changed once the
+  shape is re-read. The catalogue that re-read rebuilt is removed, unless a
+  configured set already owns the repository; then it is that set's own.
+- `set_name`, `roots` and `schedule` still override the recorded shape at
+  confirmation. The digest is over what the archive recorded, so an
+  override is a choice made while looking at the preview, not a change to
+  what it showed. That is how a root is re-pointed: the confirmed path is
+  the one captured from, under the recorded label the snapshots already
+  carry.
+
+§3's rule for a missing root stands: it is not refused at adoption. It is
+no longer learned afterwards, though. The preview flags it; the person
+re-points it at confirmation, or adopts as recorded and restores into it. A
+backup of a set whose root is absent fails naming the root and publishes no
+snapshot. The schedule is adopted as confirmed.
+
+**Contract 1.42.** It is not purely additive, deliberately. A pre-1.42
+client adopting in one call is refused by name rather than adopting a set
+nobody was shown, because that one call is what FR-DR-009 ends. The CLI and
+the console ship with the service. `KeyMaterialConfinementTests`' envelope
+allowlist grows by decision to name `preview_adoption` (§5). The shape the
+preview shows is sealed metadata that only the passphrase's derivation
+reads, so it takes the envelope adoption takes.
+
+**The surfaces.**
+- The CLI's `adopt` prints the preview: each root on or not on this
+  machine, the schedule, rules, history and the service's lines. Without
+  `--confirm` it ends "Nothing was adopted" with exit 2; `--confirm` adopts.
+- The console keeps one endpoint permitted a secret, `/api/adopt-archive`,
+  in two phases. Without a confirmation it returns the preview, which the
+  page shows with each folder's path editable; with one, it adopts. The page
+  holds the passphrase from one phase to the other and drops it with the
+  dialog, and each phase derives again.
+- `eng/recovery-drill.sh` runs a preview-only `adopt` before adopting both
+  archives with `--confirm`.
+
+What the confirmation cannot prove is that the preview was read. The CLI
+and the console show it before they can send the confirmation. A client
+written against the contract could fetch one and confirm it unread. The
+verb guarantees an adoption as shown, not as understood.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built end to end over six commits: the policy manifest's keys 10–12 (`Repository.Format/Manifests/PolicyManifest`, `Repository/SnapshotPublication`, `Agent/BackupRunner`); contract 1.30 and the service's `Agent/ServiceCommandHandler.Adoption.cs` with the writer-identity resume in `Application/LocalState`; the console's `/api/adopt-archive` through `Web/ConsoleRestoreGate`; the CLI's `discover` and `adopt` in `Cli/CliApplication` with the per-set restore grant in `Cli/OperationGateway`; the peer half over `Agent/PeerRetrievalClient`; `eng/recovery-drill.sh` step 8 green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests` and `Hosts.Tests/PeerAdoptionTests` as the in-process drills |
 | 2026-09 | Accepted (amended) | Amendment 1: the set's own retention recorded as policy-manifest key 13 and re-declared on adoption, reported in the answer (FR-DR-006, contract 1.40); a destination's override still unrecorded (FR-DEST-006). `Repository.Format/Manifests/PolicyManifest`, `Agent/RecordedRetentionMapping`; `Hosts.Tests/DestinationAdoptionTests` |
+| 2026-09 | Accepted (amended) | Amendment 2: a recovered configuration is previewed and takes effect only with the confirmation the preview answered (FR-DR-009, contract 1.42); an unconfirmed adoption is refused by name, and one the archive has moved on from is refused as changed. The preview and the check in `Agent/ServiceCommandHandler.Adoption.cs`; the CLI's `adopt --confirm` in `Cli/CliApplication`; the console's two phases in `Web/WebConsoleHost`; `eng/recovery-drill.sh` green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |
