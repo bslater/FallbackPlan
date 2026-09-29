@@ -1766,6 +1766,11 @@ public sealed partial class ServiceCommandHandler(
                 var stopped = stall is null ? null
                     : stalledOn is null ? $"its replica could not be read: {stall}"
                     : $"blob {stalledOn} could not be read: {stall}";
+
+                // A peer whose operator stated no cadence is read only when a
+                // person asks (ADR-0035 Amendment 2), so nothing scheduled
+                // carries on from here.
+                var swept = declared is not { Kind: DestinationKind.Peer, DeepVerifyIntervalDays: null };
                 lines.Add(found > 0
                     ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read — "
                         + (repaired == found
@@ -1775,11 +1780,15 @@ public sealed partial class ServiceCommandHandler(
                     : stopped is not null
                         ? $"{set.Name} -> {reference.Ref}: "
                             + (examined == 0 ? $"nothing confirmed — {stopped}" : $"{examined} object(s) confirmed, then {stopped}")
-                            + "; the sweep tries it again after a pause"
+                            + (swept
+                                ? "; the sweep tries it again after a pause"
+                                : "; nothing sweeps this peer on a schedule, so the next verify-destination tries it again")
                     : $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed"
                         + (record?.SweepCompletedAt is not null && record.SweepCursor is null
                             ? " — every stored object has now been checked"
-                            : " — more remain; the sweep resumes next pass"));
+                            : swept
+                                ? " — more remain; the sweep resumes next pass"
+                                : " — more remain; nothing sweeps this peer on a schedule, so the next verify-destination continues from here"));
             }
         }
 

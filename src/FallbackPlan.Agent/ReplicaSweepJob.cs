@@ -265,11 +265,22 @@ internal static class ReplicaSweepJob
                     ? Nothing with { Unreadable = refusal.Message }
                     : Refused(runtime, set, destination, refusal.Message, nowMs);
             }
-            catch (IOException exception)
+            catch (Exception exception) when (exception
+                is IOException or System.Net.Sockets.SocketException or System.Security.Authentication.AuthenticationException)
             {
-                // Not reached this time. Fan-out says whether the peer can be
-                // reached, and nothing is stamped, so the next pass that finds
-                // it reachable tries again.
+                // Not reached — the fan-out's classification of the same
+                // failure. A scheduled segment records it as the fan-out
+                // would, because nothing else may for hours: the pair is in
+                // sync and its challenge is not due. The scheduler then leaves
+                // the peer undialled until a sync, under its back-off, finds
+                // it again, and the circuit waits where it stopped. A person's
+                // read records nothing it did not read.
+                if (!userInitiated)
+                {
+                    runtime.DestinationSync.RecordFailure(
+                        set.Id, destination.Name, DestinationSyncState.Unavailable, exception.Message, nowMs);
+                }
+
                 return Nothing with { Unreadable = exception.Message };
             }
 
