@@ -188,6 +188,11 @@ one instant to `IsOpen` in two offsets and gets two answers.
 - **The other three limits are still unbuilt** and still named. The requirement
   says one of four.
 
+  > **Amended 2026-09 ([ADR-0074](0074-background-byte-rate-limits.md)).** Two
+  > of them are built: a destination's transfer limit and the source-read
+  > limit, which pace what this window already governs and, like it, never a
+  > person. CPU remains unbuilt, for the reason this record gives.
+
 **Neutral**
 
 - The window cannot be edited from the console, by decision.
@@ -223,3 +228,4 @@ outcome row is already written, which is the pass.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | The time window built over four commits, the first of NFR-PERF-013's four named limits to exist; the suspension reused whole from [ADR-0047](0047-backup-pool-and-priorities.md) Amendment 1, with a standing pool hold added so a freed worker cannot undo the park |
+| 2026-09 | Accepted (related) | The disk and network limits arrive as [ADR-0074](0074-background-byte-rate-limits.md), governing the same `userInitiated: false` work this window does; three of the four limits now exist, and CPU stays unbuilt |

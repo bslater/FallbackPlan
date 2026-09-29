@@ -4,7 +4,7 @@
 
 ---
 
-Sixty-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Seventy-four decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -98,6 +98,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0071](adr/0071-recovering-operation-after-total-loss.md) | Disaster recovery: the repository carries the set's shape, sealed | **Applied** | Superseded by [ADR-0061](adr/0061-adopt-a-destinations-archives.md), which carries the set's shape in the policy manifest and is established by `Hosts.Tests/DestinationAdoptionTests`. The implementation this record describes was removed in the merge rather than carried across; [notes](#0071--recovering-the-data-was-only-half-of-it) |
 | [0072](adr/0072-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0072--the-two-things-live-capture-cannot-do) |
 | [0073](adr/0073-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
+| [0074](adr/0074-background-byte-rate-limits.md) | Background byte-rate limits: a destination's `transfer_limit` and the installation's `background_read_limit` pace what the scheduler starts with nobody waiting — never a person; schema 7, contract 1.43 | **Built** | `Application/ByteRate` · `Application/ByteRateLimiter` · `Application/PacedStream` · `Application/PacingClock` · `Agent/BackgroundPacing` · `Agent/PacedObjectStore` · `Agent/PacedFileSystemSource` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/ReplicaSweepJob` · `Agent/RecoveryDrillJob` · `Application.Tests/ByteRateTests`, `Application.Tests/ByteRateLimiterTests`, `Hosts.Tests/BackgroundRateLimitTests`, `Hosts.Tests/PeerRateLimitTests`, `Web.Tests/ConsoleBackgroundLimitsScriptTests` · [notes](#0074--two-more-of-four) |
 
 ---
 
@@ -1640,7 +1641,9 @@ park writes, which is the sentence a person reads the next morning to answer
 why their backup stopped at ten. The reason is carried per ask now, first ask
 winning it.
 
-What is **not** built, and stays named: the other three limits. And two limits
+What is **not** built, and stays named: the other three limits — of which the
+disk and network ones have since been built, as
+[0074](#0074--two-more-of-four), leaving CPU. And two limits
 of the window itself — only a capture parks, because only writer-lane jobs
 carry a pause gate, so a fan-out or a drill already in flight runs to
 completion; and the window is enforced to the granularity of a pass tick. The
@@ -1648,3 +1651,29 @@ window is **reported** on `get_status` (contract 1.37), the CLI and the
 console, and **edited in the configuration file only**, as
 `max_concurrent_backups` is; the console control is owed rather than smuggled
 in behind a status field.
+
+### 0074 — two more of four
+
+The disk and network limits, built together, because they are one mechanism
+at two seams: a rate, a limiter every job it governs shares, and a stream that
+charges what passes. A destination's `transfer_limit` paces what background
+work moves to or from it, and `background_read_limit` paces what background
+captures read from the source. A person is never paced; that is the window's
+predicate, `userInitiated: false`, now carried into the capture, the fan-out,
+the sweep and the drill.
+
+The limiter is a token bucket with a one-second burst (`Application/ByteRateLimiter`),
+on a clock the runtime takes through its options, so the host suites prove a
+rate by the waits it asked for. The seams are the replica store for a local
+path, **the session's own stream** for a peer's push — the wire, which counts
+exactly what crosses the link — the ship sink's write targets for a
+direct-ship run, and the restore source a drill reads through, on the handler
+the drill builds for itself.
+
+Two paths are unpaced on purpose, and the record says why: the ship sink's
+reads, because a direct-ship set's archive store is also what a person's
+restore reads through, and the push a retention apply makes, because a person
+starts it. The first cut's tests for the local-path copy and the direct-ship
+capture passed with their seam removed — the pass's drill read the replica
+back through the same limiter and paid for the bytes — and now run their own
+job alone. CPU remains unbuilt and named.
