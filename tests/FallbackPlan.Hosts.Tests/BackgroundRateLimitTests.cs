@@ -58,16 +58,24 @@ public sealed class BackgroundRateLimitTests : IDisposable
     public async Task AScheduledSync_ToALimitedDestination_IsPaced_AndStillCompletes()
     {
         await using var runtime = await StartAsync(transferLimit: Limit);
+        var set = runtime.Configuration.BackupSets.Single();
 
-        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
-        await pass.Transfers.WaitAsync(Timeout);
-        await pass.Drills.WaitAsync(Timeout);
+        // Captured into staging first, which moves nothing to the destination.
+        var captured = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
+        Assert.AreEqual("ran", captured.Outcome, captured.Detail);
+        var limiter = runtime.Pacing.ForDestination(VaultIn(runtime));
+        Assert.IsNotNull(limiter);
+        Assert.AreEqual(0L, limiter.BytesPaced);
+
+        // Then the scheduler's fan-out alone. Not a whole pass: its drill phase
+        // reads the replica back through the same limit, and would pay for
+        // bytes this case means the copy to have paid.
+        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: false);
+        Assert.IsNotNull(sync, "the pair had a sync to run");
+        await sync.WaitAsync(Timeout);
 
         Assert.IsNotNull(
             runtime.DestinationSync.Find(_harness.DocsSetId, "vault")?.LastSuccessAt, "a paced sync still finishes");
-
-        var limiter = runtime.Pacing.ForDestination(VaultIn(runtime));
-        Assert.IsNotNull(limiter);
         var blobs = BlobBytes();
         Assert.IsGreaterThanOrEqualTo(blobs, limiter.BytesPaced, "every blob byte the replica holds passed the limit");
         AssertPacedFor(blobs);
@@ -128,10 +136,12 @@ public sealed class BackgroundRateLimitTests : IDisposable
         // that is where the limit has to bite.
         await using var runtime = await StartAsync(transferLimit: Limit, directShip: true);
 
-        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
-        await pass.Transfers.WaitAsync(Timeout);
-        await pass.Drills.WaitAsync(Timeout);
-        Assert.AreEqual(1, pass.Ran);
+        // The background capture alone, for the reason the sync case runs its
+        // fan-out alone: a pass's drill would read the replica back through
+        // the same limit.
+        var set = runtime.Configuration.BackupSets.Single();
+        var captured = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: false).WaitAsync(Timeout);
+        Assert.AreEqual("ran", captured.Outcome, captured.Detail);
 
         var limiter = runtime.Pacing.ForDestination(VaultIn(runtime));
         Assert.IsNotNull(limiter);

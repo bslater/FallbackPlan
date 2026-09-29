@@ -1764,8 +1764,10 @@ public sealed partial class ServiceCommandHandler(
 
         async Task<(int Examined, int Damaged)> Segment(BackupSetConfiguration set, string destination)
         {
+            // A person asked (verify_destination), so the segment reads
+            // through no limit.
             var outcome = await ReplicaSweepJob
-                .RunAsync(runtime, set, destination, now, cancellationToken).ConfigureAwait(false);
+                .RunAsync(runtime, set, destination, now, userInitiated: true, cancellationToken).ConfigureAwait(false);
             return (outcome.Examined, outcome.Damaged);
         }
     }
@@ -2463,10 +2465,32 @@ public sealed partial class ServiceCommandHandler(
                 configured.Text, open, (ulong)changes.ToUnixTimeMilliseconds());
         }
 
+        // The byte-rate limits in force (contract 1.43, ADR-0074), from the
+        // parsed limits as the window is from the parsed window. Null rather
+        // than an empty descriptor when nothing is limited: a client draws no
+        // line either way, and null is what an older service says too.
+        BackgroundLimitsDescriptor? limits = null;
+        var readLimit = configuration.EffectiveBackgroundReadLimit;
+        List<DestinationTransferLimitDescriptor> transferLimits =
+        [
+            .. configuration.Destinations
+                .Select(destination => (destination.Name, Rate: destination.EffectiveTransferLimit))
+                .Where(limited => limited.Rate is not null)
+                .Select(limited => new DestinationTransferLimitDescriptor(
+                    limited.Name, limited.Rate!.Text, limited.Rate.BytesPerSecond)),
+        ];
+        if (readLimit is not null || transferLimits.Count > 0)
+        {
+            limits = new BackgroundLimitsDescriptor(
+                readLimit is null ? null : new ByteRateDescriptor(readLimit.Text, readLimit.BytesPerSecond),
+                transferLimits);
+        }
+
         return new StatusResult(
             Environment.MachineName, sets, now,
             [.. runtime.Notices.Unacknowledged.Select(notice => $"[{notice.Id}] {notice.Message}")],
-            window);
+            window,
+            limits);
     }
 
     /// <summary>

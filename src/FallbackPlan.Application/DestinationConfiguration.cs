@@ -186,6 +186,32 @@ public sealed record DestinationConfiguration
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Priority { get; init; }
 
+    /// <summary>
+    /// The rate background work may move bytes to or from this destination at
+    /// — the network limit of NFR-PERF-013 (ADR-0074), e.g. <c>2 MiB/s</c>.
+    /// **Absent means unlimited**, which is what every file written before
+    /// schema 7 says by not mentioning it.
+    /// </summary>
+    /// <remarks>
+    /// Per destination, because the operator knows which link is slow or
+    /// shared and an installation-wide cap would also throttle a drive on the
+    /// desk. It paces everything background work moves to or from here — the
+    /// fan-out's copy or push, a direct-ship capture's writes, the deep
+    /// sweep's reads, a drill's — through one limiter every such job shares,
+    /// and never anything a person started.
+    /// </remarks>
+    [JsonPropertyName("transfer_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TransferLimit { get; init; }
+
+    /// <summary>
+    /// The parsed transfer limit, or null for none. Validation has already
+    /// refused a defective one on a loaded configuration.
+    /// </summary>
+    [JsonIgnore]
+    public ByteRate? EffectiveTransferLimit =>
+        TransferLimit is { } text && ByteRate.TryParse(text, out var rate, out _) ? rate : null;
+
     /// <summary>True unless this destination was knowingly excused from proving itself.</summary>
     [JsonIgnore]
     public bool RequiresVerification => (Verification ?? VerificationPolicy.Required) == VerificationPolicy.Required;

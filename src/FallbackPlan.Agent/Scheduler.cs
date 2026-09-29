@@ -253,7 +253,9 @@ public static class Scheduler
         return new AgentPassResult(outcomes)
         {
             Transfers = transfers,
-            Drills = shut ? Task.CompletedTask : RunDrillPhaseAsync(runtime, transfers, now, cancellationToken),
+            Drills = shut
+                ? Task.CompletedTask
+                : RunDrillPhaseAsync(runtime, transfers, now, userInitiated, cancellationToken),
         };
     }
 
@@ -356,7 +358,8 @@ public static class Scheduler
     /// would turn the rarest job in the service into its heaviest moment.
     /// </remarks>
     private static async Task RunDrillPhaseAsync(
-        ServiceRuntime runtime, Task transfers, DateTimeOffset now, CancellationToken cancellationToken)
+        ServiceRuntime runtime, Task transfers, DateTimeOffset now, bool userInitiated,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -390,7 +393,8 @@ public static class Scheduler
                 try
                 {
                     await RecoveryDrillJob.RunAsync(
-                        runtime, set, reference.Ref, (ulong)now.ToUnixTimeMilliseconds(), cancellationToken)
+                        runtime, set, reference.Ref, (ulong)now.ToUnixTimeMilliseconds(), userInitiated,
+                        cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -675,7 +679,8 @@ public static class Scheduler
                     try
                     {
                         completion.SetResult(
-                            await BackupRunner.RunAsync(runtime, set, job.Id, now, full, gate, cancellationToken)
+                            await BackupRunner.RunAsync(
+                                    runtime, set, job.Id, now, userInitiated, full, gate, cancellationToken)
                                 .ConfigureAwait(false));
                     }
                     catch (Exception exception)

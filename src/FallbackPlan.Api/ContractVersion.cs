@@ -389,8 +389,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// exists to end. The console and the CLI ship with the service and preview
     /// first.
     /// </para>
+    /// <para>
+    /// 1.43 adds `background_limits` to `status` (NFR-PERF-013, ADR-0074): the
+    /// byte rates background work is held to, beside the window 1.37 reports.
+    /// `read_limit` is the rate background captures read their sources at, and
+    /// `transfer_limits` lists each limited destination with its rate, as the
+    /// configured `text` and as `bytes_per_second`. Reporting only: both are
+    /// edited in the configuration file, and a person's work is never held to
+    /// either. Additive with a null default. A pre-1.43 service never sends it,
+    /// which a client reads as "nothing limited" — what a 1.43 service with no
+    /// limit configured says too.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 42);
+    public static ContractVersion Current { get; } = new(1, 43);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

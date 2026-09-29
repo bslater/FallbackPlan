@@ -2530,6 +2530,23 @@ public static class CliApplication
                                 : $"background window {window.Text} — SHUT, opens {changes}");
                     }
 
+                    // Beside the window, and for the same reason: a paced
+                    // transfer reads as a slow one (contract 1.43, ADR-0074).
+                    // Omitted entirely when nothing is limited.
+                    if (result.BackgroundLimits is { } limits)
+                    {
+                        if (limits.ReadLimit is { } reads)
+                        {
+                            output.WriteLine($"background reads limited to {reads.Text}");
+                        }
+
+                        foreach (var transfer in limits.TransferLimits)
+                        {
+                            output.WriteLine(
+                                $"background transfers to '{transfer.DestinationName}' limited to {transfer.Text}");
+                        }
+                    }
+
                     foreach (var notice in result.Notices)
                     {
                         output.WriteLine($"notice: {notice}");

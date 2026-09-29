@@ -121,6 +121,41 @@ internal static class RecoveryDrillJob
     }
 
     /// <summary>
+    /// Drills one pair as the scheduler does, under the budget the
+    /// destination's kind implies. A background drill reads the replica
+    /// through the destination's transfer limit (NFR-PERF-013, ADR-0074) — a
+    /// peer's drill spends somebody else's link — and a person's reads
+    /// through none.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="userInitiated">Whether a person is waiting for it.</param>
+    /// <param name="cancellationToken">Cancels the drill.</param>
+    public static Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        bool userInitiated,
+        CancellationToken cancellationToken)
+    {
+        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+            ? SampleBudget.Peer
+            : null;
+        return RunAsync(
+            runtime,
+            new ServiceCommandHandler(runtime, RemoteBindingState.Off) { PacesRestoreSources = !userInitiated },
+            set,
+            destinationName,
+            nowMs,
+            budget,
+            Random.Shared,
+            cancellationToken);
+    }
+
+    /// <summary>
     /// Drills one (set, destination) pair and records the result. Never
     /// throws: a drill is a check, and a check that takes the scheduler down
     /// is worse than the condition it was looking for.

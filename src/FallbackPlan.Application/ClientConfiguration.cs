@@ -242,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -315,6 +315,32 @@ public sealed record ClientConfiguration
             && Application.BackgroundWindow.TryParse(text, out var window, out _)
             ? window
             : null;
+
+    /// <summary>
+    /// The rate background captures read their sources at, summed over the
+    /// captures running at once — the disk limit of NFR-PERF-013 (ADR-0074),
+    /// e.g. <c>40 MiB/s</c>. **Absent means unlimited**, which is what every
+    /// file written before schema 7 says by not mentioning it.
+    /// </summary>
+    /// <remarks>
+    /// Installation-wide, like <see cref="BackgroundWindow"/>, because the disk
+    /// it protects is this machine's; the limit on what moves to or from one
+    /// destination is that destination's <see cref="DestinationConfiguration.TransferLimit"/>.
+    /// Read afresh by each run rather than pinned at service start, as the
+    /// window is, and never applied to a run a person started.
+    /// </remarks>
+    [JsonPropertyName("background_read_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackgroundReadLimit { get; init; }
+
+    /// <summary>
+    /// The parsed read limit, or null for none. Validation has already refused
+    /// a defective one, so a null here from a non-null
+    /// <see cref="BackgroundReadLimit"/> cannot arise on a loaded configuration.
+    /// </summary>
+    [JsonIgnore]
+    public ByteRate? EffectiveBackgroundReadLimit =>
+        BackgroundReadLimit is { } text && ByteRate.TryParse(text, out var rate, out _) ? rate : null;
 
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
@@ -391,10 +417,16 @@ public sealed record ClientConfiguration
     /// schema-4 file handed to an older build is a real compatibility event
     /// and must be refused by name rather than half-read.
     /// </para>
+    /// <para>
+    /// <b>6 → 7</b> (ADR-0074): the file gains an optional
+    /// <c>background_read_limit</c>, and a destination an optional
+    /// <c>transfer_limit</c>. As with 3 → 4 there is nothing to move — absent
+    /// means unlimited — and the version rises for the same reason.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -470,6 +502,15 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_BackgroundWindowInvalid(path, windowDefect!));
+        }
+
+        // The same rule for a limit: one this build cannot read is refused
+        // rather than ignored, because an ignored limit is an uplink the
+        // operator capped running flat out.
+        if (BackgroundReadLimit is { } readLimit && !ByteRate.TryParse(readLimit, out _, out var readDefect))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_BackgroundReadLimitInvalid(path, readDefect!));
         }
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);
@@ -713,6 +754,15 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+        }
+
+        // A limit this build cannot read is refused rather than ignored, and
+        // the refusal names the destination: a configuration can declare one
+        // per destination, and "which one" is the first thing to ask.
+        if (destination.TransferLimit is { } limit && !ByteRate.TryParse(limit, out _, out var limitDefect))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_DestinationTransferLimitInvalid(destination.Name, limitDefect!));
         }
     }
 

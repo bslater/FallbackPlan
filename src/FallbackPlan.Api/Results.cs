@@ -895,6 +895,29 @@ public sealed record BackupSetStatusDescriptor(
 /// </param>
 public sealed record BackgroundWindowDescriptor(string Text, bool Open, ulong ChangesAt);
 
+/// <summary>A byte rate as configured (contract 1.43, NFR-PERF-013).</summary>
+/// <param name="Text">The configured text, e.g. <c>40 MiB/s</c> — what a person wrote, for display.</param>
+/// <param name="BytesPerSecond">The same rate in bytes a second, for a client that computes with it.</param>
+public sealed record ByteRateDescriptor(string Text, long BytesPerSecond);
+
+/// <summary>One destination's transfer limit, as configured (contract 1.43, NFR-PERF-013).</summary>
+/// <param name="DestinationName">The declared destination the limit is on.</param>
+/// <param name="Text">The configured text, e.g. <c>2 MiB/s</c>.</param>
+/// <param name="BytesPerSecond">The same rate in bytes a second.</param>
+public sealed record DestinationTransferLimitDescriptor(string DestinationName, string Text, long BytesPerSecond);
+
+/// <summary>
+/// The byte-rate limits background work is held to (contract 1.43, ADR-0074,
+/// NFR-PERF-013): the read limit on background captures and each limited
+/// destination's transfer limit. Reporting only, as the window is: both are
+/// edited in the configuration file. A person's work is never held to either.
+/// </summary>
+/// <param name="ReadLimit">The rate background captures read their sources at, or null for none.</param>
+/// <param name="TransferLimits">Each limited destination's rate, in declaration order; empty when none is limited.</param>
+public sealed record BackgroundLimitsDescriptor(
+    ByteRateDescriptor? ReadLimit,
+    IReadOnlyList<DestinationTransferLimitDescriptor> TransferLimits);
+
 /// <summary>
 /// One machine's status. Always the per-set detail: a summary is derived from
 /// this and never stored beside it, so the never-merge rules (NFR-OPS-002) hold
@@ -912,12 +935,19 @@ public sealed record BackgroundWindowDescriptor(string Text, bool Open, ulong Ch
 /// "no window" is itself the compatibility rule, an absent window being always
 /// open.
 /// </param>
+/// <param name="BackgroundLimits">
+/// The byte-rate limits in force, or null when nothing is limited (contract
+/// 1.43, ADR-0074). Null from a service with no limit configured and from one
+/// older than 1.43 alike, for the window's reason: both mean draw no line, and
+/// an absent limit has always meant unlimited.
+/// </param>
 public sealed record StatusResult(
     string MachineName,
     IReadOnlyList<BackupSetStatusDescriptor> Sets,
     ulong ObservedAt,
     IReadOnlyList<string> Notices,
-    BackgroundWindowDescriptor? BackgroundWindow = null) : ServiceResult;
+    BackgroundWindowDescriptor? BackgroundWindow = null,
+    BackgroundLimitsDescriptor? BackgroundLimits = null) : ServiceResult;
 
 /// <summary>The client configuration as JSON.</summary>
 /// <param name="Json">The configuration document.</param>
