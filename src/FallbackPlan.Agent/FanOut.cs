@@ -360,7 +360,8 @@ public static class FanOut
             switch (destination.Kind)
             {
                 case DestinationKind.LocalPath:
-                    await CopyToLocalPathAsync(runtime, set, destination, archive, nowMs, limiter, cancellationToken)
+                    await CopyToLocalPathAsync(
+                            runtime, set, destination, archive, nowMs, limiter, userInitiated, cancellationToken)
                         .ConfigureAwait(false);
                     return;
 
@@ -838,7 +839,8 @@ public static class FanOut
 
     private static async ValueTask CopyToLocalPathAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
-        ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, CancellationToken cancellationToken)
+        ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, bool userInitiated,
+        CancellationToken cancellationToken)
     {
         var ledger = runtime.DestinationSync;
 
@@ -1129,6 +1131,33 @@ public static class FanOut
 
                 ReportShortfall(
                     runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
+            }
+
+            // The repair sync (ADR-0035 Amendment 1, FR-VER-007): objects a
+            // deep sweep found damaged and could not repair are re-read here,
+            // after the copy has filled whatever it could, and repaired from
+            // whatever sound copy exists now. The pair is not called in sync
+            // while any remain — the ledger holds it failed regardless, and
+            // recording the failure here backs the next attempt off rather
+            // than re-reading the same blobs every pass.
+            if (previous?.DamagedKeys is { Count: > 0 } outstanding)
+            {
+                await using var repairer = new ReplicaRepairer(runtime, set, destination.Name, archive, userInitiated);
+                var (resolved, unrepaired) = await repairer.RecheckAsync(
+                    replica, outstanding,
+                    key => (keeps?.Invoke(key) ?? true) || (spares?.Invoke(key) ?? false),
+                    cancellationToken).ConfigureAwait(false);
+                var remaining = ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], resolved, nowMs)
+                    .DamagedKeys;
+                if (remaining is { Count: > 0 })
+                {
+                    ledger.RecordFailure(
+                        set.Id, destination.Name, DestinationSyncState.Failed,
+                        DestinationSyncStore.DamageStatement(remaining)
+                            + (unrepaired.Count > 0 ? $" ({unrepaired[0].Detail})" : string.Empty),
+                        nowMs);
+                    return;
+                }
             }
 
             // Only a pass that read both inventories through may say so: the

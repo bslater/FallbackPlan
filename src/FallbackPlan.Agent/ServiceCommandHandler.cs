@@ -1728,24 +1728,46 @@ public sealed partial class ServiceCommandHandler(
 
                 if (declared is null || declared.Kind != DestinationKind.LocalPath)
                 {
-                    // Said rather than skipped: a peer replica lives behind the
-                    // wire with no store to read, so its bytes are confirmed by
-                    // the range challenge at sync time, not by re-reading here.
+                    // Said rather than skipped. A peer's replica can be read
+                    // over the retrieval session, but reading all of it is a
+                    // standing cost on somebody else's link that nothing here
+                    // yet schedules or bounds; until something does, the range
+                    // challenge and the read-back sample it at sync time.
                     lines.Add(
                         $"{set.Name} -> {reference.Ref}: not deeply verifiable — "
-                        + "only a local path can have its stored bytes re-read");
+                        + "a peer's replica is sampled at sync time, not re-read in full");
                     continue;
                 }
 
-                var (examined, found) = command.Full
+                // A person asked, so the read goes through no limit.
+                var outcome = command.Full
                     ? await ReplicaSweepJob.RunFullAsync(runtime, set, reference.Ref, now, cancellationToken)
                         .ConfigureAwait(false)
-                    : await Segment(set, reference.Ref).ConfigureAwait(false);
+                    : await ReplicaSweepJob
+                        .SweepAsync(runtime, set, reference.Ref, now, userInitiated: true, cancellationToken)
+                        .ConfigureAwait(false);
+                var (examined, found, repaired, stalledOn, stall) =
+                    (outcome.Examined, outcome.Damaged, outcome.Repaired, outcome.StalledOn, outcome.Stall);
 
+                // Found damage is a failed verification whether or not it was
+                // repaired: the destination altered what it was given. A read
+                // that failed is not damage — nothing was shown altered — so it
+                // is said where the sweep stopped, and counted as nothing.
                 damaged += found;
                 var record = runtime.DestinationSync.Find(set.Id, reference.Ref);
+                var stopped = stall is null ? null
+                    : stalledOn is null ? $"its replica could not be read: {stall}"
+                    : $"blob {stalledOn} could not be read: {stall}";
                 lines.Add(found > 0
-                    ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read"
+                    ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read — "
+                        + (repaired == found
+                            ? "each was replaced from a sound copy and re-verified"
+                            : $"{repaired} replaced from a sound copy, {found - repaired} with no sound copy to replace them")
+                        + (stopped is null ? string.Empty : $"; then {stopped}")
+                    : stopped is not null
+                        ? $"{set.Name} -> {reference.Ref}: "
+                            + (examined == 0 ? $"nothing confirmed — {stopped}" : $"{examined} object(s) confirmed, then {stopped}")
+                            + "; the sweep tries it again after a pause"
                     : $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed"
                         + (record?.SweepCompletedAt is not null && record.SweepCursor is null
                             ? " — every stored object has now been checked"
@@ -1763,15 +1785,6 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new VerifyDestinationResult(lines, damaged);
-
-        async Task<(int Examined, int Damaged)> Segment(BackupSetConfiguration set, string destination)
-        {
-            // A person asked (verify_destination), so the segment reads
-            // through no limit.
-            var outcome = await ReplicaSweepJob
-                .RunAsync(runtime, set, destination, now, userInitiated: true, cancellationToken).ConfigureAwait(false);
-            return (outcome.Examined, outcome.Damaged);
-        }
     }
 
     /// <summary>

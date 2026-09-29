@@ -100,7 +100,7 @@ Status per record. **Sixty-four of the seventy-four are Accepted.** Among them: 
 | [0032](adr/0032-mstest-as-the-test-framework.md) | MSTest is the test framework |
 | [0033](adr/0033-hosting-under-an-os-service-manager.md) | Hosting under an OS service manager |
 | [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations: per-set staging archives, whole-archive replicas |
-| [0035](adr/0035-destination-fitness.md) | Destination fitness: admission, capacity, shortfall, scheduled proof |
+| [0035](adr/0035-destination-fitness.md) | Destination fitness: admission, capacity, shortfall, scheduled proof, and repair of what it finds |
 | [0036](adr/0036-local-web-console.md) | The local web console |
 | [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract |
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes answered with their meaning: rescan and notice |

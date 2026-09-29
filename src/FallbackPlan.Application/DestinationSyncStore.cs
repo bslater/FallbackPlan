@@ -176,6 +176,59 @@ public sealed record DestinationSyncRecord
     public int SweptThisCircuit { get; init; }
 
     /// <summary>
+    /// The store keys a deep sweep found damaged at this destination and could
+    /// not repair; null when none are outstanding (schema 6,
+    /// [ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// While any are listed the pair is <see cref="DestinationSyncState.Failed"/>
+    /// whatever else is recorded of it: <see cref="DestinationSyncStore.RecordSuccess"/>
+    /// keeps it failed and says why. A capture ships its new blobs to a
+    /// destination knowing nothing of the old ones, so a success is not
+    /// evidence the damage has gone, and a pair read as in sync over objects
+    /// that cannot be restored would count as protection it does not give.
+    /// </para>
+    /// <para>
+    /// Keys leave the list when the sync re-reads them and finds them sound,
+    /// repaired, or no longer held.
+    /// </para>
+    /// </remarks>
+    [JsonPropertyName("damaged_keys")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? DamagedKeys { get; init; }
+
+    /// <summary>
+    /// Deep-sweep segments in a row that stopped short at a blob they could
+    /// not read, or could not read the replica at all; zero once a segment
+    /// finishes (schema 6, [ADR-0035](../../docs/adr/0035-destination-fitness.md)
+    /// Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// Sets how long the next attempt waits — the sync's back-off, not the
+    /// next pass — because a circuit under way is otherwise due on every
+    /// pass, and a blob that will not read would be read up to once a minute
+    /// for as long as it would not. A stalled segment that still read past
+    /// where the last one stopped counts from one again.
+    /// </remarks>
+    [JsonPropertyName("sweep_stalls")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int SweepStalls { get; init; }
+
+    /// <summary>When the last stalled segment stopped, Unix milliseconds; null when none is stalled.</summary>
+    [JsonPropertyName("sweep_stalled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? SweepStalledAt { get; init; }
+
+    /// <summary>
+    /// The blob the last stalled segment could not read; null when the
+    /// replica itself could not be read, or when none is stalled.
+    /// </summary>
+    [JsonPropertyName("sweep_stalled_on")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SweepStalledOn { get; init; }
+
+    /// <summary>
     /// The snapshot whose complete closure first made this destination a full
     /// replica; null while it holds none. Declared ahead of its writer
     /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
@@ -398,7 +451,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 5;
+    private const int CurrentSchemaVersion = 6;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -525,8 +578,9 @@ public sealed class DestinationSyncStore
         // Schema 3 added the verification tiers as plain additive columns: a
         // schema-2 row reads them as zero, which says exactly what is true of
         // it — the tiers were not counted — so 2 → 3 needs no rewrite. Schemas
-        // 4 and 5 did the same with the chunk tier and the count of drills
-        // that did not complete. Only 1 → 2 changes a row, below.
+        // 4, 5 and 6 did the same with the chunk tier, the count of drills
+        // that did not complete, and the keys found damaged and not repaired.
+        // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -602,17 +656,21 @@ public sealed class DestinationSyncStore
         // proven, which a newer copy does not undo.
         return Mutate(setId, destination, previous =>
         {
+            // Damage nobody could repair outlives any copy that succeeds
+            // around it: the pair stays failed, says why, and is not counted
+            // as recovered, so its back-off is not reset either.
+            var damaged = previous?.DamagedKeys is { Count: > 0 } keys ? keys : null;
             var synced = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
             {
-                State = DestinationSyncState.InSync,
+                State = damaged is null ? DestinationSyncState.InSync : DestinationSyncState.Failed,
                 LastAttemptAt = nowUnixMilliseconds,
                 LastSuccessAt = nowUnixMilliseconds,
                 Objects = objects,
-                ConsecutiveFailures = 0,
+                ConsecutiveFailures = damaged is null ? 0 : previous!.ConsecutiveFailures,
                 // Success clears the last failure's message. Stated, because `with`
                 // would otherwise carry it forward and `status` would repeat a
                 // resolved error verbatim forever.
-                LastError = null,
+                LastError = damaged is null ? null : DamageStatement(damaged),
                 // A later sync never un-holds what an earlier one delivered.
                 SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
                 // The first success is the full copy that establishes the
@@ -874,7 +932,114 @@ public sealed class DestinationSyncStore
             // that would imply coverage it does not have.
             SweptThisCircuit = completedCircuit ? 0 : (previous?.SweptThisCircuit ?? 0) + examined,
             SweepCompletedAt = completedCircuit ? nowUnixMilliseconds : previous?.SweepCompletedAt,
+            SweepStalls = 0,
+            SweepStalledAt = null,
+            SweepStalledOn = null,
         });
+    }
+
+    /// <summary>
+    /// Records a deep-sweep segment that stopped short — at a blob it could
+    /// not read, or before reading anything because the replica itself could
+    /// not be read — and counts the stall ([ADR-0035](../../docs/adr/0035-destination-fitness.md)
+    /// Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// What the segment read before it stopped stands: the cursor moves to
+    /// the last blob read, so the next attempt begins with the one that would
+    /// not read instead of re-reading the run up to it. A segment that read
+    /// nothing moves nothing, and does not move "when the sweep last read
+    /// anything" either.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="cursor">The last blob read before the stall; ignored when <paramref name="examined"/> is zero.</param>
+    /// <param name="examined">Blobs read before the stall.</param>
+    /// <param name="stalledOn">The blob that would not read; null when the replica itself could not be read.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row as written, carrying the stall count the caller decides on.</returns>
+    public DestinationSyncRecord RecordSweepStall(
+        string setId, string destination, string? cursor, int examined, string? stalledOn,
+        ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfLessThan(examined, 0);
+
+        return Mutate(setId, destination, previous =>
+        {
+            var row = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind);
+            if (examined > 0)
+            {
+                row = row with
+                {
+                    SweepCursor = cursor,
+                    SweptAt = nowUnixMilliseconds,
+                    SweptThisCircuit = (previous?.SweptThisCircuit ?? 0) + examined,
+                };
+            }
+
+            return row with
+            {
+                // Read past where the last one stopped: a new stall, not the
+                // old one again.
+                SweepStalls = examined > 0 ? 1 : (previous?.SweepStalls ?? 0) + 1,
+                SweepStalledAt = nowUnixMilliseconds,
+                SweepStalledOn = stalledOn,
+            };
+        });
+    }
+
+    /// <summary>
+    /// Records what a deep sweep or a sync found about damaged objects at a
+    /// destination: the keys still damaged with no sound copy to repair them
+    /// from, and the keys now resolved — repaired, found sound, or no longer
+    /// held ([ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// Applied as a set difference under the ledger's lock rather than written
+    /// as a whole list, because the sweep and the sync each know only the keys
+    /// they looked at, and each must leave the other's standing.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="unrepaired">Keys found damaged and not repaired.</param>
+    /// <param name="resolved">Keys no longer outstanding.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordDamage(
+        string setId,
+        string destination,
+        IReadOnlyCollection<string> unrepaired,
+        IReadOnlyCollection<string> resolved,
+        ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNull(unrepaired);
+        ThrowHelper.ThrowIfNull(resolved);
+
+        return Mutate(setId, destination, previous =>
+        {
+            var keys = new SortedSet<string>(previous?.DamagedKeys ?? [], StringComparer.Ordinal);
+            keys.UnionWith(unrepaired);
+            keys.ExceptWith(resolved);
+            return Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+            {
+                DamagedKeys = keys.Count == 0 ? null : [.. keys],
+            };
+        });
+    }
+
+    /// <summary>
+    /// What a pair carrying unrepaired damage says about it, in the ledger's
+    /// words: which objects, and that nothing could replace them.
+    /// </summary>
+    /// <param name="damagedKeys">The keys still outstanding; at least one.</param>
+    public static string DamageStatement(IReadOnlyList<string> damagedKeys)
+    {
+        ThrowHelper.ThrowIfNull(damagedKeys);
+        ThrowHelper.ThrowIfLessThan(damagedKeys.Count, 1);
+
+        var others = damagedKeys.Count - 1;
+        return $"{damagedKeys.Count} object(s) found damaged here have no sound copy to repair them from: "
+            + $"blob {damagedKeys[0]}{(others > 0 ? $" and {others} more" : string.Empty)} — "
+            + "what needs them cannot be restored from this destination until they are replaced";
     }
 
     /// <summary>Records a failed or refused attempt, keeping the last success and counting toward back-off.</summary>

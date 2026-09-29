@@ -18,7 +18,30 @@ namespace FallbackPlan.Repository;
 /// that supports "coverage is complete as of <i>T</i>" — a segment count cannot.
 /// </param>
 public sealed record ReplicaSweepResult(
-    int Examined, IReadOnlyList<string> Findings, string? NextCursor, bool CompletedCircuit);
+    int Examined, IReadOnlyList<string> Findings, string? NextCursor, bool CompletedCircuit)
+{
+    /// <summary>
+    /// The store keys behind <see cref="Findings"/>, one per damaged blob, for
+    /// whatever acts on them — a repair must not have to parse a sentence back.
+    /// </summary>
+    public IReadOnlyList<string> DamagedKeys { get; init; } = [];
+
+    /// <summary>
+    /// The blob this segment stopped at because it could not be read; null
+    /// when the segment was not stopped short. The segment ends there, and
+    /// <see cref="NextCursor"/> is the last blob read before it, so the next
+    /// attempt begins with this one.
+    /// </summary>
+    /// <remarks>
+    /// Not a finding. A disk gone from under the segment fails every read the
+    /// same way one bad sector fails one, and nothing within one attempt tells
+    /// the two apart; the caller decides what a stall repeated means.
+    /// </remarks>
+    public string? StalledOn { get; init; }
+
+    /// <summary>Why the read of <see cref="StalledOn"/> failed; null when the segment did not stall.</summary>
+    public string? Stall { get; init; }
+}
 
 /// <summary>
 /// Re-reads a replica's stored blobs and confirms they are still what was
@@ -72,6 +95,13 @@ public static class ReplicaSweep
     public const int DefaultBudget = 64;
 
     /// <summary>
+    /// Bytes read per segment when the caller states no preference: sixty-four
+    /// blobs at the default 64 MiB target, so on an ordinary archive the count
+    /// is what ends a segment and this bites only on larger blobs.
+    /// </summary>
+    public const long DefaultByteBudget = 4L * 1024 * 1024 * 1024;
+
+    /// <summary>
     /// Examines the next <paramref name="budget"/> blobs after
     /// <paramref name="cursor"/>.
     /// </summary>
@@ -82,6 +112,37 @@ public static class ReplicaSweep
     /// <param name="cursor">Where to resume, or null to start at the beginning.</param>
     /// <param name="budget">The most blobs to examine; must be positive.</param>
     /// <param name="cancellationToken">Cancels the segment; the cursor is not advanced.</param>
+    public static ValueTask<ReplicaSweepResult> RunAsync(
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        IObjectStore replica,
+        IObjectStore? source,
+        string? cursor,
+        int budget,
+        CancellationToken cancellationToken) =>
+        RunAsync(repositoryId, keys, replica, source, cursor, budget, DefaultByteBudget, cancellationToken);
+
+    /// <summary>
+    /// Examines the next <paramref name="budget"/> blobs after
+    /// <paramref name="cursor"/>, stopping early once they have read
+    /// <paramref name="byteBudget"/> bytes.
+    /// </summary>
+    /// <remarks>
+    /// The byte bound is what keeps a segment short when reading is slow: the
+    /// segment holds the process's one transfer worker for as long as it
+    /// reads, and sixty-four blobs through a slow limit is hours. A blob is
+    /// read whole or not at all, so the segment ends at the blob that spends
+    /// the budget — and never before the first, or a blob larger than the
+    /// budget would park the circuit on itself for ever.
+    /// </remarks>
+    /// <param name="repositoryId">The replica's repository identity — the same as the source's.</param>
+    /// <param name="keys">The source's key set; a replica is a byte copy, so the same keys open it.</param>
+    /// <param name="replica">The destination's store.</param>
+    /// <param name="source">The staging archive's store, for the length comparison; null skips that half.</param>
+    /// <param name="cursor">Where to resume, or null to start at the beginning.</param>
+    /// <param name="budget">The most blobs to examine; must be positive.</param>
+    /// <param name="byteBudget">The most bytes to read before stopping at a blob boundary; must be positive.</param>
+    /// <param name="cancellationToken">Cancels the segment; the cursor is not advanced.</param>
     public static async ValueTask<ReplicaSweepResult> RunAsync(
         RepositoryId repositoryId,
         RepositoryKeySet keys,
@@ -89,11 +150,13 @@ public static class ReplicaSweep
         IObjectStore? source,
         string? cursor,
         int budget,
+        long byteBudget,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(replica);
         ThrowHelper.ThrowIfLessThan(budget, 1);
+        ThrowHelper.ThrowIfLessThan(byteBudget, 1L);
 
         // The candidates: the `budget` smallest blob keys ordinally after the
         // cursor. Held in a bounded sorted set so a large archive costs the
@@ -130,20 +193,47 @@ public static class ReplicaSweep
         }
 
         var findings = new List<string>();
+        var damaged = new List<string>();
         using var verifier = new VerifyEngine(repositoryId, keys, replica);
         string? lastExamined = null;
+        var examined = 0;
+        var read = 0L;
 
         foreach (var (key, length) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (examined > 0 && read + length > byteBudget)
+            {
+                break;
+            }
+
+            examined++;
+            read += length;
 
             var storeKey = ObjectKey.Parse(key);
-            var result = await verifier
-                .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, cancellationToken)
-                .ConfigureAwait(false);
+            BlobVerifyResult result;
+            try
+            {
+                result = await verifier
+                    .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Stopped here, keeping what was read before: the next attempt
+                // begins with this blob instead of re-reading the run up to it.
+                return new ReplicaSweepResult(examined - 1, findings, lastExamined ?? cursor, CompletedCircuit: false)
+                {
+                    DamagedKeys = damaged,
+                    StalledOn = key,
+                    Stall = exception.Message,
+                };
+            }
+
             if (!result.Ok)
             {
                 findings.Add($"blob {key}: {result.Detail}");
+                damaged.Add(key);
             }
             else if (source is not null
                 && await LengthAtAsync(source, storeKey, cancellationToken).ConfigureAwait(false) is { } sourceLength
@@ -153,17 +243,21 @@ public static class ReplicaSweep
                 // source no longer lists is skipped above, not blamed.
                 findings.Add(
                     $"blob {key}: the replica holds {length} byte(s) where the source holds {sourceLength}");
+                damaged.Add(key);
             }
 
             lastExamined = key;
         }
 
-        // Fewer candidates than the budget means the listing ran out: this
+        // Every key after the cursor examined means the listing ran out: this
         // segment reached the end, so the circuit is closed and the next one
-        // starts over.
-        var completed = seen <= budget;
-        return new ReplicaSweepResult(
-            candidates.Count, findings, completed ? null : lastExamined, completed);
+        // starts over. Fewer — the count or the bytes ended the segment — and
+        // the next resumes after the last blob read.
+        var completed = examined == seen;
+        return new ReplicaSweepResult(examined, findings, completed ? null : lastExamined, completed)
+        {
+            DamagedKeys = damaged,
+        };
     }
 
     private static async ValueTask<long?> LengthAtAsync(

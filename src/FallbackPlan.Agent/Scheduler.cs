@@ -483,12 +483,27 @@ public static class Scheduler
         or JobState.FailedPermanent;
 
     /// <summary>
-    /// Whether a (set, destination) pair is due another sweep segment.
+    /// Whether a (set, destination) pair is due another sweep segment: at
+    /// once while a circuit is open, and an interval after the last circuit
+    /// closed once it has (ADR-0035 Amendment 1).
     /// </summary>
     /// <remarks>
-    /// Only local-path destinations sweep: a peer replica is behind the wire
-    /// with no store to read, so confirming its bytes needs the range
-    /// challenge, not this. Deliberately stated rather than silently skipped.
+    /// <para>
+    /// The interval used to be measured from the last segment, and a segment
+    /// is sixty-four blobs, so a replica of ten thousand took three years to
+    /// be read once and "every stored object has now been checked" was never
+    /// said of an archive of any size. A segment stays bounded — it holds the
+    /// one transfer worker while it reads — and the next one simply follows
+    /// on the next pass, unless the last stopped short at a blob it could not
+    /// read: that one waits the sync's back-off.
+    /// </para>
+    /// <para>
+    /// Only local-path destinations sweep. A peer's replica is readable over
+    /// the retrieval session, but re-reading all of it is a standing cost on
+    /// somebody else's link, which this service does not incur by default;
+    /// the range challenge and the read-back sample it instead. Deliberately
+    /// stated rather than silently skipped.
+    /// </para>
     /// </remarks>
     private static bool ShouldSweep(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
@@ -506,14 +521,24 @@ public static class Scheduler
             return false;
         }
 
-        if (record.SweptAt is not { } swept)
+        if (record.SweepStalls > 0 && record.SweepStalledAt is { } stalledAt)
         {
+            // The last segment stopped at a blob it could not read, and the
+            // next would begin with that blob: tried again under the sync's
+            // back-off, rather than once a minute for as long as it will not
+            // read.
+            return (ulong)now.ToUnixTimeMilliseconds() >= stalledAt + BackoffMs(runtime, record.SweepStalls);
+        }
+
+        if (record.SweptAt is not { } swept || record.SweepCursor is not null)
+        {
+            // Never swept, or a circuit under way: the next segment is due now.
             return true;
         }
 
         var interval = (ulong)(destination.DeepVerifyIntervalDays ?? ReplicaSweepJob.DefaultIntervalDays)
             * 24UL * 3_600_000UL;
-        return (ulong)now.ToUnixTimeMilliseconds() >= swept + interval;
+        return (ulong)now.ToUnixTimeMilliseconds() >= (record.SweepCompletedAt ?? swept) + interval;
     }
 
     /// <summary>
