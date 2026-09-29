@@ -180,6 +180,80 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordDamage_AddsWhatWasFound_AndClearsWhatWasResolved()
+    {
+        // FR-VER-007. The keys a deep sweep found damaged and could not
+        // repair outlive the segment that found them: the sync that follows
+        // re-checks exactly these, and a restart must not forget them.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a", "blobs/data/b"], resolved: [], 2_000);
+        CollectionAssert.AreEquivalent(
+            new[] { "blobs/data/a", "blobs/data/b" },
+            DestinationSyncStore.Open(_state).Find(SetId, "vault")!.DamagedKeys!.ToList());
+
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/b"], resolved: ["blobs/data/a"], 3_000);
+        Assert.AreEqual("blobs/data/b", Assert.ContainsSingle(store.Find(SetId, "vault")!.DamagedKeys!));
+
+        store.RecordDamage(SetId, "vault", unrepaired: [], resolved: ["blobs/data/b"], 4_000);
+        Assert.IsNull(store.Find(SetId, "vault")!.DamagedKeys, "a row with nothing outstanding carries no list at all");
+    }
+
+    [TestMethod]
+    public void RecordSuccess_OverUnrepairedDamage_KeepsThePairFailed_AndSaysWhy()
+    {
+        // A copy can succeed at a destination that still holds objects nobody
+        // could repair — a capture ships its new blobs there and knows nothing
+        // of the old ones. Whichever writer records that success, the pair
+        // must not read as in sync while the ledger says part of what it holds
+        // cannot be restored.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a"], resolved: [], 2_000);
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "deep verification found damage", 2_000);
+
+        store.RecordSuccess(SetId, "vault", objects: 5, nowUnixMilliseconds: 3_000, syncedSequence: 12);
+
+        var damaged = store.Find(SetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.Failed, damaged.State);
+        Assert.Contains("blobs/data/a", damaged.LastError!, StringComparison.Ordinal);
+        Assert.Contains("no sound copy", damaged.LastError!, StringComparison.Ordinal);
+        Assert.AreEqual(3_000UL, damaged.LastSuccessAt, "the copy itself did succeed, and the row says so");
+        Assert.AreEqual(1, damaged.ConsecutiveFailures, "a success over known damage is not a recovery");
+
+        store.RecordDamage(SetId, "vault", unrepaired: [], resolved: ["blobs/data/a"], 4_000);
+        store.RecordSuccess(SetId, "vault", objects: 0, nowUnixMilliseconds: 5_000, syncedSequence: 12);
+
+        var repaired = store.Find(SetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, repaired.State);
+        Assert.IsNull(repaired.LastError);
+        Assert.AreEqual(0, repaired.ConsecutiveFailures);
+    }
+
+    [TestMethod]
+    public void Open_ASchemaFiveLedger_ReadsNoOutstandingDamage()
+    {
+        // Schema 6 added the keys found damaged and not yet repaired, as a
+        // plain additive column. A schema-5 row reads it as absent, which is
+        // true of it: nothing had been found that nothing could repair.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 5, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "last_success_at": 1000, "synced_sequence": 42,
+                  "swept_at": 2000, "sweep_completed_at": 2000 } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-5 ledger must migrate, not quarantine");
+        Assert.IsFalse(File.Exists(path + ".corrupt"));
+        Assert.AreEqual(2_000UL, record.SweepCompletedAt);
+        Assert.IsNull(record.DamagedKeys);
+    }
+
+    [TestMethod]
     public void Open_APreVersioningBareArray_MigratesRatherThanDiscarding()
     {
         // The shape every install before this build wrote. The rows are
@@ -376,7 +450,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 6, "destinations": [
+            { "schema_version": 7, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -412,7 +486,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 5", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 6", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

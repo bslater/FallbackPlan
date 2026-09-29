@@ -170,6 +170,31 @@ public sealed class BackgroundRateLimitTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AScheduledSweepSegmentOfALimitedDestination_ReadsAboutAMinutesWorth_AndAPersonsReadsThrough()
+    {
+        // A segment holds the process's one transfer worker for as long as it
+        // reads, and through a limit it reads at the limit's pace: sixty-four
+        // blobs of sixty-four mebibytes at 64 KiB/s is most of a day. So a
+        // scheduled segment reads about what the limit moves in a minute —
+        // never less than one blob — and resumes on the next pass. A person's
+        // is not paced, and is not bounded by the pace it does not have.
+        WriteRandomSourceFile("docs/large.bin", 8 * 1024 * 1024);
+        await using var runtime = await StartAsync(transferLimit: Limit);
+        await ReachTheVaultAsAPersonAsync(runtime);
+        var set = runtime.Configuration.BackupSets.Single();
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var person = await ReplicaSweepJob.RunAsync(runtime, set, "vault", nowMs, userInitiated: true, Timeout);
+        Assert.IsTrue(person.CompletedCircuit, "the control: a person's segment reads the whole small replica");
+
+        var scheduled = await ReplicaSweepJob.RunAsync(runtime, set, "vault", nowMs, userInitiated: false, Timeout);
+        Assert.IsFalse(scheduled.CompletedCircuit, "a minute at the limit is less than this replica");
+        Assert.IsNotNull(scheduled.Cursor, "the next pass resumes where the bounded segment stopped");
+        Assert.IsLessThan(person.Examined, scheduled.Examined);
+        Assert.IsGreaterThanOrEqualTo(1, scheduled.Examined, "a segment reads at least one blob");
+    }
+
+    [TestMethod]
     public async Task ADrillOfALimitedDestination_IsPaced_AndAPersonsIsNot()
     {
         await using var runtime = await StartAsync(transferLimit: Limit);

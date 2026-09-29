@@ -93,6 +93,54 @@ public sealed class ReplicaSweepTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Sweep_AFinding_NamesTheKeyItFoundDamaged()
+    {
+        // The finding's prose is for a person; the key is for whatever acts
+        // on it. Repairing an object must not mean parsing a sentence back.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+
+        var victim = (await BlobKeysAsync(replica))[0];
+        var path = Path.Combine(ReplicaRoot, victim.Value.Replace('/', Path.DirectorySeparatorChar));
+        var bytes = await File.ReadAllBytesAsync(path);
+        bytes[bytes.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(path, bytes);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.AreEqual(victim.Value, Assert.ContainsSingle(result.DamagedKeys));
+    }
+
+    [TestMethod]
+    public async Task Sweep_AByteBudget_EndsTheSegmentAtTheBlobThatSpendsIt_AndTheNextResumesAfterIt()
+    {
+        // A segment is bounded by bytes as well as by count, because the one
+        // transfer worker is held for as long as the segment reads: sixty-four
+        // blobs is seconds off a local disk and an hour through a slow limit.
+        // The bound never stops a segment reading at least one blob, or a blob
+        // larger than the budget would park the circuit on itself for ever.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        Assert.IsGreaterThanOrEqualTo(3, all.Count, "the archive must span several blobs for a byte bound to bite");
+
+        var first = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: null, budget: 1_000, byteBudget: 1, CancellationToken.None);
+
+        Assert.AreEqual(1, first.Examined, "a budget smaller than one blob still reads one");
+        Assert.AreEqual(all[0], first.NextCursor);
+        Assert.IsFalse(first.CompletedCircuit);
+
+        var whole = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: first.NextCursor, budget: 1_000, byteBudget: long.MaxValue,
+            CancellationToken.None);
+
+        Assert.AreEqual(all.Count - 1, whole.Examined, "the next segment resumes after the blob the first one read");
+        Assert.IsTrue(whole.CompletedCircuit);
+    }
+
+    [TestMethod]
     public async Task Sweep_AValidBlobStoredUnderAnothersKey_IsCaughtByTheLengthComparison()
     {
         // Why the digest alone is not enough, demonstrated rather than
