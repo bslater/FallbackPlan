@@ -1,6 +1,7 @@
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
+using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Agent;
 
@@ -57,6 +58,45 @@ internal static class ReplicaSweepJob
 
     private static readonly AsyncLocal<int?> SegmentBudgetInFlow = new();
 
+    /// <summary>
+    /// Stalls in a row before the sweep says so. Two could be a drive
+    /// re-seated mid-read; three, minutes apart under the back-off, is a
+    /// device that will not give up a backup's bytes.
+    /// </summary>
+    internal const int StallsBeforeNotice = 3;
+
+    /// <summary>
+    /// Wraps every replica a segment opens. A test hook scoped to the flow
+    /// that sets it, as <see cref="SegmentBudget"/> is: no real disk can be
+    /// made to refuse one read on demand, and what the sweep does then is
+    /// what a test of it needs. Null, the production value, wraps nothing.
+    /// </summary>
+    internal static Func<IObjectStore, IObjectStore>? ReplicaDecorator
+    {
+        get => ReplicaDecoratorInFlow.Value;
+        set => ReplicaDecoratorInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<Func<IObjectStore, IObjectStore>?>
+        ReplicaDecoratorInFlow = new();
+
+    /// <summary>What one segment did, or a full pass did in all.</summary>
+    /// <param name="Examined">Blobs read.</param>
+    /// <param name="Damaged">Blobs found not to match what was sealed.</param>
+    /// <param name="Repaired">Of those, how many were replaced from a sound copy.</param>
+    /// <param name="Cursor">Where the next segment resumes; null when the circuit closed.</param>
+    /// <param name="CompletedCircuit">Whether this segment reached the end of the replica.</param>
+    internal sealed record SegmentOutcome(int Examined, int Damaged, int Repaired, string? Cursor, bool CompletedCircuit)
+    {
+        /// <summary>The blob the segment stopped at because it would not read; null when none did.</summary>
+        public string? StalledOn { get; init; }
+
+        /// <summary>Why the segment stopped short; null when it did not.</summary>
+        public string? Stall { get; init; }
+    }
+
+    private static readonly SegmentOutcome Nothing = new(0, 0, 0, null, false);
+
     /// <summary>The job identity, distinct from the pair's sync job so the two never displace each other.</summary>
     public static string JobIdFor(string setId, string destinationName) =>
         $"sweep-{setId}-{destinationName}";
@@ -93,18 +133,17 @@ internal static class ReplicaSweepJob
     /// The on-demand full pass (FR-VER-004): a recovery drill wants "every
     /// object, now", not "the next sixty-four". It re-enters the same segment
     /// logic rather than a second implementation, so the two cannot disagree
-    /// about what counts as damage.
+    /// about what counts as damage. It stops at a stall, which the next
+    /// segment would only meet again.
     /// </remarks>
-    public static async Task<(int Examined, int Damaged, int Repaired)> RunFullAsync(
+    public static async Task<SegmentOutcome> RunFullAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
         ulong nowMs,
         CancellationToken cancellationToken)
     {
-        var examined = 0;
-        var damaged = 0;
-        var repaired = 0;
+        var total = Nothing;
 
         // Bounded by the number of segments a circuit can take, not by trust
         // that one will close: a cursor that somehow failed to advance must
@@ -114,13 +153,17 @@ internal static class ReplicaSweepJob
         {
             // The on-demand full pass is a person's (FR-VER-004), so it reads
             // through no limit.
-            var outcome = await RunAsync(runtime, set, destinationName, nowMs, userInitiated: true, cancellationToken)
+            var outcome = await SweepAsync(runtime, set, destinationName, nowMs, userInitiated: true, cancellationToken)
                 .ConfigureAwait(false);
-            examined += outcome.Examined;
-            damaged += outcome.Damaged;
-            repaired += outcome.Repaired;
+            total = outcome with
+            {
+                Examined = total.Examined + outcome.Examined,
+                Damaged = total.Damaged + outcome.Damaged,
+                Repaired = total.Repaired + outcome.Repaired,
+            };
 
-            if (outcome.CompletedCircuit || outcome.Cursor is null || outcome.Cursor == previousCursor)
+            if (outcome.Stall is not null
+                || outcome.CompletedCircuit || outcome.Cursor is null || outcome.Cursor == previousCursor)
             {
                 break;
             }
@@ -128,7 +171,7 @@ internal static class ReplicaSweepJob
             previousCursor = outcome.Cursor;
         }
 
-        return (examined, damaged, repaired);
+        return total;
     }
 
     /// <summary>Reads the next segment and records what it found.</summary>
@@ -149,16 +192,31 @@ internal static class ReplicaSweepJob
         bool userInitiated,
         CancellationToken cancellationToken)
     {
+        var outcome = await SweepAsync(runtime, set, destinationName, nowMs, userInitiated, cancellationToken)
+            .ConfigureAwait(false);
+        return (outcome.Examined, outcome.Damaged, outcome.Repaired, outcome.Cursor, outcome.CompletedCircuit);
+    }
+
+    /// <summary>Reads the next segment, records what it found, and says where it stopped short.</summary>
+    /// <inheritdoc cref="RunAsync" path="/param"/>
+    public static async Task<SegmentOutcome> SweepAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        bool userInitiated,
+        CancellationToken cancellationToken)
+    {
         if (runtime.Configuration.FindDestination(destinationName) is not
             { Kind: DestinationKind.LocalPath } destination)
         {
-            return (0, 0, 0, null, false);
+            return Nothing;
         }
 
         var archive = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
         if (archive is null)
         {
-            return (0, 0, 0, null, false);
+            return Nothing;
         }
 
         var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
@@ -167,7 +225,9 @@ internal static class ReplicaSweepJob
             // Unreachable right now. Fan-out owns saying so — its shortfall and
             // availability signals already cover a replica that has gone, and
             // a second voice saying it would be a second notice to acknowledge.
-            return (0, 0, 0, null, false);
+            // Nor is it a stall: nothing was tried, and a drive plugged back
+            // in resumes where it was.
+            return Nothing;
         }
 
         // The set gate, for the same reason fan-out takes it: a retention apply
@@ -189,15 +249,51 @@ internal static class ReplicaSweepJob
 
             var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
             var replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
-            var result = await ReplicaSweep.RunAsync(
-                archive.Repository.RepositoryId,
-                archive.Repository.Keys,
-                replica,
-                archive.Store,
-                previous?.SweepCursor,
-                SegmentBudget,
-                limiter is null ? ReplicaSweep.DefaultByteBudget : Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds),
-                cancellationToken).ConfigureAwait(false);
+            if (ReplicaDecorator is { } decorate)
+            {
+                replica = decorate(replica);
+            }
+
+            ReplicaSweepResult result;
+            try
+            {
+                result = await ReplicaSweep.RunAsync(
+                    archive.Repository.RepositoryId,
+                    archive.Repository.Keys,
+                    replica,
+                    archive.Store,
+                    previous?.SweepCursor,
+                    SegmentBudget,
+                    limiter is null ? ReplicaSweep.DefaultByteBudget : Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The replica could not be listed, so nothing was read: a
+                // stall with no blob to name, waited out as any other is.
+                Stalled(runtime, set, destinationName,
+                    ledger.RecordSweepStall(set.Id, destinationName, cursor: null, examined: 0, stalledOn: null, nowMs),
+                    exception.Message, nowMs);
+                return Nothing with { Stall = exception.Message };
+            }
+
+            // What the segment read stands, whether it finished or stopped at
+            // a blob it could not read; a stall is counted, and the scheduler
+            // waits it out under the back-off instead of meeting it again on
+            // the next pass.
+            if (result.Stall is { } stall)
+            {
+                Stalled(runtime, set, destinationName,
+                    ledger.RecordSweepStall(
+                        set.Id, destinationName, result.NextCursor, result.Examined, result.StalledOn, nowMs),
+                    stall, nowMs);
+            }
+            else
+            {
+                ledger.RecordSweep(
+                    set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
+                runtime.Notices.Resolve($"deep-verify-stalled:{set.Id}:{destinationName}", nowMs);
+            }
 
             if (result.Findings.Count > 0)
             {
@@ -208,8 +304,6 @@ internal static class ReplicaSweepJob
                 // The keys go on the ledger before anything is done about
                 // them, so a repair cut short leaves them to the next sync
                 // rather than forgotten (FR-VER-007).
-                ledger.RecordSweep(
-                    set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
                 ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, resolved: [], nowMs);
 
                 IReadOnlyList<ReplicaRepairOutcome> outcomes;
@@ -235,7 +329,12 @@ internal static class ReplicaSweepJob
                     $"deep-verify-failed:{set.Id}:{destinationName}",
                     Finding(set, destinationName, result.Findings, outcomes),
                     nowMs);
-                return (result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit);
+                return new SegmentOutcome(
+                    result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit)
+                {
+                    StalledOn = result.StalledOn,
+                    Stall = result.Stall,
+                };
             }
 
             // A clean circuit no longer withdraws an earlier finding (ADR-0035
@@ -243,21 +342,50 @@ internal static class ReplicaSweepJob
             // so at once — but the device altered a backup once, which is a
             // person's to hear about, and a notice withdrawn by the next clean
             // circuit could be withdrawn before anyone had read it.
-            ledger.RecordSweep(
-                set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
-            return (result.Examined, 0, 0, result.NextCursor, result.CompletedCircuit);
+            return new SegmentOutcome(result.Examined, 0, 0, result.NextCursor, result.CompletedCircuit)
+            {
+                StalledOn = result.StalledOn,
+                Stall = result.Stall,
+            };
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // The disk went away mid-segment. The cursor is not advanced, so
-            // the next pass re-reads the same run; fan-out reports the
-            // destination's availability.
-            return (0, 0, 0, null, false);
+            // The disk went away after the segment read, while what it found
+            // was being repaired: the keys are on the ledger already, and the
+            // sync re-checks them.
+            return Nothing;
         }
         finally
         {
             gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Says a stall once it has happened <see cref="StallsBeforeNotice"/>
+    /// times in a row: a condition, not a finding, since nothing has been
+    /// shown altered — so it is withdrawn by the next segment that finishes.
+    /// </summary>
+    private static void Stalled(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DestinationSyncRecord row,
+        string reason, ulong nowMs)
+    {
+        if (row.SweepStalls < StallsBeforeNotice)
+        {
+            return;
+        }
+
+        var where = row.SweepStalledOn is { } key
+            ? $"has stopped {row.SweepStalls} times in a row at blob {key}, which would not read: {reason}. "
+                + "Until it reads, what needs that blob cannot be restored from there."
+            : $"could not read the replica {row.SweepStalls} times in a row: {reason}. "
+                + "Nothing there is being re-read until it can.";
+        runtime.Notices.Raise(
+            $"deep-verify-stalled:{set.Id}:{destinationName}",
+            $"The deep sweep of destination '{destinationName}' of set '{set.Name}' {where} Nothing is known to be "
+            + "altered, and the sweep keeps trying, further apart each time; a device that will not give back a "
+            + "backup's bytes is one to check.",
+            nowMs);
     }
 
     /// <summary>

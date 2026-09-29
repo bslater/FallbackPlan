@@ -25,6 +25,22 @@ public sealed record ReplicaSweepResult(
     /// whatever acts on them — a repair must not have to parse a sentence back.
     /// </summary>
     public IReadOnlyList<string> DamagedKeys { get; init; } = [];
+
+    /// <summary>
+    /// The blob this segment stopped at because it could not be read; null
+    /// when the segment was not stopped short. The segment ends there, and
+    /// <see cref="NextCursor"/> is the last blob read before it, so the next
+    /// attempt begins with this one.
+    /// </summary>
+    /// <remarks>
+    /// Not a finding. A disk gone from under the segment fails every read the
+    /// same way one bad sector fails one, and nothing within one attempt tells
+    /// the two apart; the caller decides what a stall repeated means.
+    /// </remarks>
+    public string? StalledOn { get; init; }
+
+    /// <summary>Why the read of <see cref="StalledOn"/> failed; null when the segment did not stall.</summary>
+    public string? Stall { get; init; }
 }
 
 /// <summary>
@@ -195,9 +211,25 @@ public static class ReplicaSweep
             read += length;
 
             var storeKey = ObjectKey.Parse(key);
-            var result = await verifier
-                .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, cancellationToken)
-                .ConfigureAwait(false);
+            BlobVerifyResult result;
+            try
+            {
+                result = await verifier
+                    .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Stopped here, keeping what was read before: the next attempt
+                // begins with this blob instead of re-reading the run up to it.
+                return new ReplicaSweepResult(examined - 1, findings, lastExamined ?? cursor, CompletedCircuit: false)
+                {
+                    DamagedKeys = damaged,
+                    StalledOn = key,
+                    Stall = exception.Message,
+                };
+            }
+
             if (!result.Ok)
             {
                 findings.Add($"blob {key}: {result.Detail}");

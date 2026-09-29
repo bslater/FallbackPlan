@@ -494,7 +494,8 @@ public static class Scheduler
     /// be read once and "every stored object has now been checked" was never
     /// said of an archive of any size. A segment stays bounded — it holds the
     /// one transfer worker while it reads — and the next one simply follows
-    /// on the next pass.
+    /// on the next pass, unless the last stopped short at a blob it could not
+    /// read: that one waits the sync's back-off.
     /// </para>
     /// <para>
     /// Only local-path destinations sweep. A peer's replica is readable over
@@ -518,6 +519,15 @@ public static class Scheduler
         {
             // Nothing has been copied there yet; there is nothing to re-read.
             return false;
+        }
+
+        if (record.SweepStalls > 0 && record.SweepStalledAt is { } stalledAt)
+        {
+            // The last segment stopped at a blob it could not read, and the
+            // next would begin with that blob: tried again under the sync's
+            // back-off, rather than once a minute for as long as it will not
+            // read.
+            return (ulong)now.ToUnixTimeMilliseconds() >= stalledAt + BackoffMs(runtime, record.SweepStalls);
         }
 
         if (record.SweptAt is not { } swept || record.SweepCursor is not null)

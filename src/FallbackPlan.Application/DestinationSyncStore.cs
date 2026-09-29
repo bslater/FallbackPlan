@@ -199,6 +199,36 @@ public sealed record DestinationSyncRecord
     public IReadOnlyList<string>? DamagedKeys { get; init; }
 
     /// <summary>
+    /// Deep-sweep segments in a row that stopped short at a blob they could
+    /// not read, or could not read the replica at all; zero once a segment
+    /// finishes (schema 6, [ADR-0035](../../docs/adr/0035-destination-fitness.md)
+    /// Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// Sets how long the next attempt waits — the sync's back-off, not the
+    /// next pass — because a circuit under way is otherwise due on every
+    /// pass, and a blob that will not read would be read up to once a minute
+    /// for as long as it would not. A stalled segment that still read past
+    /// where the last one stopped counts from one again.
+    /// </remarks>
+    [JsonPropertyName("sweep_stalls")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int SweepStalls { get; init; }
+
+    /// <summary>When the last stalled segment stopped, Unix milliseconds; null when none is stalled.</summary>
+    [JsonPropertyName("sweep_stalled_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? SweepStalledAt { get; init; }
+
+    /// <summary>
+    /// The blob the last stalled segment could not read; null when the
+    /// replica itself could not be read, or when none is stalled.
+    /// </summary>
+    [JsonPropertyName("sweep_stalled_on")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SweepStalledOn { get; init; }
+
+    /// <summary>
     /// The snapshot whose complete closure first made this destination a full
     /// replica; null while it holds none. Declared ahead of its writer
     /// (ADR-0047 §6): nothing fills it yet — the schema carries the field so
@@ -902,6 +932,59 @@ public sealed class DestinationSyncStore
             // that would imply coverage it does not have.
             SweptThisCircuit = completedCircuit ? 0 : (previous?.SweptThisCircuit ?? 0) + examined,
             SweepCompletedAt = completedCircuit ? nowUnixMilliseconds : previous?.SweepCompletedAt,
+            SweepStalls = 0,
+            SweepStalledAt = null,
+            SweepStalledOn = null,
+        });
+    }
+
+    /// <summary>
+    /// Records a deep-sweep segment that stopped short — at a blob it could
+    /// not read, or before reading anything because the replica itself could
+    /// not be read — and counts the stall ([ADR-0035](../../docs/adr/0035-destination-fitness.md)
+    /// Amendment 1).
+    /// </summary>
+    /// <remarks>
+    /// What the segment read before it stopped stands: the cursor moves to
+    /// the last blob read, so the next attempt begins with the one that would
+    /// not read instead of re-reading the run up to it. A segment that read
+    /// nothing moves nothing, and does not move "when the sweep last read
+    /// anything" either.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="cursor">The last blob read before the stall; ignored when <paramref name="examined"/> is zero.</param>
+    /// <param name="examined">Blobs read before the stall.</param>
+    /// <param name="stalledOn">The blob that would not read; null when the replica itself could not be read.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <returns>The row as written, carrying the stall count the caller decides on.</returns>
+    public DestinationSyncRecord RecordSweepStall(
+        string setId, string destination, string? cursor, int examined, string? stalledOn,
+        ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfLessThan(examined, 0);
+
+        return Mutate(setId, destination, previous =>
+        {
+            var row = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind);
+            if (examined > 0)
+            {
+                row = row with
+                {
+                    SweepCursor = cursor,
+                    SweptAt = nowUnixMilliseconds,
+                    SweptThisCircuit = (previous?.SweptThisCircuit ?? 0) + examined,
+                };
+            }
+
+            return row with
+            {
+                // Read past where the last one stopped: a new stall, not the
+                // old one again.
+                SweepStalls = examined > 0 ? 1 : (previous?.SweepStalls ?? 0) + 1,
+                SweepStalledAt = nowUnixMilliseconds,
+                SweepStalledOn = stalledOn,
+            };
         });
     }
 
