@@ -273,6 +273,27 @@ public sealed class DeepSweepTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Sweep_ADamagedKeyTheLedgerHolds_LeavesItOnceASegmentReadsItSound()
+    {
+        // However an object became whole again — replaced by hand here — the
+        // next segment to read it is what says so. At a peer, where nothing
+        // here can repair, this and the push that re-sends a removed object
+        // are the only ways damage leaves the ledger (ADR-0035 Amendment 2).
+        await using var runtime = await StartAsync(directShip: true, ("vault", null));
+        await BackUpAsync(runtime);
+        var original = await File.ReadAllBytesAsync(FirstDataBlob(ReplicaRoot(Vault)), Timeout);
+        var (_, victim) = Rot(ReplicaRoot(Vault));
+        await SweepAsync(runtime, "vault");
+        Assert.IsNotNull(Row(runtime, "vault").DamagedKeys, "the control: no sound copy, so the damage stands");
+
+        await File.WriteAllBytesAsync(victim, original, Timeout);
+        var again = await SweepAsync(runtime, "vault");
+
+        Assert.AreEqual(0, again.Damaged);
+        Assert.IsNull(Row(runtime, "vault").DamagedKeys, "a key read sound again is no longer outstanding");
+    }
+
+    [TestMethod]
     public async Task VerifyDestination_ADamagedReplica_SaysWhatWasReplaced()
     {
         await using var runtime = await StartAsync(directShip: false, ("vault", null));
@@ -468,13 +489,17 @@ public sealed class DeepSweepTests : IDisposable
     private static string PathOf(string root, string key) =>
         Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar));
 
-    /// <summary>Flips one byte in the middle of the replica's first data blob.</summary>
-    private static (string Key, string Path) Rot(string replicaRoot)
-    {
-        var victim = Directory
+    /// <summary>The replica's first data blob, in key order — the one <see cref="Rot(string)"/> damages.</summary>
+    private static string FirstDataBlob(string replicaRoot) =>
+        Directory
             .GetFiles(Path.Combine(replicaRoot, "blobs", "data"), "*", SearchOption.AllDirectories)
             .Order(StringComparer.Ordinal)
             .First();
+
+    /// <summary>Flips one byte in the middle of the replica's first data blob.</summary>
+    private static (string Key, string Path) Rot(string replicaRoot)
+    {
+        var victim = FirstDataBlob(replicaRoot);
         RotFile(victim);
         return (Path.GetRelativePath(replicaRoot, victim).Replace(Path.DirectorySeparatorChar, '/'), victim);
     }
