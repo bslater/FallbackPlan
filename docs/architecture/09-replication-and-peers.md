@@ -339,7 +339,9 @@ pair and not repaired: replacing an object at a peer needs a write the
 retrieval session does not offer. So the finding names the objects and the
 remedy the peer's owner can carry out — remove them, and the next push sends
 them again whole, which is what clears them. A peer that will not serve the
-session is said to be unreadable, and never blamed.
+session is said to be unreadable, and never blamed; one that has gone between
+syncs is recorded unreachable by the run that meets it, as a sync would record
+it, so the next pass does not dial it again.
 
 ## 6. Quotas and exhaustion
 
