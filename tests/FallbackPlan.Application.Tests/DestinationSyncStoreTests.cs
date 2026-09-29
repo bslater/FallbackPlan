@@ -232,6 +232,70 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordSweepStall_ThatReadNothing_CountsAnotherStall_AndMovesNoCursor()
+    {
+        // FR-VER-007. A segment that stopped at a blob it could not read
+        // counts a stall, and the stalls in a row set how long the next
+        // attempt waits. Nothing read is nothing to move the circuit on by,
+        // and "when the sweep last read anything" did not move either.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+        store.RecordSweep(SetId, "vault", "blobs/data/a", examined: 1, completedCircuit: false, 2_000);
+
+        store.RecordSweepStall(SetId, "vault", "blobs/data/a", examined: 0, stalledOn: "blobs/data/b", 3_000);
+        var once = store.RecordSweepStall(SetId, "vault", "blobs/data/a", examined: 0, stalledOn: "blobs/data/b", 4_000);
+
+        Assert.AreEqual(2, once.SweepStalls);
+        Assert.AreEqual(4_000UL, once.SweepStalledAt);
+        Assert.AreEqual("blobs/data/b", once.SweepStalledOn);
+        Assert.AreEqual("blobs/data/a", once.SweepCursor);
+        Assert.AreEqual(2_000UL, once.SweptAt, "a stall that read nothing is not a read");
+        Assert.AreEqual(1, once.SweptThisCircuit);
+
+        var reopened = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(2, reopened.SweepStalls, "a restart must not reset the back-off");
+        Assert.AreEqual("blobs/data/b", reopened.SweepStalledOn);
+    }
+
+    [TestMethod]
+    public void RecordSweepStall_ThatReadSomething_KeepsItsProgress_AndCountsFromOne()
+    {
+        // A segment that got further before it stopped is a new stall, not
+        // the old one again: whatever stopped the last attempt, this one read
+        // past it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+        store.RecordSweepStall(SetId, "vault", cursor: null, examined: 0, stalledOn: "blobs/data/a", 2_000);
+        store.RecordSweepStall(SetId, "vault", cursor: null, examined: 0, stalledOn: "blobs/data/a", 3_000);
+
+        var further = store.RecordSweepStall(
+            SetId, "vault", "blobs/data/b", examined: 2, stalledOn: "blobs/data/c", 4_000);
+
+        Assert.AreEqual(1, further.SweepStalls);
+        Assert.AreEqual("blobs/data/b", further.SweepCursor);
+        Assert.AreEqual(4_000UL, further.SweptAt);
+        Assert.AreEqual(2, further.SweptThisCircuit);
+        Assert.AreEqual("blobs/data/c", further.SweepStalledOn);
+    }
+
+    [TestMethod]
+    public void RecordSweep_ASegmentThatFinished_ClearsTheStall()
+    {
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+        store.RecordSweepStall(SetId, "vault", cursor: null, examined: 0, stalledOn: "blobs/data/a", 2_000);
+
+        var finished = store.RecordSweep(SetId, "vault", "blobs/data/a", examined: 1, completedCircuit: false, 3_000);
+
+        Assert.AreEqual(0, finished.SweepStalls);
+        Assert.IsNull(finished.SweepStalledAt);
+        Assert.IsNull(finished.SweepStalledOn);
+        Assert.DoesNotContain(
+            "sweep_stall", File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal,
+            "a pair that is not stalled carries no stall columns");
+    }
+
+    [TestMethod]
     public void Open_ASchemaFiveLedger_ReadsNoOutstandingDamage()
     {
         // Schema 6 added the keys found damaged and not yet repaired, as a
@@ -251,6 +315,8 @@ public sealed class DestinationSyncStoreTests
         Assert.IsFalse(File.Exists(path + ".corrupt"));
         Assert.AreEqual(2_000UL, record.SweepCompletedAt);
         Assert.IsNull(record.DamagedKeys);
+        Assert.AreEqual(0, record.SweepStalls, "nor had a sweep been stopped short by a blob that would not read");
+        Assert.IsNull(record.SweepStalledOn);
     }
 
     [TestMethod]

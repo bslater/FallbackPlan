@@ -1,6 +1,7 @@
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -138,6 +139,63 @@ public sealed class ReplicaSweepTests : ArchiveTestHarness
 
         Assert.AreEqual(all.Count - 1, whole.Examined, "the next segment resumes after the blob the first one read");
         Assert.IsTrue(whole.CompletedCircuit);
+    }
+
+    [TestMethod]
+    public async Task Sweep_ABlobThatWillNotRead_StopsTheSegmentAtIt_KeepingWhatWasReadBeforeIt()
+    {
+        // A read that fails is not a finding: a disk that has gone from under
+        // the segment fails every read the same way one bad sector fails one,
+        // and only another attempt tells them apart. So the segment stops at
+        // the blob, says which and why, and keeps what it read before it — a
+        // retry then begins at that blob rather than re-reading the run up to
+        // it, which on every pass would be the whole segment again.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        Assert.IsGreaterThanOrEqualTo(3, all.Count, "the archive must span several blobs");
+        var failing = new UnreadableObjectStore(replica, key => key == all[1]);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, failing, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.AreEqual(all[1], result.StalledOn);
+        Assert.Contains(UnreadableObjectStore.Refusal, result.Stall!, StringComparison.Ordinal);
+        Assert.AreEqual(1, result.Examined, "the blob before it was read, and stands");
+        Assert.AreEqual(all[0], result.NextCursor, "the next attempt begins at the blob that would not read");
+        Assert.IsFalse(result.CompletedCircuit);
+        Assert.IsEmpty(result.Findings, "a blob that would not be read has not been shown to be altered");
+        Assert.IsEmpty(result.DamagedKeys);
+    }
+
+    [TestMethod]
+    public async Task Sweep_TheFirstBlobWillNotRead_LeavesTheCursorWhereItWas()
+    {
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var all = (await BlobKeysAsync(replica)).Select(key => key.Value).Order(StringComparer.Ordinal).ToList();
+        var failing = new UnreadableObjectStore(replica, key => key == all[1]);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, failing, source, cursor: all[0], budget: 1_000, CancellationToken.None);
+
+        Assert.AreEqual(all[1], result.StalledOn);
+        Assert.AreEqual(0, result.Examined);
+        Assert.AreEqual(all[0], result.NextCursor, "nothing was read, so nothing moves");
+        Assert.IsFalse(result.CompletedCircuit, "a segment that stopped short has not reached the end");
+    }
+
+    [TestMethod]
+    public async Task Sweep_ASegmentThatReadsEverything_HasNoStall()
+    {
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.IsNull(result.StalledOn);
+        Assert.IsNull(result.Stall);
     }
 
     [TestMethod]

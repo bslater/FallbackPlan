@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Protocol;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -23,12 +24,17 @@ namespace FallbackPlan.Hosts.Tests;
 /// objects to be "re-copied and re-verified" and the sync it promised as the
 /// repair copied nothing, because the copier counts any key that is present as
 /// held and a local store never overwrites. And that sync then recorded the
-/// pair in sync over damage the ledger had just been told about.
+/// pair in sync over damage the ledger had just been told about. The last was
+/// found once the circuit was carried on every pass: a blob that would not
+/// read stopped its segment and moved nothing, so the next pass read the same
+/// run up to it again, once a minute, saying nothing.
 /// </para>
 /// <para>
 /// Segments are made small with <see cref="ReplicaSweepJob.SegmentBudget"/>,
-/// set before the runtime starts so the class runs beside the rest of the
-/// suite; the pass clock is the test's, as it is the service's.
+/// and a blob made to refuse its reads with
+/// <see cref="ReplicaSweepJob.ReplicaDecorator"/>, each set before the runtime
+/// starts so the class runs beside the rest of the suite; the pass clock is
+/// the test's, as it is the service's.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -305,6 +311,103 @@ public sealed class DeepSweepTests : IDisposable
         }
     }
 
+    [TestMethod]
+    public async Task Sweep_ABlobThatWillNotRead_IsTriedAgainUnderBackOff_NotOnEveryPass()
+    {
+        // A circuit under way is due on every pass, and a segment that stopped
+        // at a blob it could not read left its circuit under way — so a disk
+        // with one bad sector was read up to it once a minute, for ever, and
+        // nothing said so. The segment keeps what it read before the blob,
+        // and the next attempt waits the sync's back-off.
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        await SyncAsync(runtime, "vault");
+        var blobs = BlobKeys(ReplicaRoot(Vault));
+        Assert.IsGreaterThanOrEqualTo(2, blobs.Count, "the replica must span several blobs");
+        unreadable = blobs[1];
+
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+
+        var stalled = Row(runtime, "vault");
+        Assert.AreEqual(1, stalled.SweepStalls);
+        Assert.AreEqual(unreadable, stalled.SweepStalledOn);
+        Assert.AreEqual(blobs[0], stalled.SweepCursor, "what was read before the blob stands");
+        Assert.AreNotEqual(DestinationSyncState.Failed, stalled.State, "a blob that would not be read has not been found altered");
+        Assert.IsNull(stalled.DamagedKeys);
+
+        await PassAsync(runtime, start.AddMinutes(1));
+        Assert.AreEqual(stalled.SweepStalledAt, Row(runtime, "vault").SweepStalledAt, "not tried again on the next pass");
+
+        await PassAsync(runtime, start.AddMinutes(3));
+        var again = Row(runtime, "vault");
+        Assert.AreEqual(2, again.SweepStalls, "tried again once the back-off had passed, and stopped at the same blob");
+        Assert.AreEqual(blobs[0], again.SweepCursor);
+    }
+
+    [TestMethod]
+    public async Task Sweep_ThreeStallsInARow_AreSaid_AndTheNoticeIsWithdrawnOnceASegmentGetsPast()
+    {
+        // Two could be a drive re-seated mid-read; three in a row, minutes
+        // apart, is a device that will not give up a backup, which is a
+        // person's to hear. It is a condition rather than a finding — nothing
+        // is shown altered — so it is withdrawn once the sweep reads past it.
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        await SyncAsync(runtime, "vault");
+        unreadable = BlobKeys(ReplicaRoot(Vault))[0];
+
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        await PassAsync(runtime, start.AddMinutes(3));
+        Assert.IsNull(StallNotice(runtime), "two stalls are not yet said");
+        await PassAsync(runtime, start.AddMinutes(8));
+
+        Assert.AreEqual(3, Row(runtime, "vault").SweepStalls);
+        var notice = StallNotice(runtime);
+        Assert.IsNotNull(notice, "three stalls in a row are said");
+        Assert.Contains("'vault'", notice.Message, StringComparison.Ordinal);
+        Assert.Contains(unreadable, notice.Message, StringComparison.Ordinal);
+        Assert.Contains(UnreadableObjectStore.Refusal, notice.Message, StringComparison.Ordinal);
+        Assert.AreNotEqual(DestinationSyncState.Failed, Row(runtime, "vault").State);
+
+        unreadable = null;
+        await PassAsync(runtime, start.AddMinutes(17));
+
+        var through = Row(runtime, "vault");
+        Assert.AreEqual(0, through.SweepStalls);
+        Assert.IsNotNull(through.SweepCompletedAt, "the circuit carried on past it");
+        Assert.IsNull(StallNotice(runtime), "a condition that has cleared is withdrawn");
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_ABlobThatWillNotRead_SaysWhereItStopped_AndCountsNoDamage()
+    {
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        await SyncAsync(runtime, "vault");
+        unreadable = BlobKeys(ReplicaRoot(Vault))[1];
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand(null, "vault", Full: true), Timeout),
+            out var result);
+
+        Assert.AreEqual(0L, result.Damaged, "a blob that would not be read has not been found altered");
+        var line = Assert.ContainsSingle(result.Lines);
+        Assert.Contains("1 object(s) confirmed", line, StringComparison.Ordinal);
+        Assert.Contains(unreadable, line, StringComparison.Ordinal);
+        Assert.Contains(UnreadableObjectStore.Refusal, line, StringComparison.Ordinal);
+        Assert.DoesNotContain("every stored object has now been checked", line, StringComparison.Ordinal);
+        Assert.AreEqual(1, Row(runtime, "vault").SweepStalls, "a person's attempt is an attempt, and a full pass stops at it");
+    }
+
     private static DestinationSyncRecord Row(ServiceRuntime runtime, string destination) =>
         runtime.DestinationSync.Find(runtime.Configuration.BackupSets.Single().Id, destination)
         ?? throw new AssertFailedException($"'{destination}' has no ledger row");
@@ -333,6 +436,26 @@ public sealed class DeepSweepTests : IDisposable
         await pass.Transfers.WaitAsync(Timeout);
         await pass.Drills.WaitAsync(Timeout);
     }
+
+    /// <summary>One sync and no sweep, so a test can choose what the sweep will meet.</summary>
+    private async Task SyncAsync(ServiceRuntime runtime, string destination)
+    {
+        var sync = FanOut.Enqueue(
+            runtime, runtime.Configuration.BackupSets.Single(), destination, DateTimeOffset.Now, userInitiated: true);
+        Assert.IsNotNull(sync, "nothing else was syncing, so the sync cannot have been coalesced away");
+        await sync.WaitAsync(Timeout);
+        Assert.AreEqual(DestinationSyncState.InSync, Row(runtime, destination).State, Row(runtime, destination).LastError);
+    }
+
+    private static Notice? StallNotice(ServiceRuntime runtime) =>
+        runtime.Notices.Unacknowledged.SingleOrDefault(notice =>
+            notice.Key.StartsWith("deep-verify-stalled:", StringComparison.Ordinal));
+
+    /// <summary>The replica's blob keys, in the order a circuit reads them.</summary>
+    private static List<string> BlobKeys(string replicaRoot) =>
+        [.. BlobFiles(replicaRoot)
+            .Select(path => Path.GetRelativePath(replicaRoot, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Order(StringComparer.Ordinal)];
 
     /// <summary>The one repository directory a destination path holds.</summary>
     private static string ReplicaRoot(string destinationPath) =>
