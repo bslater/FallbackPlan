@@ -27,6 +27,14 @@ public sealed record ReplicaSweepResult(
     public IReadOnlyList<string> DamagedKeys { get; init; } = [];
 
     /// <summary>
+    /// Every key this segment read, damaged or not — what a caller holding an
+    /// earlier finding needs to know which of its keys have now been read
+    /// again, and a key the segment did not reach must not be taken for one
+    /// that is sound.
+    /// </summary>
+    public IReadOnlyList<string> ExaminedKeys { get; init; } = [];
+
+    /// <summary>
     /// The blob this segment stopped at because it could not be read; null
     /// when the segment was not stopped short. The segment ends there, and
     /// <see cref="NextCursor"/> is the last blob read before it, so the next
@@ -194,21 +202,22 @@ public static class ReplicaSweep
 
         var findings = new List<string>();
         var damaged = new List<string>();
+        var read = new List<string>();
         using var verifier = new VerifyEngine(repositoryId, keys, replica);
         string? lastExamined = null;
         var examined = 0;
-        var read = 0L;
+        var bytesRead = 0L;
 
         foreach (var (key, length) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (examined > 0 && read + length > byteBudget)
+            if (examined > 0 && bytesRead + length > byteBudget)
             {
                 break;
             }
 
             examined++;
-            read += length;
+            bytesRead += length;
 
             var storeKey = ObjectKey.Parse(key);
             BlobVerifyResult result;
@@ -225,6 +234,7 @@ public static class ReplicaSweep
                 return new ReplicaSweepResult(examined - 1, findings, lastExamined ?? cursor, CompletedCircuit: false)
                 {
                     DamagedKeys = damaged,
+                    ExaminedKeys = read,
                     StalledOn = key,
                     Stall = exception.Message,
                 };
@@ -246,6 +256,8 @@ public static class ReplicaSweep
                 damaged.Add(key);
             }
 
+            // Only a blob whose read completed is one this segment read.
+            read.Add(key);
             lastExamined = key;
         }
 
@@ -257,6 +269,7 @@ public static class ReplicaSweep
         return new ReplicaSweepResult(examined, findings, completed ? null : lastExamined, completed)
         {
             DamagedKeys = damaged,
+            ExaminedKeys = read,
         };
     }
 

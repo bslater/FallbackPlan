@@ -144,7 +144,11 @@ public sealed record DestinationConfiguration
 
     /// <summary>
     /// How often the deep sweep re-reads this destination's stored objects and
-    /// checks them against their seals, in days; absent takes the default.
+    /// checks them against their seals, in days. For a local path, absent
+    /// takes the default; for a peer, absent means <b>never</b> — a peer's
+    /// replica is re-read over its link only on a cadence written here
+    /// ([ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 2),
+    /// which is the drill's rule, for the drill's reason.
     /// </summary>
     /// <remarks>
     /// The days rest between circuits, counted from when the last one closed.

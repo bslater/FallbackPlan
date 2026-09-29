@@ -4421,7 +4421,8 @@ function openDestEditor(kind, destination) {
         <select id="dest-domain">${domains.map(domain =>
           `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
         </select></label>
-      <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num" value="${destination?.deepVerifyIntervalDays ?? ""}"></label>
+      <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num"
+        value="${destination?.deepVerifyIntervalDays ?? ""}" placeholder="${kind === "peer" ? "never" : "default"}"></label>
       <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
       <label class="mini">transfer limit <input type="text" id="dest-limit"
         value="${esc(destination?.transferLimit ?? "")}" placeholder="unlimited — e.g. 2 MiB/s"></label>

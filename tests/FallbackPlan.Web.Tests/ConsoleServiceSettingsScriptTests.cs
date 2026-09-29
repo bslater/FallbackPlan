@@ -77,4 +77,21 @@ public sealed class ConsoleServiceSettingsScriptTests
         Assert.Contains("transferLimit:", body, StringComparison.Ordinal);
         Assert.Contains("drillIntervalDays:", body, StringComparison.Ordinal);
     }
+
+    [TestMethod]
+    public void TheDestinationForm_SaysWhatAnEmptyDeepVerifyCadenceMeans_ForEachKind()
+    {
+        // An empty field is a decision with a different answer per kind: a
+        // local path is swept on the default cadence, and a peer is not swept
+        // at all unless its operator writes one down (ADR-0035 Amendment 2) —
+        // which the form must say rather than leave to be guessed.
+        var script = AppJs();
+        var start = script.IndexOf("id=\"dest-sweep\"", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "the form has no deep-verify field");
+        var tag = script[start..script.IndexOf('>', start)];
+
+        Assert.Contains(
+            "placeholder=\"${kind === \"peer\" ? \"never\" : \"default\"}\"", tag, StringComparison.Ordinal,
+            "the deep-verify field must say what an empty value means for this kind");
+    }
 }

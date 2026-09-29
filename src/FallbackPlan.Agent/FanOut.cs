@@ -641,6 +641,23 @@ public static class FanOut
                 outcome.HeldAtStart, outcome.Committed, nowMs);
             ReportHeadroom(runtime, destination, session.TheirTerms?.QuotaBytes ?? 0, outcome.Headroom, nowMs);
 
+            // A key a deep sweep found damaged at this peer, which the peer
+            // did not declare holding when this push began, has been removed
+            // there — the remedy the finding named — and this push sent it
+            // again whole if the peer is still owed it. Either way the damage
+            // is no longer held there (ADR-0035 Amendment 2). Nothing here
+            // can do more at a peer: a key it still declares is still the
+            // damaged object, and stays on the ledger.
+            if (ledger.Find(set.Id, destination.Name)?.DamagedKeys is { Count: > 0 } damagedHere
+                && outcome.HeldKeys is { } declared)
+            {
+                var gone = damagedHere.Where(key => !declared.Contains(key)).ToList();
+                if (gone.Count > 0)
+                {
+                    ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], gone, nowMs);
+                }
+            }
+
             if (plan.Samples.Count > 0)
             {
                 // Challenges ride after the acknowledgement and after any
