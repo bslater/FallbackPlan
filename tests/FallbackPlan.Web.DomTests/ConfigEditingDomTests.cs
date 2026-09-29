@@ -11,9 +11,10 @@ namespace FallbackPlan.Web.DomTests;
 /// The configuration view's editors, walked by real clicks: the destination
 /// editor, the set editor's selection tree, the typed-word delete, the
 /// acknowledgement of a claim held on a replica stored here (FR-DR-005), the
-/// write-only provisioning ceremony, and the adoption ceremony's preview and
-/// confirmation (FR-DR-009) — each asserting the command its dialog claims
-/// to send.
+/// write-only provisioning ceremony, the adoption ceremony's preview and
+/// confirmation (FR-DR-009), and the service-settings card with the
+/// destination form's limit and cadence (FR-SVC-021) — each asserting the
+/// command its dialog claims to send.
 /// </summary>
 /// <remarks>
 /// Re-homed onto the sectioned set editor when this line merged: the single

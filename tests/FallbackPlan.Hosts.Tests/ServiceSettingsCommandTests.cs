@@ -11,7 +11,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// configuration file. A setting the request leaves out keeps its value; an
 /// empty text or a zero width clears one; every refusal is asserted on its
 /// reason, on the parser's own defect, on the absence of the file's path, and
-/// on the file left as it was.
+/// on the file left as it was. Establishes FR-SVC-021.
 /// </summary>
 [TestClass]
 public sealed class ServiceSettingsCommandTests : IDisposable

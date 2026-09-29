@@ -5,7 +5,8 @@ namespace FallbackPlan.Web.Tests;
 /// service-settings card in the configuration view that reads the three
 /// installation settings and writes them back, and two fields on the
 /// destination form for a destination's transfer limit and drill cadence —
-/// the control ADR-0069 §8 and ADR-0074 §7 named as owed.
+/// the control ADR-0069 §8 and ADR-0074 §7 named as owed. The console half of
+/// FR-SVC-021.
 /// </summary>
 /// <remarks>
 /// <para>

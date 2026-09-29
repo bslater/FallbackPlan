@@ -16,7 +16,8 @@ namespace FallbackPlan.Api.Tests;
 /// FR-SVC-006's plan. Later additions ride here too, among them contract
 /// 1.40's adoption answer naming the retention an archive recorded, the wire
 /// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
-/// half of FR-DR-009.
+/// half of FR-DR-009, and 1.44's destination settings, the wire half of
+/// FR-SVC-021.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property

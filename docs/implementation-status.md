@@ -61,7 +61,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0034](adr/0034-hub-and-spoke-destinations.md) | Hub-and-spoke destinations | **Built** | `FallbackPlan.Replication`, `Agent/FanOut`, `Application/DestinationSyncStore`, `Retention/StagingTrim` · `Repository.Tests/EndToEnd/AgentPassTests`, `InterruptionTests/StoreCopyOrderTests`, `Retention.Tests/StagingTrimTests` · [notes](#0034--the-hub-fans-out-ages-and-trims) |
 | [0035](adr/0035-destination-fitness.md) | Destination fitness | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
 | [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
-| [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
+| [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/ServiceSettingsCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
@@ -1127,6 +1127,26 @@ Both are kept now, and `Hosts.Tests/ConfigurationCommandTests` holds every
 field a destination persists to being either carried by the descriptor or
 kept by an edit, so the next such field cannot be forgotten the same way.
 
+**The installation's own settings (2026-09, Amendment 1, FR-SVC-021).**
+Contract 1.44 lets five settings be changed through the service, which until
+now could be set only in the configuration file:
+- the background window, the background read limit and the backup pool's
+  width, through `get_service_settings` and `update_service_settings`;
+- a destination's transfer limit and drill cadence, on its descriptor.
+
+How a request behaves:
+- Null keeps a setting, and an empty text or a zero clears it.
+- A request applies whole or not at all.
+- A refusal quotes the parser's own defect, never the configuration file's
+  path.
+- The pool's width applies at the next start. Until then `ServiceRuntime`'s
+  `BackupPoolWidth` is reported beside the stored value.
+
+The CLI's settings and destination-settings commands, and the console's
+Service settings card and destination form, are clients of the two verbs. The
+drill cadence gained a load-time refusal of its own; it had been reported
+through the deep-verify interval's message.
+
 ### 0038 — a set edit answers with its meaning
 
 Contract 1.8. `preview_set_changes` walks a set's source — under its saved
@@ -1662,7 +1682,9 @@ completion; and the window is enforced to the granularity of a pass tick. The
 window is **reported** on `get_status` (contract 1.39), the CLI and the
 console, and **edited in the configuration file only**, as
 `max_concurrent_backups` is; the console control is owed rather than smuggled
-in behind a status field.
+in behind a status field. That control has since been built as
+[0037](#0037--the-configuration-lifecycle-joins-the-contract)'s Amendment 1, so
+the window is set through the service, the CLI and the console too.
 
 ### 0074 — two more of four
 

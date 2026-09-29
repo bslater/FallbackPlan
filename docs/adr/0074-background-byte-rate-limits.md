@@ -182,6 +182,12 @@ console adds a clause to both overview subtitles. The limits are edited in the
 configuration file only, as the window and `max_concurrent_backups` are. The
 console control ADR-0069 §8 names as owed is owed for these too.
 
+> **Amended 2026-09 ([ADR-0037](0037-configuration-over-the-command-contract.md)
+> Amendment 1).** Built for these too. Contract 1.44 sets both through the
+> service: the read limit among the installation's settings, and a
+> destination's transfer limit on its descriptor, where null keeps it and an
+> empty text removes it. The CLI and the console use both.
+
 ## Consequences
 
 **Positive**
@@ -256,3 +262,4 @@ as container measurement.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | The disk and network limits built together, the second and third of NFR-PERF-013's four; red tests first, then the limiter, the seams and contract 1.43, with each seam's removal confirmed to turn its test red. CPU remains unbuilt and named |
+| 2026-09 | Accepted (related) | The control §7 left owed is built, as ADR-0037 Amendment 1: contract 1.44 sets the read limit and a destination's transfer limit through the service, the CLI and the console |

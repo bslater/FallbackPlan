@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.43
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.44
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.43 — 58 commands. One line each; parameters, results
+The register as of 1.44 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -76,7 +76,12 @@ flagged where it does not resolve here, answered with the confirmation
 the set descriptor carries `direct_ship` (null preserves — a pre-1.25
 client cannot convert a set; an explicit value sets the storage shape,
 refused mid-run and without a local-path destination, and a new local-path
-set defaults to direct-ship).
+set defaults to direct-ship). Since 1.44, `get_service_settings` /
+`update_service_settings` read and set the installation's own settings — the
+background window, the background read limit and `max_concurrent_backups`
+(ADR-0037 Amendment 1, FR-SVC-021) — and the destination descriptor carries
+`transfer_limit` and `drill_interval_days`. On every one of them null keeps
+the stored value, and an empty text or a zero clears it.
 
 **Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
 1.24 with the run's terminal numbers on each row and an optional newest-N
@@ -158,3 +163,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.41 | `acknowledge_replica_claim {repository_id}` and `claim_awaiting_acknowledgement` on each `replica_attributions` row (FR-DR-005, [peer-protocol 06 §3](../peer-protocol/06-retention.md#3-what-the-spoke-validates)): a claim that moves a replica stored here is held — the claimant reads it at once, and its retention instructions are refused, deleting nothing, until this machine's owner acknowledges the claim. Owner-only and local callers only, like `reattribute_replica`; a replica with nothing held answers `configuration_change` saying nothing changed. The flag is additive with a false default, which a pre-1.41 service, never having held a claim, would have sent had it known the field. |
 | 1.42 | `preview_adoption {destination_name, repository_id, envelope}` and its answer `adoption_preview` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 2, FR-DR-009): a recovered configuration takes effect only as a person was shown it. The preview takes the envelope adoption takes, proves it the same way and writes nothing. It answers with the recorded `set_id` and `set_name`; each root as `recorded_path`, `label` and `resolves` on this machine; `schedule`, the rules and `retention`, the set's own policy it would delete by; `snapshot_count` and the newest snapshot; `already_adopted`; the service's `lines`; and a `confirmation`, a digest of all of it. `adopt_archive` gains `confirmation` and requires it. Without one it is refused before any envelope is opened, naming the preview. With one the archive no longer matches, because it gained a snapshot or a different recorded shape, it is refused as changed and leaves nothing behind. **Not additive**, deliberately: a pre-1.42 client that adopts in one call is refused by name rather than adopting a set nobody was shown, and the console and the CLI ship with the service and preview first |
 | 1.43 | `background_limits` on `status` ([ADR-0074](../../docs/adr/0074-background-byte-rate-limits.md), NFR-PERF-013): the byte rates background work is held to, beside the window — `read_limit`, the rate background captures read their sources at, and `transfer_limits`, each limited destination by `destination_name`, each as the configured `text` and as `bytes_per_second`. Reporting only: both are edited in the configuration file, and a person's work is never held to either. Additive with a null default: a pre-1.43 service never sends it, which a client reads as "nothing limited" — what a 1.43 service with no limit configured says too |
+| 1.44 | `get_service_settings` / `update_service_settings` and `transfer_limit` / `drill_interval_days` on the destination descriptor ([ADR-0037](../../docs/adr/0037-configuration-over-the-command-contract.md) Amendment 1, FR-SVC-021): the settings 1.39 and 1.43 report, settable through the service as ADR-0069 §8 and ADR-0074 §7 named as owed. Null keeps a setting, an empty text or a zero clears it, a refused value refuses the request whole and names the setting, never the configuration file's path. `service_settings` carries `effective_max_concurrent_backups`, the width the running pool has — the pool is sized when the service starts, so a width change applies at the next restart. Additive: two verbs, one result and two optional descriptor fields, and a pre-1.44 client's upsert carries neither field and so keeps both |

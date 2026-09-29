@@ -8,7 +8,7 @@ namespace FallbackPlan.Web.Tests;
 /// Contract 1.44's settings reaching the console both ways: the names the
 /// settings card and the destination form read off the relay, and the
 /// camelCase the console sends arriving at the service as the command it
-/// means, the clearing spellings included.
+/// means, the clearing spellings included. The relay half of FR-SVC-021.
 /// </summary>
 /// <remarks>
 /// Same rationale as <see cref="StatusRelayNamesTests"/>: the relay's names
