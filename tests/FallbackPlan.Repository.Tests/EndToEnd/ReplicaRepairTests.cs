@@ -119,8 +119,8 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
         var outcome = await ReplicaRepair.RepairAsync(
             Repo, keys, replica, victim,
             [
-                new RepairSource("destination 'gone'", _ => throw new IOException("the drive is not mounted")),
-                new RepairSource("destination 'away'", _ => ValueTask.FromResult<IObjectStore?>(null)),
+                new CopySource("destination 'gone'", _ => throw new IOException("the drive is not mounted")),
+                new CopySource("destination 'away'", _ => ValueTask.FromResult<IObjectStore?>(null)),
                 Serve("the source", source),
             ],
             CancellationToken.None);
@@ -144,7 +144,7 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
             Repo, keys, replica, victim,
             [
                 Serve("the source", source),
-                new RepairSource("destination 'friend'", _ =>
+                new CopySource("destination 'friend'", _ =>
                 {
                     opened = true;
                     return ValueTask.FromResult<IObjectStore?>(null);
@@ -179,7 +179,7 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
         Assert.IsFalse(absent.Sound);
     }
 
-    private static RepairSource Serve(string name, IObjectStore store) =>
+    private static CopySource Serve(string name, IObjectStore store) =>
         new(name, _ => ValueTask.FromResult<IObjectStore?>(store));
 
     /// <summary>Archives a test file into a store and mirrors it to a replica and a spare.</summary>

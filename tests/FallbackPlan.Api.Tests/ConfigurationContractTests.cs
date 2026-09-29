@@ -34,11 +34,42 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheServiceSettings_AreRecordedAtOneFortyFour()
+    public void ContractVersion_ARestoreReadAroundDamage_IsRecordedAtOneFortyFive()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.44", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.45", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void RestoreResult_TheFilesReadAroundDamage_CrossUnderTheirWireNames()
+    {
+        // FR-RST-007's answer: how many files were read from another copy
+        // because a copy they were first read from was damaged or would not
+        // read, and a sample of which, from where. The field names are the
+        // contract; a rename here is a protocol break that compiles.
+        var answer = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(
+                2, 0, "/out", "complete",
+                ReadAround: 1,
+                ReadAroundSample: ["docs/a.txt — read from destination 'spare', around destination 'vault'"]),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"read_around\":1", answer, StringComparison.Ordinal);
+        Assert.Contains("\"read_around_sample\":[", answer, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(answer, FrameCodec.SerializerOptions), out var parsed);
+        Assert.AreEqual(1L, parsed.ReadAround);
+        Assert.Contains("destination 'spare'", Assert.ContainsSingle(parsed.ReadAroundSample!), StringComparison.Ordinal);
+
+        // A pre-1.45 service sends neither, which reads as nothing read around.
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(
+                "{\"result\":\"restore\",\"restored\":2,\"failed\":0,\"output_directory\":\"/out\",\"outcome\":\"complete\"}",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.AreEqual(0L, older.ReadAround);
+        Assert.IsNull(older.ReadAroundSample);
     }
 
     [TestMethod]

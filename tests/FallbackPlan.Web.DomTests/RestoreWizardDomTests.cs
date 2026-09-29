@@ -180,6 +180,34 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
+    public async Task Wizard_ARestoreThatReadAroundDamage_SaysSoOnItsResult()
+    {
+        // FR-RST-007 where the person restoring is looking: which files came
+        // from another copy, and what the copy they were read around held.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        const string line = "notes.txt — read from destination 'spare', around destination 'vault': "
+            + "Record 1234 in blob 5678 failed authentication (specification 04 §7).";
+        harness.Clients.Client.Respond = command => command is RunRestoreCommand
+            ? new ApiRestoreResult(
+                1, 0, "/restore/out", "complete", ReceiptPath: "/restore/out/receipt.json",
+                ReadAround: 1, ReadAroundSample: [line])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+
+        await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
+        await Expect(page.Locator("#dialog")).ToContainTextAsync("read from another copy");
+        await Expect(page.Locator("#dialog pre.report")).ToContainTextAsync("around destination 'vault'");
+    }
+
+    [TestMethod]
     public async Task Wizard_WhileThePlanIsOnItsWay_TheRestoreCannotBeArmed()
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
