@@ -1036,10 +1036,43 @@ public sealed class DestinationSyncStore
         ThrowHelper.ThrowIfNull(damagedKeys);
         ThrowHelper.ThrowIfLessThan(damagedKeys.Count, 1);
 
+        // Worded for both kinds: a local path's damage stands because no
+        // sound copy was found, a peer's because nothing here can put one
+        // there, and either way the same thing is true of the destination.
         var others = damagedKeys.Count - 1;
-        return $"{damagedKeys.Count} object(s) found damaged here have no sound copy to repair them from: "
+        return $"{damagedKeys.Count} object(s) found damaged here have had no sound copy put in their place: "
             + $"blob {damagedKeys[0]}{(others > 0 ? $" and {others} more" : string.Empty)} — "
             + "what needs them cannot be restored from this destination until they are replaced";
+    }
+
+    /// <summary>
+    /// Records a deep sweep that reached a destination and could not read it —
+    /// a peer that will not serve the retrieval session
+    /// ([ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 2).
+    /// </summary>
+    /// <remarks>
+    /// Stamped so the next attempt waits the destination's interval rather
+    /// than following on the next pass, as an open circuit's segments do: a
+    /// refusal is not going to change in a minute, and each attempt holds the
+    /// one transfer worker while it fails. The circuit starts over when
+    /// reading next succeeds, because a replica nobody could read for an
+    /// interval may not be the one the old cursor was walking.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordSweepUnreadable(string setId, string destination, ulong nowUnixMilliseconds)
+    {
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            SweepCursor = null,
+            SweptAt = nowUnixMilliseconds,
+            SweptThisCircuit = 0,
+            // The interval governs from here, not a stall's back-off.
+            SweepStalls = 0,
+            SweepStalledAt = null,
+            SweepStalledOn = null,
+        });
     }
 
     /// <summary>Records a failed or refused attempt, keeping the last success and counting toward back-off.</summary>

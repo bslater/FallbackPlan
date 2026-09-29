@@ -1726,26 +1726,34 @@ public sealed partial class ServiceCommandHandler(
                     continue;
                 }
 
-                if (declared is null || declared.Kind != DestinationKind.LocalPath)
+                if (declared is not { Kind: DestinationKind.LocalPath or DestinationKind.Peer })
                 {
-                    // Said rather than skipped. A peer's replica can be read
-                    // over the retrieval session, but reading all of it is a
-                    // standing cost on somebody else's link that nothing here
-                    // yet schedules or bounds; until something does, the range
-                    // challenge and the read-back sample it at sync time.
+                    // Said rather than skipped.
                     lines.Add(
                         $"{set.Name} -> {reference.Ref}: not deeply verifiable — "
-                        + "a peer's replica is sampled at sync time, not re-read in full");
+                        + (declared is null ? "no longer declared" : $"a {declared.Kind} destination is not served yet"));
                     continue;
                 }
 
-                // A person asked, so the read goes through no limit.
+                // A person asked, so the read goes through no limit. A peer's
+                // replica is read over the retrieval session with no cadence
+                // needed: a person asking is consent for the read, as a
+                // restore is (ADR-0035 Amendment 2).
                 var outcome = command.Full
                     ? await ReplicaSweepJob.RunFullAsync(runtime, set, reference.Ref, now, cancellationToken)
                         .ConfigureAwait(false)
                     : await ReplicaSweepJob
                         .SweepAsync(runtime, set, reference.Ref, now, userInitiated: true, cancellationToken)
                         .ConfigureAwait(false);
+                if (outcome.Unreadable is { } unreadable && outcome.Examined == 0)
+                {
+                    // Not damage, and not a pass: nothing was read.
+                    lines.Add(
+                        $"{set.Name} -> {reference.Ref}: not deeply verifiable now — "
+                        + $"its replica could not be read: {unreadable}");
+                    continue;
+                }
+
                 var (examined, found, repaired, stalledOn, stall) =
                     (outcome.Examined, outcome.Damaged, outcome.Repaired, outcome.StalledOn, outcome.Stall);
 

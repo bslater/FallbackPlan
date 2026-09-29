@@ -498,26 +498,50 @@ public static class Scheduler
     /// read: that one waits the sync's back-off.
     /// </para>
     /// <para>
-    /// Only local-path destinations sweep. A peer's replica is readable over
-    /// the retrieval session, but re-reading all of it is a standing cost on
-    /// somebody else's link, which this service does not incur by default;
-    /// the range challenge and the read-back sample it instead. Deliberately
-    /// stated rather than silently skipped.
+    /// A peer sweeps only on a cadence its source's operator states for it
+    /// (ADR-0035 Amendment 2): re-reading all of a replica is a standing cost
+    /// on somebody else's link, which this service does not incur by default
+    /// — the drill's rule, for the drill's reason. Until one is stated, the
+    /// range challenge and the read-back sample a peer instead. A peer the
+    /// fan-out last found unreachable is not dialled for its sweep, because a
+    /// dial that fails holds the one transfer worker until it does.
+    /// </para>
+    /// <para>
+    /// A circuit that has not begun waits the interval from the last segment,
+    /// which is the one that closed the previous circuit — or the attempt
+    /// that found a peer would not serve the reads, so a refusal is tried
+    /// again an interval later rather than on every pass.
     /// </para>
     /// </remarks>
     private static bool ShouldSweep(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
     {
-        if (runtime.Configuration.FindDestination(destinationName) is not
-            { Kind: DestinationKind.LocalPath } destination)
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination)
         {
             return false;
+        }
+
+        switch (destination.Kind)
+        {
+            case DestinationKind.LocalPath:
+                break;
+
+            case DestinationKind.Peer when destination.DeepVerifyIntervalDays is not null:
+                break;
+
+            default:
+                return false;
         }
 
         var record = runtime.DestinationSync.Find(set.Id, destinationName);
         if (record?.LastSuccessAt is null)
         {
             // Nothing has been copied there yet; there is nothing to re-read.
+            return false;
+        }
+
+        if (destination.Kind == DestinationKind.Peer && record.State == DestinationSyncState.Unavailable)
+        {
             return false;
         }
 
@@ -538,7 +562,7 @@ public static class Scheduler
 
         var interval = (ulong)(destination.DeepVerifyIntervalDays ?? ReplicaSweepJob.DefaultIntervalDays)
             * 24UL * 3_600_000UL;
-        return (ulong)now.ToUnixTimeMilliseconds() >= (record.SweepCompletedAt ?? swept) + interval;
+        return (ulong)now.ToUnixTimeMilliseconds() >= swept + interval;
     }
 
     /// <summary>

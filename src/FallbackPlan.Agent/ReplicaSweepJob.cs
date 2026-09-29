@@ -59,6 +59,14 @@ internal static class ReplicaSweepJob
     private static readonly AsyncLocal<int?> SegmentBudgetInFlow = new();
 
     /// <summary>
+    /// Bytes a segment of a peer's replica reads when no transfer limit sets a
+    /// smaller share: four blobs at the default target. The worker a segment
+    /// holds is the one every other transfer waits on, and a peer is read
+    /// over a link where a local path is read off a disk.
+    /// </summary>
+    public const long PeerSegmentByteBudget = 256L * 1024 * 1024;
+
+    /// <summary>
     /// Stalls in a row before the sweep says so. Two could be a drive
     /// re-seated mid-read; three, minutes apart under the back-off, is a
     /// device that will not give up a backup's bytes.
@@ -80,13 +88,15 @@ internal static class ReplicaSweepJob
     private static readonly AsyncLocal<Func<IObjectStore, IObjectStore>?>
         ReplicaDecoratorInFlow = new();
 
-    /// <summary>What one segment did, or a full pass did in all.</summary>
+    /// <summary>What one segment did, or a full pass did in all, or why the replica could not be read at all.</summary>
     /// <param name="Examined">Blobs read.</param>
     /// <param name="Damaged">Blobs found not to match what was sealed.</param>
     /// <param name="Repaired">Of those, how many were replaced from a sound copy.</param>
     /// <param name="Cursor">Where the next segment resumes; null when the circuit closed.</param>
     /// <param name="CompletedCircuit">Whether this segment reached the end of the replica.</param>
-    internal sealed record SegmentOutcome(int Examined, int Damaged, int Repaired, string? Cursor, bool CompletedCircuit)
+    /// <param name="Unreadable">Why the replica could not be opened to read at all; null when it was.</param>
+    internal sealed record SegmentOutcome(
+        int Examined, int Damaged, int Repaired, string? Cursor, bool CompletedCircuit, string? Unreadable = null)
     {
         /// <summary>The blob the segment stopped at because it would not read; null when none did.</summary>
         public string? StalledOn { get; init; }
@@ -134,7 +144,7 @@ internal static class ReplicaSweepJob
     /// object, now", not "the next sixty-four". It re-enters the same segment
     /// logic rather than a second implementation, so the two cannot disagree
     /// about what counts as damage. It stops at a stall, which the next
-    /// segment would only meet again.
+    /// segment would only meet again, and at a replica it could not open.
     /// </remarks>
     public static async Task<SegmentOutcome> RunFullAsync(
         ServiceRuntime runtime,
@@ -162,7 +172,7 @@ internal static class ReplicaSweepJob
                 Repaired = total.Repaired + outcome.Repaired,
             };
 
-            if (outcome.Stall is not null
+            if (outcome.Unreadable is not null || outcome.Stall is not null
                 || outcome.CompletedCircuit || outcome.Cursor is null || outcome.Cursor == previousCursor)
             {
                 break;
@@ -197,7 +207,11 @@ internal static class ReplicaSweepJob
         return (outcome.Examined, outcome.Damaged, outcome.Repaired, outcome.Cursor, outcome.CompletedCircuit);
     }
 
-    /// <summary>Reads the next segment, records what it found, and says where it stopped short.</summary>
+    /// <summary>
+    /// Reads the next segment of a local path's replica, or of a peer's over
+    /// the retrieval session, records what it found, and says where it
+    /// stopped short, or why the replica could not be opened to read at all.
+    /// </summary>
     /// <inheritdoc cref="RunAsync" path="/param"/>
     public static async Task<SegmentOutcome> SweepAsync(
         ServiceRuntime runtime,
@@ -208,7 +222,7 @@ internal static class ReplicaSweepJob
         CancellationToken cancellationToken)
     {
         if (runtime.Configuration.FindDestination(destinationName) is not
-            { Kind: DestinationKind.LocalPath } destination)
+            { Kind: DestinationKind.LocalPath or DestinationKind.Peer } destination)
         {
             return Nothing;
         }
@@ -219,146 +233,228 @@ internal static class ReplicaSweepJob
             return Nothing;
         }
 
-        var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
-        if (!Directory.Exists(replicaRoot))
+        var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
+        PeerRetrievalClient? session = null;
+        IObjectStore replica;
+        if (destination.Kind == DestinationKind.LocalPath)
         {
-            // Unreachable right now. Fan-out owns saying so — its shortfall and
-            // availability signals already cover a replica that has gone, and
-            // a second voice saying it would be a second notice to acknowledge.
-            // Nor is it a stall: nothing was tried, and a drive plugged back
-            // in resumes where it was.
-            return Nothing;
-        }
-
-        // The set gate, for the same reason fan-out takes it: a retention apply
-        // mutates staging, and the length comparison reads staging.
-        var gate = runtime.SetGate(set.Id);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var ledger = runtime.DestinationSync;
-            var previous = ledger.Find(set.Id, destinationName);
-
-            // In-memory progress only. A journal entry would be keyed by set,
-            // and the scheduler reads the journal's last-completed back as the
-            // BACKUP anchor — a sweep writing there would move the next
-            // backup's due-ness. So `Verifying` is reported and not recorded,
-            // which is also why nothing polls for it to settle.
-            runtime.Progress.Report(new JobProgress(
-                JobIdFor(set.Id, destinationName), JobState.Verifying, 0, 0, 0, 0, 0, 0));
-
-            var limiter = userInitiated ? null : runtime.Pacing.ForDestination(destination);
-            var replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
-            if (ReplicaDecorator is { } decorate)
+            var replicaRoot = Path.Combine(destination.Path!, archive.Repository.RepositoryId.ToString());
+            if (!Directory.Exists(replicaRoot))
             {
-                replica = decorate(replica);
+                // Unreachable right now. Fan-out owns saying so — its shortfall and
+                // availability signals already cover a replica that has gone, and
+                // a second voice saying it would be a second notice to acknowledge.
+                // Nor is it a stall: nothing was tried, and a drive plugged back
+                // in resumes where it was.
+                return Nothing with { Unreadable = "its replica directory is not there" };
             }
 
-            ReplicaSweepResult result;
+            replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
+        }
+        else
+        {
             try
             {
-                result = await ReplicaSweep.RunAsync(
-                    archive.Repository.RepositoryId,
-                    archive.Repository.Keys,
-                    replica,
-                    archive.Store,
-                    previous?.SweepCursor,
-                    SegmentBudget,
-                    limiter is null ? ReplicaSweep.DefaultByteBudget : Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds),
-                    cancellationToken).ConfigureAwait(false);
+                session = await PeerRetrievalClient.DialAsync(
+                    runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
+                    .ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (Protocol.PeerProtocolException refusal)
             {
-                // The replica could not be listed, so nothing was read: a
-                // stall with no blob to name, waited out as any other is.
-                Stalled(runtime, set, destinationName,
-                    ledger.RecordSweepStall(set.Id, destinationName, cursor: null, examined: 0, stalledOn: null, nowMs),
-                    exception.Message, nowMs);
-                return Nothing with { Stall = exception.Message };
+                return userInitiated
+                    ? Nothing with { Unreadable = refusal.Message }
+                    : Refused(runtime, set, destination, refusal.Message, nowMs);
+            }
+            catch (IOException exception)
+            {
+                // Not reached this time. Fan-out says whether the peer can be
+                // reached, and nothing is stamped, so the next pass that finds
+                // it reachable tries again.
+                return Nothing with { Unreadable = exception.Message };
             }
 
-            // What the segment read stands, whether it finished or stopped at
-            // a blob it could not read; a stall is counted, and the scheduler
-            // waits it out under the back-off instead of meeting it again on
-            // the next pass.
-            if (result.Stall is { } stall)
+            replica = PacedObjectStore.Over(new PeerRetrievalObjectStore(session), limiter);
+        }
+
+        if (ReplicaDecorator is { } decorate)
+        {
+            replica = decorate(replica);
+        }
+
+        await using (session)
+        {
+            // The set gate, for the same reason fan-out takes it: a retention
+            // apply mutates staging, and the length comparison reads staging.
+            var gate = runtime.SetGate(set.Id);
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                Stalled(runtime, set, destinationName,
-                    ledger.RecordSweepStall(
-                        set.Id, destinationName, result.NextCursor, result.Examined, result.StalledOn, nowMs),
-                    stall, nowMs);
+                return await SegmentAsync(
+                    runtime, set, destination, archive, replica, limiter, nowMs, userInitiated, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or Protocol.PeerProtocolException)
+            {
+                // The disk went away after the segment read, while what it found
+                // was being repaired: the keys are on the ledger already, and the
+                // sync re-checks them.
+                return Nothing;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+    }
+
+    /// <summary>One segment, under the set gate, against a replica already opened.</summary>
+    private static async Task<SegmentOutcome> SegmentAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        DestinationConfiguration destination,
+        ArchiveHandle archive,
+        IObjectStore replica,
+        Application.ByteRateLimiter? limiter,
+        ulong nowMs,
+        bool userInitiated,
+        CancellationToken cancellationToken)
+    {
+        var destinationName = destination.Name;
+        var ledger = runtime.DestinationSync;
+        var previous = ledger.Find(set.Id, destinationName);
+
+        // In-memory progress only. A journal entry would be keyed by set,
+        // and the scheduler reads the journal's last-completed back as the
+        // BACKUP anchor — a sweep writing there would move the next
+        // backup's due-ness. So `Verifying` is reported and not recorded,
+        // which is also why nothing polls for it to settle.
+        runtime.Progress.Report(new JobProgress(
+            JobIdFor(set.Id, destinationName), JobState.Verifying, 0, 0, 0, 0, 0, 0));
+
+        ReplicaSweepResult result;
+        try
+        {
+            result = await ReplicaSweep.RunAsync(
+                archive.Repository.RepositoryId,
+                archive.Repository.Keys,
+                replica,
+                archive.Store,
+                previous?.SweepCursor,
+                SegmentBudget,
+                limiter is not null ? Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds)
+                    : destination.Kind == DestinationKind.Peer ? PeerSegmentByteBudget
+                    : ReplicaSweep.DefaultByteBudget,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or Protocol.PeerProtocolException)
+        {
+            // The replica could not be listed, or the peer ended the session
+            // outside any one blob's read, so nothing was read: a stall with no
+            // blob to name, waited out as any other is.
+            Stalled(runtime, set, destinationName,
+                ledger.RecordSweepStall(set.Id, destinationName, cursor: null, examined: 0, stalledOn: null, nowMs),
+                exception.Message, nowMs);
+            return Nothing with { Stall = exception.Message };
+        }
+
+        // Keys an earlier finding left on the ledger that this segment has
+        // now read, and read sound. Only keys actually read: one the segment
+        // did not reach, or that has gone, is not thereby shown to be whole
+        // (ADR-0035 Amendment 2).
+        var readSound = (previous?.DamagedKeys ?? [])
+            .Where(key => result.ExaminedKeys.Contains(key) && !result.DamagedKeys.Contains(key))
+            .ToList();
+
+        // The destination read, so a refusal said earlier no longer stands.
+        runtime.Notices.Resolve($"deep-verify-unavailable:{set.Id}:{destinationName}", nowMs);
+
+        // What the segment read stands, whether it finished or stopped at a
+        // blob it could not read; a stall is counted, and the scheduler waits
+        // it out under the back-off instead of meeting it again on the next
+        // pass.
+        if (result.Stall is { } stall)
+        {
+            Stalled(runtime, set, destinationName,
+                ledger.RecordSweepStall(
+                    set.Id, destinationName, result.NextCursor, result.Examined, result.StalledOn, nowMs),
+                stall, nowMs);
+        }
+        else
+        {
+            ledger.RecordSweep(
+                set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
+            runtime.Notices.Resolve($"deep-verify-stalled:{set.Id}:{destinationName}", nowMs);
+        }
+
+        if (result.Findings.Count > 0)
+        {
+            // FR-VER-005: a verification failure degrades the pair and
+            // raises a warning requiring action. The cursor still advances
+            // — a damaged blob must not park the sweep on itself forever,
+            // re-reporting the same object while the rest goes unchecked.
+            // The keys go on the ledger before anything is done about
+            // them, so a repair cut short leaves them to the next sync
+            // rather than forgotten (FR-VER-007).
+            ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, readSound, nowMs);
+
+            IReadOnlyList<ReplicaRepairOutcome> outcomes;
+            if (destination.Kind == DestinationKind.LocalPath)
+            {
+                await using var repairer = new ReplicaRepairer(runtime, set, destinationName, archive, userInitiated);
+                outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
+                    .ConfigureAwait(false);
             }
             else
             {
-                ledger.RecordSweep(
-                    set.Id, destinationName, result.NextCursor, result.Examined, result.CompletedCircuit, nowMs);
-                runtime.Notices.Resolve($"deep-verify-stalled:{set.Id}:{destinationName}", nowMs);
+                // Nothing here can write at a peer: the retrieval session
+                // reads, and a push only creates.
+                outcomes = [.. result.DamagedKeys.Select(key =>
+                    new ReplicaRepairOutcome(key, RepairedFrom: null, "a peer's replica cannot be repaired from here"))];
             }
 
-            if (result.Findings.Count > 0)
-            {
-                // FR-VER-005: a verification failure degrades the pair and
-                // raises a warning requiring action. The cursor still advances
-                // — a damaged blob must not park the sweep on itself forever,
-                // re-reporting the same object while the rest goes unchecked.
-                // The keys go on the ledger before anything is done about
-                // them, so a repair cut short leaves them to the next sync
-                // rather than forgotten (FR-VER-007).
-                ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, resolved: [], nowMs);
+            var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
+            var outstanding = ledger.RecordDamage(
+                set.Id, destinationName, unrepaired: [], [.. repaired.Select(outcome => outcome.Key)], nowMs)
+                .DamagedKeys;
 
-                IReadOnlyList<ReplicaRepairOutcome> outcomes;
-                await using (var repairer = new ReplicaRepairer(runtime, set, destinationName, archive, userInitiated))
-                {
-                    outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
-                var outstanding = ledger.RecordDamage(
-                    set.Id, destinationName, unrepaired: [], [.. repaired.Select(outcome => outcome.Key)], nowMs)
-                    .DamagedKeys;
-
-                ledger.RecordFailure(
-                    set.Id, destinationName, DestinationSyncState.Failed,
-                    $"deep verification found {result.Findings.Count} damaged object(s): {result.Findings[0]}; "
-                    + (outstanding is { Count: > 0 }
-                        ? DestinationSyncStore.DamageStatement(outstanding)
-                        : "each was replaced from a sound copy and re-verified, and the next sync re-checks the destination"),
-                    nowMs);
-                runtime.Notices.Raise(
-                    $"deep-verify-failed:{set.Id}:{destinationName}",
-                    Finding(set, destinationName, result.Findings, outcomes),
-                    nowMs);
-                return new SegmentOutcome(
-                    result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit)
-                {
-                    StalledOn = result.StalledOn,
-                    Stall = result.Stall,
-                };
-            }
-
-            // A clean circuit no longer withdraws an earlier finding (ADR-0035
-            // Amendment 1). Its objects may be sound now — a repair makes them
-            // so at once — but the device altered a backup once, which is a
-            // person's to hear about, and a notice withdrawn by the next clean
-            // circuit could be withdrawn before anyone had read it.
-            return new SegmentOutcome(result.Examined, 0, 0, result.NextCursor, result.CompletedCircuit)
+            ledger.RecordFailure(
+                set.Id, destinationName, DestinationSyncState.Failed,
+                $"deep verification found {result.Findings.Count} damaged object(s): {result.Findings[0]}; "
+                + (outstanding is { Count: > 0 }
+                    ? DestinationSyncStore.DamageStatement(outstanding)
+                    : "each was replaced from a sound copy and re-verified, and the next sync re-checks the destination"),
+                nowMs);
+            runtime.Notices.Raise(
+                $"deep-verify-failed:{set.Id}:{destinationName}",
+                destination.Kind == DestinationKind.LocalPath
+                    ? Finding(set, destinationName, result.Findings, outcomes)
+                    : PeerFinding(set, destinationName, archive, result),
+                nowMs);
+            return new SegmentOutcome(
+                result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit)
             {
                 StalledOn = result.StalledOn,
                 Stall = result.Stall,
             };
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+
+        // A clean circuit no longer withdraws an earlier finding (ADR-0035
+        // Amendment 1). Its objects may be sound now — a repair makes them
+        // so at once — but the device altered a backup once, which is a
+        // person's to hear about, and a notice withdrawn by the next clean
+        // circuit could be withdrawn before anyone had read it.
+        if (readSound.Count > 0)
         {
-            // The disk went away after the segment read, while what it found
-            // was being repaired: the keys are on the ledger already, and the
-            // sync re-checks them.
-            return Nothing;
+            ledger.RecordDamage(set.Id, destinationName, unrepaired: [], readSound, nowMs);
         }
-        finally
+
+        return new SegmentOutcome(result.Examined, 0, 0, result.NextCursor, result.CompletedCircuit)
         {
-            gate.Release();
-        }
+            StalledOn = result.StalledOn,
+            Stall = result.Stall,
+        };
     }
 
     /// <summary>
@@ -387,6 +483,43 @@ internal static class ReplicaSweepJob
             + "backup's bytes is one to check.",
             nowMs);
     }
+
+    /// <summary>
+    /// A peer that would not serve the retrieval session to a scheduled
+    /// segment: an incapacity, never a finding. Stamped, so the next attempt
+    /// waits the peer's interval rather than following on the next pass, and
+    /// said, because a cadence that reads nothing and says nothing looks
+    /// exactly like one that is working.
+    /// </summary>
+    private static SegmentOutcome Refused(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination, string reason,
+        ulong nowMs)
+    {
+        runtime.DestinationSync.RecordSweepUnreadable(set.Id, destination.Name, nowMs);
+        runtime.Notices.Raise(
+            $"deep-verify-unavailable:{set.Id}:{destination.Name}",
+            $"destination '{destination.Name}' of set '{set.Name}' is to be re-read every "
+            + $"{destination.DeepVerifyIntervalDays} day(s), but it would not serve the retrieval session this "
+            + $"installation reads a peer over ({reason}), so nothing there is being re-read. Nothing is known to "
+            + "be wrong with what it holds. Upgrade that peer, or remove the cadence.",
+            nowMs);
+        return Nothing with { Unreadable = reason };
+    }
+
+    /// <summary>
+    /// The notice a finding at a peer raises: what no longer matched, why it
+    /// stays, and the one remedy there is — which is the peer's owner's to
+    /// carry out, so the notice names what they need to find.
+    /// </summary>
+    private static string PeerFinding(
+        BackupSetConfiguration set, string destinationName, ArchiveHandle archive, ReplicaSweepResult result) =>
+        $"destination '{destinationName}' of set '{set.Name}' was found holding {result.Findings.Count} object(s) "
+        + $"that no longer match what was sealed: {string.Join("; ", result.Findings.Take(3))}. A peer's replica "
+        + "cannot be repaired from here — this installation can read what it holds but not replace it — so those "
+        + "bytes cannot be restored from there until they are gone. Ask the owner of that machine to remove them "
+        + $"from its replica of repository {archive.Repository.RepositoryId}: "
+        + $"{string.Join(", ", result.DamagedKeys)}; the next sync sends them again whole. Its storage altered a "
+        + "backup once and may again.";
 
     /// <summary>
     /// The notice a finding raises: what no longer matched, what replaced it,
