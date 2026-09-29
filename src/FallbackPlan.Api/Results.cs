@@ -704,6 +704,18 @@ public sealed record RestorePlanResult(
 /// <param name="WrittenBeside">Restored copies written beside a kept existing file under the rename policy (ADR-0041).</param>
 /// <param name="ReceiptPath">The persisted machine-readable receipt (FR-RST-004), on the service's machine.</param>
 /// <param name="FailedSample">At most twenty failures, as <c>path — detail</c> lines.</param>
+/// <param name="ReadAround">
+/// Files restored from another copy than the one first read, because that
+/// copy held them damaged or would not read them (FR-RST-007, contract
+/// 1.45). Each was verified as any other. Files read from a destination only
+/// because the staging archive no longer holds them are not counted: that is
+/// where their bytes were meant to come from.
+/// </param>
+/// <param name="ReadAroundSample">
+/// At most twenty of them, as <c>path — read from …, around …</c> lines
+/// naming the copy each came from and what was wrong with the copies passed
+/// over.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -714,7 +726,9 @@ public sealed record RestoreResult(
     long Displaced = 0,
     long WrittenBeside = 0,
     string? ReceiptPath = null,
-    IReadOnlyList<string>? FailedSample = null) : ServiceResult;
+    IReadOnlyList<string>? FailedSample = null,
+    long ReadAround = 0,
+    IReadOnlyList<string>? ReadAroundSample = null) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

@@ -4,7 +4,7 @@
 
 ---
 
-Seventy-four decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Seventy-five decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -99,6 +99,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0072](adr/0072-snapshot-based-capture.md) | Snapshot-based capture: a privileged helper, and what each platform is promised | **Specified only** | [notes](#0072--the-two-things-live-capture-cannot-do) |
 | [0073](adr/0073-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
 | [0074](adr/0074-background-byte-rate-limits.md) | Background byte-rate limits: a destination's `transfer_limit` and the installation's `background_read_limit` pace what the scheduler starts with nobody waiting — never a person; schema 7, contract 1.43 | **Built** | `Application/ByteRate` · `Application/ByteRateLimiter` · `Application/PacedStream` · `Application/PacingClock` · `Agent/BackgroundPacing` · `Agent/PacedObjectStore` · `Agent/PacedFileSystemSource` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/ReplicaSweepJob` · `Agent/RecoveryDrillJob` · `Application.Tests/ByteRateTests`, `Application.Tests/ByteRateLimiterTests`, `Hosts.Tests/BackgroundRateLimitTests`, `Hosts.Tests/PeerRateLimitTests`, `Web.Tests/ConsoleBackgroundLimitsScriptTests` · [notes](#0074--two-more-of-four) |
+| [0075](adr/0075-a-restore-reads-around-damage.md) | A restore reads around damage: a restore of a set's own archive reads a record its own store will not serve from the set's other copies, nearest first and verified as any other; receipt schema 5, contract 1.45 | **Built** | `Repository/RepositoryReader` · `Repository/CopySource` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/FirstHolderStore` · `Agent/SetCopies` · `Agent/ReplicaRepairer` · `Agent/ServiceCommandHandler` · `Agent/RestoreSourceRegistry` · `Cli/OperationGateway` · `Repository.Tests/ReadAroundTests`, `Hosts.Tests/RestoreReadAroundTests`, `Cli.Tests/GatewayRestoreReportTests`, `Web.Tests/ConsoleRestoreResultScriptTests` · [notes](#0075--one-copy-was-never-the-only-one) |
 
 ---
 
@@ -1715,3 +1716,36 @@ starts it. The first cut's tests for the local-path copy and the direct-ship
 capture passed with their seam removed — the pass's drill read the replica
 back through the same limiter and paid for the bytes — and now run their own
 job alone. CPU remains unbuilt and named.
+
+### 0075 — one copy was never the only one
+
+A restore read exactly one store, and every other copy of the same bytes sat
+unused while it failed a file. Blobs are immutable and a replica holds them key
+for key, so a record sits at the same offset of the same blob at every copy.
+The reader now reads a record its own store will not serve at that one location
+from the set's other copies, and through the same checks
+(`Repository/RepositoryReader`). The copies are the repair's own list, nearest
+and cheapest first (`Agent/SetCopies`), so the repair and the restore cannot
+disagree about where a sound copy may be. A copy is opened only once every
+earlier one has failed, and a peer is dialled only then.
+
+It is the set's own archive that reads around. A destination named as the
+source is read alone, because the drill restores through it to prove that copy.
+A restore that let a named source read around its damage turns exactly the
+named-restore and drill tests red.
+
+Three things came out of reading the code rather than out of the plan. First,
+a copy's failed location read is not damage until that copy's own footer
+agrees: a footer that does not list the record means the location was wrong.
+The rule already held at the own store (ADR-0068 §2), and now holds at every
+copy. Second, a direct-ship set's own store is a read path over its
+destinations rather than a copy, so it is never named, and each destination is
+named when it is tried in its own right. Third, ADR-0034 §6 had accepted that
+a trimmed snapshot could not be restored from staging. The same change retires
+that cost, and the plan now counts a file missing only when no copy holds it,
+so the plan and the run agree.
+
+What a restore finds damaged at a destination goes on its ledger row, as the
+sweep's findings do: the next sync repairs a local path's objects, and holds a
+peer's with its owner's remedy. Damage in the staging archive is a notice
+alone, since nothing repairs it in place.

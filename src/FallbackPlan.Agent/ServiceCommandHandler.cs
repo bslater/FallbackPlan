@@ -640,15 +640,15 @@ public sealed partial class ServiceCommandHandler(
     /// The archive holding a snapshot, found by asking each existing set
     /// archive's catalogue. Null when no archive knows it.
     /// </summary>
-    private async ValueTask<ArchiveHandle?> FindArchiveBySnapshotAsync(
+    private async ValueTask<(BackupSetConfiguration Set, ArchiveHandle Archive)?> FindArchiveBySnapshotAsync(
         byte[] snapshotId, CancellationToken cancellationToken)
     {
-        foreach (var (_, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
             using var catalogue = archive.OpenReadCatalogue();
             if (catalogue.EnumerateSnapshots().Any(row => row.SnapshotId.Span.SequenceEqual(snapshotId)))
             {
-                return archive;
+                return (set, archive);
             }
         }
 
@@ -726,15 +726,23 @@ public sealed partial class ServiceCommandHandler(
     /// it: the CLI's direct restore opened every footer in the store, and so
     /// did this handler whenever the source was local.
     /// </remarks>
-    private static async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
+    private async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
         RestoreContext context,
         Repository.Catalogue.Catalogue catalogue,
         RestorePlan plan,
         CancellationToken cancellationToken)
     {
-        var resolved = await Restore.RestoreBlobSet.ResolveAsync(
-            catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
-            .ConfigureAwait(false);
+        // A plan answers for the run it plans: one that will read around what
+        // its own store does not hold counts a file missing only when no copy
+        // of the set holds what it needs (FR-RST-007).
+        await using var copies = context.OtherCopies(runtime);
+        var resolved = copies is null
+            ? await Restore.RestoreBlobSet.ResolveAsync(
+                catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
+                .ConfigureAwait(false)
+            : await Restore.RestoreBlobSet.ResolveAsync(
+                catalogue, plan, context.Store, copies.Sources, context.RepositoryId, context.Keys, cancellationToken)
+                .ConfigureAwait(false);
 
         return ([.. resolved.Missing], [.. resolved.Blobs]);
     }
@@ -833,6 +841,16 @@ public sealed partial class ServiceCommandHandler(
             // one's (FR-RST-003).
             reader.UseLocationSource(catalogue.ResolveLocation);
 
+            // The set's own archive reads around what its own store will not
+            // serve (FR-RST-007): the set's other copies, nearest first, each
+            // opened only once every earlier one has failed. A destination
+            // named as the source is read alone.
+            await using var copies = context.OtherCopies(runtime);
+            if (copies is not null)
+            {
+                reader.UseOtherCopies(context.OwnCopyName, copies.Sources);
+            }
+
             var options = new RestoreExecutionOptions
             {
                 DestinationMode = command.InPlace || toOriginal
@@ -863,6 +881,16 @@ public sealed partial class ServiceCommandHandler(
 
             var receipt = MergeReceipts(receipts);
             var receiptPath = PersistReceipt(receipt, options.RunId);
+            if (copies is not null)
+            {
+                RecordReadAroundFindings(context.Set!, copies, reader, context.RepositoryId, options.NowUnixMilliseconds);
+            }
+
+            // What a person needs to hear of: a file that came from another
+            // copy because a copy passed over was damaged or would not read.
+            // One that came from a destination only because staging no longer
+            // holds it came from where its bytes were meant to come from.
+            var readAround = receipt.Items.Where(item => item.ReadAround is not null).ToList();
 
             // Files, not entries. The receipt records a created directory as
             // "restored" too, but the contract documents this field as files
@@ -898,7 +926,13 @@ public sealed partial class ServiceCommandHandler(
                 ReceiptPath: receiptPath,
                 FailedSample: failures.Count == 0
                     ? null
-                    : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")]);
+                    : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")],
+                ReadAround: readAround.Count,
+                ReadAroundSample: readAround.Count == 0
+                    ? null
+                    : [.. readAround.Take(20).Select(item =>
+                        $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
+                        + $"around {string.Join("; ", item.ReadAround!)}")]);
         }
         finally
         {

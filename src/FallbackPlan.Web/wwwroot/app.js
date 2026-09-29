@@ -4839,6 +4839,10 @@ function rstStep6() {
         <span class="mono">${esc(W.result.outputDirectory)}</span>.
         Receipt: <span class="mono">${esc(W.result.receiptPath ?? "—")}</span></p>
       ${W.result.failedSample?.length ? `<pre class="report">${esc(W.result.failedSample.join("\n"))}</pre>` : ""}
+      ${W.result.readAround ? `<p class="dlg-sub">${fmtCount(W.result.readAround)} file(s) were read from another copy,
+        because a copy they were first read from was damaged or would not read. Each was verified like any other,
+        and a notice says where the damage is.</p>
+        ${W.result.readAroundSample?.length ? `<pre class="report">${esc(W.result.readAroundSample.join("\n"))}</pre>` : ""}` : ""}
       <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`;
   }
 

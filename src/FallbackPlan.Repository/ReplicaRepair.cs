@@ -6,15 +6,6 @@ using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository;
 
-/// <summary>Somewhere a sound copy of a damaged replica object might be read from.</summary>
-/// <param name="Name">How the source is named to a person: "the staging archive", "destination 'spare'".</param>
-/// <param name="OpenAsync">
-/// Opens the source's store, or answers null when it cannot be reached. Called
-/// only once every earlier source has failed to serve, because opening a
-/// peer's means dialling it.
-/// </param>
-public sealed record RepairSource(string Name, Func<CancellationToken, ValueTask<IObjectStore?>> OpenAsync);
-
 /// <summary>What a store holds under one key, proved where it sits.</summary>
 /// <param name="Held">Whether the store holds the key at all.</param>
 /// <param name="Sound">Whether what it holds is the blob the key names, unaltered since it was sealed.</param>
@@ -131,13 +122,13 @@ public static class ReplicaRepair
     /// Replaces <paramref name="key"/> at <paramref name="replica"/> from the
     /// first source whose copy proves sound, reading the source directly.
     /// </summary>
-    /// <inheritdoc cref="RepairAsync(RepositoryId, RepositoryKeySet, IObjectStore, ObjectKey, IReadOnlyList{RepairSource}, IObjectStore?, CancellationToken)"/>
+    /// <inheritdoc cref="RepairAsync(RepositoryId, RepositoryKeySet, IObjectStore, ObjectKey, IReadOnlyList{CopySource}, IObjectStore?, CancellationToken)"/>
     public static ValueTask<ReplicaRepairOutcome> RepairAsync(
         RepositoryId repositoryId,
         RepositoryKeySet keys,
         IObjectStore replica,
         ObjectKey key,
-        IReadOnlyList<RepairSource> sources,
+        IReadOnlyList<CopySource> sources,
         CancellationToken cancellationToken) =>
         RepairAsync(repositoryId, keys, replica, key, sources, scratch: null, cancellationToken);
 
@@ -161,7 +152,7 @@ public static class ReplicaRepair
         RepositoryKeySet keys,
         IObjectStore replica,
         ObjectKey key,
-        IReadOnlyList<RepairSource> sources,
+        IReadOnlyList<CopySource> sources,
         IObjectStore? scratch,
         CancellationToken cancellationToken)
     {
@@ -231,7 +222,7 @@ public static class ReplicaRepair
     /// with the reason recorded, when the source cannot serve.
     /// </summary>
     private static async ValueTask<IObjectStore?> CandidateAsync(
-        RepairSource source, ObjectKey key, IObjectStore? scratch, List<string> refusals,
+        CopySource source, ObjectKey key, IObjectStore? scratch, List<string> refusals,
         CancellationToken cancellationToken)
     {
         IObjectStore? store;

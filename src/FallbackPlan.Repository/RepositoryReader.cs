@@ -1,4 +1,6 @@
 using Bodu;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
@@ -79,6 +81,19 @@ public sealed class RepositoryReader : IDisposable
     private StoreBlobKeyDeriver? _storeKeyDeriver;
 
     private PrefetchPolicy _prefetch = PrefetchPolicy.Default;
+
+    // The other copies (FR-RST-007), consulted only once this store's copy
+    // of a record will not serve. Each copy is opened at most once, and what
+    // is learned about a blob there is kept for the run as it is here.
+    private IReadOnlyList<CopySource>? _otherCopies;
+    private string? _ownName;
+    private readonly Dictionary<int, Task<IObjectStore?>> _openedCopies = [];
+    private readonly Dictionary<(int Copy, string Key), (ObjectKey Key, long Length)?> _copyLocated = [];
+    private readonly Dictionary<(int Copy, ObjectKey Key), BlobReader> _copyFraming = [];
+    private readonly Dictionary<(int Copy, ObjectKey Key), (BlobReader? Reader, string Refusal)> _copyFooters = [];
+    private readonly List<RecordReadAround> _readAround = [];
+    private readonly Dictionary<ObjectId, RecordReadAround> _readAroundById = [];
+    private readonly List<CopyRefusal> _refusals = [];
 
     /// <summary>Creates a reader; call <see cref="LoadBlobsAsync(CancellationToken)"/> (or the targeted overload) before reading.</summary>
     public RepositoryReader(
@@ -275,18 +290,49 @@ public sealed class RepositoryReader : IDisposable
 
     /// <summary>
     /// Reads and verifies one segment by object identifier — the full
-    /// specification 04 §6 sequence including step 7.
+    /// specification 04 §6 sequence including step 7. Given other copies
+    /// (<see cref="UseOtherCopies"/>), a record this store will not serve is
+    /// read from the first copy that will, through the same sequence.
     /// </summary>
     public async ValueTask<RecordReadResult> ReadSegmentAsync(ObjectId objectId, CancellationToken cancellationToken)
     {
         RecordsRead++;
 
+        if (_otherCopies is null)
+        {
+            return (await ReadOwnAsync(objectId, cancellationToken).ConfigureAwait(false)).Read;
+        }
+
+        OwnRead own;
+        try
+        {
+            own = await ReadOwnAsync(objectId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return await ReadAroundAsync(objectId, own: null, exception, cancellationToken).ConfigureAwait(false);
+        }
+
+        return IsAnswer(own.Read.Outcome)
+            ? own.Read
+            : await ReadAroundAsync(objectId, own, unreadable: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What this store says about a record, and what the fast read said on
+    /// the way when the footer then had to answer instead.
+    /// </summary>
+    private readonly record struct OwnRead(RecordReadResult Read, RecordReadResult? Fast);
+
+    private async ValueTask<OwnRead> ReadOwnAsync(ObjectId objectId, CancellationToken cancellationToken)
+    {
+        RecordReadResult? fast = null;
         if (_locations is not null && _locations(objectId) is { } location)
         {
-            var fast = await ReadFromLocationAsync(location, objectId, cancellationToken).ConfigureAwait(false);
+            fast = await ReadFromLocationAsync(location, objectId, cancellationToken).ConfigureAwait(false);
             if (fast is { } read && read.Outcome == RecordReadOutcome.Ok)
             {
-                return read;
+                return new OwnRead(read, fast);
             }
 
             // A location cache is never authoritative, so a fast read that
@@ -301,12 +347,338 @@ public sealed class RepositoryReader : IDisposable
 
         if (!_records.TryGetValue(objectId, out var located))
         {
-            return RecordReadResult.Failure(
-                RecordReadOutcome.FormatViolation,
-                $"No loaded blob carries a record for object {objectId}.");
+            return new OwnRead(
+                RecordReadResult.Failure(
+                    RecordReadOutcome.FormatViolation,
+                    $"No loaded blob carries a record for object {objectId}."),
+                fast);
         }
 
-        return await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false);
+        return new OwnRead(
+            await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false), fast);
+    }
+
+    /// <summary>
+    /// Whether a record read is the answer whichever copy is asked: a record
+    /// that verified, or one no copy could open for a reason that is not the
+    /// copy's — content sealed to a key this reader does not hold, or a
+    /// profile it does not implement.
+    /// </summary>
+    private static bool IsAnswer(RecordReadOutcome outcome) =>
+        outcome is RecordReadOutcome.Ok or RecordReadOutcome.ContentSealed or RecordReadOutcome.UnsupportedProfile;
+
+    /// <summary>
+    /// Other copies of this repository's blobs, to read a record from when
+    /// this reader's own store will not serve it (FR-RST-007): a record that
+    /// fails its checks, a blob the store holds but will not read, or one it
+    /// does not hold. Each copy is tried in order and opened only once every
+    /// earlier one has failed, and what it serves passes the same checks as
+    /// a record from the own store. What was passed over, and why, is kept in
+    /// <see cref="Refusals"/>; what was served elsewhere, in
+    /// <see cref="ReadAround"/>.
+    /// </summary>
+    /// <param name="ownName">
+    /// How this reader's own store is named to a person, or null when it is
+    /// not one copy but a way of reading them — a direct-ship set's store
+    /// answers each blob from the first of its destinations holding it, and
+    /// every one of those is among <paramref name="others"/>, so a damaged
+    /// one is named when it is tried in its own right.
+    /// </param>
+    /// <param name="others">The copies, in the order to try them.</param>
+    public void UseOtherCopies(string? ownName, IReadOnlyList<CopySource> others)
+    {
+        ThrowHelper.ThrowIfNull(others);
+        _ownName = ownName;
+        _otherCopies = others;
+    }
+
+    /// <summary>Every record served by another copy than the one first asked, in the order they were read.</summary>
+    public IReadOnlyList<RecordReadAround> ReadAround => _readAround;
+
+    /// <summary>
+    /// Every copy that did not serve a record it was asked for, in order —
+    /// the own store's included when it has a name. A
+    /// <see cref="CopyFault.Damaged"/> refusal is a finding about that copy;
+    /// the others are not.
+    /// </summary>
+    public IReadOnlyList<CopyRefusal> Refusals => _refusals;
+
+    /// <summary>How <paramref name="objectId"/> was read around, if it was.</summary>
+    public bool TryGetReadAround(ObjectId objectId, [MaybeNullWhen(false)] out RecordReadAround readAround) =>
+        _readAroundById.TryGetValue(objectId, out readAround);
+
+    /// <summary>
+    /// Where a record is, in terms any copy can use: its span within its
+    /// blob, the blob's identity, and the blob's store key where one is known.
+    /// </summary>
+    private readonly record struct RecordWhere(
+        RecordSpan Span, BlobId? BlobId, StoreBlobKey? StoreBlobKey, ObjectKey? OwnKey);
+
+    /// <summary>Where <paramref name="objectId"/> is, from the location source or the loaded footers; null when neither knows.</summary>
+    private RecordWhere? Where(ObjectId objectId)
+    {
+        if (_locations?.Invoke(objectId) is { } location)
+        {
+            return new RecordWhere(
+                new RecordSpan(
+                    objectId,
+                    location.PhysicalOffset,
+                    location.StoredLength,
+                    location.CompressionProfileValue,
+                    location.EncryptionProfileValue),
+                location.BlobId,
+                location.StoreBlobKey,
+                _located.TryGetValue(location.BlobId, out var blob) ? blob.Key : null);
+        }
+
+        return _records.TryGetValue(objectId, out var loaded)
+            ? new RecordWhere(RecordSpan.From(loaded.Entry), loaded.Reader.Envelope.BlobId, null, loaded.Reader.StoreKey)
+            : null;
+    }
+
+    /// <summary>
+    /// Reads a record this store would not serve from the first other copy
+    /// that will, recording what each copy passed over said.
+    /// </summary>
+    private async ValueTask<RecordReadResult> ReadAroundAsync(
+        ObjectId objectId, OwnRead? own, Exception? unreadable, CancellationToken cancellationToken)
+    {
+        var where = Where(objectId);
+        var passedOver = new List<CopyRefusal>();
+        if (_ownName is not null)
+        {
+            passedOver.Add(OwnRefusal(objectId, where, own, unreadable));
+        }
+
+        if (where is { } located)
+        {
+            for (var index = 0; index < _otherCopies!.Count; index++)
+            {
+                var (answer, refusal) = await ReadCopyAsync(index, objectId, located, cancellationToken)
+                    .ConfigureAwait(false);
+                if (answer is null)
+                {
+                    passedOver.Add(refusal!);
+                    continue;
+                }
+
+                _refusals.AddRange(passedOver);
+                if (answer.Outcome == RecordReadOutcome.Ok)
+                {
+                    var around = new RecordReadAround(objectId, _otherCopies[index].Name, passedOver);
+                    _readAround.Add(around);
+                    _readAroundById.TryAdd(objectId, around);
+                }
+
+                return answer;
+            }
+        }
+
+        _refusals.AddRange(passedOver);
+
+        // With nothing else to try, the answer is the own store's, as it was.
+        var tried = passedOver.Skip(_ownName is null ? 0 : 1).ToList();
+        if (tried.Count == 0)
+        {
+            if (unreadable is not null)
+            {
+                ExceptionDispatchInfo.Capture(unreadable).Throw();
+            }
+
+            return own!.Value.Read;
+        }
+
+        var named = _ownName is null ? string.Empty : $"{_ownName}: ";
+        var suffix = " No other copy served it: "
+            + string.Join("; ", tried.Select(refusal => $"{refusal.Source}: {refusal.Detail.TrimEnd('.')}")) + ".";
+        if (unreadable is not null)
+        {
+            throw new IOException(named + unreadable.Message + suffix, unreadable);
+        }
+
+        var read = own!.Value.Read;
+        return RecordReadResult.Failure(read.Outcome, named + read.Detail + suffix);
+    }
+
+    /// <summary>What this store's failure to serve a record says about this store.</summary>
+    private CopyRefusal OwnRefusal(ObjectId objectId, RecordWhere? where, OwnRead? own, Exception? unreadable)
+    {
+        var name = _ownName!;
+        var key = where?.OwnKey;
+        if (unreadable is not null)
+        {
+            return new CopyRefusal(name, key?.Value, CopyFault.Unreadable, unreadable.Message);
+        }
+
+        var read = own!.Value.Read;
+        if (key is not { } held)
+        {
+            return new CopyRefusal(name, null, CopyFault.NotHeld, "it does not hold the blob the record is in");
+        }
+
+        // The footer read is the one that knows what is wrong with a blob; a
+        // footer that would not open says the blob is damaged, and a sound
+        // footer that does not list the record says the location was wrong,
+        // which is no fault of this copy's.
+        if (!_records.ContainsKey(objectId))
+        {
+            if (_skipped.FirstOrDefault(skipped => skipped.Key == held) is { } refused)
+            {
+                return new CopyRefusal(
+                    name, held.Value, CopyFault.Damaged, own.Value.Fast?.Detail ?? refused.Reason);
+            }
+
+            if (_blobReaders.Any(open => open.StoreKey == held))
+            {
+                return new CopyRefusal(name, held.Value, CopyFault.NotHeld, "its blob does not list the record");
+            }
+        }
+
+        return new CopyRefusal(name, held.Value, CopyFault.Damaged, read.Detail ?? read.Outcome.ToString());
+    }
+
+    /// <summary>
+    /// Reads one record at one other copy: at its location, then — as at the
+    /// own store — through the blob's footer when the location read fails,
+    /// so a location that was wrong is never taken for damage there.
+    /// </summary>
+    /// <returns>The copy's answer, or why it gave none.</returns>
+    private async ValueTask<(RecordReadResult? Answer, CopyRefusal? Refusal)> ReadCopyAsync(
+        int index, ObjectId objectId, RecordWhere where, CancellationToken cancellationToken)
+    {
+        var name = _otherCopies![index].Name;
+        IObjectStore? store;
+        try
+        {
+            if (!_openedCopies.TryGetValue(index, out var opening))
+            {
+                opening = _otherCopies[index].OpenAsync(cancellationToken).AsTask();
+                _openedCopies[index] = opening;
+            }
+
+            store = await opening.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (null, new CopyRefusal(name, null, CopyFault.Unreachable, exception.Message));
+        }
+
+        if (store is null)
+        {
+            return (null, new CopyRefusal(name, null, CopyFault.Unreachable, "it could not be reached"));
+        }
+
+        (ObjectKey Key, long Length)? blob = null;
+        try
+        {
+            blob = await LocateAtCopyAsync(index, store, where, cancellationToken).ConfigureAwait(false);
+            if (blob is not { } held)
+            {
+                return (null, new CopyRefusal(name, null, CopyFault.NotHeld, "it does not hold the blob the record is in"));
+            }
+
+            RecordReadResult atLocation;
+            try
+            {
+                if (!_copyFraming.TryGetValue((index, held.Key), out var framing))
+                {
+                    framing = await BlobReader.OpenFramingAsync(
+                        store, held.Key, held.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                        cancellationToken, _sealedContentKeyOpener, _logger).ConfigureAwait(false);
+                    _copyFraming[(index, held.Key)] = framing;
+                }
+
+                atLocation = await framing.ReadRecordAsync(where.Span, cancellationToken).ConfigureAwait(false);
+            }
+            catch (BlobFormatException exception)
+            {
+                atLocation = RecordReadResult.Failure(RecordReadOutcome.FormatViolation, exception.Message);
+            }
+
+            if (IsAnswer(atLocation.Outcome))
+            {
+                return (atLocation, null);
+            }
+
+            if (!_copyFooters.TryGetValue((index, held.Key), out var footer))
+            {
+                try
+                {
+                    footer = (await BlobReader.OpenAsync(
+                        store, held.Key, held.Length, _repositoryId, _keys.DeriveClassKey, _objectIdDeriver,
+                        cancellationToken, _sealedContentKeyOpener, _logger).ConfigureAwait(false), string.Empty);
+                }
+                catch (BlobFormatException exception)
+                {
+                    footer = (null, exception.Message);
+                }
+
+                _copyFooters[(index, held.Key)] = footer;
+            }
+
+            if (footer.Reader is null)
+            {
+                return (null, new CopyRefusal(
+                    name, held.Key.Value, CopyFault.Damaged, atLocation.Detail ?? footer.Refusal));
+            }
+
+            var listed = footer.Reader.RecordTable.Where(entry => entry.ObjectId == objectId).ToList();
+            if (listed.Count == 0)
+            {
+                return (null, new CopyRefusal(name, held.Key.Value, CopyFault.NotHeld, "its blob does not list the record"));
+            }
+
+            var fromFooter = await footer.Reader.ReadRecordAsync(listed[0], cancellationToken).ConfigureAwait(false);
+            return IsAnswer(fromFooter.Outcome)
+                ? (fromFooter, null)
+                : (null, new CopyRefusal(
+                    name, held.Key.Value, CopyFault.Damaged, fromFooter.Detail ?? fromFooter.Outcome.ToString()));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return (null, new CopyRefusal(name, blob?.Key.Value, CopyFault.Unreadable, exception.Message));
+        }
+    }
+
+    /// <summary>
+    /// Where the record's blob is at one other copy, and how long — the own
+    /// store's key when it holds the blob, else each class tried in turn, as
+    /// <see cref="LocateBlobAsync"/> does here. Null when the copy holds
+    /// neither.
+    /// </summary>
+    private async ValueTask<(ObjectKey Key, long Length)?> LocateAtCopyAsync(
+        int index, IObjectStore store, RecordWhere where, CancellationToken cancellationToken)
+    {
+        ObjectKey[] candidates;
+        if (where.OwnKey is { } known)
+        {
+            candidates = [known];
+        }
+        else
+        {
+            _storeKeyDeriver ??= new StoreBlobKeyDeriver(_keys.KeyIdKey);
+            var blobKey = where.StoreBlobKey ?? _storeKeyDeriver.Derive(where.BlobId!.Value);
+            candidates = [BlobStoreKeys.ForBlob(BlobClass.Data, blobKey), BlobStoreKeys.ForBlob(BlobClass.Metadata, blobKey)];
+        }
+
+        if (_copyLocated.TryGetValue((index, candidates[0].Value), out var remembered))
+        {
+            return remembered;
+        }
+
+        (ObjectKey Key, long Length)? found = null;
+        foreach (var candidate in candidates)
+        {
+            var metadata = await store.GetMetadataAsync(candidate, cancellationToken).ConfigureAwait(false);
+            if (metadata.Metadata is { Length: > 0 } held)
+            {
+                found = (candidate, held.Length);
+                break;
+            }
+        }
+
+        _copyLocated[(index, candidates[0].Value)] = found;
+        return found;
     }
 
     /// <summary>
@@ -857,6 +1229,16 @@ public sealed class RepositoryReader : IDisposable
         foreach (var reader in _framing.Values)
         {
             reader.Dispose();
+        }
+
+        foreach (var reader in _copyFraming.Values)
+        {
+            reader.Dispose();
+        }
+
+        foreach (var (reader, _) in _copyFooters.Values)
+        {
+            reader?.Dispose();
         }
 
         _storeKeyDeriver?.Dispose();

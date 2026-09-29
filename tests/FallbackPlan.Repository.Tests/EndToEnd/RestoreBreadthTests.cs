@@ -18,8 +18,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// <see cref="ExistingDestinationPolicy"/> values no test had ever set, and
 /// the NFR-PERF-009 GET budget. ADR-0041 widened it: the write-beside policy
 /// that keeps both files under a dated name (FR-RST-006's explicit-choice
-/// posture), the receipt pinned whole at schema 4 with <c>written_as</c>
-/// (FR-RST-004), several prefixes in one plan, and the targeted blob load.
+/// posture), the receipt pinned whole (schema 4 added <c>written_as</c>;
+/// schema 5, the optional <c>read_from</c> and <c>read_around</c> a run that
+/// reads around damage writes, which this run does not) (FR-RST-004),
+/// several prefixes in one plan, and the targeted blob load.
 /// </summary>
 /// <remarks>
 /// The budget case began as a characterisation of a shortfall and is now the
@@ -354,7 +356,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
     private const string GoldenReceipt = """
         {
-          "schema_version": 4,
+          "schema_version": 5,
           "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
           "started_at": 1722700000000,
           "completed_at": 1722700000000,

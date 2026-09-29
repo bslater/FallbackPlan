@@ -85,6 +85,7 @@ Requirements marked **[changed]** differ materially from the original; **[new]**
 | FR-RST-004 **[new]** | Restore shall produce a machine-readable receipt listing every file restored, every degraded attribute, and every failure. | The receipt accounts for every file in the plan. |
 | FR-RST-005 **[new]** | Restore shall never report success when any required file failed. | A partial restore reports failure and names what failed. |
 | FR-RST-006 **[new]** | Restore of historical content shall default to a quarantine path rather than the original location. | In-place restore requires an explicit choice. |
+| FR-RST-007 **[new]** | A restore of a set's own archive shall read a record its own store will not serve — damaged, unreadable, or not held — from the set's other copies, local-path destinations by priority then peers, trying each only once every earlier copy has failed and verifying what it reads exactly as the first copy's would have been; it shall say which files came from which copy and what was wrong with the copies passed over, hold damage it finds against the destination that holds it, and read a destination named as its source alone. | A direct-ship set whose first destination rots, and a staging set whose staging copy rots or was trimmed, restores whole from another copy and says which; with every copy damaged the file still fails, naming each copy tried; a restore or drill from a named destination fails on that destination's damage whatever its siblings hold. |
 
 ## Recovery drills
 

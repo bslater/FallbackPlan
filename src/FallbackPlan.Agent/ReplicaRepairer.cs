@@ -9,7 +9,8 @@ namespace FallbackPlan.Agent;
 /// Repairs one local-path replica's damaged blobs from the other copies its
 /// set has (FR-VER-007, ADR-0035 Amendment 1): the staging archive, the
 /// set's other local-path destinations, then its paired peers over the
-/// retrieval session — nearest and cheapest first.
+/// retrieval session — nearest and cheapest first, as <see cref="SetCopies"/>
+/// lists them for a restore too.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -38,10 +39,9 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     private readonly string _damagedDestination;
     private readonly ArchiveHandle _archive;
     private readonly bool _userInitiated;
-    private readonly List<IAsyncDisposable> _sessions = [];
     private readonly string _scratchRoot;
     private IObjectStore? _scratch;
-    private List<RepairSource>? _sources;
+    private SetCopies? _copies;
 
     /// <summary>Creates a repairer for one destination of one set.</summary>
     /// <param name="runtime">The service.</param>
@@ -124,9 +124,9 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
-        foreach (var session in _sessions)
+        if (_copies is not null)
         {
-            await session.DisposeAsync().ConfigureAwait(false);
+            await _copies.DisposeAsync().ConfigureAwait(false);
         }
 
         try
@@ -157,74 +157,13 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
             cancellationToken);
     }
 
-    /// <summary>The sources, built once, each opened at most once.</summary>
-    private List<RepairSource> Sources()
-    {
-        if (_sources is not null)
-        {
-            return _sources;
-        }
-
-        _sources = [];
-        if (_archive.ShipSink is null)
-        {
+    /// <summary>The sources, listed once, each opened at most once.</summary>
+    private IReadOnlyList<CopySource> Sources() =>
+        (_copies ??= new SetCopies(
+            _runtime, _set, _archive, excluding: _damagedDestination,
             // A staging set's staging archive is the copy every destination
             // was filled from. A direct-ship set has none: its store reads
             // blobs back from the destinations, this one included.
-            _sources.Add(new RepairSource(
-                "the staging archive", _ => ValueTask.FromResult<IObjectStore?>(_archive.Store)));
-        }
-
-        var configuration = _runtime.Configuration;
-        var siblings = _set.Destinations
-            .Where(reference => !string.Equals(reference.Ref, _damagedDestination, StringComparison.Ordinal))
-            .Select(reference => (Reference: reference, Destination: configuration.FindDestination(reference.Ref)))
-            .Where(sibling => sibling.Destination is { AddressDefect: null })
-            .OrderByDescending(sibling => SetDestinationReference.EffectivePriority(sibling.Reference, sibling.Destination))
-            .Select(sibling => sibling.Destination!)
-            .ToList();
-
-        foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.LocalPath))
-        {
-            _sources.Add(Once($"destination '{sibling.Name}'", _ => OpenLocal(sibling)));
-        }
-
-        foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.Peer))
-        {
-            _sources.Add(Once($"destination '{sibling.Name}'", token => DialAsync(sibling, token)));
-        }
-
-        return _sources;
-    }
-
-    /// <summary>
-    /// A source opened on first use and remembered — its store, or the reason
-    /// it could not be reached, which is the same reason for every later blob.
-    /// </summary>
-    private static RepairSource Once(string name, Func<CancellationToken, ValueTask<IObjectStore?>> open)
-    {
-        Task<IObjectStore?>? opened = null;
-        return new RepairSource(name, token => new ValueTask<IObjectStore?>(opened ??= open(token).AsTask()));
-    }
-
-    private ValueTask<IObjectStore?> OpenLocal(DestinationConfiguration destination)
-    {
-        var root = Path.Combine(destination.Path!, _archive.Repository.RepositoryId.ToString());
-        return ValueTask.FromResult<IObjectStore?>(
-            Directory.Exists(root)
-                ? PacedObjectStore.Over(new LocalFileSystemObjectStore(root), Limiter(destination))
-                : null);
-    }
-
-    private async ValueTask<IObjectStore?> DialAsync(DestinationConfiguration destination, CancellationToken cancellationToken)
-    {
-        var client = await PeerRetrievalClient.DialAsync(
-            _runtime, destination, _archive.Repository.RepositoryId.ToArray(), cancellationToken)
-            .ConfigureAwait(false);
-        _sessions.Add(client);
-        return PacedObjectStore.Over(new PeerRetrievalObjectStore(client), Limiter(destination));
-    }
-
-    private ByteRateLimiter? Limiter(DestinationConfiguration destination) =>
-        _userInitiated ? null : _runtime.Pacing.ForDestination(destination);
+            includeStaging: _archive.ShipSink is null,
+            _userInitiated)).Sources;
 }

@@ -197,6 +197,14 @@ the trimmed history until destination-aware verification (peer-protocol 04)
 can seed it from a complete replica. **N archives mean N key derivations** on
 a many-set hub, bounded by opening archives lazily.
 
+> **Amended 2026-09 ([ADR-0075](0075-a-restore-reads-around-damage.md)).** The
+> first residual cost is retired. A restore of the set's own archive reads the
+> history staging trimmed from the set's destinations, record by record and
+> verified as any other read, and the plan names a file among its missing
+> objects only when no copy of the set holds what it needs. The destination
+> replica is still the restore path for that history; the restore takes it
+> without a person having to choose it.
+
 ## Consequences
 
 **Positive.** Every destination copy is a full, self-verifying, independently
@@ -334,3 +342,4 @@ folder stayed empty.
 | 2026-08 | Built | Whether a destination is *fit* to be relied on — admission, capacity, shortfall detection and confirmation on a schedule — is settled separately by [ADR-0035](0035-destination-fitness.md), which builds on this record's topology rather than changing it. |
 | 2026-08 | Built (amended) | Amendment 2: a `local-path` destination (or the service's own state/archives directory) at or under a source root is refused at the configuration boundaries unless the set's excludes provably fence it off (FR-DEST-011); relative destination paths are pinned absolute at declaration and refused by the fan-out when hand-edited in (FR-DEST-012). The free-space floor now measures the destination's own volume rather than the OS root on Unix. |
 | 2026-08 | Superseded in part | [ADR-0046](0046-direct-to-destination-publication.md) removes the staging archive for direct-ship sets: §1 and §6 no longer apply there, §3's fan-out becomes the catch-up/seeding pump rather than the write path (the blockquotes at each section scope the change), and the capture-never-blocks property is consciously traded away (ADR-0046 §4). §2, §4 and §5 stand for both shapes; this record remains authoritative for unflagged sets until the `direct_ship` default flips. |
+| 2026-09 | Built (amended) | §6's first residual cost retired by [ADR-0075](0075-a-restore-reads-around-damage.md): a restore of the set's own archive reads what staging trimmed from the set's destinations, and the plan counts a file missing only when no copy of the set holds it. `Agent/SetCopies`; `Hosts.Tests/RestoreReadAroundTests` |

@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.44
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.45
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.44 — 60 commands. One line each; parameters, results
+The register as of 1.45 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -95,7 +95,10 @@ work is held to).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
-`close_restore_source` (ADR-0041).
+`close_restore_source` (ADR-0041). Since 1.45, a `run_restore` of a set's
+own archive that read some files from another copy, because a copy passed
+over was damaged or would not read, says how many (`read_around`) and which
+(`read_around_sample`) ([ADR-0075](../../docs/adr/0075-a-restore-reads-around-damage.md)).
 
 **Destinations at work** — `sync`, `verify_destination`, `verify`, `check`,
 `retention`, `retire_staging` (1.20, ADR-0046), `upgrade_set_format`
@@ -164,3 +167,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.42 | `preview_adoption {destination_name, repository_id, envelope}` and its answer `adoption_preview` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 2, FR-DR-009): a recovered configuration takes effect only as a person was shown it. The preview takes the envelope adoption takes, proves it the same way and writes nothing. It answers with the recorded `set_id` and `set_name`; each root as `recorded_path`, `label` and `resolves` on this machine; `schedule`, the rules and `retention`, the set's own policy it would delete by; `snapshot_count` and the newest snapshot; `already_adopted`; the service's `lines`; and a `confirmation`, a digest of all of it. `adopt_archive` gains `confirmation` and requires it. Without one it is refused before any envelope is opened, naming the preview. With one the archive no longer matches, because it gained a snapshot or a different recorded shape, it is refused as changed and leaves nothing behind. **Not additive**, deliberately: a pre-1.42 client that adopts in one call is refused by name rather than adopting a set nobody was shown, and the console and the CLI ship with the service and preview first |
 | 1.43 | `background_limits` on `status` ([ADR-0074](../../docs/adr/0074-background-byte-rate-limits.md), NFR-PERF-013): the byte rates background work is held to, beside the window — `read_limit`, the rate background captures read their sources at, and `transfer_limits`, each limited destination by `destination_name`, each as the configured `text` and as `bytes_per_second`. Reporting only: both are edited in the configuration file, and a person's work is never held to either. Additive with a null default: a pre-1.43 service never sends it, which a client reads as "nothing limited" — what a 1.43 service with no limit configured says too |
 | 1.44 | `get_service_settings` / `update_service_settings` and `transfer_limit` / `drill_interval_days` on the destination descriptor ([ADR-0037](../../docs/adr/0037-configuration-over-the-command-contract.md) Amendment 1, FR-SVC-021): the settings 1.39 and 1.43 report, settable through the service as ADR-0069 §8 and ADR-0074 §7 named as owed. Null keeps a setting, an empty text or a zero clears it, a refused value refuses the request whole and names the setting, never the configuration file's path. `service_settings` carries `effective_max_concurrent_backups`, the width the running pool has — the pool is sized when the service starts, so a width change applies at the next restart. Additive: two verbs, one result and two optional descriptor fields, and a pre-1.44 client's upsert carries neither field and so keeps both |
+| 1.45 | `read_around` and `read_around_sample` on `restore` ([ADR-0075](../../docs/adr/0075-a-restore-reads-around-damage.md), FR-RST-007): a restore of a set's own archive reads a record its own store will not serve from the set's other copies, and the answer counts the files that came from another copy because a copy passed over was damaged or would not read, with up to twenty lines naming the copy each came from and what was wrong with those passed over. A file read from a destination only because staging no longer holds it is not counted. Additive with defaults: a pre-1.45 service sends neither, which reads as nothing read around |

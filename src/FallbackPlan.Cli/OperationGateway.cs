@@ -519,12 +519,22 @@ internal sealed class ServiceGateway(
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
 
-            return new OperationReport(
-                result.Failed == 0,
-                [
-                    string.Create(CultureInfo.InvariantCulture,
-                        $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
-                ]);
+            List<string> lines =
+            [
+                string.Create(CultureInfo.InvariantCulture,
+                    $"restored {result.Restored} file(s) to {result.OutputDirectory}; {result.Failed} failure(s)"),
+            ];
+
+            // A person restoring hears that a copy of their backup is damaged
+            // from the restore that met it (FR-RST-007), and which copy.
+            if (result.ReadAround > 0)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{result.ReadAround} file(s) came from another copy, because a copy they were first read from was damaged or would not read; each was verified like any other:"));
+                lines.AddRange(result.ReadAroundSample ?? []);
+            }
+
+            return new OperationReport(result.Failed == 0, lines);
         }
         finally
         {
