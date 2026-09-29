@@ -46,6 +46,15 @@ this survey sends upstream
 | `Security.Cryptography.SecretBytes`, `Salt`, `Nonce`, `AuthenticationTag`, `SignatureValue` | `Repository.Crypto`'s own key and salt handling | These are `Bodu.Security.Cryptography` types, so taking them widens the surface the containment rule bounds ([ADR-0019](adr/0019-third-party-dependency-policy.md) §3) for ergonomics rather than for a primitive. Not worth it. |
 | `Security.Cryptography.Hkdf`, `Text.Encoding.Base16` | The platform's `System.Security.Cryptography.HKDF` and `Convert.ToHexString` | Already served by the platform. A second implementation of an in-box primitive is exactly what [ADR-0019](adr/0019-third-party-dependency-policy.md) §2's first gate keeps out, and §4 already keeps hex on the platform. |
 
+> **2026-09 — the rate gate, looked at ([ADR-0074](adr/0074-background-byte-rate-limits.md)).**
+> The slice its row waited for is built, and the gate is not what it needed.
+> `RateGate` admits at most one call per interval and drops the calls in
+> between, synchronously. A byte limit charges every byte, and delays rather
+> than drops. So the limiter is this repository's own,
+> `Application/ByteRateLimiter`: a token bucket that takes its clock as an
+> argument. No request goes upstream. The limiter is small, it is operational
+> rather than format-critical, and this repository's own tests prove it.
+
 ## Not overlaps, listed so they are not mistaken for gaps
 
 - `Collections.Generic.Concurrent.ConcurrentLruCache` — nothing here is an LRU
@@ -91,3 +100,6 @@ a look, which turned out to be the platform's rather than Bodu's:
 `ArchiveSession`'s segment fill, which `Stream.ReadAtLeastAsync` already does.
 Everything else upstream ships is either already consumed, already served by
 the platform, or deliberately not wanted.
+
+> **2026-09.** That slice is built, and the rate gate was not taken; see the
+> note under [Real overlaps, not taken](#real-overlaps-not-taken).

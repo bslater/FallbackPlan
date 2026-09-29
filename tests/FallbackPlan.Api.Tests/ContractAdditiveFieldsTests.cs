@@ -616,6 +616,54 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheBackgroundLimits_WireNamesAndPre143Default()
+    {
+        // Contract 1.43 (NFR-PERF-013): the status surface says which byte
+        // rates background work is held to — the source-read limit and each
+        // destination's transfer limit — beside the window it already
+        // reports, so "why is this sync so slow" is answerable without the
+        // configuration file. Text for people, bytes a second for arithmetic.
+        var json = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult(
+                "hub",
+                [],
+                ObservedAt: 10_000,
+                Notices: [],
+                BackgroundLimits: new BackgroundLimitsDescriptor(
+                    new ByteRateDescriptor("40 MiB/s", 41_943_040),
+                    [new DestinationTransferLimitDescriptor("friend", "2 MiB/s", 2_097_152)])),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"background_limits\":", json, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"read_limit\":{\"text\":\"40 MiB/s\",\"bytes_per_second\":41943040}", json, StringComparison.Ordinal);
+        Assert.Contains("\"transfer_limits\":[", json, StringComparison.Ordinal);
+        Assert.Contains(
+            "{\"destination_name\":\"friend\",\"text\":\"2 MiB/s\",\"bytes_per_second\":2097152}",
+            json,
+            StringComparison.Ordinal);
+
+        // A pre-1.43 service never mentions the field, and a 1.43 service
+        // with nothing limited sends none either: both mean "draw no line",
+        // which is what a client does in both cases. The old frame is the
+        // modern one with the addition stripped, so it cannot drift from the
+        // real serialization.
+        var modern = JsonSerializer.Serialize<ServiceResult>(
+            new StatusResult(
+                "hub", [], 10_000, [],
+                BackgroundLimits: new BackgroundLimitsDescriptor(null, [new DestinationTransferLimitDescriptor("friend", "2 MiB/s", 2_097_152)])),
+            FrameCodec.SerializerOptions);
+        var start = modern.IndexOf(",\"background_limits\":", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "the modern frame must carry the field");
+        Assert.IsTrue(modern.EndsWith("]}}", StringComparison.Ordinal), "the field must be the frame's last");
+        var old = modern[..start] + "}";
+
+        var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<StatusResult>(result, out var status);
+        Assert.IsNull(status.BackgroundLimits);
+    }
+
+    [TestMethod]
     public void TheAdoptedRetention_WireNameAndPre140Default()
     {
         // Contract 1.40 (FR-DR-006): the adoption answer says what the

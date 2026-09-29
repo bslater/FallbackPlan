@@ -49,7 +49,8 @@ internal static class ReplicaSweepJob
             JobLane.Transfer,
             userInitiated,
             $"verify {set.Name} -> {destinationName}",
-            async token => await RunAsync(runtime, set, destinationName, (ulong)now.ToUnixTimeMilliseconds(), token)
+            async token => await RunAsync(
+                    runtime, set, destinationName, (ulong)now.ToUnixTimeMilliseconds(), userInitiated, token)
                 .ConfigureAwait(false),
             // As the pair's sync is: answered once the queue has let the
             // segment's identity go, so the next segment can be asked for at
@@ -84,7 +85,9 @@ internal static class ReplicaSweepJob
         string? previousCursor = null;
         for (var segment = 0; segment < 1_000_000; segment++)
         {
-            var outcome = await RunAsync(runtime, set, destinationName, nowMs, cancellationToken)
+            // The on-demand full pass is a person's (FR-VER-004), so it reads
+            // through no limit.
+            var outcome = await RunAsync(runtime, set, destinationName, nowMs, userInitiated: true, cancellationToken)
                 .ConfigureAwait(false);
             examined += outcome.Examined;
             damaged += outcome.Damaged;
@@ -101,11 +104,21 @@ internal static class ReplicaSweepJob
     }
 
     /// <summary>Reads the next segment and records what it found.</summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to sweep.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The pass clock, Unix milliseconds.</param>
+    /// <param name="userInitiated">
+    /// Whether a person is waiting. A background segment reads the replica
+    /// through the destination's transfer limit (NFR-PERF-013, ADR-0074).
+    /// </param>
+    /// <param name="cancellationToken">Cancels the segment.</param>
     public static async Task<(int Examined, int Damaged, string? Cursor, bool CompletedCircuit)> RunAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         string destinationName,
         ulong nowMs,
+        bool userInitiated,
         CancellationToken cancellationToken)
     {
         if (runtime.Configuration.FindDestination(destinationName) is not
@@ -149,7 +162,9 @@ internal static class ReplicaSweepJob
             var result = await ReplicaSweep.RunAsync(
                 archive.Repository.RepositoryId,
                 archive.Repository.Keys,
-                StoreComposition.OpenLocal(replicaRoot),
+                PacedObjectStore.Over(
+                    StoreComposition.OpenLocal(replicaRoot),
+                    userInitiated ? null : runtime.Pacing.ForDestination(destination)),
                 archive.Store,
                 previous?.SweepCursor,
                 ReplicaSweep.DefaultBudget,

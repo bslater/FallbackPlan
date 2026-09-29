@@ -172,6 +172,62 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Status_WithBackgroundLimits_SaysWhatIsHeldToWhat()
+    {
+        // A paced sync looks like a slow one, so the limits are said where
+        // the window is (contract 1.43, NFR-PERF-013): above the matrix,
+        // one line per limit, with the destination named.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        var loaded = ClientConfiguration.Load(configuration);
+        (loaded with
+        {
+            BackgroundReadLimit = "40 MiB/s",
+            Destinations = [.. loaded.Destinations.Select(destination => destination with { TransferLimit = "2 MiB/s" })],
+        }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("background reads limited to 40 MiB/s", result.All, StringComparison.Ordinal);
+        Assert.Contains("background transfers to 'vault' limited to 2 MiB/s", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Status_WithNoBackgroundLimits_PrintsNoLimitLine()
+    {
+        // Every installation written before schema 7 limits nothing, so a
+        // line that appeared anyway would be a regression visible everywhere.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            "status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.DoesNotContain("limited to", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Backup_ASetNamedWithAServiceRunning_IsRunByTheService()
     {
         // ADR-0028 §3 is unconditional: "the CLI connects to the service when

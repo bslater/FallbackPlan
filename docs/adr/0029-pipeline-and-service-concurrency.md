@@ -392,6 +392,15 @@ Repository-level multi-writer semantics are unaffected.
 > is machine-dependent in a way this project cannot settle from a container,
 > and it is the figure NFR-PERF-007 already discounts for the same reason.
 
+> **2026-09, scoped to this amendment ([ADR-0074](0074-background-byte-rate-limits.md)).**
+> Two more exist: the **disk** and **network** limits, as byte rates. They are
+> the installation's source-read limit and a destination's transfer limit,
+> and they pace the same scheduler-started work the window governs, never a
+> person. So the sentence below now names **one** limit that does not exist:
+> the CPU cap, for the reason the paragraph above gives. Neither rate bounds
+> CPU, and `CapturePolicy.Concurrency` still bounds parallel work rather than
+> CPU.
+
 §3's default was chosen to satisfy **NFR-OPS-004** and **NFR-PERF-013**, and
 the 2026-08 amendment above ends by saying that "NFR-PERF-013's CPU cap
 should be measured against that rather than assumed from the number".
@@ -525,3 +534,4 @@ cost is no longer a question worth asking.
 | 2026-09 | Accepted (amended) | One of the four is now built: the **time window** ([ADR-0069](0069-the-background-window.md)), out of this record's own §4 pause gate rather than beside it. CPU, disk and network remain unbuilt, and the CPU cap's acceptance stays machine-dependent in a way a container cannot settle |
 | 2026-09 | Accepted (amended) | Amendment 5: a job cancelled before it has started is taken out of the queue and journalled `Cancelled` at the command, when it carries its own record of cancellation; started jobs, and queued ones without that record, keep the cooperative path. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests` |
 | 2026-09 | Accepted (amended) | Amendment 6: a job answers whoever waits on it only once the queue has released its identity, so the next request for the same pair is queued rather than coalesced into a run that has already ended. `Agent/JobScheduler`, `Agent/FanOut`, `Agent/ReplicaSweepJob`; `Hosts.Tests/JobSchedulerTests` |
+| 2026-09 | Accepted (amended) | Two more of the four are built: the **disk** and **network** limits ([ADR-0074](0074-background-byte-rate-limits.md)), byte rates pacing the same scheduler-started work the window governs. CPU alone remains unbuilt, for the reason the amendment gives |

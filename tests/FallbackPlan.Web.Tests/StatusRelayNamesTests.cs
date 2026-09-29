@@ -103,5 +103,49 @@ public sealed class StatusRelayNamesTests
             JsonValueKind.Null,
             body.RootElement.GetProperty("backgroundWindow").ValueKind);
     }
-}
 
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheBackgroundLimitNamesTheViewReads()
+    {
+        // Contract 1.43 (NFR-PERF-013). limitsNote() reads these camelCase
+        // names off the object; a rename compiles cleanly and quietly renders
+        // the clause as "undefined".
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets: [],
+            ObservedAt: 10_000,
+            Notices: [],
+            BackgroundLimits: new BackgroundLimitsDescriptor(
+                new ByteRateDescriptor("40 MiB/s", 41_943_040),
+                [new DestinationTransferLimitDescriptor("friend", "2 MiB/s", 2_097_152)]));
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var limits = body.RootElement.GetProperty("backgroundLimits");
+        Assert.AreEqual("40 MiB/s", limits.GetProperty("readLimit").GetProperty("text").GetString());
+        Assert.AreEqual(41_943_040, limits.GetProperty("readLimit").GetProperty("bytesPerSecond").GetInt64());
+        var friend = limits.GetProperty("transferLimits")[0];
+        Assert.AreEqual("friend", friend.GetProperty("destinationName").GetString());
+        Assert.AreEqual("2 MiB/s", friend.GetProperty("text").GetString());
+        Assert.AreEqual(2_097_152, friend.GetProperty("bytesPerSecond").GetInt64());
+    }
+
+    [TestMethod]
+    public async Task GetStatus_WithNoLimits_RelaysNullRatherThanOmittingIt()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult("hub", [], 10_000, []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(
+            JsonValueKind.Null,
+            body.RootElement.GetProperty("backgroundLimits").ValueKind);
+    }
+}

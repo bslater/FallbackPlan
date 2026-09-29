@@ -33,6 +33,11 @@ public static class BackupRunner
     /// <param name="set">The set to run.</param>
     /// <param name="jobId">The journal entry to transition.</param>
     /// <param name="now">The clock, passed in so the caller decides it.</param>
+    /// <param name="userInitiated">
+    /// Whether a person is waiting for it. Background runs read and ship
+    /// through the configured byte-rate limits (NFR-PERF-013, ADR-0074); a
+    /// person's never does.
+    /// </param>
     /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
     /// <param name="pauseGate">
     /// The run's suspension point (ADR-0047 Amendment 1), when its scheduler preempts;
@@ -45,6 +50,7 @@ public static class BackupRunner
         BackupSetConfiguration set,
         string jobId,
         DateTimeOffset now,
+        bool userInitiated,
         bool full = false,
         IPauseGate? pauseGate = null,
         CancellationToken cancellationToken = default)
@@ -117,6 +123,7 @@ public static class BackupRunner
                 await shipSink.BeginRunAsync(
                     set,
                     nowMs,
+                    userInitiated,
                     archive.Repository.Credential.ReclaimPublicKey.ToArray(),
                     archive.Repository.Credential.ClaimPublicKey.ToArray(),
                     cancellationToken)
@@ -165,7 +172,12 @@ public static class BackupRunner
             var published = await orchestrator.PublishAsync(
                 new SnapshotJob
                 {
-                    Source = new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>()),
+                    // A background capture reads its sources through the
+                    // installation's read limit (NFR-PERF-013, ADR-0074); a
+                    // person's run reads through none.
+                    Source = PacedFileSystemSource.Over(
+                        new LocalFileSystemSource(runtime.LoggerFor<LocalFileSystemSource>()),
+                        userInitiated ? null : runtime.Pacing.ForSourceReads(runtime.Configuration)),
                     Roots = SetChangeScan.ScanRootsOf(set),
                     IncludeRules = set.IncludeRules,
                     ExcludeRules = set.ExcludeRules,

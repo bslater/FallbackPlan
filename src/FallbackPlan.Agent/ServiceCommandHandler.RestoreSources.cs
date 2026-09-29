@@ -193,6 +193,17 @@ public sealed partial class ServiceCommandHandler
     /// rebuilt from its own index plane — checkpoint plus deltas, metadata
     /// reads only.
     /// </summary>
+    /// <summary>
+    /// Whether the restore sources this handler opens read through their
+    /// destination's transfer limit (NFR-PERF-013, ADR-0074). Set only on the
+    /// handler a background drill restores through; every handler that serves
+    /// a person leaves it false, so a person's restore is never paced.
+    /// </summary>
+    internal bool PacesRestoreSources { get; init; }
+
+    private Application.ByteRateLimiter? SourcePacing(Application.DestinationConfiguration destination) =>
+        PacesRestoreSources ? runtime.Pacing.ForDestination(destination) : null;
+
     private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenReplicaSourceAsync(
         string sourceId,
         Application.BackupSetConfiguration set,
@@ -231,7 +242,7 @@ public sealed partial class ServiceCommandHandler
                 continue;
             }
 
-            var store = StoreComposition.OpenLocal(replicaRoot);
+            var store = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), SourcePacing(destination));
             OpenedRepository repository;
             try
             {
@@ -305,7 +316,7 @@ public sealed partial class ServiceCommandHandler
                 var client = await PeerRetrievalClient.DialAsync(
                     runtime, destination, Convert.FromHexString(repositoryIdHex), cancellationToken)
                     .ConfigureAwait(false);
-                var store = new PeerRetrievalObjectStore(client);
+                var store = PacedObjectStore.Over(new PeerRetrievalObjectStore(client), SourcePacing(destination));
                 OpenedRepository repository;
                 try
                 {

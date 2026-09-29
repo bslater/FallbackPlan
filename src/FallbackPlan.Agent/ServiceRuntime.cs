@@ -94,6 +94,14 @@ public sealed record ServiceOptions
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
 
     /// <summary>
+    /// The clock the byte-rate limits pace on (NFR-PERF-013, ADR-0074) — a
+    /// test harness's way to prove a rate by the waits it asked for rather
+    /// than by sleeping through them. Null, the production value, paces on
+    /// the monotonic clock with real delays.
+    /// </summary>
+    internal PacingClock? PacingClock { get; init; }
+
+    /// <summary>
     /// Where this service's diagnostics go (ADR-0043). Null runs silent,
     /// which is what a test wants and what a host must not leave as its
     /// default.
@@ -181,6 +189,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
         ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
+        Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System);
     }
 
     /// <summary>How this service was started.</summary>
@@ -261,6 +270,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
+
+    /// <summary>
+    /// The byte-rate limiters background work is paced through (NFR-PERF-013,
+    /// ADR-0074): one per limited destination and one for source reads, each
+    /// shared by every background job its limit governs.
+    /// </summary>
+    internal BackgroundPacing Pacing { get; }
 
     /// <summary>The service's envelope recipient keypair (ADR-0042 §4).</summary>
     internal GrantRecipient GrantRecipient { get; }

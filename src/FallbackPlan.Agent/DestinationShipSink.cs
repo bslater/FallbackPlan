@@ -149,6 +149,11 @@ public sealed class DestinationShipSink : IObjectStore
     /// </summary>
     /// <param name="set">The set as configured for this run.</param>
     /// <param name="nowUnixMilliseconds">The clock, for the ledger rows.</param>
+    /// <param name="userInitiated">
+    /// Whether a person is waiting for this run. A background run's writes go
+    /// through each destination's transfer limit (NFR-PERF-013, ADR-0074); a
+    /// person's never do.
+    /// </param>
     /// <param name="reclaimPublicKey">
     /// The repository's reclaim public key (ADR-0055 §5), published on the
     /// offer a peer destination is opened with and recorded by it at first
@@ -165,6 +170,7 @@ public sealed class DestinationShipSink : IObjectStore
     public async ValueTask BeginRunAsync(
         BackupSetConfiguration set,
         ulong nowUnixMilliseconds,
+        bool userInitiated,
         ReadOnlyMemory<byte> reclaimPublicKey,
         ReadOnlyMemory<byte> claimPublicKey,
         CancellationToken cancellationToken)
@@ -267,10 +273,15 @@ public sealed class DestinationShipSink : IObjectStore
             // construction, so both kinds are dropped by one rule (ADR-0058).
             try
             {
+                // Only the run's own writes are paced. The sink is also this
+                // set's archive store, and a read through it may be a
+                // person's restore running beside a background backup.
                 inScope.Add(new Shipment(
                     destination.Name,
-                    await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
-                        .ConfigureAwait(false),
+                    PacedObjectStore.Over(
+                        await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
+                            .ConfigureAwait(false),
+                        userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
                     SetDestinationReference.EffectivePriority(reference, destination)));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

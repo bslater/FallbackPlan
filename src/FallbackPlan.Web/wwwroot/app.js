@@ -218,6 +218,18 @@ function windowNote() {
     : ` Background window ${esc(w.text)} — <strong>shut</strong>, opens ${esc(until(w.changesAt))}.`;
 }
 
+// The byte-rate limits in force (contract 1.43, ADR-0074), beside the window:
+// a paced transfer reads as a slow one, and this says why. Nothing at all when
+// nothing is limited, which is also what a pre-1.43 service says.
+function limitsNote() {
+  const l = S.status?.backgroundLimits;
+  if (!l) return "";
+  const parts = [];
+  if (l.readLimit) parts.push(`reads to ${esc(l.readLimit.text)}`);
+  for (const t of l.transferLimits ?? []) parts.push(`transfers to '${esc(t.destinationName)}' to ${esc(t.text)}`);
+  return parts.length ? ` Background work is limited — ${parts.join(", ")}.` : "";
+}
+
 function setName(backupSetId) {
   const set = S.sets.find(s => s.id === backupSetId);
   return set ? set.name : (backupSetId ? backupSetId.slice(0, 12) + "…" : "—");
@@ -610,7 +622,7 @@ function renderOverview() {
   if (sets.length === 0) {
     el.innerHTML = `
       <h2>Overview</h2>
-      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}${windowNote()}</p>
+      <p class="view-sub">Observed ${esc(rel(S.status.observedAt))} on ${esc(S.status.machineName)}${windowNote()}${limitsNote()}</p>
       <div class="card empty"><span class="big">🗂</span>
         No backup sets are configured yet.<br>
         Create one under <a href="#config">Configuration</a> — add a destination first; every set needs at least one.
@@ -627,7 +639,7 @@ function renderOverview() {
 
   el.innerHTML = `
     <h2>Overview</h2>
-    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.${windowNote()}</p>
+    <p class="view-sub">Per set, per destination — as the service derives it. Observed ${esc(rel(S.status.observedAt))}.${windowNote()}${limitsNote()}</p>
     <div class="set-stack">${sets.map(renderSetCard).join("")}</div>`;
 
   // The CSP forbids inline style attributes, so mark widths are set from

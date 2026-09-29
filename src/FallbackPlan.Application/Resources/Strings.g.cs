@@ -347,6 +347,28 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundWindowInvalid, arg0, arg1);
 
     /// <summary>
+    /// '{0}' declares a background_read_limit this build cannot read: {1}
+    /// </summary>
+    private static string ClientConfiguration_BackgroundReadLimitInvalid => Get(nameof(ClientConfiguration_BackgroundReadLimitInvalid));
+
+    /// <summary>
+    /// '{0}' declares a background_read_limit this build cannot read: {1}
+    /// </summary>
+    internal static string FormatClientConfiguration_BackgroundReadLimitInvalid(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundReadLimitInvalid, arg0, arg1);
+
+    /// <summary>
+    /// Destination '{0}' declares a transfer_limit this build cannot read: {1}
+    /// </summary>
+    private static string ClientConfiguration_DestinationTransferLimitInvalid => Get(nameof(ClientConfiguration_DestinationTransferLimitInvalid));
+
+    /// <summary>
+    /// Destination '{0}' declares a transfer_limit this build cannot read: {1}
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationTransferLimitInvalid(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationTransferLimitInvalid, arg0, arg1);
+
+    /// <summary>
     /// '{0}' declares schema_version 1; this build reads version {1} (ADR-0034). Migrate: declare a top-level "destinations" table, give each backup set a "destinations" list naming at least one entry, and set schema_version to 2 — every version after that migrates itself on load.
     /// </summary>
     private static string ClientConfiguration_SchemaVersion1NeedsDestinations => Get(nameof(ClientConfiguration_SchemaVersion1NeedsDestinations));
