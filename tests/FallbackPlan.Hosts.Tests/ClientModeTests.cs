@@ -117,7 +117,7 @@ public sealed class ClientModeTests : IDisposable
     {
         // The window governs every row the matrix prints, so a person asking
         // `status` gets the answer to "why is this due set not running"
-        // without a second verb (contract 1.37, ADR-0069). The configuration
+        // without a second verb (contract 1.39, ADR-0069). The configuration
         // is rewritten with a window that is shut right now, against the real
         // clock rather than a fixed hour, so the case says what it means
         // wherever it runs.
