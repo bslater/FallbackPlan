@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.41
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.42
 
 ---
 
@@ -33,7 +33,9 @@ touches a byte already written.
 - **Compatibility is by major version.** A client and service that disagree
   on the major must refuse to proceed with **both versions named**
   (FR-SVC-007); minor versions are additive, and an older peer simply does
-  not see fields it predates. A console managing several services degrades
+  not see fields it predates. 1.42 is the stated exception: it refuses, by
+  name, the one-call adoption an older client sends, because that call is
+  what FR-DR-009 ends. A console managing several services degrades
   per service rather than refusing to start.
 - Refusals are a typed `error` result with a reason code; the message is for
   people and explicitly not for parsing.
@@ -46,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.41 — 57 commands. One line each; parameters, results
+The register as of 1.42 — 58 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -60,6 +62,9 @@ credential, so the `format_version` it reports is the version each archive
 was **created** at — an upgrade record is signed, and verifying a signature
 needs a key discovery does not have; since 1.40 the adoption answer carries
 the set's own retention as the archive recorded it, FR-DR-006),
+`preview_adoption` (1.42, FR-DR-009 — what adopting would declare, each root
+flagged where it does not resolve here, answered with the confirmation
+`adopt_archive` now requires),
 `login` / `resume_session` / `logout`, `list_users` / `create_user` /
 `delete_user` / `change_password` (ADR-0045).
 
@@ -150,3 +155,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.39 | `background_window` on `status` ([ADR-0069](../../docs/adr/0069-the-background-window.md)): the configured window, whether background work may start right now, and when that next changes. The window is the first of NFR-PERF-013's four named limits to exist and it can hold every backup on an installation for hours; before this the only way to find out was the service's log, which is not where "why did nothing run last night" gets asked. One nullable descriptor rather than three loose fields, so a client tests "is there a window" once. Null from a service with no window configured **and** from one older than 1.39 — deliberately the same answer, because a client does nothing different in the two cases and an absent window has always meant always open. Reporting only: the window is edited in the configuration file, as `max_concurrent_backups` is, and a console control for it is owed. The state is evaluated at the instant `observed_at` names, from the same parsed window the scheduler's pass uses, so a client cannot catch the two disagreeing across a boundary. Additive |
 | 1.40 | `retention` on `archive_adopted` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 1, FR-DR-006): the set's own retention policy as the adopted set is now configured, taken from the archive's newest policy manifest, which records it from this version on. The same descriptor the set listing carries, null when the set defers retention; a destination's override is never in it, because it names the destination (FR-DEST-006). Additive with a null default: a pre-1.40 service never sends it, which a client reads as "the archive recorded none" |
 | 1.41 | `acknowledge_replica_claim {repository_id}` and `claim_awaiting_acknowledgement` on each `replica_attributions` row (FR-DR-005, [peer-protocol 06 §3](../peer-protocol/06-retention.md#3-what-the-spoke-validates)): a claim that moves a replica stored here is held — the claimant reads it at once, and its retention instructions are refused, deleting nothing, until this machine's owner acknowledges the claim. Owner-only and local callers only, like `reattribute_replica`; a replica with nothing held answers `configuration_change` saying nothing changed. The flag is additive with a false default, which a pre-1.41 service, never having held a claim, would have sent had it known the field. |
+| 1.42 | `preview_adoption {destination_name, repository_id, envelope}` and its answer `adoption_preview` ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md) Amendment 2, FR-DR-009): a recovered configuration takes effect only as a person was shown it. The preview takes the envelope adoption takes, proves it the same way and writes nothing. It answers with the recorded `set_id` and `set_name`; each root as `recorded_path`, `label` and `resolves` on this machine; `schedule`, the rules and `retention`, the set's own policy it would delete by; `snapshot_count` and the newest snapshot; `already_adopted`; the service's `lines`; and a `confirmation`, a digest of all of it. `adopt_archive` gains `confirmation` and requires it. Without one it is refused before any envelope is opened, naming the preview. With one the archive no longer matches, because it gained a snapshot or a different recorded shape, it is refused as changed and leaves nothing behind. **Not additive**, deliberately: a pre-1.42 client that adopts in one call is refused by name rather than adopting a set nobody was shown, and the console and the CLI ship with the service and preview first |

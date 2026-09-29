@@ -12,8 +12,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// with the passphrase (ADR-0053), and then discovers and adopts it through
 /// the same verbs a local path takes — the peer's owner inventory is the
 /// enumerator, the retrieval session is the store, and the next backup
-/// ships incrementally to the peer. Does not establish FR-REP-001, which
-/// the claim tests hold.
+/// ships incrementally to the peer. The recorded shape is previewed over
+/// the retrieval session and confirmed before it takes effect, as at a
+/// local path (FR-DR-009). Does not establish FR-REP-001, which the claim
+/// tests hold.
 /// </summary>
 [TestClass]
 public sealed class PeerAdoptionTests : IDisposable

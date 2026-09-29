@@ -127,12 +127,15 @@ different question from the reclaim-signature ones of
 [ADR-0055](../adr/0055-reclaim-authority.md) and
 [ADR-0059](../adr/0059-session-bound-deletion-authority.md): not who signed the
 instruction, but whether the destination's operator has acknowledged who is
-now asking, and the claimant holds the key that signs. FR-DR-009 is still
-unbuilt: a recovered configuration is reported and then acted on rather than
-confirmed first, and `Api/Results.cs` says so in as many words, "reported, not
-refused". FR-DR-005 has a proof obligation now that the product claims it;
-FR-DR-009 has none, because the proof page tracks invariants the product
-claims and it does not yet claim this one.
+now asking, and the claimant holds the key that signs. **FR-DR-009 is now
+built too** ([ADR-0061 Amendment 2](../adr/0061-adopt-a-destinations-archives.md#amendment-2-2026-09--a-recovered-configuration-is-confirmed-before-it-takes-effect)).
+Adoption first shows the configuration the archive recorded: each root's
+recorded path, flagged where it does not resolve on this machine, and the
+retention the set would delete by. It takes effect only with the
+confirmation that preview answered. An adoption without one is refused by
+name, one the archive has moved on from since is refused as changed, and a
+root can be re-pointed when the person confirms. Both rows have proof
+obligations now that the product claims them.
 
 **FR-DR-006 arrived with its work.** The review also found that the repository
 did not carry the set's **retention policy** as part of its recorded shape, so a

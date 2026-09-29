@@ -575,7 +575,8 @@ public sealed record DiscoverArchivesCommand(string DestinationName) : ServiceCo
 /// and are required exactly when the archive records nothing to take —
 /// an archive written for no configured set, or before the shape was
 /// recorded. A recorded root that does not exist on this machine is
-/// reported, never refused: the person edits the set.
+/// reported, never refused: the preview flags it, and the person re-points
+/// it through <paramref name="Roots"/> at confirmation or edits the set.
 /// </para>
 /// <para>
 /// Since 1.42 an adoption is confirmed (FR-DR-009): <paramref name="Confirmation"/>
