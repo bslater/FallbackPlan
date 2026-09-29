@@ -328,6 +328,22 @@ public sealed record DestinationSyncRecord
     [JsonPropertyName("drill_limit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DrillLimit { get; init; }
+
+    /// <summary>
+    /// How many drills in a row have ended without completing, cut short by a
+    /// fault in the service rather than by an answer about the replica; zero
+    /// once a drill completes, passing or failing (schema 5,
+    /// [ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md) Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// It is what brings the pair's next drill forward. A drill that did not
+    /// complete is due again on a back-off from an hour rather than at the
+    /// pair's interval, so a fault that has passed does not stand as a failed
+    /// drill for a month, and one that lasts is not retried every pass.
+    /// </remarks>
+    [JsonPropertyName("consecutive_incomplete_drills")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConsecutiveIncompleteDrills { get; init; }
 }
 
 /// <summary>
@@ -382,7 +398,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 4;
+    private const int CurrentSchemaVersion = 5;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -508,8 +524,9 @@ public sealed class DestinationSyncStore
     {
         // Schema 3 added the verification tiers as plain additive columns: a
         // schema-2 row reads them as zero, which says exactly what is true of
-        // it — the tiers were not counted — so 2 → 3 needs no rewrite. Only
-        // 1 → 2 changes a row, below.
+        // it — the tiers were not counted — so 2 → 3 needs no rewrite. Schemas
+        // 4 and 5 did the same with the chunk tier and the count of drills
+        // that did not complete. Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -694,6 +711,38 @@ public sealed class DestinationSyncStore
             DrillBytes = bytes,
             DrillFailure = failure,
             DrillLimit = limit,
+            ConsecutiveIncompleteDrills = 0,
+        });
+    }
+
+    /// <summary>
+    /// Records a drill that did not complete: ended by a fault in the service
+    /// while it ran, not by an answer about the replica (ADR-0054 Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// On the row it is a failed drill like any other: the stamp moves,
+    /// because it was a try, and the reason stands in the drill's own words.
+    /// It is also counted, which is what lets the next drill come sooner than
+    /// the pair's interval and back off while the fault lasts. A drill that
+    /// completes, through <see cref="RecordDrill"/>, ends the count.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="failure">What stopped it, in the drill's own words.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordIncompleteDrill(
+        string setId, string destination, string failure, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(failure);
+
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            DrilledAt = nowUnixMilliseconds,
+            DrillFiles = 0,
+            DrillBytes = 0,
+            DrillFailure = failure,
+            DrillLimit = null,
+            ConsecutiveIncompleteDrills = (previous?.ConsecutiveIncompleteDrills ?? 0) + 1,
         });
     }
 

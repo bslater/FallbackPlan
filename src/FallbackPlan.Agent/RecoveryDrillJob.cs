@@ -151,8 +151,34 @@ internal static class RecoveryDrillJob
     /// <param name="budget">What the sample may read, or null for no cap.</param>
     /// <param name="draw">Chooses among the entries the descent is offered at each step.</param>
     /// <param name="cancellationToken">Cancels the drill.</param>
+    internal static Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        SampleBudget? budget,
+        Random draw,
+        CancellationToken cancellationToken) =>
+        RunAsync(
+            runtime, new ServiceCommandHandler(runtime, RemoteBindingState.Off), set, destinationName, nowMs, budget, draw,
+            cancellationToken);
+
+    /// <summary>
+    /// Drills one (set, destination) pair through the service it is handed —
+    /// a test's way to put one fault between the drill and the verbs it
+    /// calls, so that the fault is all that differs from a clean drill.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="handler">The verbs the drill calls.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="budget">What the sample may read, or null for no cap.</param>
+    /// <param name="draw">Chooses among the entries the descent is offered at each step.</param>
+    /// <param name="cancellationToken">Cancels the drill.</param>
     internal static async Task<DrillOutcome> RunAsync(
         ServiceRuntime runtime,
+        IFallbackPlanService handler,
         BackupSetConfiguration set,
         string destinationName,
         ulong nowMs,
@@ -162,7 +188,6 @@ internal static class RecoveryDrillJob
     {
         var scratch = Path.Combine(
             runtime.RestoreCacheRoot, $"drill-{Convert.ToHexStringLower(Guid.NewGuid().ToByteArray())[..16]}");
-        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         string? sourceId = null;
 
         try
@@ -171,30 +196,40 @@ internal static class RecoveryDrillJob
                 handler, set, destinationName, scratch, budget, draw, id => sourceId = id, cancellationToken)
                 .ConfigureAwait(false);
 
+            // A failure reached while the service is stopping is about the
+            // service, not the replica: the store it read from, or the source
+            // it opened, may be going away underneath it. The row keeps its
+            // last answer, and the next start drills the pair again.
+            if (outcome.Failure is not null && Stopping(runtime, cancellationToken))
+            {
+                return Unrecorded;
+            }
+
             runtime.DestinationSync.RecordDrill(
                 set.Id, destinationName, outcome.Files, outcome.Bytes, outcome.Failure, outcome.Limit, nowMs);
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
-        catch (Exception exception) when (exception is OperationCanceledException or ObjectDisposedException)
+        catch (Exception) when (Stopping(runtime, cancellationToken))
         {
-            // A drill cut short by shutdown states nothing: it did not pass
-            // and it did not find damage, so the row keeps whatever the last
-            // completed drill said and the next pass tries again. The filter
-            // is deliberately absent: the cancellation that matters here is
-            // usually NOT this token's — it is the service's own queue going
-            // away underneath a drill in flight, which reaches this method as
-            // a cancelled command answer and is translated below. Blaming the
-            // destination for a shutdown would put the loudest notice this
-            // product can raise on the most ordinary event it has. A disposed
-            // object is the same event arriving a moment later, once the
-            // runtime has started taking itself apart.
-            return new DrillOutcome(0, 0, null);
+            // A drill cut short because the service is stopping states
+            // nothing (ADR-0054 Amendment 1): it did not pass and it did not
+            // find damage, so the row keeps whatever the last completed drill
+            // said, and the next pass tries again. Whatever it met on the way
+            // out, a cancelled command, a disposed object or anything else,
+            // came from the service taking itself apart.
+            return Unrecorded;
         }
         catch (Exception exception)
         {
-            var outcome = new DrillOutcome(0, 0, $"the drill did not complete: {exception.Message}");
-            runtime.DestinationSync.RecordDrill(set.Id, destinationName, 0, 0, outcome.Failure, limit: null, nowMs);
+            // Anything else that ends a drill while the service runs is a
+            // drill that did not complete, and says so (Amendment 4). A
+            // cancellation or a disposed object is not shutdown unless the
+            // service is stopping; met while it runs, it is a fault on the
+            // road back, and silence would hide it for as long as it lasted.
+            var failure = $"the drill did not complete: {exception.Message.ReplaceLineEndings(" ")}";
+            runtime.DestinationSync.RecordIncompleteDrill(set.Id, destinationName, failure, nowMs);
+            var outcome = new DrillOutcome(0, 0, failure);
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -211,28 +246,65 @@ internal static class RecoveryDrillJob
     }
 
     /// <summary>
-    /// Turns a command refused because the service is stopping back into the
-    /// cancellation it was, so the drill records nothing.
+    /// When a pair whose last drill did not complete is due again: an hour
+    /// after the first such drill, doubling with each one after it, and never
+    /// later than the pair's own interval (ADR-0054 Amendment 4).
+    /// </summary>
+    /// <remarks>
+    /// Sooner than the interval, because there is no drill-now verb and a
+    /// fault that passed in a minute should not stand as a failed drill for a
+    /// month. Not every pass, because a fault that lasts would then drill
+    /// every minute, and a peer's drill reads over somebody else's link.
+    /// </remarks>
+    /// <param name="consecutiveIncomplete">Drills in a row that did not complete; one or more.</param>
+    /// <param name="intervalMs">The pair's drill interval.</param>
+    /// <returns>How long after the last drill the pair is due again.</returns>
+    internal static ulong IncompleteRetryMs(int consecutiveIncomplete, ulong intervalMs)
+    {
+        var doublings = Math.Clamp(consecutiveIncomplete - 1, 0, 30);
+        return Math.Min(IncompleteRetryFirstMs << doublings, intervalMs);
+    }
+
+    /// <summary>The first retry after a drill that did not complete: an hour.</summary>
+    private const ulong IncompleteRetryFirstMs = 3_600_000;
+
+    /// <summary>What a drill that states nothing returns: no files, no failure, no limit, and nothing recorded.</summary>
+    private static DrillOutcome Unrecorded { get; } = new(0, 0, null);
+
+    /// <summary>
+    /// Whether the service is stopping, which is the only thing that makes a
+    /// drill's ending say nothing: its queue or its runtime has begun shutting
+    /// down, or the pass that ran the drill, which runs on the service's
+    /// lifetime, was cancelled.
+    /// </summary>
+    private static bool Stopping(ServiceRuntime runtime, CancellationToken cancellationToken) =>
+        cancellationToken.IsCancellationRequested || runtime.IsStopping;
+
+    /// <summary>
+    /// Turns a command answered as cancelled back into the cancellation it
+    /// was, naming the step it cut short.
     /// </summary>
     /// <remarks>
     /// <see cref="ServiceCommandHandler"/> answers every cancellation as a
     /// <see cref="ServiceErrorReason.Cancelled"/> error rather than throwing,
-    /// which is right for a client and wrong for this caller: a drill that
-    /// treated it as an answer about the replica would write "your backups may
-    /// not be restorable" every time the service stopped while one was in
-    /// flight.
+    /// which is right for a client and wrong for this caller. Read as an
+    /// answer about the replica, a cancellation during shutdown wrote "your
+    /// backups may not be restorable". Thrown instead, it ends the drill, and
+    /// whether that ending says anything is decided in one place, by whether
+    /// the service is stopping.
     /// </remarks>
     /// <param name="error">The refusal to inspect.</param>
-    private static void ThrowIfCancelled(ServiceError error)
+    /// <param name="step">What the drill was doing, for the record of a drill that did not complete.</param>
+    private static void ThrowIfCancelled(ServiceError error, string step)
     {
         if (error.Reason == ServiceErrorReason.Cancelled)
         {
-            throw new OperationCanceledException(error.Message);
+            throw new OperationCanceledException($"{step} was cancelled");
         }
     }
 
     private static async Task<DrillOutcome> DrillAsync(
-        ServiceCommandHandler handler,
+        IFallbackPlanService handler,
         BackupSetConfiguration set,
         string destinationName,
         string scratch,
@@ -245,7 +317,7 @@ internal static class RecoveryDrillJob
             new OpenRestoreSourceCommand(set.Name, destinationName), cancellationToken).ConfigureAwait(false);
         if (opened is ServiceError openFailure)
         {
-            ThrowIfCancelled(openFailure);
+            ThrowIfCancelled(openFailure, "opening the replica");
             return new DrillOutcome(0, 0, $"the replica would not open: {openFailure.Message}");
         }
 
@@ -303,7 +375,7 @@ internal static class RecoveryDrillJob
             switch (restored)
             {
                 case ServiceError error:
-                    ThrowIfCancelled(error);
+                    ThrowIfCancelled(error, $"restoring '{path}'");
                     return new DrillOutcome(0, 0, $"'{path}' would not restore: {error.Message}");
 
                 // The whole-file hash is checked inside the restore, after
@@ -330,7 +402,7 @@ internal static class RecoveryDrillJob
                     switch (planned)
                     {
                         case ServiceError error:
-                            ThrowIfCancelled(error);
+                            ThrowIfCancelled(error, $"planning '{path}'");
                             return new DrillOutcome(0, 0, $"'{path}' would not plan: {error.Message}");
 
                         case RestorePlanResult { MissingObjects.Count: 0 }:
@@ -407,7 +479,7 @@ internal static class RecoveryDrillJob
     /// challenge draws its record at random.
     /// </remarks>
     private static async Task<(List<string> Paths, int Skipped)> SampleAsync(
-        ServiceCommandHandler handler,
+        IFallbackPlanService handler,
         string sourceId,
         string snapshotId,
         SampleBudget? budget,
@@ -427,6 +499,15 @@ internal static class RecoveryDrillJob
                 var listed = await handler.ExecuteAsync(
                     new ListDirectoryCommand(snapshotId, path.Length == 0 ? null : path, sourceId),
                     cancellationToken).ConfigureAwait(false);
+
+                // A listing that came back cancelled is not an empty folder.
+                // Read as one, it ended every descent, and the drill blamed the
+                // snapshot for having nothing it could sample.
+                if (listed is ServiceError listFailure)
+                {
+                    ThrowIfCancelled(listFailure, path.Length == 0 ? "listing the snapshot" : $"listing '{path}'");
+                }
+
                 if (listed is not DirectoryResult directory || directory.Entries.Count == 0)
                 {
                     break;

@@ -206,6 +206,21 @@ public sealed class JobScheduler : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the queue has begun stopping. From then on it takes no work,
+    /// so every command that needs a lane answers cancelled.
+    /// </summary>
+    internal bool HasStopped
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _disposed;
+            }
+        }
+    }
+
     /// <summary>Whether a job with this identity is queued or running.</summary>
     /// <param name="jobId">The job identity.</param>
     /// <returns><see langword="true"/> when it is known.</returns>

@@ -375,6 +375,14 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The throwaway per-source catalogue root, purged at start.</summary>
     internal string RestoreCacheRoot => Path.Combine(Options.StateDirectory, "restore-cache");
 
+    /// <summary>
+    /// Whether the service has begun stopping: its disposal has started, or
+    /// its queue has stopped taking work. A check that ends in a cancellation
+    /// or a disposed object asks this before it says anything, because only a
+    /// stop makes those endings mean nothing (ADR-0054 Amendment 4).
+    /// </summary>
+    internal bool IsStopping => Volatile.Read(ref _disposed) || Queue.HasStopped;
+
     /// <summary>Where persisted restore receipts land (FR-RST-004).</summary>
     internal string ReceiptsRoot => Path.Combine(Options.StateDirectory, "receipts");
 

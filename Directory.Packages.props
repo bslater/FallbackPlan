@@ -12,12 +12,17 @@
          nothing; it publishes now, so the feed is gone. Upstream versions
          the packages in lock-step and they are taken and upgraded together:
          a mixed set pairs assemblies that were never built or tested
-         against each other. Argon2id and base32 sit beneath the committed
-         conformance fixtures, so an upgrade that changes either surfaces as
-         a fixture diff rather than as a test that merely still compiles
-         (NFR-COMP-004). -->
+         against each other. The one exception is a package upstream
+         releases alone. It is taken alone when every dependency its package
+         declares is at the version pinned here, so no assembly meets a
+         version it was not built against (Amendment 3).
+         Bodu.Security.Cryptography 1.1.0 is that case: its one dependency
+         is Bodu.Core 1.0.0, and no other Bodu package here depends on it.
+         Argon2id and base32 sit beneath the committed conformance fixtures,
+         so an upgrade that changes either surfaces as a fixture diff rather
+         than as a test that merely still compiles (NFR-COMP-004). -->
     <PackageVersion Include="Bodu.Core" Version="1.0.0" />
-    <PackageVersion Include="Bodu.Security.Cryptography" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Security.Cryptography" Version="1.1.0" />
     <PackageVersion Include="Bodu.Text.Encoding" Version="1.0.0" />
     <PackageVersion Include="Bodu.Globalization.Recurrence" Version="1.0.0" />
     <!-- The diagnostics ring buffer (ADR-0043 §6): a lock-free Vyukov MPMC

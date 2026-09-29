@@ -459,7 +459,15 @@ public static class Scheduler
 
         var interval = (ulong)(destination.DrillIntervalDays ?? RecoveryDrillJob.DefaultIntervalDays)
             * 24UL * 3_600_000UL;
-        return (ulong)now.ToUnixTimeMilliseconds() >= drilled + interval;
+
+        // A drill that did not complete answered nothing about the replica, so
+        // it is retried on a back-off rather than left for the whole interval
+        // (ADR-0054 Amendment 4). One that completed, passing or failing, has
+        // answered and waits the interval.
+        var wait = record.ConsecutiveIncompleteDrills > 0
+            ? RecoveryDrillJob.IncompleteRetryMs(record.ConsecutiveIncompleteDrills, interval)
+            : interval;
+        return (ulong)now.ToUnixTimeMilliseconds() >= drilled + wait;
     }
 
     /// <summary>Whether a journal state is finished — the one-run-per-set rule's input.</summary>
