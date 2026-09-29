@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
 using FallbackPlan.Api;
+using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;
 using static Microsoft.Playwright.Assertions;
 
@@ -7,9 +10,10 @@ namespace FallbackPlan.Web.DomTests;
 /// <summary>
 /// The configuration view's editors, walked by real clicks: the destination
 /// editor, the set editor's selection tree, the typed-word delete, the
-/// acknowledgement of a claim held on a replica stored here (FR-DR-005), and
-/// the write-only provisioning ceremony — each asserting the command its
-/// dialog claims to send.
+/// acknowledgement of a claim held on a replica stored here (FR-DR-005), the
+/// write-only provisioning ceremony, and the adoption ceremony's preview and
+/// confirmation (FR-DR-009) — each asserting the command its dialog claims
+/// to send.
 /// </summary>
 /// <remarks>
 /// Re-homed onto the sectioned set editor when this line merged: the single
@@ -222,5 +226,87 @@ public sealed class ConfigEditingDomTests
         Assert.DoesNotContain("Kestrel", provisioned.Envelope, StringComparison.Ordinal);
 
         await Expect(page.GetByText("Write-only provisioned")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task Adoption_ShowsWhatTheArchiveRecorded_ThenSendsOnlyWhatWasConfirmed()
+    {
+        // FR-DR-009: the first click shows the set as the archive recorded it
+        // and adopts nothing; the second sends the preview's confirmation with
+        // the folder the person re-pointed. The discovered row carries the
+        // passphrase's real derivation under the archive's own salt, because
+        // the console proves its derivation against it before sending anything.
+        const string passphraseText = "Harbour-Kestrel-19-Vault-Door";
+        var repositoryId = new string('c', 32);
+        var confirmation = new string('9', 64);
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+        string sealingKey;
+        using (var passphrase = Passphrase.Create(passphraseText))
+        using (var authority = WriteOnlyDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository))
+        {
+            sealingKey = Convert.ToHexStringLower(authority.Credential.SealingPublicKey);
+        }
+
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner") with { SignedInRole = "Owner" },
+            ListDestinationsCommand => new DestinationsResult([Vault]),
+            ListBackupSetsCommand => new BackupSetsResult([]),
+            DiscoverArchivesCommand => new ArchivesDiscoveredResult(
+                "vault",
+                [
+                    new DiscoveredArchiveDescriptor(
+                        repositoryId, 2, 1_700_000_000_000, "fallbackplan-agent/0.1", Convert.ToHexStringLower(salt),
+                        parameters.MemoryKiB, parameters.Iterations, parameters.Parallelism, sealingKey,
+                        SnapshotObjects: 3, HighestPublicationSequence: 12, OwnedBySet: null, SameInstallation: false),
+                ],
+                []),
+            PreviewAdoptionCommand => new AdoptionPreviewResult(
+                "vault", repositoryId, Wire.SetId, "docs",
+                [new RecoveredRootDescriptor("/old/documents", "documents", Resolves: false)],
+                "every 1h", [], ["**/*.tmp"], new RetentionPolicyDescriptor(KeepDaily: 7), 3,
+                new string('5', 32), 1_700_000_000_000, AlreadyAdopted: false, Confirmation: confirmation,
+                Lines: ["Recorded root folder '/old/documents' is not on this machine."]),
+            AdoptArchiveCommand => new ArchiveAdoptedResult(
+                Wire.SetId, "docs", repositoryId, [new BackupRootDescriptor("/new/documents", "documents")], [],
+                "every 1h", [], ["**/*.tmp"], 3, null, null, WriterIdentityResumed: true, AlreadyAdopted: false,
+                Lines: ["Adopted archive 'cccc' as set 'docs'."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-discover\"]");
+        await page.ClickAsync("[data-action=\"dest-adopt\"]");
+        await page.FillAsync("#adopt-passphrase", passphraseText);
+        await page.CheckAsync("#adopt-ack");
+        await page.ClickAsync("[data-action=\"dest-adopt-go\"]");
+
+        // The preview: the recorded path offered for re-pointing and flagged
+        // as absent here, and the retention the set would delete by.
+        await Expect(page.Locator("#adopt-root-0")).ToHaveValueAsync("/old/documents");
+        await Expect(page.Locator(".badge.bad")).ToHaveTextAsync("not on this machine");
+        await Expect(page.Locator("pre.report").First).ToContainTextAsync("keep 7 daily versions");
+        var previewed = await harness.ReceivedAsync<PreviewAdoptionCommand>();
+        Assert.AreEqual(repositoryId, previewed.RepositoryId);
+        lock (harness.Clients.Client.Received)
+        {
+            Assert.IsEmpty(harness.Clients.Client.Received.OfType<AdoptArchiveCommand>());
+        }
+
+        await page.FillAsync("#adopt-root-0", "/new/documents");
+        await page.ClickAsync("[data-action=\"dest-adopt-confirm\"]");
+
+        var adopted = await harness.ReceivedAsync<AdoptArchiveCommand>();
+        Assert.AreEqual(confirmation, adopted.Confirmation);
+        var root = Assert.ContainsSingle(adopted.Roots!);
+        Assert.AreEqual("/new/documents", root.Path);
+        Assert.AreEqual("documents", root.Label);
+        Assert.DoesNotContain("Kestrel", adopted.Envelope, StringComparison.Ordinal);
+        await Expect(page.GetByText("Backup set 'docs' adopted")).ToBeVisibleAsync();
     }
 }

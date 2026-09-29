@@ -420,22 +420,38 @@ public static class WebConsoleHost
     /// <param name="Lines">The service's ceremony statements, when provisioned.</param>
     private sealed record ProvisionResponse(string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
 
-    /// <summary>The page's adoption request (ADR-0061 §5).</summary>
+    /// <summary>The page's adoption request (ADR-0061 §5, FR-DR-009).</summary>
     /// <param name="DestinationName">The declared destination the archive was discovered at.</param>
     /// <param name="RepositoryId">The discovered archive's repository id.</param>
     /// <param name="Passphrase">The typed passphrase; it stops here.</param>
     /// <param name="Acknowledged">The loss acknowledgement, collected before anything derives.</param>
     /// <param name="SetName">An optional name to adopt the set under; blank takes the archive's recorded one.</param>
+    /// <param name="Confirmation">
+    /// The preview's confirmation. Absent, the endpoint previews; present, it
+    /// adopts what that preview showed.
+    /// </param>
+    /// <param name="Roots">The roots as the person confirmed them, recorded labels kept; absent takes the recorded ones.</param>
     private sealed record AdoptRequest(
-        string? DestinationName, string? RepositoryId, string? Passphrase, bool Acknowledged, string? SetName = null);
+        string? DestinationName,
+        string? RepositoryId,
+        string? Passphrase,
+        bool Acknowledged,
+        string? SetName = null,
+        string? Confirmation = null,
+        IReadOnlyList<BackupRootDescriptor>? Roots = null);
 
     /// <summary>The adoption endpoint's answer to the page.</summary>
-    /// <param name="Outcome"><c>adopted</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
-    /// <param name="Detail">Why, when not adopted.</param>
+    /// <param name="Outcome"><c>preview</c>, <c>adopted</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when neither previewed nor adopted.</param>
     /// <param name="Lines">The service's statements, when adopted.</param>
     /// <param name="Set">The set as adopted, when adopted.</param>
+    /// <param name="Preview">What the archive recorded, when previewed.</param>
     private sealed record AdoptResponse(
-        string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null, ArchiveAdoptedResult? Set = null);
+        string Outcome,
+        string? Detail = null,
+        IReadOnlyList<string>? Lines = null,
+        ArchiveAdoptedResult? Set = null,
+        AdoptionPreviewResult? Preview = null);
 
     /// <summary>
     /// The adoption ceremony (ADR-0061 §5): the third endpoint permitted a
@@ -446,6 +462,14 @@ public static class WebConsoleHost
     /// sealing key before anything is sent, so a wrong passphrase is caught
     /// where it was typed.
     /// </summary>
+    /// <remarks>
+    /// Two phases on the one endpoint (FR-DR-009), so no second endpoint is
+    /// permitted a secret: without a confirmation the service is asked for
+    /// the preview, which the page shows; with one, it is asked to adopt what
+    /// that preview showed, with any root the person re-pointed. The page
+    /// sends the passphrase each time and the derivation runs each time; the
+    /// console holds nothing between the two.
+    /// </remarks>
     private static async Task AdoptArchiveAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
     {
         if (!auth.Authorizes(context.Request))
@@ -537,10 +561,26 @@ public static class WebConsoleHost
                 return;
             }
 
+            if (string.IsNullOrWhiteSpace(request.Confirmation))
+            {
+                var previewed = await client.ExecuteAsync(
+                    new PreviewAdoptionCommand(request.DestinationName, target.RepositoryId, minted.Envelope!),
+                    context.RequestAborted).ConfigureAwait(false);
+                await AnswerAsync(previewed switch
+                {
+                    AdoptionPreviewResult preview => new AdoptResponse("preview", Preview: preview),
+                    ServiceError refusal => new AdoptResponse("refused", refusal.Message),
+                    _ => new AdoptResponse("refused", $"Unexpected result '{previewed.GetType().Name}'."),
+                }).ConfigureAwait(false);
+                return;
+            }
+
             var result = await client.ExecuteAsync(
                 new AdoptArchiveCommand(
                     request.DestinationName, target.RepositoryId, minted.Envelope!,
-                    SetName: string.IsNullOrWhiteSpace(request.SetName) ? null : request.SetName.Trim()),
+                    SetName: string.IsNullOrWhiteSpace(request.SetName) ? null : request.SetName.Trim(),
+                    Roots: request.Roots is { Count: > 0 } roots ? roots : null,
+                    Confirmation: request.Confirmation),
                 context.RequestAborted).ConfigureAwait(false);
             await AnswerAsync(result switch
             {

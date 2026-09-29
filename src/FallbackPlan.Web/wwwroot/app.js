@@ -1352,6 +1352,7 @@ function closeDialog() {
   dialog.innerHTML = "";
   dialog.classList.remove("wide");
   E = null;
+  A = null; // an adoption's passphrase, held from its preview to its confirmation, dies here
   endSourceScans(); // a walk for an editor that no longer exists stops now, not in ten minutes
   if (W) {
     // The wizard's server-side source handle is released best-effort; the
@@ -3627,6 +3628,73 @@ function readPolicyInputs(read) {
   };
 }
 
+/* ----- adopting a discovered archive (ADR-0061) ----- */
+//
+// Two phases on one endpoint (FR-DR-009): the first answers what the archive
+// recorded and adopts nothing; only the confirming action sends that
+// answer's confirmation, with the folders as the person left or re-pointed
+// them. The passphrase is re-derived by each phase in the console process,
+// so it is held in A between them — and closeDialog() drops it, as it does
+// the restore wizard's.
+
+let A = null;
+
+// One call to the ceremony's endpoint: its answer, or null once a toast has
+// said everything there is to say.
+async function postAdoption(request) {
+  let response;
+  try {
+    response = await fetch("/api/adopt-archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify(request),
+    });
+  } catch {
+    toast("warn", "The console process stopped answering.");
+    return null;
+  }
+  const body = await safeJson(response);
+  if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return null; }
+  return body;
+}
+
+function renderAdoptionPreview() {
+  const preview = A.preview;
+  const name = A.setName || preview.setName || "";
+  const renamed = A.setName && preview.setName && A.setName !== preview.setName
+    ? ` It recorded the name '${esc(preview.setName)}'; it comes back as '${esc(A.setName)}'.` : "";
+  const roots = (preview.roots ?? []).map((root, index) => `
+    <tr>
+      <td>${esc(root.label ?? "")}</td>
+      <td><input type="text" id="adopt-root-${index}" value="${esc(root.recordedPath)}" autocomplete="off" spellcheck="false"
+          aria-label="Path of the folder recorded as ${esc(root.recordedPath)}">
+        <div class="detail">recorded as <span class="mono">${esc(root.recordedPath)}</span></div></td>
+      <td>${root.resolves ? `<span class="badge ok">on this machine</span>` : `<span class="badge bad">not on this machine</span>`}</td>
+    </tr>`).join("");
+  const shape = [
+    `schedule   ${describeSchedule(preview.schedule)}`,
+    ...(preview.includeRules ?? []).map(rule => `include    ${rule}`),
+    ...(preview.excludeRules ?? []).map(rule => `exclude    ${rule}`),
+    `retention  ${retentionProse(preview.retention)}`,
+    `history    ${preview.snapshotCount} snapshot${preview.snapshotCount === 1 ? "" : "s"}`
+      + (preview.newestSnapshotAt ? `, the newest ${new Date(Number(preview.newestSnapshotAt)).toLocaleString()}` : ""),
+  ];
+  openDialog(`
+    <h3>Adopt set '${esc(name)}' from '${esc(preview.destinationName)}'?</h3>
+    <p class="dlg-sub">Nothing has been adopted yet. This is the set as archive
+    <span class="mono">${esc(preview.repositoryId.slice(0, 12))}…</span> recorded it; adopting takes it back as shown,
+    and its next backup is incremental against this archive.${renamed} A folder that lives somewhere else on this
+    machine can be re-pointed here — a backup refuses a folder that is not there.</p>
+    ${roots ? `<table class="table"><thead><tr><th>Folder</th><th>Path on this machine</th><th></th></tr></thead><tbody>${roots}</tbody></table>`
+            : `<p class="detail">The archive records no folders.</p>`}
+    <pre class="report">${esc(shape.join("\n"))}</pre>
+    <pre class="report">${esc((preview.lines ?? []).join("\n"))}</pre>
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+      <button type="button" class="btn primary" data-action="dest-adopt-confirm">Adopt as shown</button>
+    </div>`);
+}
+
 /* ----- configuration actions ----- */
 
 Object.assign(actions, {
@@ -3982,9 +4050,10 @@ Object.assign(actions, {
     const repo = el.dataset.repo;
     openDialog(`
       <h3>Adopt a backup from '${esc(name)}'</h3>
-      <p class="dlg-sub">Archive <span class="mono">${esc(repo.slice(0, 12))}…</span>. The set comes back as the
-      archive recorded it — name, folders, schedule, rules — and this service continues it. Enter the passphrase
-      the backup was written with; it is checked here, on this machine, before anything is sent.</p>
+      <p class="dlg-sub">Archive <span class="mono">${esc(repo.slice(0, 12))}…</span>. Enter the passphrase the
+      backup was written with; it is checked here, on this machine, before anything is sent. Next you see the set
+      as the archive recorded it — name, folders, schedule, rules, retention — and nothing is adopted until you
+      confirm it.</p>
       <label class="field" for="adopt-passphrase">Passphrase</label>
       <input type="password" id="adopt-passphrase" autocomplete="current-password">
       <label class="field" for="adopt-name">Set name <span class="detail">(leave blank to use the recorded name)</span></label>
@@ -3995,7 +4064,7 @@ Object.assign(actions, {
         I understand that losing this passphrase loses the backup, permanently.</label>
       <div class="dlg-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
-        <button type="button" class="btn primary" data-action="dest-adopt-go" data-name="${esc(name)}" data-repo="${esc(repo)}">Adopt</button>
+        <button type="button" class="btn primary" data-action="dest-adopt-go" data-name="${esc(name)}" data-repo="${esc(repo)}">Show what it recorded</button>
       </div>`);
     document.getElementById("adopt-passphrase").focus();
   },
@@ -4007,30 +4076,41 @@ Object.assign(actions, {
     if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
     if (!acknowledged) { toast("warn", "Adoption needs the loss acknowledgement."); return; }
     await withBusy(el, async () => {
-      let response;
-      try {
-        response = await fetch("/api/adopt-archive", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-          body: JSON.stringify({
-            destinationName: el.dataset.name, repositoryId: el.dataset.repo, passphrase, acknowledged,
-            setName: setName || null,
-          }),
-        });
-      } catch {
-        toast("warn", "The console process stopped answering.");
-        return;
+      const request = {
+        destinationName: el.dataset.name, repositoryId: el.dataset.repo, passphrase, acknowledged,
+        setName: setName || null,
+      };
+      const body = await postAdoption(request);
+      if (body?.outcome === "preview") {
+        A = { request, setName, preview: body.preview };
+        renderAdoptionPreview();
+      } else if (body) {
+        toast("bad", body.detail ?? "The ceremony refused.");
       }
-      const body = await safeJson(response);
-      if (!response.ok) { toast("bad", body?.message ?? "The ceremony refused."); return; }
+    });
+  },
+
+  async "dest-adopt-confirm"(el) {
+    if (!A) return;
+    const recorded = A.preview.roots ?? [];
+    const paths = recorded.map((_, index) => document.getElementById(`adopt-root-${index}`)?.value.trim() ?? "");
+    if (paths.some(path => !path)) { toast("warn", "Every folder needs a path."); return; }
+    const repointed = paths.some((path, index) => path !== recorded[index].recordedPath);
+    await withBusy(el, async () => {
+      const body = await postAdoption({
+        ...A.request,
+        confirmation: A.preview.confirmation,
+        roots: repointed ? recorded.map((root, index) => ({ path: paths[index], label: root.label })) : null,
+      });
       if (body?.outcome === "adopted") {
+        A = null;
         const set = body.set ?? {};
         const lines = [...(body.lines ?? [])];
         if ((set.missingRoots ?? []).length) lines.push(`Folders not found on this machine: ${set.missingRoots.join(", ")}`);
         reportDialog(`Backup set '${set.setName ?? ""}' adopted`, lines);
         refreshConfigData(); refreshStatus();
-      } else {
-        toast("bad", body?.detail ?? "The ceremony refused.");
+      } else if (body) {
+        toast("bad", body.detail ?? "The ceremony refused.");
       }
     });
   },

@@ -163,22 +163,75 @@ public sealed partial class ServiceCommandHandler
         }
     }
 
-    private async ValueTask<ServiceResult> AdoptArchiveAsync(
-        AdoptArchiveCommand command, CancellationToken cancellationToken)
+    private ValueTask<ServiceResult> AdoptArchiveAsync(
+        AdoptArchiveCommand command, CancellationToken cancellationToken) =>
+        WithAdoptableArchiveAsync(
+            command.DestinationName,
+            command.RepositoryId,
+            command.Envelope,
+            beforeOpening: () =>
+                ScheduleDefect(command.Schedule) is { } scheduleDefect
+                    ? new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect)
+                    : string.IsNullOrWhiteSpace(command.Confirmation)
+                        // FR-DR-009: a recovered configuration takes effect
+                        // only as a person was shown it. Refused before any
+                        // envelope is opened, so an old client that never
+                        // previews learns why and has nothing to undo.
+                        ? new ServiceError(
+                            ServiceErrorReason.Refused,
+                            "An adoption is confirmed against its preview (FR-DR-009): send preview_adoption first, "
+                            + "show what the archive recorded, then adopt_archive with the confirmation it answered.")
+                        : null,
+            (destination, replicaStore, repository, credential) => AdoptOpenedArchiveAsync(
+                command, destination, replicaStore, repository, credential, cancellationToken),
+            cancellationToken);
+
+    /// <summary>
+    /// Shows what adopting the archive would declare and writes nothing
+    /// (FR-DR-009): the same resolution, envelope and proof as adoption, then
+    /// the recorded shape read through a catalogue of its own in a scratch
+    /// directory — the runtime's real one is adoption's first write.
+    /// </summary>
+    private ValueTask<ServiceResult> PreviewAdoptionAsync(
+        PreviewAdoptionCommand command, CancellationToken cancellationToken) =>
+        WithAdoptableArchiveAsync(
+            command.DestinationName,
+            command.RepositoryId,
+            command.Envelope,
+            beforeOpening: static () => null,
+            (destination, replicaStore, repository, _) => PreviewOpenedArchiveAsync(
+                destination, replicaStore, repository, cancellationToken),
+            cancellationToken);
+
+    /// <summary>
+    /// The steps adoption and its preview share, in the order nothing can be
+    /// learned or written early: the destination resolved, the id's shape
+    /// checked, the archive found there (for a peer, attributed to this
+    /// device), the caller's own refusals, then the envelope opened, the
+    /// descriptor read and the derived sealing key proved against it, and
+    /// only then <paramref name="body"/> over the opened archive.
+    /// </summary>
+    private async ValueTask<ServiceResult> WithAdoptableArchiveAsync(
+        string destinationName,
+        string repositoryId,
+        string envelopeHex,
+        Func<ServiceError?> beforeOpening,
+        Func<DestinationConfiguration, IObjectStore, OpenedRepository, RepositoryWriteCredential, ValueTask<ServiceResult>> body,
+        CancellationToken cancellationToken)
     {
-        var (destination, refusal) = ResolveAdoptableDestination(command.DestinationName);
+        var (destination, refusal) = ResolveAdoptableDestination(destinationName);
         if (refusal is not null)
         {
             return refusal;
         }
 
-        if (command.RepositoryId.Length != 32 || !command.RepositoryId.All(Uri.IsHexDigit))
+        if (repositoryId.Length != 32 || !repositoryId.All(Uri.IsHexDigit))
         {
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument, "A repository id is thirty-two hex characters.");
         }
 
-        var repositoryIdHex = command.RepositoryId.ToLowerInvariant();
+        var repositoryIdHex = repositoryId.ToLowerInvariant();
         var replicaRoot = destination!.Kind == DestinationKind.LocalPath ? Path.Combine(destination.Path!, repositoryIdHex) : null;
         if (replicaRoot is not null && !File.Exists(Path.Combine(replicaRoot, RepositoryLifecycle.DescriptorKey.Value)))
         {
@@ -216,15 +269,15 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
-        if (ScheduleDefect(command.Schedule) is { } scheduleDefect)
+        if (beforeOpening() is { } callerRefusal)
         {
-            return new ServiceError(ServiceErrorReason.InvalidArgument, scheduleDefect);
+            return callerRefusal;
         }
 
         byte[] envelope;
         try
         {
-            envelope = Convert.FromHexString(command.Envelope);
+            envelope = Convert.FromHexString(envelopeHex);
         }
         catch (FormatException)
         {
@@ -259,8 +312,8 @@ public sealed partial class ServiceCommandHandler
                         .ConfigureAwait(false);
                     await using (client.ConfigureAwait(false))
                     {
-                        return await AdoptFromStoreAsync(
-                            command, destination, new PeerRetrievalObjectStore(client), repositoryIdHex, credential,
+                        return await OpenAdoptableArchiveAsync(
+                            destination, new PeerRetrievalObjectStore(client), repositoryIdHex, credential, body,
                             cancellationToken).ConfigureAwait(false);
                     }
                 }
@@ -276,10 +329,10 @@ public sealed partial class ServiceCommandHandler
                 }
             }
 
-            return await AdoptFromStoreAsync(
-                command, destination,
+            return await OpenAdoptableArchiveAsync(
+                destination,
                 new LocalFileSystemObjectStore(replicaRoot, runtime.LoggerFor<LocalFileSystemObjectStore>()),
-                repositoryIdHex, credential, cancellationToken).ConfigureAwait(false);
+                repositoryIdHex, credential, body, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -289,12 +342,12 @@ public sealed partial class ServiceCommandHandler
     /// from here, which is what let the peer half of ADR-0061 add an
     /// enumerator and a store and nothing else.
     /// </summary>
-    private async ValueTask<ServiceResult> AdoptFromStoreAsync(
-        AdoptArchiveCommand command,
+    private async ValueTask<ServiceResult> OpenAdoptableArchiveAsync(
         DestinationConfiguration destination,
         IObjectStore replicaStore,
         string repositoryIdHex,
         RepositoryWriteCredential credential,
+        Func<DestinationConfiguration, IObjectStore, OpenedRepository, RepositoryWriteCredential, ValueTask<ServiceResult>> body,
         CancellationToken cancellationToken)
     {
         {
@@ -351,9 +404,7 @@ public sealed partial class ServiceCommandHandler
 
             using (repository)
             {
-                return await AdoptOpenedArchiveAsync(
-                    command, destination, replicaStore, repository, credential, cancellationToken)
-                    .ConfigureAwait(false);
+                return await body(destination, replicaStore, repository, credential).ConfigureAwait(false);
             }
         }
     }
@@ -389,6 +440,20 @@ public sealed partial class ServiceCommandHandler
         {
             shape = await ReadRecordedShapeAsync(catalogue, reader, replicaStore, repository, cancellationToken)
                 .ConfigureAwait(false);
+        }
+
+        // FR-DR-009: what takes effect is what the person was shown. An
+        // archive that moved on since the preview — another snapshot, another
+        // recorded shape — no longer matches its confirmation, and is refused
+        // with nothing left behind but a catalogue this installation already
+        // kept for a set of its own.
+        if (!string.Equals(command.Confirmation, ConfirmationOf(destination.Name, repositoryIdHex, shape), StringComparison.Ordinal))
+        {
+            DiscardUnownedCatalogue(cataloguePath, repositoryIdHex);
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Archive '{repositoryIdHex}' at destination '{destination.Name}' has changed since it was previewed — "
+                + "preview it again, and confirm what it shows now (FR-DR-009).");
         }
 
         // What the set is declared as: the archive's record, overridden
@@ -548,14 +613,7 @@ public sealed partial class ServiceCommandHandler
                 + "edit the set before its next run, or restore them there first.");
         }
 
-        lines.Add(retentionRefused
-            ? "The archive records a retention rule of zero, which is not a policy, so the set is adopted with "
-                + "retention deferred and deletes nothing until one is declared."
-            : retention is null
-                ? "The archive records no retention policy, so the set is adopted with retention deferred and "
-                    + "deletes nothing until one is declared."
-                : $"Retention comes back as the archive recorded it: {DescribeRetention(retention)}. A destination's "
-                    + "own override is not kept in the archive, and is declared with the destination.");
+        lines.Add(RetentionLine(retention, retentionRefused, previewing: false));
 
         if (shape.OtherSetIds.Count > 0)
         {
@@ -642,6 +700,237 @@ public sealed partial class ServiceCommandHandler
             shape.SnapshotCount, shape.NewestSnapshotId, shape.NewestSnapshotAt,
             WriterIdentityResumed: false, AlreadyAdopted: true, Lines: lines,
             Retention: ToPolicyDescriptor(set.Retention));
+    }
+
+    /// <summary>
+    /// The preview's reading (FR-DR-009): the recorded shape, each root's
+    /// path checked against this machine, the retention the set would delete
+    /// by, what adoption would say about this installation, and the
+    /// confirmation over all of it. The catalogue it reads through lives in a
+    /// scratch directory and is gone before the answer is.
+    /// </summary>
+    private async ValueTask<ServiceResult> PreviewOpenedArchiveAsync(
+        DestinationConfiguration destination,
+        IObjectStore replicaStore,
+        OpenedRepository repository,
+        CancellationToken cancellationToken)
+    {
+        var repositoryIdHex = repository.RepositoryId.ToString();
+        var warnings = new List<string>();
+        RecordedShape shape;
+        var scratch = Directory.CreateTempSubdirectory("fbp-adoption-preview-");
+        try
+        {
+            using var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replicaStore, repository, cancellationToken)
+                .ConfigureAwait(false);
+            using var catalogue = await CatalogueRebuild.OpenRebuiltAsync(
+                runtime, replicaStore, repository, Path.Combine(scratch.FullName, "catalogue.db"), reader, warnings,
+                cancellationToken).ConfigureAwait(false);
+            shape = await ReadRecordedShapeAsync(catalogue, reader, replicaStore, repository, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            DeleteScratch(scratch.FullName);
+        }
+
+        var policy = shape.Policy;
+        var name = string.IsNullOrWhiteSpace(policy?.SetName) ? null : policy.SetName;
+        var retention = RecordedRetentionMapping.FromRecorded(policy?.Retention);
+        var retentionRefused = retention is { IsValid: false };
+        if (retentionRefused)
+        {
+            retention = null;
+        }
+
+        List<RecoveredRootDescriptor> roots =
+        [
+            .. (policy?.Roots ?? []).Select(root => new RecoveredRootDescriptor(root.Path, root.Label, Directory.Exists(root.Path))),
+        ];
+
+        var lines = new List<string>
+        {
+            policy is null
+                ? $"Archive '{repositoryIdHex}' at destination '{destination.Name}' holds no snapshot, so it records no "
+                    + "set — give the set a name and at least one root folder when you confirm."
+                : $"Archive '{repositoryIdHex}' at destination '{destination.Name}' records "
+                    + $"{(name is null ? "a set with no name — give it one when you confirm" : $"set '{name}'")}, "
+                    + $"with {shape.SnapshotCount} snapshot(s).",
+        };
+        lines.AddRange(roots.Where(root => !root.Resolves).Select(root =>
+            $"Recorded root folder '{root.RecordedPath}' is not on this machine — re-point it when you confirm, or "
+            + "restore into it after adopting. A backup refuses a root folder that is not there."));
+        lines.Add(RetentionLine(retention, retentionRefused, previewing: true));
+        if (shape.OtherSetIds.Count > 0)
+        {
+            lines.Add($"The archive also holds snapshots for other set id(s): {string.Join(", ", shape.OtherSetIds)}.");
+        }
+
+        // What adoption would say about this installation, said now, so the
+        // person confirms knowing it rather than learning it from a refusal.
+        var alreadyAdopted = false;
+        ClientConfiguration? configuration = null;
+        try
+        {
+            configuration = runtime.Configuration;
+        }
+        catch (ClientStateException exception)
+        {
+            lines.Add($"This installation's configuration does not load, so adoption would be refused: {exception.Message}");
+        }
+
+        if (configuration?.BackupSets.FirstOrDefault(set => string.Equals(set.Id, shape.SetId, StringComparison.Ordinal))
+            is { } existing)
+        {
+            alreadyAdopted = string.Equals(
+                await LocalRepositoryIdOfAsync(existing, cancellationToken).ConfigureAwait(false),
+                repositoryIdHex,
+                StringComparison.Ordinal);
+            lines.Add(alreadyAdopted
+                ? $"Set '{existing.Name}' is already configured against this archive: confirming makes sure of its "
+                    + "destination, credential and ledger, and repeats nothing."
+                : $"Set '{existing.Name}' ({existing.Id}) is already configured against a different archive, so "
+                    + "adopting this one would be refused — delete that set first if this archive is the one to keep.");
+        }
+        else if (name is not null
+            && configuration?.BackupSets.Any(set => string.Equals(set.Name, name, StringComparison.Ordinal)) == true)
+        {
+            lines.Add($"A backup set named '{name}' already exists — give the adopted set another name when you confirm.");
+        }
+
+        lines.AddRange(warnings.Select(warning => $"Catalogue rebuild: {warning}"));
+        lines.Add("Confirming adopts the set as shown, and its next backup is incremental against this archive.");
+
+        return new AdoptionPreviewResult(
+            destination.Name, repositoryIdHex, shape.SetId, name, roots,
+            policy?.Schedule, policy?.IncludeRules ?? [], policy?.ExcludeRules ?? [], ToPolicyDescriptor(retention),
+            shape.SnapshotCount, shape.NewestSnapshotId, shape.NewestSnapshotAt, alreadyAdopted,
+            ConfirmationOf(destination.Name, repositoryIdHex, shape), lines);
+    }
+
+    /// <summary>
+    /// The confirmation a preview answers with and adoption checks
+    /// (FR-DR-009): a digest over the recorded shape as the preview showed it
+    /// — the destination and archive, the set's id, name, roots, schedule,
+    /// rules and retention, and the snapshot the shape was read from — so an
+    /// archive that moves on between the two no longer matches. It is not a
+    /// secret: it names what was seen, not who saw it.
+    /// </summary>
+    private static string ConfirmationOf(string destinationName, string repositoryIdHex, RecordedShape shape)
+    {
+        // Length-prefixed fields in a fixed order: no field can run into the
+        // next, and an absent one reads differently from an empty one.
+        var canonical = new System.Text.StringBuilder();
+        var policy = shape.Policy;
+        Field("fbp/adoption-preview/v1");
+        Field(destinationName);
+        Field(repositoryIdHex);
+        Field(shape.SetId);
+        Field(policy?.SetName);
+        Count(policy?.Roots.Count);
+        foreach (var root in policy?.Roots ?? [])
+        {
+            Field(root.Path);
+            Field(root.Label);
+        }
+
+        Field(policy?.Schedule);
+        Count(policy?.IncludeRules.Count);
+        foreach (var rule in policy?.IncludeRules ?? [])
+        {
+            Field(rule);
+        }
+
+        Count(policy?.ExcludeRules.Count);
+        foreach (var rule in policy?.ExcludeRules ?? [])
+        {
+            Field(rule);
+        }
+
+        var retention = policy?.Retention;
+        Field(retention is null ? null : "retention");
+        Count(retention?.KeepDaily);
+        Count(retention?.KeepWeekly);
+        Count(retention?.KeepMonthly);
+        Count(retention?.MinGenerations);
+        Count(retention?.DeferralDays);
+        Count(shape.SnapshotCount);
+        Field(shape.NewestSnapshotId);
+        Field(shape.NewestSnapshotAt?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Count(shape.OtherSetIds.Count);
+        foreach (var other in shape.OtherSetIds)
+        {
+            Field(other);
+        }
+
+        return Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical.ToString())));
+
+        void Field(string? value) =>
+            canonical.Append(value is null
+                ? "-;"
+                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{value.Length}:{value};"));
+
+        void Count(long? value) =>
+            Field(value?.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Removes the catalogue adoption rebuilt before it refused, unless a
+    /// configured set's archive is this repository — then the file is that
+    /// set's own, which adoption rebuilds on every call, and it stays.
+    /// </summary>
+    private void DiscardUnownedCatalogue(string cataloguePath, string repositoryIdHex)
+    {
+        if (OwnedRepositories().ContainsKey(repositoryIdHex))
+        {
+            return;
+        }
+
+        foreach (var path in new[] { cataloguePath, cataloguePath + "-wal", cataloguePath + "-shm", cataloguePath + "-journal" })
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // Left behind, it is only ever deleted and rebuilt by the next
+                // adoption (the stale-catalogue rule above), never trusted.
+            }
+        }
+    }
+
+    /// <summary>A preview's scratch catalogue, removed on the way out; a leftover in the temp directory harms nothing.</summary>
+    private static void DeleteScratch(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// The sentence about retention an adoption or its preview reports: what
+    /// the set will (or would) delete by, or why it defers.
+    /// </summary>
+    private static string RetentionLine(RetentionConfiguration? retention, bool refused, bool previewing)
+    {
+        var adopted = previewing ? "would be adopted" : "is adopted";
+        return refused
+            ? $"The archive records a retention rule of zero, which is not a policy, so the set {adopted} with "
+                + "retention deferred and deletes nothing until one is declared."
+            : retention is null
+                ? $"The archive records no retention policy, so the set {adopted} with retention deferred and "
+                    + "deletes nothing until one is declared."
+                : $"{(previewing ? "The set would delete by the retention the archive recorded" : "Retention comes back as the archive recorded it")}: "
+                    + $"{DescribeRetention(retention)}. A destination's own override is not kept in the archive, and is "
+                    + "declared with the destination.";
     }
 
     /// <summary>A retention policy in a person's words, for the adoption report.</summary>

@@ -367,8 +367,30 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// it, and a pre-1.41 service never sends it, which is true of a service
     /// that never held a claim.
     /// </para>
+    /// <para>
+    /// 1.42 adds `preview_adoption` and its answer, `adoption_preview`
+    /// (FR-DR-009). A recovered configuration takes effect only as a person was
+    /// shown it. The preview takes the same sealed envelope adoption takes,
+    /// proves it the same way, and writes nothing. It answers with:
+    /// - the shape the archive recorded, and each root's recorded path as a
+    ///   hint flagged `resolves` or not on this machine;
+    /// - the set's own retention, which the set would delete by;
+    /// - a `confirmation`, a digest of all of it.
+    ///
+    /// `adopt_archive` gains `confirmation` and requires it. Without one it
+    /// is refused before any envelope is opened. With one the archive no
+    /// longer matches, because it gained a snapshot or a different recorded
+    /// shape since the preview, it is refused as changed and leaves nothing
+    /// behind.
+    ///
+    /// The refusal is the one part that is not additive. A pre-1.42 client
+    /// that adopts in one call is refused, by name, rather than adopting a
+    /// set nobody was shown: that one-call adoption is the behaviour FR-DR-009
+    /// exists to end. The console and the CLI ship with the service and preview
+    /// first.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 41);
+    public static ContractVersion Current { get; } = new(1, 42);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

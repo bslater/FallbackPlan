@@ -32,9 +32,11 @@
 #      and a flag from the kit era is refused by name
 #   9  the rebuilt machine RESUMES: set up afresh under the same passphrase,
 #      pointed at the vault and nothing else, the service discovers both
-#      archives by descriptor, adopts each under its original ids from the
-#      shape the archive records, the next backup ships only what changed
-#      into the same two archives, and the recovery tool restores the change
+#      archives by descriptor, shows what each recorded and adopts nothing
+#      until that is confirmed (FR-DR-009), adopts each under its original
+#      ids from the shape the archive records, the next backup ships only
+#      what changed into the same two archives, and the recovery tool
+#      restores the change
 #
 # This is a manual/e2e drill, deliberately not wired into CI: it builds
 # installations, writes outside the repository, and wants a second filesystem.
@@ -290,9 +292,21 @@ FOUND=$(grep -c "nobody yet" "$DRILL/discover.log")
 [ "$FOUND" -eq 2 ] || { cat "$DRILL/discover.log"; die "step 8 — discovery listed $FOUND unowned archives, expected 2"; }
 ok "discovery lists both archives by descriptor alone, owned by nobody yet"
 
+# Without --confirm, adopt shows what the archive recorded and adopts nothing
+# (FR-DR-009): exit 2, the preview on screen, and no set configured.
+FIRST=$(grep -oE '^[0-9a-f]{32}' "$DRILL/discover.log" | head -n 1)
+PREVIEW_EXIT=0
+$CLI adopt --destination vault --repository "$FIRST" --state "$DRILL/state" \
+    --passphrase-env DRILL_PASSPHRASE > "$DRILL/preview.log" 2>&1 || PREVIEW_EXIT=$?
+[ "$PREVIEW_EXIT" -eq 2 ] && grep -q "Nothing was adopted" "$DRILL/preview.log" \
+    || { cat "$DRILL/preview.log"; die "step 8 — adopt without --confirm did something other than preview"; }
+grep -q "$DRILL/source" "$DRILL/preview.log" \
+    || { cat "$DRILL/preview.log"; die "step 8 — the preview did not show the recorded root folder"; }
+ok "without --confirm, adopt shows the recorded set and adopts nothing"
+
 VAULT_BYTES_BEFORE=$(du -sb "$VAULT" | cut -f1)
 for id in $(grep -oE '^[0-9a-f]{32}' "$DRILL/discover.log"); do
-    $CLI adopt --destination vault --repository "$id" --state "$DRILL/state" \
+    $CLI adopt --destination vault --repository "$id" --state "$DRILL/state" --confirm \
         --passphrase-env DRILL_PASSPHRASE > "$DRILL/adopt-$id.log" 2>&1 \
         || { cat "$DRILL/adopt-$id.log"; die "step 8 — adopt $id"; }
     grep -q "writer identity resumed: yes" "$DRILL/adopt-$id.log" \
