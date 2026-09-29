@@ -391,6 +391,23 @@ single typo.
    withdraws it. With the repair immediate it would be withdrawn before anyone
    had read it, and a disk that altered a backup once is worth a person's
    attention — the shortfall notice's posture (§3).
+6. **A blob that will not read stalls the circuit, under back-off.** Decision 1
+   made an open circuit due on every pass, and a segment that met a blob it
+   could not read recorded nothing: the next pass read the same run to the
+   same blob, once a minute, for as long as it would not read, and nothing
+   said so. A failed read is not a finding, because a disk gone from under the
+   segment fails every read the same way one bad sector fails one.
+   - The segment stops at the blob and keeps what it read before it, so the
+     next attempt begins with that blob.
+   - The stall is counted on the ledger (schema 6), and the next attempt waits
+     the sync's back-off — the poll interval doubling, to an hour — instead of
+     the next pass. A stalled segment that still read past where the last one
+     stopped counts from one again.
+   - Three stalls in a row raise a notice naming the destination, the blob and
+     the error. It is a condition, not a finding, and is withdrawn once a
+     segment reads past it.
+   - A replica that is not there at all — a drive unplugged — is not a stall.
+     Nothing was tried, fan-out says so, and the circuit resumes where it was.
 
 The act is called **repair**. *Heal* already names the copy-back of a
 destination's metadata to a rolled-back hub
@@ -409,6 +426,11 @@ two directions of copy would say neither.
 - **Keep content under the state directory.** The stage holds one blob at a
   time and is removed when the repair ends, so a direct-ship set still keeps no
   content there between repairs ([ADR-0046](0046-direct-to-destination-publication.md)).
+- **Take a blob that will not read for damage.** Replacing it would need
+  evidence, within the attempt, that the rest of the replica still reads.
+  Without that, a failing disk's every blob would be condemned as altered in
+  turn. Decision 6 says the stall instead, and repairing an unreadable blob is
+  left to a record that can tell the two apart.
 
 ## Status history
 
@@ -416,4 +438,4 @@ two directions of copy would say neither.
 |------|--------|------|
 | 2026-08 | Accepted | Written after the arc it records was built, from six gaps each verified against the code rather than surmised; §1's alternative would have taken every backup set down over one typo, and is the reason the record exists in this shape |
 | 2026-08 | Amended by later records | Fitness gained consequence it did not have here: for a direct-ship set ([ADR-0046](0046-direct-to-destination-publication.md) §3) the same defect/reachability/capacity findings scope the *run* — an unfit destination is excluded from the capture rather than merely degrading one pair, and with none fit the capture refuses. A zero already-held count is now also a legitimate state, not only a wiped replica: a pair owed its seed says so through the ledger's baseline facts ([ADR-0047](0047-backup-pool-and-priorities.md) §6, `needs_full`). The staging-trim licensing this record mentions applies to staging sets only; direct-ship reclaim runs through per-destination convergence under the same proof rule. |
-| 2026-09 | Amended | [Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired): a circuit is carried on every pass and the interval rests between circuits, and a segment is bounded in bytes as well as blobs (`Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Repository/ReplicaSweep`). Damage the sweep finds at a local path is repaired from a copy proven sound first — the staging archive, another local path, or a peer over the retrieval session (`Repository/ReplicaRepair`, `Agent/ReplicaRepairer`) — and where none exists it is kept, named, and held against the pair by the ledger and the sync that re-checks it (`Application/DestinationSyncStore`, `Agent/FanOut`). The finding's notice now stands until acknowledged. Held by `Hosts.Tests/DeepSweepTests`, `Repository.Tests/ReplicaRepairTests`, `Repository.Tests/ReplicaSweepTests`, `Hosts.Tests/BackgroundRateLimitTests` and `Application.Tests/DestinationSyncStoreTests` |
+| 2026-09 | Amended | [Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired): a circuit is carried on every pass and the interval rests between circuits, and a segment is bounded in bytes as well as blobs (`Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Repository/ReplicaSweep`). Damage the sweep finds at a local path is repaired from a copy proven sound first — the staging archive, another local path, or a peer over the retrieval session (`Repository/ReplicaRepair`, `Agent/ReplicaRepairer`) — and where none exists it is kept, named, and held against the pair by the ledger and the sync that re-checks it (`Application/DestinationSyncStore`, `Agent/FanOut`). The finding's notice now stands until acknowledged. A blob that will not read stalls the circuit under the sync's back-off rather than being met again every pass, and three stalls in a row are said. Held by `Hosts.Tests/DeepSweepTests`, `Repository.Tests/ReplicaRepairTests`, `Repository.Tests/ReplicaSweepTests`, `Hosts.Tests/BackgroundRateLimitTests` and `Application.Tests/DestinationSyncStoreTests` |

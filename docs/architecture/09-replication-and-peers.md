@@ -324,6 +324,12 @@ answer from it. With no sound copy the damaged object is kept, since its other
 records still restore, and the ledger holds the pair failed until the sync that
 re-checks it finds the damage gone.
 
+A blob that will not be read is not damage, since a disk gone from under the
+run fails every read the same way one bad sector fails one. The run stops at
+it, keeping what it read, and the next attempt waits the sync's back-off
+instead of meeting it again on the next pass. Three such stalls in a row are
+said, until a run reads past it.
+
 A peer's replica is not swept and not repaired. It can be read — the repair
 reads one — but re-reading all of it is a standing cost on somebody else's
 link that needs a stated cadence and bound, and replacing an object there needs
