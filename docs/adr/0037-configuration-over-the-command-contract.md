@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-SVC-001, FR-DEST-001, FR-DEST-007, FR-GC-001, FR-GC-010, NFR-OPS-003
+**Requirements:** FR-SVC-001, FR-SVC-020, FR-DEST-001, FR-DEST-007, FR-GC-001, FR-GC-010, NFR-OPS-003
 **Related:** [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0035](0035-destination-fitness.md), [ADR-0036](0036-local-web-console.md), [ADR-0030 Amendment 4](0030-peer-identity-and-pairing.md#amendment-4-2026-08--the-invite-authenticated-ceremony-pairing-without-two-humans-present-at-once), [ADR-0024](0024-include-exclude-rule-dialect.md), [spec 06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1)
 
 ---
@@ -35,6 +35,18 @@ retention policy, and map destinations — without editing JSON over SSH.
    ignore what they do not know; their upserts leave the new fields absent,
    which preserves — a policy spoken with every field empty is the explicit
    "none", so silence and "none" stay distinguishable.
+
+   > **2026-09 ([FR-SVC-020](../requirements/functional.md)).** The rule
+   > holds just as much for a field no client can see at all, one that lives
+   > in the configuration file alone: an upsert that cannot speak for a
+   > field must leave it as the file says. The destination upsert kept only
+   > the verification policy of those, and dropped the drill cadence
+   > ([ADR-0054](0054-scheduled-restore-drills.md) Amendment 3) and the
+   > transfer limit ([ADR-0074](0074-background-byte-rate-limits.md)) that
+   > later records added. It keeps all three now, and a test holds every
+   > field a destination persists to being either carried by the descriptor
+   > or kept by an edit.
+
 2. **The schedule is validated at the command boundary**, refused with the
    parser's own defect — not at configuration load, where a throw would stop
    every set over one typo (ADR-0035 §1's blast-radius rule). The interval
@@ -109,3 +121,4 @@ neither route can write what the other refuses.
 |------|--------|------|
 | 2026-08 | Proposed | Written with the web console shipped read-only and the include-rule gap freshly verified against the scanner |
 | 2026-08 | Accepted | Built: contract 1.7, handlers, include enforcement in the orchestrator, and the web console's Configuration surface over it |
+| 2026-09 | Accepted (amended) | §1's preservation rule stated for fields with no wire field at all (FR-SVC-020): the destination upsert kept the verification policy but dropped the drill cadence and the transfer limit; all three are kept now, and every field a destination persists must be carried by the descriptor or kept by an edit |

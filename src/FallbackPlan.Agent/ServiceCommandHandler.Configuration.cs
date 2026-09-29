@@ -136,10 +136,15 @@ public sealed partial class ServiceCommandHandler
             Fingerprint = command.Destination.Fingerprint,
             Endpoint = command.Destination.Endpoint,
             FailureDomain = domain,
-            Verification = existing?.Verification,
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
             // Null preserves — a pre-1.17 client cannot see the field.
             Priority = command.Destination.Priority ?? existing?.Priority,
+            // No wire field, so no client can speak for these: an edit keeps
+            // what the file says (ADR-0037 §1). Dropping them would stop a
+            // peer's drills and lift a destination's limit, unannounced.
+            Verification = existing?.Verification,
+            DrillIntervalDays = existing?.DrillIntervalDays,
+            TransferLimit = existing?.TransferLimit,
         };
 
         // The circular-capture guard (FR-DEST-011), entered from this door:

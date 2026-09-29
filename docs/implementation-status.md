@@ -1115,6 +1115,18 @@ folder picker, the selection tree compiling to rules-v1, the schedule builder
 previewing real next runs, retention with full-replacement overrides,
 destination management, and the invite/pair-with-invite flows.
 
+**Edits keep what no client can see (2026-09, FR-SVC-020).** The destination
+upsert rebuilt the declaration from the descriptor and kept only the
+verification policy from the stored one. So the two fields later records
+added without a wire field were dropped by the first edit through the
+service: a peer's drill cadence ([ADR-0054](adr/0054-scheduled-restore-drills.md)
+Amendment 3) and a destination's transfer limit
+([ADR-0074](adr/0074-background-byte-rate-limits.md)). A console save of a
+deep-verify interval was enough to stop a peer's drills or lift its limit.
+Both are kept now, and `Hosts.Tests/ConfigurationCommandTests` holds every
+field a destination persists to being either carried by the descriptor or
+kept by an edit, so the next such field cannot be forgotten the same way.
+
 ### 0038 — a set edit answers with its meaning
 
 Contract 1.8. `preview_set_changes` walks a set's source — under its saved
