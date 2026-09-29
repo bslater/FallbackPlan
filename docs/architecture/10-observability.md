@@ -98,7 +98,7 @@ parks that expired against the max-pause bound while the window stayed shut, whi
 says a window is set wider than the work it is holding · the byte rates in force
 ([ADR-0074](../adr/0074-background-byte-rate-limits.md)): the source-read limit and each destination's
 transfer limit, and the bytes each limiter has paced. NFR-PERF-013 names four limits and three exist;
-its CPU counterpart has nothing to report because there is nothing configured to observe. The window's state is not only a metric: it is on `get_status` from contract 1.37
+its CPU counterpart has nothing to report because there is nothing configured to observe. The window's state is not only a metric: it is on `get_status` from contract 1.39
 and on the console and CLI, because "why did nothing run last night" is a question a window creates and
 answering it should not require reading the service's log — and the byte rates are on `get_status`
 from contract 1.43, because a paced sync reads as a slow one until something says it is paced.

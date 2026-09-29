@@ -5,7 +5,7 @@
 **Requirements:** NFR-PERF-013, NFR-OPS-004, NFR-TIME-001, FR-SVC-013, FR-SVC-014
 **Related:** [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0047](0047-backup-pool-and-priorities.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [architecture 10 §2](../architecture/10-observability.md#2-technical-metrics), [command-contract](../../specifications/command-contract/README.md)
 
-**Built:** `Application/BackgroundWindow` (the grammar, `IsOpen`, `NextOpen`, `NextClose`, and the strict parse that names its defect), `Application/ClientConfiguration` (schema 6's `background_window`, its validation and its migration), `Agent/Scheduler` (the gate at the four `userInitiated: false` sites, the per-set outcome row, the hold and the release), `Agent/JobScheduler` (the standing background hold, the two filters in the writer pump, and the reason carried to the park), `Agent/PauseGate` (the park reason), `Agent/Log` (events 3782 and 3783), `Agent/ServiceCommandHandler` (the window on `get_status`, evaluated at the instant the status names), `Api/Results.cs` and `Api/ContractVersion.cs` (contract 1.37's `BackgroundWindowDescriptor`), `Cli/CliApplication` (the `status` line), `Web/wwwroot/app.js` (`windowNote` and `until`); `Application.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundHoldTests`, `Hosts.Tests/ClientModeTests`, `Web.Tests/ConsoleBackgroundWindowScriptTests`, `Web.Tests/StatusRelayNamesTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
+**Built:** `Application/BackgroundWindow` (the grammar, `IsOpen`, `NextOpen`, `NextClose`, and the strict parse that names its defect), `Application/ClientConfiguration` (schema 6's `background_window`, its validation and its migration), `Agent/Scheduler` (the gate at the four `userInitiated: false` sites, the per-set outcome row, the hold and the release), `Agent/JobScheduler` (the standing background hold, the two filters in the writer pump, and the reason carried to the park), `Agent/PauseGate` (the park reason), `Agent/Log` (events 3782 and 3783), `Agent/ServiceCommandHandler` (the window on `get_status`, evaluated at the instant the status names), `Api/Results.cs` and `Api/ContractVersion.cs` (contract 1.39's `BackgroundWindowDescriptor`), `Cli/CliApplication` (the `status` line), `Web/wwwroot/app.js` (`windowNote` and `until`); `Application.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundWindowTests`, `Hosts.Tests/BackgroundHoldTests`, `Hosts.Tests/ClientModeTests`, `Web.Tests/ConsoleBackgroundWindowScriptTests`, `Web.Tests/StatusRelayNamesTests`, `Api.Tests/ConfigurationContractTests`, `Api.Tests/ContractAdditiveFieldsTests`.
 
 ---
 
@@ -135,6 +135,13 @@ stays in the configuration file**, exactly as `max_concurrent_backups` does,
 and the console control is named as owed rather than smuggled in behind a
 status field. A window whose state nobody can see is a support call, which is
 why the reporting half is here and the editing half is a stated limit.
+
+> **Corrected 2026-09.** The contract version is **1.39**, not 1.37. 1.37
+> (`total` on `receipts_listed`) and 1.38 (`upgrade_set_format`) landed first,
+> and the window took the next number when it merged. `ContractVersion`'s
+> changelog and the [command-contract register](../../specifications/command-contract/README.md)
+> say 1.39. This paragraph said 1.37, and so did the comments and records that
+> copied it, until they were corrected together.
 
 The state is evaluated at the instant the status reports as its own, and from
 the same parsed window the pass uses, so a client cannot catch the two

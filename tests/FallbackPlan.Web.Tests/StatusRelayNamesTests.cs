@@ -64,7 +64,7 @@ public sealed class StatusRelayNamesTests
     [TestMethod]
     public async Task GetStatus_OverTheRelay_CarriesTheBackgroundWindowNamesTheViewReads()
     {
-        // Contract 1.37 (ADR-0069). windowNote() reads three camelCase names
+        // Contract 1.39 (ADR-0069). windowNote() reads three camelCase names
         // off this object; a rename compiles cleanly and quietly renders the
         // clause as "undefined".
         await using var harness = await ConsoleHarness.StartAsync();

@@ -928,9 +928,9 @@ public sealed record BackgroundLimitsDescriptor(
 /// <param name="ObservedAt">When the service produced this, Unix milliseconds.</param>
 /// <param name="Notices">Durable events awaiting a human — surfaced here until acknowledged (10 §3.1).</param>
 /// <param name="BackgroundWindow">
-/// The background window in force, or null (contract 1.37, ADR-0069). Null
+/// The background window in force, or null (contract 1.39, ADR-0069). Null
 /// means the same thing from a service that has no window configured and from
-/// one older than 1.37: draw no line. Conflating them is honest here rather
+/// one older than 1.39: draw no line. Conflating them is honest here rather
 /// than lossy, because a client does nothing different in the two cases — and
 /// "no window" is itself the compatibility rule, an absent window being always
 /// open.

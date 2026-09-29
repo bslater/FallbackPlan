@@ -1659,7 +1659,7 @@ disk and network ones have since been built, as
 of the window itself — only a capture parks, because only writer-lane jobs
 carry a pause gate, so a fan-out or a drill already in flight runs to
 completion; and the window is enforced to the granularity of a pass tick. The
-window is **reported** on `get_status` (contract 1.37), the CLI and the
+window is **reported** on `get_status` (contract 1.39), the CLI and the
 console, and **edited in the configuration file only**, as
 `max_concurrent_backups` is; the console control is owed rather than smuggled
 in behind a status field.

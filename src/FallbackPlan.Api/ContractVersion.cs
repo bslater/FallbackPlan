@@ -391,7 +391,7 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// </para>
     /// <para>
     /// 1.43 adds `background_limits` to `status` (NFR-PERF-013, ADR-0074): the
-    /// byte rates background work is held to, beside the window 1.37 reports.
+    /// byte rates background work is held to, beside the window 1.39 reports.
     /// `read_limit` is the rate background captures read their sources at, and
     /// `transfer_limits` lists each limited destination with its rate, as the
     /// configured `text` and as `bytes_per_second`. Reporting only: both are

@@ -2,14 +2,14 @@ namespace FallbackPlan.Web.Tests;
 
 /// <summary>
 /// The console's background-window clause, pinned structurally (contract
-/// 1.37; ADR-0069, NFR-PERF-013): the overview says whether the window is
+/// 1.39; ADR-0069, NFR-PERF-013): the overview says whether the window is
 /// open and when it next changes, drawn from the status result the view
 /// already holds, and says nothing at all when there is no window.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The absent case is the one worth a test of its own. Null arrives from a
-/// service with no window configured and from any service older than 1.37,
+/// service with no window configured and from any service older than 1.39,
 /// and both mean the same instruction — draw no line. A clause that rendered
 /// "undefined" or an empty window would be a regression visible on every
 /// existing installation at once.

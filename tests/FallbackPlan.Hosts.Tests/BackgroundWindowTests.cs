@@ -315,7 +315,7 @@ public sealed class BackgroundWindowTests : IDisposable
         // The limit was invisible: C1 and C2 can hold every backup on an
         // installation for hours and the only way to find out was the
         // service's log, which is not where "why did nothing run last night"
-        // gets asked (contract 1.37).
+        // gets asked (contract 1.39).
         //
         // The window is read once: each read of ShutWindow is taken from the
         // clock, so a minute turning between the configuration and the
@@ -357,7 +357,7 @@ public sealed class BackgroundWindowTests : IDisposable
     [TestMethod]
     public async Task NoWindow_IsReportedAsNone()
     {
-        // Which a client reads exactly as it reads a pre-1.37 service: draw
+        // Which a client reads exactly as it reads a pre-1.39 service: draw
         // no line. Both mean the same thing, and an absent window has always
         // meant always open.
         await using var runtime = await StartAsync(window: null);
