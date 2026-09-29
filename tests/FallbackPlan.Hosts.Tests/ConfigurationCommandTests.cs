@@ -1,3 +1,6 @@
+using System.Reflection;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -275,6 +278,87 @@ public sealed class ConfigurationCommandTests : IDisposable
         Assert.AreEqual(
             7, ClientConfiguration.Load(ConfigurationPath).Destinations.Single().Priority,
             "an upsert that says nothing about priority must preserve the stored one");
+    }
+
+    /// <summary>
+    /// What a destination's descriptor carries (ADR-0037), by the name each
+    /// field is stored under. Everything else a destination persists has no
+    /// wire field and lives in the configuration file alone.
+    /// </summary>
+    private static readonly string[] DestinationWireFields =
+    [
+        "id", "name", "kind", "path", "fingerprint", "endpoint",
+        "failure_domain", "deep_verify_interval_days", "priority",
+    ];
+
+    /// <summary>
+    /// Every field a destination persists that no client can see, with a value
+    /// the harness's local-path destination may hold: an edit through the
+    /// service cannot speak for these, so it must leave them as the file says.
+    /// </summary>
+    private static readonly Dictionary<string, JsonNode> DestinationKeptFields = new(StringComparer.Ordinal)
+    {
+        ["verification"] = JsonValue.Create("required"),
+        ["drill_interval_days"] = JsonValue.Create(3),
+        ["transfer_limit"] = JsonValue.Create("2 MiB/s"),
+    };
+
+    [TestMethod]
+    public async Task UpsertDestination_EditingIt_KeepsEverySettingNoClientCanSee()
+    {
+        // The console's destination form saves through upsert_destination
+        // and carries only the descriptor. Adjusting the deep-verify
+        // interval must not erase a peer's drill cadence (ADR-0054
+        // Amendment 3) or a transfer limit (ADR-0074), which only the file
+        // can hold.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var file = JsonNode.Parse(File.ReadAllText(ConfigurationPath))!;
+        var stored = file["destinations"]![0]!.AsObject();
+        foreach (var (name, value) in DestinationKeptFields)
+        {
+            stored[name] = value.DeepClone();
+        }
+
+        File.WriteAllText(ConfigurationPath, file.ToJsonString());
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, DeepVerifyIntervalDays: 14)),
+            _timeout.Token));
+
+        var saved = JsonNode.Parse(File.ReadAllText(ConfigurationPath))!["destinations"]![0]!.AsObject();
+        Assert.AreEqual(14, saved["deep_verify_interval_days"]!.GetValue<int>(), "the edit itself must land");
+        var lost = DestinationKeptFields
+            .Where(pair => !JsonNode.DeepEquals(pair.Value, saved[pair.Key]))
+            .Select(pair => $"{pair.Key} (held {pair.Value.ToJsonString()}, "
+                + $"now {saved[pair.Key]?.ToJsonString() ?? "nothing"})")
+            .ToList();
+        Assert.IsEmpty(lost, $"an edit that cannot see a field must keep it; lost: {string.Join("; ", lost)}");
+    }
+
+    [TestMethod]
+    public void DestinationConfiguration_EveryPersistedField_IsCarriedOnTheWireOrKeptByAnEdit()
+    {
+        // The test above holds the kept fields; this one makes the next field
+        // a destination learns to persist choose which it is, instead of
+        // being dropped by the first edit nobody thought to check.
+        var persisted = typeof(DestinationConfiguration).GetProperties()
+            .Select(property => property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        var accounted = DestinationWireFields.Concat(DestinationKeptFields.Keys).ToHashSet(StringComparer.Ordinal);
+
+        var unaccounted = persisted.Except(accounted).Order(StringComparer.Ordinal).ToList();
+        Assert.IsEmpty(
+            unaccounted,
+            $"persisted but neither on the wire nor kept by an edit: {string.Join(", ", unaccounted)}");
+        var stale = accounted.Except(persisted).Order(StringComparer.Ordinal).ToList();
+        Assert.IsEmpty(stale, $"listed but no longer persisted: {string.Join(", ", stale)}");
     }
 
     [TestMethod]
