@@ -525,6 +525,33 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheDestinationSettings_WireNamesAndPre144Default()
+    {
+        // Contract 1.44: the destination descriptor carries the transfer
+        // limit and the drill cadence, both ways. Null preserves, as every
+        // field this surface adds does, so a pre-1.44 client's save keeps
+        // what the file says rather than clearing it.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('d', 32), "vault", "local-path", "/backups", null, null,
+                TransferLimit: "2 MiB/s", DrillIntervalDays: 7)),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"transfer_limit\":\"2 MiB/s\"", modern, StringComparison.Ordinal);
+        Assert.Contains("\"drill_interval_days\":7", modern, StringComparison.Ordinal);
+
+        var old = modern
+            .Replace(",\"transfer_limit\":\"2 MiB/s\"", "", StringComparison.Ordinal)
+            .Replace(",\"drill_interval_days\":7", "", StringComparison.Ordinal);
+        Assert.DoesNotContain("transfer_limit", old, StringComparison.Ordinal, "the strip must have removed the field");
+        Assert.DoesNotContain("drill_interval_days", old, StringComparison.Ordinal, "the strip must have removed the field");
+
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
+        Assert.IsNull(command.Destination.TransferLimit);
+        Assert.IsNull(command.Destination.DrillIntervalDays);
+    }
+
+    [TestMethod]
     public void TheBehindReason_WireNamesAndPre122Defaults()
     {
         // Contract 1.22: the status matrix carries the machine cause beside

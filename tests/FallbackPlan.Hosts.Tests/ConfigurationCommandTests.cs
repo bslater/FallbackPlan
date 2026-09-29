@@ -290,6 +290,7 @@ public sealed class ConfigurationCommandTests : IDisposable
     [
         "id", "name", "kind", "path", "fingerprint", "endpoint",
         "failure_domain", "deep_verify_interval_days", "priority",
+        "transfer_limit", "drill_interval_days",
     ];
 
     /// <summary>
@@ -300,8 +301,6 @@ public sealed class ConfigurationCommandTests : IDisposable
     private static readonly Dictionary<string, JsonNode> DestinationKeptFields = new(StringComparer.Ordinal)
     {
         ["verification"] = JsonValue.Create("required"),
-        ["drill_interval_days"] = JsonValue.Create(3),
-        ["transfer_limit"] = JsonValue.Create("2 MiB/s"),
     };
 
     [TestMethod]
@@ -309,9 +308,10 @@ public sealed class ConfigurationCommandTests : IDisposable
     {
         // The console's destination form saves through upsert_destination
         // and carries only the descriptor. Adjusting the deep-verify
-        // interval must not erase a peer's drill cadence (ADR-0054
-        // Amendment 3) or a transfer limit (ADR-0074), which only the file
-        // can hold.
+        // interval must not erase what only the file can hold. Before
+        // contract 1.44 that included a peer's drill cadence (ADR-0054
+        // Amendment 3) and a transfer limit (ADR-0074); both are on the wire
+        // now, where null preserves them (the test after this one).
         await _harness.CreateRepositoryAsync();
         _harness.WriteConfiguration("every 1h");
         var file = JsonNode.Parse(File.ReadAllText(ConfigurationPath))!;
@@ -340,6 +340,119 @@ public sealed class ConfigurationCommandTests : IDisposable
                 + $"now {saved[pair.Key]?.ToJsonString() ?? "nothing"})")
             .ToList();
         Assert.IsEmpty(lost, $"an edit that cannot see a field must keep it; lost: {string.Join("; ", lost)}");
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_WithoutTheSettings_PreservesTheStoredOnes()
+    {
+        // Null preserves (contract 1.44): a client older than the fields,
+        // the console's form among them until it learned them, re-saves a
+        // destination without them, and must not clear what the file says.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        WithTheStoredDestination(vault => vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 });
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null, DeepVerifyIntervalDays: 14)),
+            _timeout.Token));
+
+        var saved = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+        Assert.AreEqual(14, saved.DeepVerifyIntervalDays, "the edit itself must land");
+        Assert.AreEqual("2 MiB/s", saved.TransferLimit);
+        Assert.AreEqual(3, saved.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_CarryingALimitAndACadence_WritesAndListsBoth()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null,
+                TransferLimit: "2 MiB/s", DrillIntervalDays: 7)),
+            _timeout.Token));
+
+        var saved = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+        Assert.AreEqual("2 MiB/s", saved.TransferLimit);
+        Assert.AreEqual(7, saved.DrillIntervalDays);
+
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), _timeout.Token), out var listed);
+        var listedVault = Assert.ContainsSingle(listed.Destinations);
+        Assert.AreEqual("2 MiB/s", listedVault.TransferLimit);
+        Assert.AreEqual(7, listedVault.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_AnEmptyLimitAndAZeroCadence_ClearBoth()
+    {
+        // The wire's spelling of "remove it": an empty limit is unlimited,
+        // and a zero cadence returns a local path to the default and a peer
+        // to never being drilled — what absence has always meant.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        WithTheStoredDestination(vault => vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 });
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                vault.Id, "vault", "local-path", vault.Path, null, null,
+                TransferLimit: "", DrillIntervalDays: 0)),
+            _timeout.Token));
+
+        var saved = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+        Assert.IsNull(saved.TransferLimit);
+        Assert.IsNull(saved.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    [DataRow("10 MB/s", null, "transfer_limit")]
+    [DataRow("fast", null, "transfer_limit")]
+    [DataRow(null, -1, "drill_interval_days")]
+    public async Task UpsertDestination_AnUnreadableSetting_IsRefusedNamingItAndTheDestination(
+        string? limit, int? cadence, string field)
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var vault = ClientConfiguration.Load(ConfigurationPath).Destinations.Single();
+        var before = await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(
+                new UpsertDestinationCommand(new DestinationDescriptor(
+                    vault.Id, "vault", "local-path", vault.Path, null, null,
+                    TransferLimit: limit, DrillIntervalDays: cadence)),
+                _timeout.Token),
+            out var error);
+
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, error.Reason);
+        Assert.Contains(field, error.Message, StringComparison.Ordinal);
+        Assert.Contains("vault", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(ConfigurationPath, error.Message, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(before, await File.ReadAllBytesAsync(ConfigurationPath, _timeout.Token));
+    }
+
+    private void WithTheStoredDestination(Func<DestinationConfiguration, DestinationConfiguration> edit)
+    {
+        var loaded = ClientConfiguration.Load(ConfigurationPath);
+        (loaded with { Destinations = [.. loaded.Destinations.Select(edit)] }).Save(ConfigurationPath);
     }
 
     [TestMethod]

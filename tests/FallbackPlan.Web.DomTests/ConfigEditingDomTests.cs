@@ -59,6 +59,119 @@ public sealed class ConfigEditingDomTests
     }
 
     [TestMethod]
+    public async Task DestinationEditor_ALimitAndACadence_RideTheUpsert()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([]),
+            UpsertDestinationCommand => new ConfigurationChangeResult(["Destination 'vault' is declared."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-add-local\"]");
+        await page.FillAsync("#dest-name", "vault");
+        await page.FillAsync("#dest-path", "/backups");
+        await page.FillAsync("#dest-limit", "2 MiB/s");
+        await page.FillAsync("#dest-drill", "7");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("2 MiB/s", upsert.Destination.TransferLimit);
+        Assert.AreEqual(7, upsert.Destination.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task DestinationEditor_EmptyingTheSettings_SendsTheSpellingsThatClearThem()
+    {
+        // The form shows what the destination holds and sends what the form
+        // holds: an emptied limit and cadence must clear, not keep.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult(
+                [Vault with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 }]),
+            UpsertDestinationCommand => new ConfigurationChangeResult(["Destination 'vault' is declared."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-dest\"][data-id=\"dest-1\"]");
+        await Expect(page.Locator("#dest-limit")).ToHaveValueAsync("2 MiB/s");
+        await Expect(page.Locator("#dest-drill")).ToHaveValueAsync("3");
+        await page.FillAsync("#dest-limit", "");
+        await page.FillAsync("#dest-drill", "");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("", upsert.Destination.TransferLimit);
+        Assert.AreEqual(0, upsert.Destination.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task ServiceSettingsCard_Saving_SendsTheUpdateAndShowsWhatTheServiceSaid()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetServiceSettingsCommand => new ServiceSettingsResult(null, null, null, EffectiveMaxConcurrentBackups: 2),
+            UpdateServiceSettingsCommand => new ConfigurationChangeResult(
+                ["Background window set to 22:00-06:00; it applies from the next pass."]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListBackupSetsCommand => new BackupSetsResult([]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.FillAsync("#svc-window", "22:00-06:00");
+        await page.FillAsync("#svc-read-limit", "40 MiB/s");
+        await page.FillAsync("#svc-max-backups", "3");
+        await page.ClickAsync("[data-action=\"svc-settings-save\"]");
+
+        var update = await harness.ReceivedAsync<UpdateServiceSettingsCommand>();
+        Assert.AreEqual("22:00-06:00", update.BackgroundWindow);
+        Assert.AreEqual("40 MiB/s", update.BackgroundReadLimit);
+        Assert.AreEqual(3, update.MaxConcurrentBackups);
+
+        await Expect(page.GetByText("Background window set to 22:00-06:00; it applies from the next pass."))
+            .ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task ServiceSettingsCard_AWidthNotYetRunning_SaysItWaitsForARestart()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetServiceSettingsCommand => new ServiceSettingsResult(null, null, 3, EffectiveMaxConcurrentBackups: 2),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListBackupSetsCommand => new BackupSetsResult([]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await Expect(page.Locator("#svc-max-backups")).ToHaveValueAsync("3");
+        await Expect(page.GetByText("The pool runs 2 until the service restarts.")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
     public async Task SetEditor_TickingAFolder_ValidatesTheDraftAndSavesTheSet()
     {
         await using var harness = await DomHarness.StartAsync();
