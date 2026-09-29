@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-GC-009
+**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-VER-005, FR-VER-007, FR-GC-009
 **Related:** [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0018](0018-replica-failure-domains.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [architecture 09](../architecture/09-replication-and-peers.md), [peer-protocol 03](../../specifications/peer-protocol/03-replication.md), [peer-protocol 04](../../specifications/peer-protocol/04-verification.md), [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)
 
 ---
@@ -136,6 +136,12 @@ cursor, at a cadence that defaults to weekly and is overridable per destination.
 This is the remedy for the structural fact above: it is the only thing in the
 product that refreshes a proof without a backup having happened.
 
+> **Amended 2026-09 ([Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired)):** the cadence is
+> between circuits, not segments. Built as written, the interval ran from the
+> last segment, so a replica of ten thousand blobs was read once in about three
+> years. A circuit that has begun is now carried on every pass until every
+> stored blob has been read, and the interval rests from when it closed.
+
 It runs on the **transfer lane**, not the reader lane. A reader-lane sweep would
 read the replica while the fan-out is putting and deleting in it, manufacturing
 failures that would set the pair failed and raise a notice about damage that never
@@ -161,6 +167,14 @@ of the wire — only the range-challenge protocol — so a peer digest sweep nee
 session-establishment half of the push extracted first. Deferred and stated, not
 silently omitted; the extraction that the admission probe required is its first
 half.
+
+> **Amended 2026-09 ([Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired)):** the reason given
+> here no longer holds. The retrieval session
+> ([ADR-0041](0041-guided-restore-and-peer-retrieval.md)) reads a peer's replica,
+> and Amendment 1 reads one as a repair source. What keeps the sweep local is
+> the cost: re-reading all of a peer's replica is a standing charge on somebody
+> else's link, which needs a stated cadence and a bound of its own, as
+> [ADR-0054 Amendment 3](0054-scheduled-restore-drills.md) gave drills.
 
 ### 5. Sampling coverage accumulates
 
@@ -275,6 +289,13 @@ so a notice carrying numbers no longer shows the first observation forever.
   fitness picture this record does not deliver, and it is named in §4 rather than
   left to be noticed.
 
+> **Amended 2026-09 ([Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired)):** the repair sync
+> promised above repaired nothing. The copier counts any key that is present as
+> held, and a local store never overwrites, so a damaged object stayed damaged
+> and the next sync called the pair in sync over it. Amendment 1 builds the
+> repair, and the sync that re-checks it. The last bullet stands, for the
+> reason the blockquote at §4 now gives.
+
 ## Alternatives considered
 
 **Degrade on staleness rather than warn.** Rejected in §7, against the author's
@@ -296,9 +317,103 @@ false positives enumerated.
 would have been actively harmful: it would have taken every backup set down over a
 single typo.
 
+## Amendment 1 (2026-09) — a circuit is carried to its end, and damage is repaired
+
+§4's sweep was built, and three things around it did not hold.
+
+- **The pace.** The scheduler made a pair due when the interval had passed since
+  the last *segment*, and a segment is sixty-four blobs. The configuration said
+  so in its own words — the interval "sets how often a segment runs, not how
+  long a full circuit takes" — and nothing said what that meant. At the 64 MiB
+  blob target a 640 GiB replica is ten thousand blobs, and a weekly interval
+  read all of it once in about three years. "Every stored object has now been
+  checked" was never said of an archive of any size.
+- **The repair.** The finding's notice asked for the damaged objects to be
+  re-copied, and the Consequences promised a repair sync delayed at most an
+  hour. That sync copied nothing: the copier counts any key that is present as
+  held, and a local store never overwrites
+  ([specification 01 §4](../../specifications/repository-format/01-object-layout.md#4-object-immutability)).
+- **The state.** Nothing in the fan-out or the status read the finding, so the
+  retry sync recorded success and the pair read in sync while its notice said
+  it was damaged.
+
+**Decisions.**
+
+1. **A circuit is carried to its end.** An open circuit — a cursor on the
+   ledger — is due on every pass. The interval rests between the end of one
+   circuit and the start of the next, measured from when the last one closed,
+   and the seven-day default stands, now meaning a full re-read at most
+   weekly. A segment stays bounded, because it holds the process's one
+   transfer worker while it reads, and it is now bounded in bytes as well as
+   in blobs: 4 GiB by default, and for a background segment of a destination
+   with a transfer limit about a minute's worth at that rate — never less than
+   one blob, or a blob larger than the budget would park the circuit on
+   itself. A person's segment reads through no limit and is bounded by none.
+2. **Damage is repaired from a copy proven sound first** (FR-VER-007). A copy is
+   sound when its whole blob still hashes to its sealed digest *and* its
+   envelope names the blob its key derives from: the check the sweep's length
+   comparison stands in for, made directly, because the key-ID key is at hand.
+   - Sources are tried nearest and cheapest first: a staging set's staging
+     archive, the set's other local paths by priority, then its peers over the
+     retrieval session, each dialled only when every nearer source has failed
+     to serve and at most once.
+   - The damaged destination is never a source, and neither is a direct-ship
+     set's own read path, which answers from the highest-priority holder and
+     may be the damaged one.
+   - A source's copy is staged under the state directory's spool and proven
+     there, so the bytes proven are the bytes installed and a peer's link is
+     read once. Only then is the damaged object deleted and the copy put, and
+     the copy is proven again where it landed before the repair is claimed.
+   - A background repair reads each source through that source's own transfer
+     limit.
+   - Immutability holds. What is put is byte for byte what was written under
+     the key, which is what the proof establishes; the key's content changed
+     when the storage rotted, and the repair changes it back.
+3. **With no sound copy, nothing is deleted.** A damaged blob's other records
+   still restore, each authenticating on its own, so the object stays where it
+   is, named on the notice and on the ledger.
+4. **Known damage is held against the pair.** The ledger keeps the keys found
+   damaged and not repaired (schema 6), written before the repair is attempted
+   so that a repair cut short still leaves them.
+   - While any are listed, a success recorded by any writer keeps the pair
+     failed, says which objects, and does not reset the back-off. A direct-ship
+     capture ships new blobs to a destination knowing nothing of the old ones,
+     so its success is not evidence the damage has gone.
+   - The local-path sync is the repair sync the Consequences promised. After
+     its copy it re-reads the listed keys, repairs what it now can, resolves
+     what is sound again or no longer owed, and records a failure rather than a
+     success while any remain.
+5. **A finding still fails the pair, and its notice stands until acknowledged.**
+   FR-VER-005 is unchanged: the segment that finds damage records a failure even
+   when every object was repaired, and the next sync re-checks and returns the
+   pair to in sync. The notice says what was replaced and from where, what
+   could not be and why, and to check the device. A clean circuit no longer
+   withdraws it. With the repair immediate it would be withdrawn before anyone
+   had read it, and a disk that altered a backup once is worth a person's
+   attention — the shortfall notice's posture (§3).
+
+The act is called **repair**. *Heal* already names the copy-back of a
+destination's metadata to a rolled-back hub
+([ADR-0062](0062-the-destination-is-the-rollback-witness.md)), and one word for
+two directions of copy would say neither.
+
+**What this amendment does not do.**
+
+- **Repair a peer's replica.** The retrieval session is read-only and a push
+  never overwrites, so replacing an object at a peer needs protocol work. A
+  peer's damage is found by the read-back and the drill, and nothing repairs it
+  yet.
+- **Sweep a peer.** §4's stated reason is gone, as its blockquote says. What
+  remains is the cost to somebody else's link, which needs a stated cadence and
+  a bound; that is for the record that builds it.
+- **Keep content under the state directory.** The stage holds one blob at a
+  time and is removed when the repair ends, so a direct-ship set still keeps no
+  content there between repairs ([ADR-0046](0046-direct-to-destination-publication.md)).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | Written after the arc it records was built, from six gaps each verified against the code rather than surmised; §1's alternative would have taken every backup set down over one typo, and is the reason the record exists in this shape |
 | 2026-08 | Amended by later records | Fitness gained consequence it did not have here: for a direct-ship set ([ADR-0046](0046-direct-to-destination-publication.md) §3) the same defect/reachability/capacity findings scope the *run* — an unfit destination is excluded from the capture rather than merely degrading one pair, and with none fit the capture refuses. A zero already-held count is now also a legitimate state, not only a wiped replica: a pair owed its seed says so through the ledger's baseline facts ([ADR-0047](0047-backup-pool-and-priorities.md) §6, `needs_full`). The staging-trim licensing this record mentions applies to staging sets only; direct-ship reclaim runs through per-destination convergence under the same proof rule. |
+| 2026-09 | Amended | [Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired): a circuit is carried on every pass and the interval rests between circuits, and a segment is bounded in bytes as well as blobs (`Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Repository/ReplicaSweep`). Damage the sweep finds at a local path is repaired from a copy proven sound first — the staging archive, another local path, or a peer over the retrieval session (`Repository/ReplicaRepair`, `Agent/ReplicaRepairer`) — and where none exists it is kept, named, and held against the pair by the ledger and the sync that re-checks it (`Application/DestinationSyncStore`, `Agent/FanOut`). The finding's notice now stands until acknowledged. Held by `Hosts.Tests/DeepSweepTests`, `Repository.Tests/ReplicaRepairTests`, `Repository.Tests/ReplicaSweepTests`, `Hosts.Tests/BackgroundRateLimitTests` and `Application.Tests/DestinationSyncStoreTests` |
