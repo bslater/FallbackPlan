@@ -329,10 +329,10 @@ public sealed class ClaimedReplicaRetentionTests : IDisposable
                 Convert.FromHexString(description.RestoreGrantRecipient!), authority, salt, parameters));
         }
 
+        var (_, result) = await HostHarness.PreviewThenAdoptAsync(
+            handler.ExecuteAsync, new AdoptArchiveCommand("friend", repositoryIdHex, envelope), Timeout);
         Assert.IsInstanceOfType<ArchiveAdoptedResult>(
-            await handler.ExecuteAsync(new AdoptArchiveCommand("friend", repositoryIdHex, envelope), Timeout),
-            out var adopted,
-            "adoption of the claimed replica refused");
+            result, out var adopted, (result as ServiceError)?.Message ?? "adoption of the claimed replica refused");
         Assert.AreEqual("docs", adopted.SetName);
     }
 

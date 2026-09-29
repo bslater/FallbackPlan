@@ -117,9 +117,14 @@ public sealed class PeerAdoptionTests : IDisposable
                 Convert.FromHexString(description.RestoreGrantRecipient!), authority, Convert.FromHexString(row.KdfSalt), parameters));
         }
 
+        // Previewed over the retrieval session exactly as a directory is
+        // (FR-DR-009): the recorded shape comes back before anything does.
+        var (preview, result) = await HostHarness.PreviewThenAdoptAsync(
+            handler.ExecuteAsync, new AdoptArchiveCommand(Friend, repositoryId, envelope), Timeout);
+        Assert.AreEqual("docs", preview.SetName);
+        Assert.IsTrue(Assert.ContainsSingle(preview.Roots).Resolves);
         Assert.IsInstanceOfType<ArchiveAdoptedResult>(
-            await handler.ExecuteAsync(new AdoptArchiveCommand(Friend, repositoryId, envelope), Timeout),
-            out var adopted, "adoption from the peer refused");
+            result, out var adopted, (result as ServiceError)?.Message ?? "adoption from the peer refused");
         Assert.AreEqual(_harness.DocsSetId, adopted.SetId);
         Assert.AreEqual("docs", adopted.SetName);
         Assert.AreEqual(_harness.SourceRoot, Assert.ContainsSingle(adopted.Roots).Path);

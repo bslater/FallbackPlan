@@ -67,6 +67,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(FolderListingResult), "folder_listing")]
 [JsonDerivedType(typeof(SetDraftValidationResult), "set_draft_validation")]
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
+[JsonDerivedType(typeof(AdoptionPreviewResult), "adoption_preview")]
 [JsonDerivedType(typeof(NoticesResult), "notices")]
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
@@ -1100,6 +1101,62 @@ public sealed record ArchiveAdoptedResult(
     bool AlreadyAdopted,
     IReadOnlyList<string> Lines,
     RetentionPolicyDescriptor? Retention = null) : ServiceResult;
+
+/// <summary>One root as an archive recorded it, and whether it is here (FR-DR-009).</summary>
+/// <param name="RecordedPath">The path the root had where the archive was written — a hint, not an instruction.</param>
+/// <param name="Label">The root's persisted label (ADR-0040); null for a set that recorded a single unlabelled root.</param>
+/// <param name="Resolves">Whether the path names an existing folder on this machine.</param>
+public sealed record RecoveredRootDescriptor(string RecordedPath, string? Label, bool Resolves);
+
+/// <summary>
+/// What adopting an archive would declare, before anything takes effect
+/// (FR-DR-009, contract 1.42): the answer to <c>preview_adoption</c>.
+/// </summary>
+/// <remarks>
+/// Every field is what the archive's newest record says, not what the
+/// caller asked for: the overrides <c>adopt_archive</c> takes are applied
+/// by the person on top of this, and the confirmation is over the recorded
+/// shape alone. A preview writes nothing.
+/// </remarks>
+/// <param name="DestinationName">The destination the archive was read at.</param>
+/// <param name="RepositoryId">The archive, lowercase hex.</param>
+/// <param name="SetId">The set id the newest snapshot recorded; null when the archive holds no snapshot.</param>
+/// <param name="SetName">The recorded name; null when the archive records none and adoption needs one given.</param>
+/// <param name="Roots">Each recorded root with its path and whether that path resolves here.</param>
+/// <param name="Schedule">The recorded schedule; null for manual-only.</param>
+/// <param name="IncludeRules">The recorded include rules.</param>
+/// <param name="ExcludeRules">The recorded exclude rules.</param>
+/// <param name="Retention">
+/// The set's own retention policy as recorded — what the adopted set would
+/// delete by. Null when it defers retention, or when the recorded policy is
+/// refused (a rule of zero), which <paramref name="Lines"/> says.
+/// </param>
+/// <param name="SnapshotCount">How many snapshots the archive holds.</param>
+/// <param name="NewestSnapshotId">The newest snapshot's id, hex; null with none.</param>
+/// <param name="NewestSnapshotAt">When it completed, Unix milliseconds; null with none.</param>
+/// <param name="AlreadyAdopted">A set is already configured against this very archive.</param>
+/// <param name="Confirmation">
+/// The token <c>adopt_archive</c> must carry: a digest of the recorded shape
+/// above, so an archive that changes between the preview and the adoption
+/// is refused rather than adopted as something nobody saw.
+/// </param>
+/// <param name="Lines">What the preview found, for a person.</param>
+public sealed record AdoptionPreviewResult(
+    string DestinationName,
+    string RepositoryId,
+    string? SetId,
+    string? SetName,
+    IReadOnlyList<RecoveredRootDescriptor> Roots,
+    string? Schedule,
+    IReadOnlyList<string> IncludeRules,
+    IReadOnlyList<string> ExcludeRules,
+    RetentionPolicyDescriptor? Retention,
+    int SnapshotCount,
+    string? NewestSnapshotId,
+    ulong? NewestSnapshotAt,
+    bool AlreadyAdopted,
+    string Confirmation,
+    IReadOnlyList<string> Lines) : ServiceResult;
 
 /// <summary>
 /// What this service is logging and where it is putting it (ADR-0043 §6,

@@ -44,6 +44,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ProvisionInstallationCommand), "provision_installation")]
 [JsonDerivedType(typeof(DiscoverArchivesCommand), "discover_archives")]
 [JsonDerivedType(typeof(AdoptArchiveCommand), "adopt_archive")]
+[JsonDerivedType(typeof(PreviewAdoptionCommand), "preview_adoption")]
 [JsonDerivedType(typeof(GetDiagnosticsCommand), "get_diagnostics")]
 [JsonDerivedType(typeof(SetLogLevelCommand), "set_log_level")]
 [JsonDerivedType(typeof(ReadLogCommand), "read_log")]
@@ -576,6 +577,13 @@ public sealed record DiscoverArchivesCommand(string DestinationName) : ServiceCo
 /// recorded. A recorded root that does not exist on this machine is
 /// reported, never refused: the person edits the set.
 /// </para>
+/// <para>
+/// Since 1.42 an adoption is confirmed (FR-DR-009): <paramref name="Confirmation"/>
+/// is the token <see cref="PreviewAdoptionCommand"/> answered with, so the
+/// shape that takes effect is the shape a person was shown. Without one the
+/// command is refused, and with one the archive no longer matches it is
+/// refused as changed.
+/// </para>
 /// </remarks>
 /// <param name="DestinationName">The declared destination holding the archive.</param>
 /// <param name="RepositoryId">The archive's repository id, 32 hex, as discovery listed it.</param>
@@ -588,6 +596,7 @@ public sealed record DiscoverArchivesCommand(string DestinationName) : ServiceCo
 /// <param name="Roots">The set's roots; null takes the recorded ones.</param>
 /// <param name="Schedule">The set's schedule; null takes the recorded one.</param>
 /// <param name="Priority">The set's priority (ADR-0047); null means none.</param>
+/// <param name="Confirmation">The preview's confirmation token (FR-DR-009); required.</param>
 public sealed record AdoptArchiveCommand(
     string DestinationName,
     string RepositoryId,
@@ -595,7 +604,30 @@ public sealed record AdoptArchiveCommand(
     string? SetName = null,
     IReadOnlyList<BackupRootDescriptor>? Roots = null,
     string? Schedule = null,
-    int? Priority = null) : ServiceCommand;
+    int? Priority = null,
+    string? Confirmation = null) : ServiceCommand;
+
+/// <summary>
+/// Shows what adopting one of a destination's archives would declare, and
+/// changes nothing (FR-DR-009, contract 1.42): the configuration the archive
+/// records — name, each root's recorded path and whether it resolves on this
+/// machine, schedule, rules and the set's own retention — answered with the
+/// confirmation token <see cref="AdoptArchiveCommand"/> must carry.
+/// </summary>
+/// <remarks>
+/// The same envelope and the same proof as adoption: the recorded shape is
+/// sealed metadata, so only the passphrase's derivation reads it. Nothing is
+/// written — not the catalogue, the metadata copy, the credential, the
+/// configuration or the ledger — so a preview can be repeated, abandoned or
+/// taken on the wrong archive without anything to undo.
+/// </remarks>
+/// <param name="DestinationName">The declared destination holding the archive.</param>
+/// <param name="RepositoryId">The archive's repository id, 32 hex, as discovery listed it.</param>
+/// <param name="Envelope">The provisioning envelope, exactly as <see cref="AdoptArchiveCommand"/> carries it.</param>
+public sealed record PreviewAdoptionCommand(
+    string DestinationName,
+    string RepositoryId,
+    string Envelope) : ServiceCommand;
 
 /// <summary>
 /// Asks what this service is logging and where it is putting it (ADR-0043 §6,

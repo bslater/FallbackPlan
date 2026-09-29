@@ -218,6 +218,27 @@ public sealed class HostHarness : IDisposable
     }
 
     /// <summary>
+    /// Adopts an archive the only way the contract now allows (FR-DR-009):
+    /// preview it, then adopt with the preview's confirmation. The preview
+    /// is asserted to succeed and handed back beside the adoption's own
+    /// answer, which is returned unjudged so a test can assert a refusal.
+    /// </summary>
+    public static async Task<(AdoptionPreviewResult Preview, ServiceResult Adopted)> PreviewThenAdoptAsync(
+        Func<ServiceCommand, CancellationToken, ValueTask<ServiceResult>> execute,
+        AdoptArchiveCommand adopt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        ArgumentNullException.ThrowIfNull(adopt);
+
+        var previewed = await execute(
+            new PreviewAdoptionCommand(adopt.DestinationName, adopt.RepositoryId, adopt.Envelope), cancellationToken);
+        Assert.IsInstanceOfType<AdoptionPreviewResult>(
+            previewed, out var preview, (previewed as ServiceError)?.Message ?? previewed.GetType().Name);
+        return (preview, await execute(adopt with { Confirmation = preview.Confirmation }, cancellationToken));
+    }
+
+    /// <summary>
     /// The reclaim grant a console sends with <c>retention --apply</c> on a
     /// set-up installation (ADR-0055 §6): the reclaim sub-root, re-derived
     /// from the passphrase under the installation's salt and sealed to the
