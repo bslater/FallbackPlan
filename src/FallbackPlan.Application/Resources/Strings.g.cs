@@ -248,6 +248,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationIntervalMustBePositive, arg0);
 
     /// <summary>
+    /// Destination '{0}': 'drill_interval_days' must be a positive number of days; omit it to take the default — which, for a peer, is never.
+    /// </summary>
+    private static string ClientConfiguration_DestinationDrillIntervalMustBePositive => Get(nameof(ClientConfiguration_DestinationDrillIntervalMustBePositive));
+
+    /// <summary>
+    /// Destination '{0}': 'drill_interval_days' must be a positive number of days; omit it to take the default — which, for a peer, is never.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationDrillIntervalMustBePositive(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationDrillIntervalMustBePositive, arg0);
+
+    /// <summary>
     /// Destination '{0}': id must be 32 hex digits.
     /// </summary>
     private static string ClientConfiguration_DestinationIdMustHex => Get(nameof(ClientConfiguration_DestinationIdMustHex));

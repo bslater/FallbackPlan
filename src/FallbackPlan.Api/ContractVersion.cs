@@ -400,8 +400,23 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// which a client reads as "nothing limited" — what a 1.43 service with no
     /// limit configured says too.
     /// </para>
+    /// <para>
+    /// 1.44 lets the settings 1.39 and 1.43 report be set through the service
+    /// (ADR-0037 Amendment 1), which ADR-0069 §8 and ADR-0074 §7 named as
+    /// owed. `get_service_settings` answers `service_settings`: the background
+    /// window, the background read limit and `max_concurrent_backups` as the
+    /// configuration file states them, with `effective_max_concurrent_backups`
+    /// — the width the running pool has, since the pool is sized when the
+    /// service starts. `update_service_settings` changes them: null keeps a
+    /// setting, an empty text or a zero width clears it, a value the parser
+    /// refuses refuses the whole request, and the answer is a
+    /// `configuration_change` saying when each change applies. The destination
+    /// descriptor gains `transfer_limit` and `drill_interval_days`, both ways,
+    /// under the same rule — null keeps, empty or zero clears. Additive: a
+    /// pre-1.44 client's upsert carries neither, and keeps both.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 43);
+    public static ContractVersion Current { get; } = new(1, 44);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

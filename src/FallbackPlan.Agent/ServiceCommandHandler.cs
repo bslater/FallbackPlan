@@ -521,6 +521,8 @@ public sealed partial class ServiceCommandHandler(
         ListDestinationsCommand => ListDestinations(),
         UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
         DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
+        GetServiceSettingsCommand => GetServiceSettings(),
+        UpdateServiceSettingsCommand updateSettings => UpdateServiceSettings(updateSettings),
         ListPairingsCommand => ListPairings(),
         GetDiagnosticsCommand => GetDiagnostics(),
         SetLogLevelCommand setLevel => SetLogLevel(setLevel),

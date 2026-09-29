@@ -749,11 +749,13 @@ public sealed record ClientConfiguration
                 Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
         }
 
-        // Same rule for the drill's cadence, and the same reason (ADR-0054).
+        // Same rule for the drill's cadence, and the same reason (ADR-0054),
+        // under its own name: the refusal sends the operator to the field
+        // they wrote.
         if (destination.DrillIntervalDays is { } drill && drill <= 0)
         {
             throw new ClientStateException(
-                Strings.FormatClientConfiguration_DestinationIntervalMustBePositive(destination.Name));
+                Strings.FormatClientConfiguration_DestinationDrillIntervalMustBePositive(destination.Name));
         }
 
         // A limit this build cannot read is refused rather than ignored, and

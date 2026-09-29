@@ -15,6 +15,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListDestinationsCommand), "list_destinations")]
 [JsonDerivedType(typeof(UpsertDestinationCommand), "upsert_destination")]
 [JsonDerivedType(typeof(DeleteDestinationCommand), "delete_destination")]
+[JsonDerivedType(typeof(GetServiceSettingsCommand), "get_service_settings")]
+[JsonDerivedType(typeof(UpdateServiceSettingsCommand), "update_service_settings")]
 [JsonDerivedType(typeof(ListPairingsCommand), "list_pairings")]
 [JsonDerivedType(typeof(BrowseFoldersCommand), "browse_folders")]
 [JsonDerivedType(typeof(ValidateSetDraftCommand), "validate_set_draft")]
@@ -167,6 +169,35 @@ public sealed record ListDestinationsCommand : ServiceCommand;
 /// <summary>Adds or replaces one declared destination (ADR-0037).</summary>
 /// <param name="Destination">The declaration; a null id declares a new destination.</param>
 public sealed record UpsertDestinationCommand(DestinationDescriptor Destination) : ServiceCommand;
+
+/// <summary>
+/// Reads the installation's own settings (contract 1.44): the background
+/// window, the background read limit and the backup pool's width, as the
+/// configuration file states them, with the width the running pool has.
+/// </summary>
+public sealed record GetServiceSettingsCommand : ServiceCommand;
+
+/// <summary>
+/// Changes the installation's own settings (contract 1.44). Null keeps what
+/// the configuration file says; an empty text or a zero width clears a
+/// setting back to its default. The request is one decision: a value the
+/// parser refuses refuses the whole of it, and nothing is written.
+/// </summary>
+/// <param name="BackgroundWindow">
+/// The hours background work may start in, <c>HH:mm-HH:mm</c> local time
+/// (ADR-0069); empty clears it, so background work may start at any hour.
+/// </param>
+/// <param name="BackgroundReadLimit">
+/// The rate background captures read their sources at, e.g. <c>40 MiB/s</c>
+/// (ADR-0074); empty clears it, so reads are unlimited.
+/// </param>
+/// <param name="MaxConcurrentBackups">
+/// The backup pool's width, 1 to 5 (ADR-0047); zero clears it to the default.
+/// The pool is sized when the service starts, so a change applies at the next
+/// restart.
+/// </param>
+public sealed record UpdateServiceSettingsCommand(
+    string? BackgroundWindow, string? BackgroundReadLimit, int? MaxConcurrentBackups) : ServiceCommand;
 
 /// <summary>
 /// Removes one declared destination (FR-DEST-007). Refused while any set

@@ -118,6 +118,9 @@
   <data name="ClientConfiguration_DestinationIntervalMustBePositive" xml:space="preserve">
     <value>Destination '{0}': 'deep_verify_interval_days' must be a positive number of days; omit it to take the default.</value>
   </data>
+  <data name="ClientConfiguration_DestinationDrillIntervalMustBePositive" xml:space="preserve">
+    <value>Destination '{0}': 'drill_interval_days' must be a positive number of days; omit it to take the default — which, for a peer, is never.</value>
+  </data>
   <data name="ClientConfiguration_DestinationIdMustHex" xml:space="preserve">
     <value>Destination '{0}': id must be 32 hex digits.</value>
   </data>

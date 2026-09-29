@@ -2733,6 +2733,10 @@ async function refreshConfigData() {
   // — not a toast on every refresh.
   const attributions = await api({ command: "list_replica_attributions" }).catch(() => null);
   S.attributions = attributions?.result === "replica_attributions" ? attributions.attributions : [];
+  // The installation's own settings (contract 1.44), asked for the same way:
+  // a service older than the verb refuses it by name, and that is no card.
+  const settings = await api({ command: "get_service_settings" }).catch(() => null);
+  S.serviceSettings = settings?.result === "service_settings" ? settings : null;
   await refreshSets();
   if (S.view === "config") renderConfigBody();
   if (S.view === "maintenance") refreshReceipts();
@@ -2769,6 +2773,35 @@ function retentionSummary(policy) {
   if (policy.keepMonthly) parts.push(`${policy.keepMonthly}m`);
   if (policy.minGenerations) parts.push(`≥${policy.minGenerations}`);
   return parts.length ? "retention " + parts.join("/") : "keeps everything";
+}
+
+// The installation's own settings (contract 1.44, ADR-0037 Amendment 1):
+// the control ADR-0069 §8 and ADR-0074 §7 named as owed. The pool is sized
+// when the service starts, so a width saved but not yet running is said
+// rather than shown as if it were in force.
+function serviceSettingsCard() {
+  const s = S.serviceSettings;
+  if (!s) return "";
+  const stored = s.maxConcurrentBackups ?? 2;
+  const waiting = stored !== s.effectiveMaxConcurrentBackups;
+  return `
+    <div class="cfg-section">
+      <div class="cfg-head"><h3>Service settings</h3></div>
+      <div class="card">
+        <div class="field-row wrap">
+          <label class="mini">background window <input type="text" id="svc-window"
+            value="${esc(s.backgroundWindow ?? "")}" placeholder="any hour — e.g. 22:00-06:00"></label>
+          <label class="mini">background read limit <input type="text" id="svc-read-limit"
+            value="${esc(s.backgroundReadLimit ?? "")}" placeholder="unlimited — e.g. 40 MiB/s"></label>
+          <label class="mini">max concurrent backups <input type="text" id="svc-max-backups" class="num"
+            value="${esc(s.maxConcurrentBackups ?? "")}" placeholder="2"></label>
+        </div>
+        ${waiting ? `<p class="sub">The pool runs ${esc(s.effectiveMaxConcurrentBackups)} until the service restarts.</p>` : ""}
+        <div class="actions-row">
+          <button type="button" class="btn small primary" data-action="svc-settings-save">Save settings</button>
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderConfigBody() {
@@ -2873,6 +2906,8 @@ function renderConfigBody() {
           <tbody>${destinations}</tbody></table></div></div>`
         : `<div class="card empty"><span class="big">📦</span>No destinations declared. A local folder is the quickest start; a paired peer survives losing this machine.</div>`}
     </div>
+
+    ${serviceSettingsCard()}
 
     ${S.pairings.length ? `<div class="cfg-section">
       <div class="cfg-head"><h3>Pairings</h3></div>
@@ -4135,8 +4170,33 @@ Object.assign(actions, {
     if (destination) openDestEditor(destination.kind, destination);
   },
 
+  async "svc-settings-save"(el) {
+    // Every field goes as shown: an emptied text clears, and an emptied
+    // width goes as 0, which clears too. Null would keep the stored value,
+    // and make clearing silently do nothing.
+    const widthText = document.getElementById("svc-max-backups").value.trim();
+    const update = {
+      command: "update_service_settings",
+      backgroundWindow: document.getElementById("svc-window").value.trim(),
+      backgroundReadLimit: document.getElementById("svc-read-limit").value.trim(),
+      maxConcurrentBackups: widthText === "" ? 0 : Number(widthText),
+    };
+    if (!Number.isInteger(update.maxConcurrentBackups)) {
+      toast("warn", "The pool's width is a whole number, 1 to 5."); return;
+    }
+
+    await withBusy(el, async () => {
+      const result = await run(update, { errToast: "The service refused the settings" });
+      if (result) {
+        toast("ok", (result.lines ?? []).join(" ") || "Settings saved.");
+        refreshConfigData(); refreshStatus();
+      }
+    });
+  },
+
   async "dest-save"(el) {
     const kind = el.dataset.kind;
+    const drillText = document.getElementById("dest-drill").value.trim();
     const descriptor = {
       id: el.dataset.id || null,
       name: document.getElementById("dest-name").value.trim(),
@@ -4147,8 +4207,15 @@ Object.assign(actions, {
       failureDomain: document.getElementById("dest-domain").value || null,
       deepVerifyIntervalDays: Number(document.getElementById("dest-sweep").value.trim()) || null,
       priority: intOrNull(document.getElementById("dest-priority").value),
+      // Contract 1.44: both go as shown, so an emptied field clears — the
+      // empty limit and the zero cadence are the wire's "remove it".
+      transferLimit: document.getElementById("dest-limit").value.trim(),
+      drillIntervalDays: drillText === "" ? 0 : Number(drillText),
     };
     if (!descriptor.name) { toast("warn", "A destination needs a name."); return; }
+    if (!Number.isInteger(descriptor.drillIntervalDays) || descriptor.drillIntervalDays < 0) {
+      toast("warn", "A drill cadence is a whole number of days."); return;
+    }
     if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
       toast("warn", "Priority is a whole number."); return;
     }
@@ -4356,6 +4423,10 @@ function openDestEditor(kind, destination) {
         </select></label>
       <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num" value="${destination?.deepVerifyIntervalDays ?? ""}"></label>
       <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
+      <label class="mini">transfer limit <input type="text" id="dest-limit"
+        value="${esc(destination?.transferLimit ?? "")}" placeholder="unlimited — e.g. 2 MiB/s"></label>
+      <label class="mini">drill every (days) <input type="text" id="dest-drill" class="num"
+        value="${esc(destination?.drillIntervalDays ?? "")}" placeholder="${kind === "peer" ? "never" : "default"}"></label>
     </div>
     <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
     to its destinations in priority order.</p>
