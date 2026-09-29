@@ -58,6 +58,13 @@ the client contract and nothing below it (ADR-0036's client posture).
    The open carries **no passphrase**: the runtime unlocks replicas with the
    secret it holds — which is also the genuine authorisation, since a
    replica that is not this repository's will not unwrap.
+
+   > **Amended 2026-09 ([ADR-0075](0075-a-restore-reads-around-damage.md)).**
+   > The set's own archive — the staging handle, or a direct-ship set's
+   > metadata store — now reads a record it will not serve from the set's
+   > other copies. A destination's replica opened by name is still read
+   > alone, as a stranger would read it, because a drill restores through it
+   > to prove that copy.
 3. **Replica resolution favours the disaster it exists for.** With staging
    alive, the replica is found by repository id directly. With staging
    gone, candidates are probed — a local destination's subdirectories, or
@@ -155,3 +162,4 @@ round.
 |------|--------|------|
 | 2026-08 | Proposed | Written with the wizard's six steps agreed and the two walls (key confinement, console dependency) identified as the design's fixed points |
 | 2026-08 | Accepted | Built end to end: engine policies and multi-prefix plans, contract 1.11, source handles over staging/replica/peer, peer-protocol 07 implemented both sides, the console gate and wizard — proven by service-level drills including a total-staging-loss restore over the wire, and a live Playwright walk of all six steps |
+| 2026-09 | Accepted (amended) | [ADR-0075](0075-a-restore-reads-around-damage.md) amends §2: a restore of the set's own archive reads around damage from the set's other copies, and a destination opened by name is still read alone. `Agent/ServiceCommandHandler`; `Hosts.Tests/RestoreReadAroundTests` |

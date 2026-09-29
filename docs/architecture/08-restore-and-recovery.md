@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §12 · **Resolves:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified), [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
-**Built:** §§1–6 yes, and that includes the disaster-recovery ceremony in §6: the peer claim and its hold, and adoption shown and confirmed before it takes effect. There is no §7; the disaster-recovery claim this line once gave a §7 is §6's, and built. See [implementation status](../implementation-status.md).
+**Built:** §§1–6 yes, and that includes §3.2's reading around damage ([ADR-0075](../adr/0075-a-restore-reads-around-damage.md)) and the disaster-recovery ceremony in §6: the peer claim and its hold, and adoption shown and confirmed before it takes effect. There is no §7; the disaster-recovery claim this line once gave a §7 is §6's, and built. See [implementation status](../implementation-status.md).
 
 ---
 
@@ -17,7 +17,7 @@ Restore the latest version · state at a chosen date and time · a named or tagg
 A plan is constructed **before** any transfer, and it is the mechanism by which the user finds out about problems while they are still cheap. It contains:
 
 - the selected source snapshot and the resolved file-version set;
-- the required object set and which replicas can serve it — for a direct-ship set ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) that is always a destination read: no local content exists, the sink answers each blob from whichever destination holds it (proven byte-identical end to end), and a restore with no reachable destination is a plan that says so rather than a transfer that fails;
+- the required object set and which replicas can serve it — for a direct-ship set ([ADR-0046](../adr/0046-direct-to-destination-publication.md)) that is always a destination read: no local content exists, the sink answers each blob from whichever destination holds it (proven byte-identical end to end), and a restore with no reachable destination is a plan that says so rather than a transfer that fails. A restore of a set's own archive reads around what its own store does not hold (§3.2), so an object counts as missing only when no copy of the set holds it;
 - estimated logical and physical transfer size — these differ, sometimes greatly, when the store lacks range reads ([`05-storage-providers.md` §3](05-storage-providers.md#3-capabilities));
 - target conflicts: existing files, and the resolution policy that will apply to each;
 - **path and case collisions** ([`06-filesystem-capture.md` §2](06-filesystem-capture.md#2-path-handling));
@@ -62,6 +62,18 @@ They are now distinct:
 | Existing-destination policy | What happens to a file already at a destination? | Preserve it — moved into this run's own displaced store |
 
 A displaced file goes into a directory namespaced by the restore run. A single shared refuge is worse than none: restoring the same path twice silently destroys the first displaced copy, which is precisely the data the policy exists to keep.
+
+### 3.2 Reading around damage
+
+Every copy of a set's blobs is the same bytes: blobs are immutable, and a replica holds them key for key. So a record sits at the same offset of the same blob wherever the blob is held, and a restore that meets a record its own store will not serve can read that record from another copy ([ADR-0075](../adr/0075-a-restore-reads-around-damage.md)). → FR-RST-007
+
+- **Which restores.** A restore of the set's own archive reads around: the staging archive, or a direct-ship set's store, which reads through its destinations. A destination named as the source is read alone, as a stranger would read it, because the recovery drill restores through it to prove that copy restores.
+- **Which copies, in what order.** The repair's order ([09 §5.5](09-replication-and-peers.md#55-re-reading-what-is-held-and-repairing-it)): the set's local-path destinations by priority, then its peers over the retrieval session. Each copy is opened only once every earlier one has failed to serve, and a peer is dialled only then.
+- **What sends a record there.** A record that fails authentication, framing or its content identifier; a blob that will not read; or a blob the store does not hold, which is what a staging trim leaves. Content sealed to a key the restore does not hold is the same at every copy and is not read around.
+- **Nothing is trusted more for being second.** The other copy's record goes through the whole of §3, and the whole-file hash covers the reassembly whichever copies served which segments. A failed read at a copy is not damage until that copy's own footer agrees: a footer that does not list the record means the location was wrong, not the copy.
+- **What is said, and what is kept.** The receipt names, per item, the copies it was read from and what was wrong with those it was read around. The answer counts the files read around damage or an unreadable copy, but not those read from a destination only because staging no longer holds them. Damage found at a destination goes on its ledger row, as the deep sweep's does, so the next sync repairs a local path's and a peer's is held for its owner to remove. Damage found in the staging archive is raised as a notice.
+
+With every copy failed, the file still fails, and the failure names each copy tried.
 
 ## 4. Recovery credential
 
