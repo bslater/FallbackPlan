@@ -208,7 +208,7 @@ function until(ms) {
 // The background window governs every set below it, so it belongs on the
 // overview's one-line summary rather than in a card of its own (ADR-0069).
 // Absent means no window — from a service that has none configured and from
-// one older than contract 1.37 alike, which is the same instruction either
+// one older than contract 1.39 alike, which is the same instruction either
 // way: draw no line.
 function windowNote() {
   const w = S.status?.backgroundWindow;

@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.42 — 58 commands. One line each; parameters, results
+The register as of 1.43 — 58 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -85,7 +85,8 @@ its predecessor and its capture failures, read from the repository on
 demand), `get_status` (the per-set, per-destination matrix — since 1.21
 with each destination's baseline facts, since 1.24 with each demotion's
 machine cause and the set's `last_completed_at`, since 1.39 with the
-background window's state).
+background window's state, since 1.43 with the byte-rate limits background
+work is held to).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /

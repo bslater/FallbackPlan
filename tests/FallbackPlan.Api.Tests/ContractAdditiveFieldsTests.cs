@@ -575,9 +575,9 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
-    public void TheBackgroundWindow_WireNamesAndPre137Default()
+    public void TheBackgroundWindow_WireNamesAndPre139Default()
     {
-        // Contract 1.37 (ADR-0069): the status surface says whether the
+        // Contract 1.39 (ADR-0069): the status surface says whether the
         // background window is open and when it next changes, so "why did
         // nothing run last night" is answerable without reading the
         // service's log. One nullable descriptor rather than three loose
@@ -597,9 +597,9 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.Contains("\"changes_at\":20000", json, StringComparison.Ordinal);
 
         // The old frame is the modern one with the addition stripped, so the
-        // fixture cannot drift from the real serialization. A pre-1.37
+        // fixture cannot drift from the real serialization. A pre-1.39
         // service never mentions the field and a client reads that as "no
-        // window" — the same thing a 1.37 service with none configured says,
+        // window" — the same thing a 1.39 service with none configured says,
         // and honestly so: both mean "draw no line".
         var modern = JsonSerializer.Serialize<ServiceResult>(
             new StatusResult("hub", [], 10_000, [], new BackgroundWindowDescriptor("22:00-06:00", true, 20_000)),
