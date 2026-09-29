@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-VER-005, FR-VER-007, FR-GC-009
+**Requirements:** FR-DEST-001, FR-DEST-003, FR-DEST-004, FR-DEST-009, FR-DEST-010, FR-VER-002, FR-VER-003, FR-VER-004, FR-VER-005, FR-VER-007, FR-VER-008, FR-GC-009
 **Related:** [ADR-0011](0011-commit-versus-replication-semantics.md), [ADR-0018](0018-replica-failure-domains.md), [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0029](0029-pipeline-and-service-concurrency.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [architecture 09](../architecture/09-replication-and-peers.md), [peer-protocol 03](../../specifications/peer-protocol/03-replication.md), [peer-protocol 04](../../specifications/peer-protocol/04-verification.md), [peer-protocol 05](../../specifications/peer-protocol/05-quotas.md)
 
 ---
@@ -175,6 +175,10 @@ half.
 > the cost: re-reading all of a peer's replica is a standing charge on somebody
 > else's link, which needs a stated cadence and a bound of its own, as
 > [ADR-0054 Amendment 3](0054-scheduled-restore-drills.md) gave drills.
+>
+> **Amended again 2026-09 ([Amendment 2](#amendment-2-2026-09--a-peer-is-swept-on-a-stated-cadence-and-what-is-found-there-is-held)):** a peer now has them. It is
+> swept over the retrieval session on a cadence its source's operator states,
+> and never without one.
 
 ### 5. Sampling coverage accumulates
 
@@ -293,8 +297,11 @@ so a notice carrying numbers no longer shows the first observation forever.
 > promised above repaired nothing. The copier counts any key that is present as
 > held, and a local store never overwrites, so a damaged object stayed damaged
 > and the next sync called the pair in sync over it. Amendment 1 builds the
-> repair, and the sync that re-checks it. The last bullet stands, for the
-> reason the blockquote at §4 now gives.
+> repair, and the sync that re-checks it. The last bullet stood, for the
+> reason the blockquote at §4 gave, until
+> [Amendment 2](#amendment-2-2026-09--a-peer-is-swept-on-a-stated-cadence-and-what-is-found-there-is-held)
+> built peer-side deep verification on a stated cadence. What stays undone is
+> repairing a peer.
 
 ## Alternatives considered
 
@@ -423,6 +430,9 @@ two directions of copy would say neither.
 - **Sweep a peer.** §4's stated reason is gone, as its blockquote says. What
   remains is the cost to somebody else's link, which needs a stated cadence and
   a bound; that is for the record that builds it.
+
+  > **Amended 2026-09 ([Amendment 2](#amendment-2-2026-09--a-peer-is-swept-on-a-stated-cadence-and-what-is-found-there-is-held)):** built, on a stated cadence and
+  > under a bound.
 - **Keep content under the state directory.** The stage holds one blob at a
   time and is removed when the repair ends, so a direct-ship set still keeps no
   content there between repairs ([ADR-0046](0046-direct-to-destination-publication.md)).
@@ -432,6 +442,77 @@ two directions of copy would say neither.
   turn. Decision 6 says the stall instead, and repairing an unreadable blob is
   left to a record that can tell the two apart.
 
+## Amendment 2 (2026-09) — a peer is swept on a stated cadence, and what is found there is held
+
+Amendment 1 left the peer half named and unbuilt: a peer's replica could be
+read over the retrieval session, and re-reading all of it was a cost to
+somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
+
+**Decisions.**
+
+1. **A peer is swept only on a cadence its source's operator states.** The
+   destination's `deep_verify_interval_days` is the cadence, and for a peer an
+   absent value means never. That is [ADR-0054 Amendment
+   3](0054-scheduled-restore-drills.md)'s rule for drills, for the same reason:
+   the bandwidth is somebody else's, and this service does not spend it by
+   default. The console's form offered the field for every destination, and for
+   a peer it did nothing; a peer whose declaration already states one is swept
+   from the first pass after this change, because the value says what its
+   operator asked for.
+2. **The read is the local path's read, over the wire.** Every blob is read
+   back whole over the retrieval session and checked against the digest sealed
+   into its own footer, with the length comparison against the source where the
+   source still holds the key. The bytes crossing the wire are the proof: a
+   digest the peer computed of its own copy would be a claim
+   ([ADR-0058](0058-peer-write-adapter.md) §8). A circuit is carried on every
+   pass, as Amendment 1 carries a local path's.
+3. **Bounded to what the link can spare.** A background segment reads through
+   the peer's transfer limit, about a minute's worth at it, or 256 MiB — four
+   blobs at the default target — where the peer has none. It never reads less
+   than one blob. A peer the fan-out last found unreachable is not dialled for
+   its sweep, because a dial that fails holds the one transfer worker until it
+   does. A person's segment is not paced.
+4. **What is found is held, and not repaired.** The keys go on the ledger and
+   the pair fails, held failed through any success by Amendment 1's rule.
+   Nothing here can write at a peer: the retrieval session reads, a push only
+   creates, and a deletion there needs reclaim authority
+   ([ADR-0055](0055-reclaim-authority.md), [ADR-0059](0059-session-bound-deletion-authority.md)),
+   which a write-only service holds only under a grant. So the notice names the
+   objects, the repository they sit under, and the one remedy there is: the
+   peer's owner removes them, and the next push sends them again whole.
+5. **Damage leaves the ledger when it has gone.** A push clears a damaged key
+   the peer no longer declares holding, because it has been removed there and
+   sent again if the peer is owed it. A segment clears a damaged key it has read
+   again and found sound, for any destination. It clears only keys it actually
+   read, so a key the segment never reached is never taken for a sound one.
+6. **A peer that will not serve the session is not blamed.** Reached and
+   refused is an incapacity, never a finding. The attempt is stamped, so the
+   next waits the interval instead of following on the next pass, and a notice
+   says that the cadence reads nothing and why. The notice resolves itself when
+   a segment next reads. Unreached is not stamped at all; fan-out says whether
+   the peer can be reached.
+7. **On demand, any peer.** `verify-destination` reads a peer's replica, one
+   segment or with `--full` the whole circuit, and needs no cadence: a person
+   asking is consent for the read, as a restore is. A replica that could not be
+   read is "not deeply verifiable now", with the reason. It is never counted as
+   damage, and never as a pass.
+
+**What this amendment does not do.**
+
+- **Repair a peer.** Decision 4's remedy is the peer owner's to carry out.
+  Replacing an object from here needs a write the protocol does not have, under
+  an authority a write-only service does not hold unattended; that is a record
+  of its own.
+- **Offer a cheaper circuit.** The scoping offered one built from
+  [ADR-0065](0065-merkle-commitment-and-chunk-possession.md)'s chunk challenge:
+  one leaf a blob, a mebibyte instead of the blob. It is a sampled proof, which
+  FR-VER-003 requires be reported apart from a whole read, so it needs its own
+  ledger field and its own line in the status and the console. Named here, not
+  built.
+- **Report a circuit in status.** When a circuit last closed is on the ledger,
+  and said by `verify-destination`, but not yet on the contract, the status
+  matrix or the console, for a local path or a peer.
+
 ## Status history
 
 | Date | Status | Note |
@@ -439,3 +520,4 @@ two directions of copy would say neither.
 | 2026-08 | Accepted | Written after the arc it records was built, from six gaps each verified against the code rather than surmised; §1's alternative would have taken every backup set down over one typo, and is the reason the record exists in this shape |
 | 2026-08 | Amended by later records | Fitness gained consequence it did not have here: for a direct-ship set ([ADR-0046](0046-direct-to-destination-publication.md) §3) the same defect/reachability/capacity findings scope the *run* — an unfit destination is excluded from the capture rather than merely degrading one pair, and with none fit the capture refuses. A zero already-held count is now also a legitimate state, not only a wiped replica: a pair owed its seed says so through the ledger's baseline facts ([ADR-0047](0047-backup-pool-and-priorities.md) §6, `needs_full`). The staging-trim licensing this record mentions applies to staging sets only; direct-ship reclaim runs through per-destination convergence under the same proof rule. |
 | 2026-09 | Amended | [Amendment 1](#amendment-1-2026-09--a-circuit-is-carried-to-its-end-and-damage-is-repaired): a circuit is carried on every pass and the interval rests between circuits, and a segment is bounded in bytes as well as blobs (`Agent/Scheduler`, `Agent/ReplicaSweepJob`, `Repository/ReplicaSweep`). Damage the sweep finds at a local path is repaired from a copy proven sound first — the staging archive, another local path, or a peer over the retrieval session (`Repository/ReplicaRepair`, `Agent/ReplicaRepairer`) — and where none exists it is kept, named, and held against the pair by the ledger and the sync that re-checks it (`Application/DestinationSyncStore`, `Agent/FanOut`). The finding's notice now stands until acknowledged. A blob that will not read stalls the circuit under the sync's back-off rather than being met again every pass, and three stalls in a row are said. Held by `Hosts.Tests/DeepSweepTests`, `Repository.Tests/ReplicaRepairTests`, `Repository.Tests/ReplicaSweepTests`, `Hosts.Tests/BackgroundRateLimitTests` and `Application.Tests/DestinationSyncStoreTests` |
+| 2026-09 | Amended | [Amendment 2](#amendment-2-2026-09--a-peer-is-swept-on-a-stated-cadence-and-what-is-found-there-is-held): a peer is swept over the retrieval session on a cadence its source's operator states and never without one, paced by its transfer limit and bounded per segment (`Agent/Scheduler`, `Agent/ReplicaSweepJob`); what it finds is held against the pair and named with the remedy the peer's owner can carry out, and cleared by the push that re-sends a removed object or by a segment that reads it sound (`Agent/FanOut`, `Application/DestinationSyncStore`, `Repository/ReplicaSweep`); a peer that will not serve the session is said to be unreadable and not redialled every pass. Held by `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepTests` and `Web.Tests/ConsoleServiceSettingsScriptTests` |
