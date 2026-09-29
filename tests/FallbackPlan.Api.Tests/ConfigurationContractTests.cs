@@ -34,11 +34,42 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_TheBackgroundLimits_AreRecordedAtOneFortyThree()
+    public void ContractVersion_TheServiceSettings_AreRecordedAtOneFortyFour()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.43", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.44", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void ServiceSettings_RoundTripUnderTheirWireNames()
+    {
+        // Two verbs and their answer. The discriminators and the field names
+        // are the contract; a rename here is a protocol break that compiles.
+        var get = JsonSerializer.Serialize<ServiceCommand>(
+            new GetServiceSettingsCommand(), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"get_service_settings\"", get, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<GetServiceSettingsCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(get, FrameCodec.SerializerOptions));
+
+        var update = JsonSerializer.Serialize<ServiceCommand>(
+            new UpdateServiceSettingsCommand("22:00-06:00", "40 MiB/s", 3), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"update_service_settings\"", update, StringComparison.Ordinal);
+        Assert.Contains("\"background_window\":\"22:00-06:00\"", update, StringComparison.Ordinal);
+        Assert.Contains("\"background_read_limit\":\"40 MiB/s\"", update, StringComparison.Ordinal);
+        Assert.Contains("\"max_concurrent_backups\":3", update, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<UpdateServiceSettingsCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(update, FrameCodec.SerializerOptions), out var parsed);
+        Assert.AreEqual(new UpdateServiceSettingsCommand("22:00-06:00", "40 MiB/s", 3), parsed);
+
+        var answer = JsonSerializer.Serialize<ServiceResult>(
+            new ServiceSettingsResult("22:00-06:00", null, 3, EffectiveMaxConcurrentBackups: 2),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"service_settings\"", answer, StringComparison.Ordinal);
+        Assert.Contains("\"background_window\":\"22:00-06:00\"", answer, StringComparison.Ordinal);
+        Assert.Contains("\"background_read_limit\":null", answer, StringComparison.Ordinal);
+        Assert.Contains("\"max_concurrent_backups\":3", answer, StringComparison.Ordinal);
+        Assert.Contains("\"effective_max_concurrent_backups\":2", answer, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -8,9 +8,12 @@ namespace FallbackPlan.Agent;
 
 /// <summary>
 /// The configuration surface (ADR-0037): destination CRUD, set deletion, the
-/// folder browser, draft validation, and the pairing listing. Everything here
-/// edits <c>config.json</c> through <see cref="ClientConfiguration.Save"/>, so
-/// a refusal is the validator's own message and the file is untouched.
+/// installation's own settings (Amendment 1), the folder browser, draft
+/// validation, and the pairing listing. Everything here edits
+/// <c>config.json</c> through <see cref="ClientConfiguration.Save"/>, so a
+/// refusal leaves the file untouched. It is the validator's own message, or,
+/// for a setting a paired console may send, the parser's words said at the
+/// boundary without the file's path.
 /// </summary>
 public sealed partial class ServiceCommandHandler
 {
@@ -87,7 +90,9 @@ public sealed partial class ServiceCommandHandler
             destination.FailureDomain is { } domain ? DomainName(domain) : null,
             destination.DeepVerifyIntervalDays,
             destination.AddressDefect,
-            destination.Priority))]);
+            destination.Priority,
+            destination.TransferLimit,
+            destination.DrillIntervalDays))]);
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
     {
@@ -117,6 +122,44 @@ public sealed partial class ServiceCommandHandler
                 string.Equals(candidate.Id, id, StringComparison.Ordinal))
             : null;
 
+        // Contract 1.44 carries the transfer limit and the drill cadence. Null
+        // keeps what the file says, as it does for every field an older client
+        // cannot send; an empty limit and a zero cadence clear. Each is judged
+        // here, with the parser's own words, so the refusal names the
+        // destination and never the configuration file's path.
+        var transferLimit = existing?.TransferLimit;
+        if (command.Destination.TransferLimit is { } limitText)
+        {
+            if (limitText.Length == 0)
+            {
+                transferLimit = null;
+            }
+            else if (ByteRate.TryParse(limitText, out var rate, out var limitDefect))
+            {
+                transferLimit = rate!.Text;
+            }
+            else
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{command.Destination.Name}': transfer_limit {limitDefect}");
+            }
+        }
+
+        var drillIntervalDays = existing?.DrillIntervalDays;
+        if (command.Destination.DrillIntervalDays is { } drillDays)
+        {
+            if (drillDays < 0)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"Destination '{command.Destination.Name}': drill_interval_days must be a positive number of "
+                    + $"days, or 0 to remove the cadence; {drillDays} is neither.");
+            }
+
+            drillIntervalDays = drillDays == 0 ? null : drillDays;
+        }
+
         // A relative path is pinned to an absolute one HERE, at the moment
         // the operator can still see what it meant. Stored verbatim, it
         // resolves against whatever working directory the service happens to
@@ -139,12 +182,11 @@ public sealed partial class ServiceCommandHandler
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
             // Null preserves — a pre-1.17 client cannot see the field.
             Priority = command.Destination.Priority ?? existing?.Priority,
-            // No wire field, so no client can speak for these: an edit keeps
-            // what the file says (ADR-0037 §1). Dropping them would stop a
-            // peer's drills and lift a destination's limit, unannounced.
+            // No wire field, so no client can speak for it: an edit keeps what
+            // the file says (ADR-0037 §1).
             Verification = existing?.Verification,
-            DrillIntervalDays = existing?.DrillIntervalDays,
-            TransferLimit = existing?.TransferLimit,
+            DrillIntervalDays = drillIntervalDays,
+            TransferLimit = transferLimit,
         };
 
         // The circular-capture guard (FR-DEST-011), entered from this door:
@@ -228,6 +270,104 @@ public sealed partial class ServiceCommandHandler
             ? new ConfigurationChangeResult(
                 [$"Destination '{replacement.Name}' named the relative path '{declaredPath}'; stored as '{path}'."])
             : new AcknowledgedResult();
+    }
+
+    private ServiceSettingsResult GetServiceSettings()
+    {
+        var configuration = runtime.Configuration;
+        return new ServiceSettingsResult(
+            configuration.BackgroundWindow,
+            configuration.BackgroundReadLimit,
+            configuration.MaxConcurrentBackups,
+            runtime.BackupPoolWidth);
+    }
+
+    private ServiceResult UpdateServiceSettings(UpdateServiceSettingsCommand command)
+    {
+        // Every value is judged before anything is written: the request is one
+        // decision, and half of it landing would leave the operator guessing
+        // which half. The parsers' own words name the defect; the configuration
+        // file's path is never in a refusal a paired console can receive.
+        string? window = null;
+        if (command.BackgroundWindow is { Length: > 0 } windowText)
+        {
+            if (!BackgroundWindow.TryParse(windowText, out var parsedWindow, out var windowDefect))
+            {
+                return new ServiceError(ServiceErrorReason.InvalidArgument, $"background_window: {windowDefect}");
+            }
+
+            window = parsedWindow!.Text;
+        }
+
+        string? readLimit = null;
+        if (command.BackgroundReadLimit is { Length: > 0 } rateText)
+        {
+            if (!ByteRate.TryParse(rateText, out var rate, out var rateDefect))
+            {
+                return new ServiceError(ServiceErrorReason.InvalidArgument, $"background_read_limit: {rateDefect}");
+            }
+
+            readLimit = rate!.Text;
+        }
+
+        if (command.MaxConcurrentBackups is { } requestedWidth && requestedWidth is not 0 and (< 1 or > 5))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"max_concurrent_backups: the backup pool takes 1 to 5, or 0 to return to the default "
+                + $"(ADR-0047); {requestedWidth} is neither.");
+        }
+
+        var configuration = runtime.Configuration;
+        var updated = configuration;
+        var lines = new List<string>();
+
+        if (command.BackgroundWindow is not null
+            && !string.Equals(window, configuration.BackgroundWindow, StringComparison.Ordinal))
+        {
+            updated = updated with { BackgroundWindow = window };
+            lines.Add(window is null
+                ? "Background window removed: background work may start at any hour, from the next pass."
+                : $"Background window set to {window}: background work starts only inside it, from the next pass.");
+        }
+
+        if (command.BackgroundReadLimit is not null
+            && !string.Equals(readLimit, configuration.BackgroundReadLimit, StringComparison.Ordinal))
+        {
+            updated = updated with { BackgroundReadLimit = readLimit };
+            lines.Add(readLimit is null
+                ? "Background read limit removed: background captures read unpaced, from the next capture."
+                : $"Background reads limited to {readLimit}, from the next background capture.");
+        }
+
+        if (command.MaxConcurrentBackups is { } width)
+        {
+            int? stored = width == 0 ? null : width;
+            if (stored != configuration.MaxConcurrentBackups)
+            {
+                updated = updated with { MaxConcurrentBackups = stored };
+                lines.Add(
+                    $"max_concurrent_backups {(stored is { } set ? $"set to {set}" : "returned to the default of 2")}; "
+                    + $"the pool is sized when the service starts, so it runs {runtime.BackupPoolWidth} until the "
+                    + "service restarts.");
+            }
+        }
+
+        if (lines.Count == 0)
+        {
+            return new ConfigurationChangeResult(["No setting changed."]);
+        }
+
+        try
+        {
+            updated.Save(runtime.ConfigurationPath);
+        }
+        catch (ClientStateException exception)
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
+        }
+
+        return new ConfigurationChangeResult(lines);
     }
 
     private ServiceResult DeleteDestination(DeleteDestinationCommand command)

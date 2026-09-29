@@ -269,8 +269,10 @@ public static class CliApplication
                 var result = await client.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
                 return result switch
                 {
-                    TResult expected => expected,
+                    // The refusal first: a caller content with any answer
+                    // asks for ServiceResult, which a refusal also is.
                     ServiceError serviceError => throw new CliFailureException(serviceError.Message),
+                    TResult expected => expected,
                     _ => throw new CliFailureException($"the service answered with {result.GetType().Name}."),
                 };
             }
@@ -1755,6 +1757,159 @@ public static class CliApplication
                                 $"the service answered with {answered.GetType().Name}.");
                     }
                 }
+            }));
+        }
+
+        // ------------------------------------------------------------ settings
+
+        {
+            // The installation's own settings through the service (contract
+            // 1.44, ADR-0037 Amendment 1). Service-only, like `restart`: they
+            // are the service's settings, and only a running service can say
+            // what width its pool runs at.
+            var settingsState = new Option<string?>("--state")
+            {
+                Description = "The service's state directory; the machine-wide installation when absent.",
+            };
+            var windowOption = new Option<string?>("--window")
+            {
+                Description = "The hours background work may start in, HH:mm-HH:mm local time. An empty value "
+                    + "removes the window.",
+            };
+            var readLimitOption = new Option<string?>("--read-limit")
+            {
+                Description = "The rate background captures read their sources at, e.g. \"40 MiB/s\". An empty "
+                    + "value removes the limit.",
+            };
+            var maxBackupsOption = new Option<int?>("--max-backups")
+            {
+                Description = "The backup pool's width, 1 to 5; 0 returns it to the default. The pool is sized "
+                    + "when the service starts, so a change applies at the next restart.",
+            };
+            var settings = new Command(
+                "settings",
+                "Show the service's installation settings — the background window, the background read limit "
+                + "and the backup pool's width — or change them.");
+            settings.Options.Add(settingsState);
+            settings.Options.Add(windowOption);
+            settings.Options.Add(readLimitOption);
+            settings.Options.Add(maxBackupsOption);
+            root.Subcommands.Add(settings);
+
+            settings.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var state = parse.GetValue(settingsState);
+                var window = parse.GetValue(windowOption);
+                var readLimit = parse.GetValue(readLimitOption);
+                var maxBackups = parse.GetValue(maxBackupsOption);
+
+                if (window is null && readLimit is null && maxBackups is null)
+                {
+                    var current = await QueryLocalServiceAsync<ServiceSettingsResult>(
+                        state, new GetServiceSettingsCommand(), cancellationToken).ConfigureAwait(false);
+                    output.WriteLine($"background window: {current.BackgroundWindow ?? "none"}");
+                    output.WriteLine($"background read limit: {current.BackgroundReadLimit ?? "none"}");
+                    output.WriteLine($"max concurrent backups: {PoolWidth(current)}");
+                    return 0;
+                }
+
+                var change = await QueryLocalServiceAsync<ConfigurationChangeResult>(
+                    state, new UpdateServiceSettingsCommand(window, readLimit, maxBackups), cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var line in change.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+            }));
+
+            // A width saved but not yet running is said as such: the pool is
+            // sized when the service starts.
+            static string PoolWidth(ServiceSettingsResult settings)
+            {
+                var stored = settings.MaxConcurrentBackups ?? 2;
+                var said = settings.MaxConcurrentBackups is null ? $"{stored} (the default)" : $"{stored}";
+                return stored == settings.EffectiveMaxConcurrentBackups
+                    ? said
+                    : $"{(settings.MaxConcurrentBackups is null ? $"{stored}, the default," : said)} "
+                        + $"(the pool runs {settings.EffectiveMaxConcurrentBackups} until the service restarts)";
+            }
+        }
+
+        {
+            // A destination's two settings through the service (contract
+            // 1.44). The declaration is read back first and sent whole, so an
+            // edit of these two carries everything else it says unchanged.
+            var destinationName = new Argument<string>("name")
+            {
+                Description = "The destination, by the name its declaration gives it.",
+            };
+            var destinationState = new Option<string?>("--state")
+            {
+                Description = "The service's state directory; the machine-wide installation when absent.",
+            };
+            var transferLimitOption = new Option<string?>("--transfer-limit")
+            {
+                Description = "The rate background work may move bytes to or from it at, e.g. \"2 MiB/s\". An "
+                    + "empty value removes the limit.",
+            };
+            var drillDaysOption = new Option<int?>("--drill-days")
+            {
+                Description = "How often a restore drill reads from it, in days; 0 removes the cadence, which "
+                    + "means the default for a local path and never for a peer.",
+            };
+            var destinationSettings = new Command(
+                "destination-settings",
+                "Show a destination's transfer limit and drill cadence, or change them.");
+            destinationSettings.Arguments.Add(destinationName);
+            destinationSettings.Options.Add(destinationState);
+            destinationSettings.Options.Add(transferLimitOption);
+            destinationSettings.Options.Add(drillDaysOption);
+            root.Subcommands.Add(destinationSettings);
+
+            destinationSettings.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var name = parse.GetValue(destinationName)!;
+                var state = parse.GetValue(destinationState);
+                var transferLimit = parse.GetValue(transferLimitOption);
+                var drillDays = parse.GetValue(drillDaysOption);
+
+                var listed = await QueryLocalServiceAsync<DestinationsResult>(
+                    state, new ListDestinationsCommand(), cancellationToken).ConfigureAwait(false);
+                var destination = listed.Destinations.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Name, name, StringComparison.Ordinal))
+                    ?? throw new CliFailureException($"no destination named '{name}' is declared.");
+
+                if (transferLimit is null && drillDays is null)
+                {
+                    output.WriteLine($"transfer limit: {destination.TransferLimit ?? "none"}");
+                    output.WriteLine(destination.DrillIntervalDays is { } days
+                        ? $"drill every: {days} days"
+                        : destination.Kind == "peer"
+                            ? "drill every: never — a peer is drilled only on a cadence written for it"
+                            : "drill every: the default cadence");
+                    return 0;
+                }
+
+                var answer = await QueryLocalServiceAsync<ServiceResult>(
+                    state,
+                    new UpsertDestinationCommand(destination with
+                    {
+                        TransferLimit = transferLimit,
+                        DrillIntervalDays = drillDays,
+                    }),
+                    cancellationToken).ConfigureAwait(false);
+                if (answer is ConfigurationChangeResult change)
+                {
+                    foreach (var line in change.Lines)
+                    {
+                        output.WriteLine(line);
+                    }
+                }
+
+                output.WriteLine($"destination '{name}' saved.");
+                return 0;
             }));
         }
         {

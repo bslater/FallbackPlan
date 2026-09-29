@@ -10,7 +10,7 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
-/// Establishes FR-SVC-008.
+/// Establishes FR-SVC-008, and the CLI half of FR-SVC-021.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -518,6 +518,152 @@ public sealed class ClientModeTests : IDisposable
     /// <summary>Runs <c>backup</c> against this harness with the given extra arguments.</summary>
     private Task<HostHarness.Invocation> RunBackupAsync(params string[] extra) =>
         RunCliAsync(["backup", .. extra]);
+
+    [TestMethod]
+    public async Task Settings_WithNoOptions_ShowsEachSettingAndTheWidthThePoolRuns()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync("settings", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("background window: none", result.All, StringComparison.Ordinal);
+        Assert.Contains("background read limit: none", result.All, StringComparison.Ordinal);
+        Assert.Contains("max concurrent backups: 2 (the default)", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Settings_WithOptions_ChangesThemAndPrintsWhatTheServiceSaid()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync(
+            "settings", "--state", _harness.StateDirectory,
+            "--window", "22:00-06:00", "--read-limit", "40 MiB/s", "--max-backups", "3");
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("22:00-06:00", result.All, StringComparison.Ordinal);
+        Assert.Contains("restart", result.All, StringComparison.Ordinal);
+        var saved = ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json"));
+        Assert.AreEqual("22:00-06:00", saved.BackgroundWindow);
+        Assert.AreEqual("40 MiB/s", saved.BackgroundReadLimit);
+        Assert.AreEqual(3, saved.MaxConcurrentBackups);
+
+        var shown = await RunAgainstServiceAsync("settings", "--state", _harness.StateDirectory);
+        Assert.Contains(
+            "max concurrent backups: 3 (the pool runs 2 until the service restarts)",
+            shown.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Settings_AnUnreadableValue_FailsNamingTheDefect()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync("settings", "--state", _harness.StateDirectory, "--read-limit", "10 MB/s");
+
+        Assert.AreNotEqual(0, result.ExitCode, result.All);
+        Assert.Contains("MiB/s", result.All, StringComparison.Ordinal);
+        Assert.IsNull(ClientConfiguration.Load(Path.Combine(_harness.StateDirectory, "config.json")).BackgroundReadLimit);
+    }
+
+    [TestMethod]
+    public async Task DestinationSettings_SettingALimitAndACadence_KeepsEverythingElseTheDestinationSays()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        var loaded = ClientConfiguration.Load(configuration);
+        (loaded with
+        {
+            Destinations = [.. loaded.Destinations.Select(destination => destination with { DeepVerifyIntervalDays = 5, Priority = 4 })],
+        }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync(
+            "destination-settings", "vault", "--state", _harness.StateDirectory,
+            "--transfer-limit", "2 MiB/s", "--drill-days", "7");
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        var vault = ClientConfiguration.Load(configuration).Destinations.Single();
+        Assert.AreEqual("2 MiB/s", vault.TransferLimit);
+        Assert.AreEqual(7, vault.DrillIntervalDays);
+        Assert.AreEqual(5, vault.DeepVerifyIntervalDays, "the edit must carry back what it did not change");
+        Assert.AreEqual(4, vault.Priority, "the edit must carry back what it did not change");
+
+        var shown = await RunAgainstServiceAsync("destination-settings", "vault", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, shown.ExitCode, shown.All);
+        Assert.Contains("transfer limit: 2 MiB/s", shown.All, StringComparison.Ordinal);
+        Assert.Contains("drill every: 7 days", shown.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task DestinationSettings_AnEmptyLimitAndAZeroCadence_ClearBoth()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        var configuration = Path.Combine(_harness.StateDirectory, "config.json");
+        var loaded = ClientConfiguration.Load(configuration);
+        (loaded with
+        {
+            Destinations = [.. loaded.Destinations.Select(destination => destination with { TransferLimit = "2 MiB/s", DrillIntervalDays = 3 })],
+        }).Save(configuration);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync(
+            "destination-settings", "vault", "--state", _harness.StateDirectory,
+            "--transfer-limit", "", "--drill-days", "0");
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        var vault = ClientConfiguration.Load(configuration).Destinations.Single();
+        Assert.IsNull(vault.TransferLimit);
+        Assert.IsNull(vault.DrillIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task DestinationSettings_ANameNothingDeclares_FailsNamingIt()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync(
+            "destination-settings", "nowhere", "--state", _harness.StateDirectory, "--transfer-limit", "2 MiB/s");
+
+        Assert.AreNotEqual(0, result.ExitCode, result.All);
+        Assert.Contains("nowhere", result.All, StringComparison.Ordinal);
+    }
+
+    /// <summary>Runs a CLI verb against the service this harness started, with no direct-mode flags.</summary>
+    private static Task<HostHarness.Invocation> RunAgainstServiceAsync(params string[] args) =>
+        HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            args);
 
     private async Task<ServiceRuntime> StartServiceAsync()
     {

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-08
-**Requirements:** FR-SVC-001, FR-SVC-020, FR-DEST-001, FR-DEST-007, FR-GC-001, FR-GC-010, NFR-OPS-003
+**Requirements:** FR-SVC-001, FR-SVC-020, FR-SVC-021, FR-DEST-001, FR-DEST-007, FR-GC-001, FR-GC-010, NFR-OPS-003
 **Related:** [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0035](0035-destination-fitness.md), [ADR-0036](0036-local-web-console.md), [ADR-0030 Amendment 4](0030-peer-identity-and-pairing.md#amendment-4-2026-08--the-invite-authenticated-ceremony-pairing-without-two-humans-present-at-once), [ADR-0024](0024-include-exclude-rule-dialect.md), [spec 06 §7.1](../../specifications/repository-format/06-manifests.md#71-rule-dialect-rules-v1)
 
 ---
@@ -115,6 +115,53 @@ neither route can write what the other refuses.
   every defect message worse; the configuration's own field-per-kind shape is
   kept verbatim.
 
+## Amendment 1 (2026-09) — the installation's own settings join the contract
+
+Five settings could be seen through the service but edited only in the
+configuration file:
+- the background window ([ADR-0069](0069-the-background-window.md));
+- the background read limit ([ADR-0074](0074-background-byte-rate-limits.md));
+- the backup pool's width ([ADR-0047](0047-backup-pool-and-priorities.md));
+- a destination's transfer limit ([ADR-0074](0074-background-byte-rate-limits.md));
+- a destination's drill cadence ([ADR-0054](0054-scheduled-restore-drills.md) Amendment 3).
+
+ADR-0069 §8 and ADR-0074 §7 named the console control as owed. Contract 1.44
+builds it ([FR-SVC-021](../requirements/functional.md)).
+
+1. **Two verbs for the installation's settings.**
+   - `get_service_settings` answers each setting as the file states it, beside
+     the width the running pool has.
+   - `update_service_settings` changes them.
+2. **§1's rule, with a way to clear.**
+   - Null keeps a setting, as it keeps every field §1 covers.
+   - An empty text or a zero width clears a setting back to its default. That
+     is the explicit spelling §1 already gives an empty retention policy.
+   - The destination descriptor gains the transfer limit and the drill
+     cadence under the same rule: null keeps, and an empty limit or a zero
+     cadence clears.
+3. **One request, one decision.**
+   - Every value is judged, before anything is written, by the parser the
+     configuration load uses.
+   - One refused value refuses the whole request.
+   - The refusal names the setting and quotes the parser's defect. It never
+     names the configuration file's path: the load-time messages embed it,
+     and a paired console has no claim to it.
+4. **Said when it applies.** The answer names each setting that changed and
+   when the change takes effect.
+   - The window and the limits apply from the next pass or job.
+   - The pool's width applies when the service next starts, because the pool
+     is sized then. Until that restart the service reports both the stored
+     width and the running one, so the stored width is never mistaken for
+     the running one.
+5. **No one gains a new permission.** Like the verbs this record added in the
+   first place, the two are open to any signed-in user of any console paired
+   with the service. Neither is local-only or owner-only. These settings are
+   configuration, and configuration was already that open.
+
+The CLI's `settings` and `destination-settings` commands, the console's
+Service settings card and the destination form are all clients of the two
+verbs and the widened descriptor.
+
 ## Status history
 
 | Date | Status | Note |
@@ -122,3 +169,4 @@ neither route can write what the other refuses.
 | 2026-08 | Proposed | Written with the web console shipped read-only and the include-rule gap freshly verified against the scanner |
 | 2026-08 | Accepted | Built: contract 1.7, handlers, include enforcement in the orchestrator, and the web console's Configuration surface over it |
 | 2026-09 | Accepted (amended) | §1's preservation rule stated for fields with no wire field at all (FR-SVC-020): the destination upsert kept the verification policy but dropped the drill cadence and the transfer limit; all three are kept now, and every field a destination persists must be carried by the descriptor or kept by an edit |
+| 2026-09 | Accepted (amended) | Amendment 1: the installation's settings join the contract. The window, the read limit and the pool width go through two verbs; a destination's limit and cadence ride its descriptor. Null keeps a setting and empty or zero clears it; a request is one decision; the pool width applies at the next start (FR-SVC-021, contract 1.44) |

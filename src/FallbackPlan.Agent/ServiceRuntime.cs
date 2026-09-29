@@ -183,8 +183,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
         State = state;
         Jobs = jobs;
         Progress = new ProgressHub();
+        BackupPoolWidth = ConfiguredBackupPoolWidth(options);
         Queue = new JobScheduler(
-            Logger(options, typeof(JobScheduler)), ConfiguredBackupPoolWidth(options), options.MaxPauseOverride);
+            Logger(options, typeof(JobScheduler)), BackupPoolWidth, options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
@@ -194,6 +195,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>How this service was started.</summary>
     public ServiceOptions Options { get; }
+
+    /// <summary>
+    /// The width this service's backup pool was built with (ADR-0047). The
+    /// configuration may since say otherwise; the pool follows at the next
+    /// start, and <c>get_service_settings</c> reports both.
+    /// </summary>
+    public int BackupPoolWidth { get; }
 
     /// <summary>A logger for <paramref name="category"/>, or a silent one.</summary>
     private static ILogger Logger(ServiceOptions options, Type category) =>

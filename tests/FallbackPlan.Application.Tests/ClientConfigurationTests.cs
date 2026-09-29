@@ -326,6 +326,27 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(-3)]
+    public void Save_ANonPositiveDrillCadence_IsRefusedNamingTheDrillCadence(int days)
+    {
+        // The refusal must name the field that is wrong: sharing the
+        // deep-verify interval's message sent the operator to fix a setting
+        // they had not written.
+        var zero = new ClientConfiguration
+        {
+            SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations = [LocalPath("usb") with { DrillIntervalDays = days }],
+            BackupSets = [Set("docs", Ref("usb"))],
+        };
+
+        var refusal = Assert.ThrowsExactly<ClientStateException>(() => zero.Save(ConfigPath));
+        Assert.Contains("usb", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("drill_interval_days", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("deep_verify_interval_days", refusal.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void Load_AVerificationPolicyOutsideTheVocabulary_IsRefused()
     {
         // Notably including the plausible-looking ones: there is no "none",

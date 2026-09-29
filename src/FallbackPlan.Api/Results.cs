@@ -61,6 +61,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(ArchiveAdoptedResult), "archive_adopted")]
 [JsonDerivedType(typeof(ConfigurationChangeResult), "configuration_change")]
 [JsonDerivedType(typeof(DestinationsResult), "destinations")]
+[JsonDerivedType(typeof(ServiceSettingsResult), "service_settings")]
 [JsonDerivedType(typeof(PairingsResult), "pairings")]
 [JsonDerivedType(typeof(ReplicaAttributionsResult), "replica_attributions")]
 [JsonDerivedType(typeof(ReceiptsResult), "receipts_listed")]
@@ -224,6 +225,17 @@ public sealed record BackupSetDescriptor(
 /// backup writes to its destinations in this order. On an upsert, null
 /// preserves what the declaration already has.
 /// </param>
+/// <param name="TransferLimit">
+/// The rate background work may move bytes to or from it at (ADR-0074,
+/// contract 1.44), or null for none. On an upsert, null preserves what the
+/// declaration has and an empty text removes the limit.
+/// </param>
+/// <param name="DrillIntervalDays">
+/// How often a restore drill reads from it, in days (ADR-0054, contract 1.44),
+/// or null where the declaration states none — the default for a local path,
+/// never for a peer. On an upsert, null preserves what the declaration has and
+/// zero removes the cadence.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -234,11 +246,30 @@ public sealed record DestinationDescriptor(
     string? FailureDomain = null,
     int? DeepVerifyIntervalDays = null,
     string? AddressDefect = null,
-    int? Priority = null);
+    int? Priority = null,
+    string? TransferLimit = null,
+    int? DrillIntervalDays = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>
 public sealed record DestinationsResult(IReadOnlyList<DestinationDescriptor> Destinations) : ServiceResult;
+
+/// <summary>
+/// The installation's own settings (contract 1.44), each as the configuration
+/// file states it — null where it states none and the default applies.
+/// </summary>
+/// <param name="BackgroundWindow">The background window's text, or null for none (ADR-0069).</param>
+/// <param name="BackgroundReadLimit">The background read limit's text, or null for none (ADR-0074).</param>
+/// <param name="MaxConcurrentBackups">The stored pool width, or null for the default (ADR-0047).</param>
+/// <param name="EffectiveMaxConcurrentBackups">
+/// The width the running pool has. It differs from the stored one after a
+/// change the service has not yet restarted to apply.
+/// </param>
+public sealed record ServiceSettingsResult(
+    string? BackgroundWindow,
+    string? BackgroundReadLimit,
+    int? MaxConcurrentBackups,
+    int EffectiveMaxConcurrentBackups) : ServiceResult;
 
 /// <summary>A configuration change that succeeded and owes the operator facts.</summary>
 /// <param name="Lines">

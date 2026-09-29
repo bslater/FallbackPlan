@@ -143,6 +143,11 @@ why the reporting half is here and the editing half is a stated limit.
 > say 1.39. This paragraph said 1.37, and so did the comments and records that
 > copied it, until they were corrected together.
 
+> **Amended 2026-09 ([ADR-0037](0037-configuration-over-the-command-contract.md)
+> Amendment 1).** The owed control is built. Contract 1.44 sets the window
+> through the service, using the same parse the configuration load does. The
+> CLI's `settings` and the console's Service settings card both use it.
+
 The state is evaluated at the instant the status reports as its own, and from
 the same parsed window the pass uses, so a client cannot catch the two
 disagreeing across a boundary. Building that found the status handler reading
@@ -236,3 +241,4 @@ outcome row is already written, which is the pass.
 |------|--------|------|
 | 2026-09 | Accepted | The time window built over four commits, the first of NFR-PERF-013's four named limits to exist; the suspension reused whole from [ADR-0047](0047-backup-pool-and-priorities.md) Amendment 1, with a standing pool hold added so a freed worker cannot undo the park |
 | 2026-09 | Accepted (related) | The disk and network limits arrive as [ADR-0074](0074-background-byte-rate-limits.md), governing the same `userInitiated: false` work this window does; three of the four limits now exist, and CPU stays unbuilt |
+| 2026-09 | Accepted (related) | The console control §8 named as owed is built, as ADR-0037 Amendment 1: contract 1.44 sets the window through the service, the CLI and the console |

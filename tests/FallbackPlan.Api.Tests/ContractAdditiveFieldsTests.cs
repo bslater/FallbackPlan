@@ -16,7 +16,8 @@ namespace FallbackPlan.Api.Tests;
 /// FR-SVC-006's plan. Later additions ride here too, among them contract
 /// 1.40's adoption answer naming the retention an archive recorded, the wire
 /// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
-/// half of FR-DR-009.
+/// half of FR-DR-009, and 1.44's destination settings, the wire half of
+/// FR-SVC-021.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -522,6 +523,33 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
         Assert.IsInstanceOfType<UpsertBackupSetCommand>(parsed, out var command);
         Assert.IsNull(command.Set.DirectShip);
+    }
+
+    [TestMethod]
+    public void TheDestinationSettings_WireNamesAndPre144Default()
+    {
+        // Contract 1.44: the destination descriptor carries the transfer
+        // limit and the drill cadence, both ways. Null preserves, as every
+        // field this surface adds does, so a pre-1.44 client's save keeps
+        // what the file says rather than clearing it.
+        var modern = JsonSerializer.Serialize<ServiceCommand>(
+            new UpsertDestinationCommand(new DestinationDescriptor(
+                new string('d', 32), "vault", "local-path", "/backups", null, null,
+                TransferLimit: "2 MiB/s", DrillIntervalDays: 7)),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"transfer_limit\":\"2 MiB/s\"", modern, StringComparison.Ordinal);
+        Assert.Contains("\"drill_interval_days\":7", modern, StringComparison.Ordinal);
+
+        var old = modern
+            .Replace(",\"transfer_limit\":\"2 MiB/s\"", "", StringComparison.Ordinal)
+            .Replace(",\"drill_interval_days\":7", "", StringComparison.Ordinal);
+        Assert.DoesNotContain("transfer_limit", old, StringComparison.Ordinal, "the strip must have removed the field");
+        Assert.DoesNotContain("drill_interval_days", old, StringComparison.Ordinal, "the strip must have removed the field");
+
+        var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions);
+        Assert.IsInstanceOfType<UpsertDestinationCommand>(parsed, out var command);
+        Assert.IsNull(command.Destination.TransferLimit);
+        Assert.IsNull(command.Destination.DrillIntervalDays);
     }
 
     [TestMethod]
