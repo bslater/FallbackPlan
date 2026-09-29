@@ -304,8 +304,9 @@ Recorded in [`../threat-model.md`](../threat-model.md#t-8-destination-withholdin
 ### 5.5 Re-reading what is held, and repairing it
 
 A challenge samples, and between syncs nothing reads at all. The **deep sweep**
-is the other half for a destination this side can read: every stored blob of a
-local-path replica re-read against the digest sealed into its own footer, in
+is the other half for a destination whose disk this side owns: every stored
+blob of a local-path replica re-read against the digest sealed into its own
+footer, in
 bounded runs resuming from a cursor, a circuit carried on every pass until it
 closes and the destination's interval resting between circuits
 ([ADR-0035](../adr/0035-destination-fitness.md) §4 and Amendment 1). A run is
