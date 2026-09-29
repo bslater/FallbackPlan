@@ -415,8 +415,20 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// under the same rule — null keeps, empty or zero clears. Additive: a
     /// pre-1.44 client's upsert carries neither, and keeps both.
     /// </para>
+    /// <para>
+    /// 1.45 adds `read_around` and `read_around_sample` to `restore`
+    /// (FR-RST-007). A restore of a set's own archive that meets a copy it
+    /// cannot use reads the record from the set's next copy, and the answer
+    /// counts the files that came from another copy because a copy passed
+    /// over was damaged or would not read, with up to twenty lines naming the
+    /// copy each came from and what was wrong with those passed over. A file
+    /// read from a destination only because staging no longer holds it is not
+    /// counted. Additive with defaults: a pre-1.45 service sends neither,
+    /// which a client reads as nothing read around, and that is what a
+    /// pre-1.45 service did.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 44);
+    public static ContractVersion Current { get; } = new(1, 45);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -350,7 +350,7 @@ public sealed class ReadAroundTests : ArchiveTestHarness
     private static CopySource Serve(string name, IObjectStore store) =>
         new(name, _ => ValueTask.FromResult<IObjectStore?>(store));
 
-    private async Task<RestoreReceipt> RestoreAsync(RepositoryReader reader, RestorePlan plan, string output) =>
+    private static async Task<RestoreReceipt> RestoreAsync(RepositoryReader reader, RestorePlan plan, string output) =>
         await new RestoreExecutor(reader, RestoreTargetProfile.ForLocalPlatform()).ExecuteAsync(
             plan, output,
             new RestoreExecutionOptions

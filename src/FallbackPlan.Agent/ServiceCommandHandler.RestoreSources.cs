@@ -23,12 +23,44 @@ public sealed partial class ServiceCommandHandler
     /// the legacy staging lookup, reduced to one shape so the plan probe and
     /// the run body exist once.
     /// </summary>
+    /// <param name="Store">The store the restore reads first.</param>
+    /// <param name="RepositoryId">The repository's identity.</param>
+    /// <param name="Keys">The repository's keys.</param>
+    /// <param name="OpenCatalogue">Opens a read connection on the catalogue that answers for the store.</param>
+    /// <param name="Source">The open source handle, or null for the legacy staging lookup.</param>
+    /// <param name="Set">
+    /// The set whose own archive this is, when it is one — with
+    /// <paramref name="Archive"/>, what lets the restore read around damage
+    /// from the set's other copies (FR-RST-007). Null for a destination's
+    /// replica, which is read alone.
+    /// </param>
+    /// <param name="Archive">The set's archive, when <paramref name="Set"/> is.</param>
     private sealed record RestoreContext(
         Storage.Abstractions.IObjectStore Store,
         Domain.Identifiers.RepositoryId RepositoryId,
         RepositoryKeySet Keys,
         Func<CatalogueDb> OpenCatalogue,
-        OpenRestoreSourceHandle? Source);
+        OpenRestoreSourceHandle? Source,
+        Application.BackupSetConfiguration? Set = null,
+        ArchiveHandle? Archive = null)
+    {
+        /// <summary>
+        /// The set's other copies to read around damage from, or null when
+        /// this restore reads one copy alone. Disposed with the run: a peer
+        /// dialled for it is hung up afterwards.
+        /// </summary>
+        public SetCopies? OtherCopies(ServiceRuntime runtime) =>
+            Set is null || Archive is null
+                ? null
+                : new SetCopies(runtime, Set, Archive, excluding: null, includeStaging: false, userInitiated: true);
+
+        /// <summary>
+        /// How the restore's own store is named among the copies: the staging
+        /// archive, or — for a direct-ship set, whose store reads through its
+        /// destinations — nothing, since each of those is named in its turn.
+        /// </summary>
+        public string? OwnCopyName => Archive?.ShipSink is null ? SetCopies.StagingName : null;
+    }
 
     /// <summary>
     /// Resolves the context a restore verb runs against. With a source id,
@@ -41,21 +73,35 @@ public sealed partial class ServiceCommandHandler
     {
         if (sourceId is null)
         {
-            var archive = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
-            return archive is null
+            var found = await FindArchiveBySnapshotAsync(snapshotId, cancellationToken).ConfigureAwait(false);
+            return found is not { } located
                 ? (null, new ServiceError(
                     ServiceErrorReason.NotFound, $"No set's archive holds snapshot {snapshotHex}."))
                 : (new RestoreContext(
-                    archive.Store, archive.Repository.RepositoryId, archive.Repository.Keys,
-                    archive.OpenReadCatalogue, Source: null), null);
+                    located.Archive.Store, located.Archive.Repository.RepositoryId, located.Archive.Repository.Keys,
+                    located.Archive.OpenReadCatalogue, Source: null, located.Set, located.Archive), null);
         }
 
         var handle = runtime.RestoreSources.Find(sourceId);
-        return handle is null
-            ? (null, new ServiceError(
-                ServiceErrorReason.NotFound, "This restore source has expired — unlock it again."))
-            : (new RestoreContext(
-                handle.Store, handle.RepositoryId, handle.Keys, handle.OpenReadCatalogue, handle), null);
+        if (handle is null)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.NotFound, "This restore source has expired — unlock it again."));
+        }
+
+        // Only the set's own archive reads around damage. A destination
+        // opened by name is read alone: a drill restores through it to prove
+        // that copy restores, and one that read around its damage would pass.
+        var set = handle.IsSetArchive
+            ? runtime.Configuration.BackupSets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, handle.SetId, StringComparison.Ordinal))
+            : null;
+        var archive = set is null
+            ? null
+            : await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+        return (new RestoreContext(
+            handle.Store, handle.RepositoryId, handle.Keys, handle.OpenReadCatalogue, handle,
+            archive is null ? null : set, archive), null);
     }
 
     /// <summary>
@@ -104,6 +150,7 @@ public sealed partial class ServiceCommandHandler
                 SourceId = sourceId,
                 SetId = set.Id,
                 SetName = set.Name,
+                IsSetArchive = true,
                 Location = directShip ? "metadata store" : "staging",
                 Store = archive.Store,
                 OwnedRepository = null,

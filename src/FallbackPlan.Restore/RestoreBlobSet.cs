@@ -57,6 +57,29 @@ public sealed record RestoreBlobSetResult(
 /// </remarks>
 public static class RestoreBlobSet
 {
+    /// <summary>
+    /// Resolves the blob set and the unreachable paths for a plan whose run
+    /// reads around what <paramref name="store"/> will not serve
+    /// (FR-RST-007): a blob the store does not hold is looked for at each of
+    /// <paramref name="otherCopies"/> in turn, so a path is missing only when
+    /// no copy holds what it needs — the run would read it from one that does.
+    /// </summary>
+    public static ValueTask<RestoreBlobSetResult> ResolveAsync(
+        Catalogue catalogue,
+        RestorePlan plan,
+        IObjectStore store,
+        IReadOnlyList<CopySource> otherCopies,
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(otherCopies);
+        return ResolveAsync(
+            catalogue, plan, otherCopies.Count == 0 ? store : new FirstHolderStore(store, otherCopies),
+            repositoryId, keys, cancellationToken);
+    }
+
     /// <summary>Resolves the blob set and the unreachable paths for <paramref name="plan"/>.</summary>
     public static async ValueTask<RestoreBlobSetResult> ResolveAsync(
         Catalogue catalogue,

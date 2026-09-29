@@ -109,6 +109,28 @@ public sealed record ReceiptItem
     [JsonPropertyName("written_as")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WrittenAs { get; init; }
+
+    /// <summary>
+    /// The copies other than the restore's own store that this item's
+    /// content or manifest was read from (FR-RST-007), each because the
+    /// copies tried before it would not serve, and each record verified as
+    /// the own store's would have been. Null when the own store served all of
+    /// it.
+    /// </summary>
+    [JsonPropertyName("read_from")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ReadFrom { get; init; }
+
+    /// <summary>
+    /// The copies this item was read around because they held it damaged or
+    /// would not read it, each with what was wrong. Null when every copy
+    /// passed over simply did not hold it — a staging archive's trimmed
+    /// history, a destination not yet caught up — which is nothing to warn
+    /// about.
+    /// </summary>
+    [JsonPropertyName("read_around")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ReadAround { get; init; }
 }
 
 /// <summary>
@@ -133,8 +155,12 @@ public sealed record RestoreReceipt
     /// optional per-item <c>written_as</c> (ADR-0041): under the write-beside
     /// policy the content lands at a suffixed name, and a receipt that could
     /// not say where would fail the only question it exists to answer.
+    /// Version 5 added the optional per-item <c>read_from</c> and
+    /// <c>read_around</c> (FR-RST-007): a file read from another copy,
+    /// because the copy it was first read from would not serve, says where its
+    /// bytes came from and what was wrong with the copies passed over.
     /// </remarks>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -685,19 +711,19 @@ public sealed class RestoreExecutor(
                     // item, exactly where the shortfall is.
                     if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
                     {
-                        items.Add(new ReceiptItem
+                        items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                         {
                             Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
                             Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
                                 + "and not written back on this target (declared in the plan)",
-                        });
+                        }));
                         break;
                     }
 
-                    items.Add(new ReceiptItem
+                    items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                    });
+                    }));
                     break;
                 }
 
@@ -772,10 +798,10 @@ public sealed class RestoreExecutor(
                         continue;
                     }
 
-                    items.Add(new ReceiptItem
+                    items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
-                    });
+                    }));
                     break;
                 }
 
@@ -844,6 +870,47 @@ public sealed class RestoreExecutor(
         }
 
         return receipt;
+    }
+
+    /// <summary>
+    /// <paramref name="landed"/>, saying which copies its manifest and
+    /// content came from when some came from another than the restore's own
+    /// store, and what was wrong with those it was read around (FR-RST-007).
+    /// </summary>
+    private ReceiptItem ReadAroundOf(ObjectId manifestId, FileVersionManifest manifest, ReceiptItem landed)
+    {
+        var around = new List<RecordReadAround>();
+        foreach (var objectId in manifest.SegmentReferences.Select(reference => reference.ObjectId).Prepend(manifestId))
+        {
+            if (reader.TryGetReadAround(objectId, out var readAround))
+            {
+                around.Add(readAround);
+            }
+        }
+
+        if (around.Count == 0)
+        {
+            return landed;
+        }
+
+        // Damage and unreadable copies are what a person needs to hear of. A
+        // copy that simply did not hold the blob — staging's trimmed history,
+        // a destination not yet caught up — is where the bytes were never
+        // going to come from.
+        List<string> faults =
+        [
+            .. around
+                .SelectMany(readAround => readAround.PassedOver)
+                .Where(refusal => refusal.Fault is CopyFault.Damaged or CopyFault.Unreadable)
+                .Select(refusal => $"{refusal.Source}: {refusal.Detail}")
+                .Distinct(StringComparer.Ordinal),
+        ];
+
+        return landed with
+        {
+            ReadFrom = [.. around.Select(readAround => readAround.ReadFrom).Distinct(StringComparer.Ordinal)],
+            ReadAround = faults.Count == 0 ? null : faults,
+        };
     }
 
     /// <summary>Reduces the item outcomes to what the restore as a whole achieved.</summary>

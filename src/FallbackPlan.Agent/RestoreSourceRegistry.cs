@@ -29,6 +29,14 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     /// <summary><c>staging</c>, or the destination's declared name.</summary>
     public required string Location { get; init; }
 
+    /// <summary>
+    /// Whether this source is the set's own archive — its staging archive, or
+    /// a direct-ship set's metadata store and the destinations it reads
+    /// through — rather than one destination's replica opened as a stranger
+    /// would. Only the set's own archive reads around damage (FR-RST-007).
+    /// </summary>
+    public bool IsSetArchive { get; init; }
+
     /// <summary>The store reads go through.</summary>
     public required Storage.Abstractions.IObjectStore Store { get; init; }
 
