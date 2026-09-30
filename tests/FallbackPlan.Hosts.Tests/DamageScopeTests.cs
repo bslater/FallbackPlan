@@ -89,6 +89,39 @@ public sealed class DamageScopeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ASyncWhoseCopyAnswersWhileTheDamageStands_NarrowsAFailureOfAnotherKindThatStoodBefore()
+    {
+        // A failure of another kind makes the whole copy suspect, and a
+        // damage finding over it does not narrow it. A sync that copies
+        // everything and still finds the damage standing has shown the rest
+        // of the copy answers: from then on, only what needs the damaged
+        // objects is degraded there.
+        await using var runtime = await StartAsync(withSpare: false);
+        var set = runtime.Configuration.BackupSets.Single();
+        WriteRandom("docs/ledger.txt", 1);
+        await BackUpAsync(runtime);
+        var older = DataKeys(Vault);
+        WriteRandom("docs/ledger.txt", 2);
+        await BackUpAsync(runtime);
+        Tamper(Vault, older);
+        await VerifyAsync(runtime);
+        runtime.DestinationSync.RecordFailure(
+            set.Id, "vault", DestinationSyncState.Failed, "the copy broke off",
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var (_, whileSuspect) = await BothSnapshotsAsync(runtime);
+        Assert.AreEqual("vault: degraded", Assert.ContainsSingle(whileSuspect.Destinations!), "until a sync answers");
+
+        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: true);
+        Assert.IsNotNull(sync, "nothing else was syncing");
+        await sync.WaitAsync(Timeout);
+
+        var row = Row(runtime, "vault");
+        Assert.AreEqual(DestinationSyncState.Failed, row.State, "the damage still stands");
+        var (_, second) = await BothSnapshotsAsync(runtime);
+        Assert.AreNotEqual("vault: degraded", Assert.ContainsSingle(second.Destinations!), row.LastError);
+    }
+
+    [TestMethod]
     public async Task DamageTheServiceCannotTraceToASnapshot_DegradesEverySnapshotThere()
     {
         // A blob no snapshot this installation lists is known to need could

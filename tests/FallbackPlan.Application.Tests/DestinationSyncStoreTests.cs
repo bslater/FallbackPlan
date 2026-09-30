@@ -283,6 +283,26 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordHeldForDamage_ASyncTheCopyAnsweredButDamageRemains_IsFailedForTheDamageAlone()
+    {
+        // A sync that copied everything and re-checked its damaged objects
+        // has shown the rest of the copy answers, whatever failure stood
+        // before it: what holds the pair failed now is the damage, and the
+        // back-off still counts it so the same blobs are not re-read every
+        // pass (FR-VER-007).
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "the copy broke off", 1_000);
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a"], resolved: [], 2_000);
+
+        var held = store.RecordHeldForDamage(SetId, "vault", "1 object(s) found damaged here have had no sound copy", 3_000);
+
+        Assert.AreEqual(DestinationSyncState.Failed, held.State);
+        Assert.IsTrue(held.DamageOnly);
+        Assert.AreEqual(2, held.ConsecutiveFailures, "held back, and backed off");
+        Assert.Contains("no sound copy", held.LastError!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void Open_ASchemaSixLedger_ReadsEveryFailureAsOfTheWholeCopy()
     {
         // Schema 6 said nothing about why a pair was failed, and the old

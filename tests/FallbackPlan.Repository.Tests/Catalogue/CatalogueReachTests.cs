@@ -33,7 +33,9 @@ public sealed class CatalogueReachTests : IDisposable
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "fbp-catalogue-reach", Guid.NewGuid().ToString("n"));
 
-    private Catalogue Open() => Catalogue.Open(Path.Combine(_root, "catalogue.db"), Repo);
+    private string CataloguePath => Path.Combine(_root, "catalogue.db");
+
+    private Catalogue Open() => Catalogue.Open(CataloguePath, Repo);
 
     private static ObjectId Object(byte seed) => ObjectId.FromBytes([.. Enumerable.Repeat(seed, 32)]);
 
@@ -210,6 +212,31 @@ public sealed class CatalogueReachTests : IDisposable
 
         Assert.AreEqual(8, reach.Files);
         CollectionAssert.AreEqual(new[] { "docs/file-0.txt", "docs/file-1.txt", "docs/file-2.txt" }, reach.FileSample.ToList());
+    }
+
+    [TestMethod]
+    public void ReachOf_WhileAnotherConnectionHoldsTheWriteLock_StillAnswers()
+    {
+        // The status read traces damage while a capture may be writing the
+        // same catalogue. A trace is a read, and waiting on the write lock
+        // would stall the status for as long as the capture holds it.
+        using var catalogue = Open();
+        var segment = Object(0x01);
+        var v1 = Object(0x11);
+        Locate(catalogue, 1, 0, (segment, Blob(0xD1)));
+        Version(catalogue, v1, "report.txt", segment);
+        Snapshot(catalogue, SnapshotA, Object(0x21), Object(0x31));
+        catalogue.RecordTreeEntry(SnapshotA, "docs/report.txt", EntryKind.File, v1);
+
+        using var writer = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = CataloguePath, Pooling = false }.ToString());
+        writer.Open();
+        using var held = writer.BeginTransaction(deferred: false);
+
+        var reach = catalogue.ReachOf([Blob(0xD1)], sampleLimit: 5);
+
+        Assert.AreEqual(Hex(SnapshotA), Assert.ContainsSingle(reach.Snapshots));
+        Assert.AreEqual("docs/report.txt", Assert.ContainsSingle(reach.FileSample));
     }
 
     [TestMethod]
