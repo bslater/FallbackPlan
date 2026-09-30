@@ -51,4 +51,13 @@ public sealed record FileVersionManifest
 
     /// <summary>Capture diagnostics (key 13); present only when non-empty.</summary>
     public IReadOnlyList<string> CaptureDiagnostics { get; init; } = [];
+
+    /// <summary>
+    /// Every content object restoring this version reads: its segments in
+    /// order, then each alternate stream's content — what a damaged object is
+    /// traced back to the version through (FR-VER-005).
+    /// </summary>
+    public IEnumerable<ObjectId> ContentObjects() =>
+        SegmentReferences.Select(reference => reference.ObjectId)
+            .Concat(Metadata.AlternateStreams.Select(stream => stream.ObjectId));
 }

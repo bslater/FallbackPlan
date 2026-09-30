@@ -309,12 +309,13 @@ public sealed class ForensicRebuilder : IDisposable
                 signatureState = signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? 1 : 2;
             }
 
+            var snapshotObjectId = _objectIdDeriver.Derive(ObjectType.SnapshotManifest, ContentHasher.Hash(
+                SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span)));
             catalogue.RecordSnapshot(
                 decoded.Manifest.SnapshotId.Span,
                 decoded.Manifest.DeviceId.Span,
                 decoded.Manifest.BackupSetId.Span,
-                _objectIdDeriver.Derive(ObjectType.SnapshotManifest, ContentHasher.Hash(
-                    SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span))),
+                snapshotObjectId,
                 decoded.Manifest.RootTree,
                 decoded.Manifest.PublicationGeneration,
                 decoded.Manifest.CaptureStatus,
@@ -322,12 +323,22 @@ public sealed class ForensicRebuilder : IDisposable
                 decoded.Manifest.CaptureCompletedAt,
                 decoded.Manifest.ConsistencyMethod);
 
+            // What the snapshot is made of besides its files, as the capture
+            // records it, so damage to one of its own records can be traced
+            // to it from a catalogue rebuilt from blobs alone (FR-VER-005).
+            List<ObjectId> structure = [snapshotObjectId, decoded.Manifest.PolicyManifest];
+            if (decoded.Manifest.ErrorManifest is { } errors)
+            {
+                structure.Add(errors);
+            }
+
             // Walk root tree → subdirectories → file versions → segments
             // through the indexed metadata records, projecting the paths.
             await WalkTreeAsync(
                 decoded.Manifest.SnapshotId, decoded.Manifest.RootTree, prefix: string.Empty,
-                indexed, needed, findings, catalogue, cancellationToken)
+                indexed, needed, findings, catalogue, structure, cancellationToken)
                 .ConfigureAwait(false);
+            catalogue.RecordSnapshotStructure(decoded.Manifest.SnapshotId.Span, structure);
         }
 
         return needed;
@@ -341,8 +352,10 @@ public sealed class ForensicRebuilder : IDisposable
         HashSet<ObjectId> needed,
         List<DamageFinding> findings,
         Catalogue catalogue,
+        List<ObjectId> structure,
         CancellationToken cancellationToken)
     {
+        structure.Add(treeId);
         var plaintext = await ReadMetadataRecordAsync(treeId, indexed, cancellationToken).ConfigureAwait(false);
         if (plaintext is null)
         {
@@ -365,7 +378,7 @@ public sealed class ForensicRebuilder : IDisposable
             // (ADR-0026 §Decision 6) — the walk descends it.
             if (entry.EntryKind == EntryKind.DirectoryPlaceholder)
             {
-                await WalkTreeAsync(snapshotId, entry.ObjectId, path, indexed, needed, findings, catalogue, cancellationToken)
+                await WalkTreeAsync(snapshotId, entry.ObjectId, path, indexed, needed, findings, catalogue, structure, cancellationToken)
                     .ConfigureAwait(false);
                 continue;
             }
@@ -392,6 +405,7 @@ public sealed class ForensicRebuilder : IDisposable
                 manifest.Metadata.ModifiedAt,
                 hasAlternateStreams: manifest.Metadata.AlternateStreams.Count > 0,
                 metadataDigest: FileVersionManifestCodec.MetadataDigest(manifest.Metadata));
+            catalogue.RecordVersionContents(entry.ObjectId, manifest.ContentObjects());
 
             foreach (var reference in manifest.SegmentReferences)
             {
@@ -406,7 +420,7 @@ public sealed class ForensicRebuilder : IDisposable
 
         if (tree.Continuation is { } continuation)
         {
-            await WalkTreeAsync(snapshotId, continuation, prefix, indexed, needed, findings, catalogue, cancellationToken)
+            await WalkTreeAsync(snapshotId, continuation, prefix, indexed, needed, findings, catalogue, structure, cancellationToken)
                 .ConfigureAwait(false);
         }
     }

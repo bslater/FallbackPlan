@@ -12,11 +12,12 @@ namespace FallbackPlan.Repository;
 
 /// <summary>
 /// Rebuilds the catalogue's manifest plane — snapshots, tree paths, file
-/// versions — from the repository itself, so <c>ls</c> works after any
-/// rebuild (E1; FR-MAN-006). Identity columns stay null: they are
-/// scan-time local facts the repository never stores (02 §2), which
-/// disables the NFR-PERF-003 short-circuit until the next backup relearns
-/// them — conservative, never wrong.
+/// versions, and what each version and snapshot is made of — from the
+/// repository itself, so <c>ls</c> works after any rebuild (E1; FR-MAN-006)
+/// and damage can still be traced to what needs it (FR-VER-005). Identity
+/// columns stay null: they are scan-time local facts the repository never
+/// stores (02 §2), which disables the NFR-PERF-003 short-circuit until the
+/// next backup relearns them — conservative, never wrong.
 /// </summary>
 public sealed class CatalogueProjector
 {
@@ -114,9 +115,19 @@ public sealed class CatalogueProjector
                 manifest.ConsistencyMethod);
             snapshots++;
 
+            // What the snapshot is made of besides its files, for damage to be
+            // traced back through (FR-VER-005): its manifest, its policy and
+            // error manifests, and every tree the walk meets, read or not.
+            List<ObjectId> structure = [record.Header.ObjectId, manifest.PolicyManifest];
+            if (manifest.ErrorManifest is { } errors)
+            {
+                structure.Add(errors);
+            }
+
             var (entries, versions, unseen) = await ProjectTreeAsync(
-                target, reader, manifest.SnapshotId, manifest.RootTree, prefix: string.Empty, cancellationToken)
+                target, reader, manifest.SnapshotId, manifest.RootTree, prefix: string.Empty, structure, cancellationToken)
                 .ConfigureAwait(false);
+            target.RecordSnapshotStructure(manifest.SnapshotId.Span, structure);
             treeEntries += entries;
             fileVersions += versions;
             missing += unseen;
@@ -131,6 +142,7 @@ public sealed class CatalogueProjector
         ReadOnlyMemory<byte> snapshotId,
         ObjectId treeId,
         string prefix,
+        List<ObjectId> structure,
         CancellationToken cancellationToken)
     {
         var entries = 0;
@@ -140,6 +152,7 @@ public sealed class CatalogueProjector
         ObjectId? next = treeId;
         while (next is { } id)
         {
+            structure.Add(id);
             var read = await reader.ReadSegmentAsync(id, cancellationToken).ConfigureAwait(false);
             if (read.Outcome != RecordReadOutcome.Ok)
             {
@@ -161,7 +174,7 @@ public sealed class CatalogueProjector
                 if (child.EntryKind == EntryKind.DirectoryPlaceholder)
                 {
                     var (childEntries, childVersions, childMissing) = await ProjectTreeAsync(
-                        target, reader, snapshotId, child.ObjectId, path, cancellationToken).ConfigureAwait(false);
+                        target, reader, snapshotId, child.ObjectId, path, structure, cancellationToken).ConfigureAwait(false);
                     entries += childEntries;
                     versions += childVersions;
                     missing += childMissing;
@@ -190,6 +203,7 @@ public sealed class CatalogueProjector
                     version.Metadata.ModifiedAt,
                     hasAlternateStreams: version.Metadata.AlternateStreams.Count > 0,
                     metadataDigest: FileVersionManifestCodec.MetadataDigest(version.Metadata));
+                target.RecordVersionContents(child.ObjectId, version.ContentObjects());
                 versions++;
             }
 

@@ -69,6 +69,33 @@ public sealed record ResolvedLocation(
     ulong Sequence);
 
 /// <summary>
+/// What damaged blobs are needed by, as far as the catalogue can trace it
+/// (FR-VER-005, specification 04 §7): the snapshots a restore of which would
+/// meet the damage, and the paths in them.
+/// </summary>
+/// <param name="Snapshots">
+/// Every snapshot that needs one of the damaged objects — for a file's
+/// content or version, or for its own structure — by lowercase hex identity.
+/// </param>
+/// <param name="Files">Distinct paths whose version needs one of them, across those snapshots.</param>
+/// <param name="FileSample">The first of those paths in ordinal order, as many as were asked for.</param>
+/// <param name="Structures">Snapshots whose own records — manifest, policy, error manifest, a tree — one of them holds.</param>
+/// <param name="Untraced">
+/// Damaged objects, and damaged blobs, the catalogue cannot trace to anything
+/// that needs them. Where any are, the damage may reach any snapshot, and a
+/// caller must count every one as reached.
+/// </param>
+public sealed record DamageReach(
+    IReadOnlySet<string> Snapshots, int Files, IReadOnlyList<string> FileSample, int Structures, int Untraced)
+{
+    /// <summary>Nothing damaged, and so nothing reached.</summary>
+    public static DamageReach None { get; } = new(new HashSet<string>(StringComparer.Ordinal), 0, [], 0, 0);
+
+    /// <summary>Whether every damaged object was traced, so that <see cref="Snapshots"/> is all that needs them.</summary>
+    public bool Complete => Untraced == 0;
+}
+
+/// <summary>
 /// The local catalogue (architecture 02 §7; FR-MAN-002, FR-MAN-005;
 /// NFR-PERF-004, NFR-PERF-010): a disposable SQLite cache of index and
 /// manifest state. It is never authoritative — a schema or repository
@@ -502,6 +529,273 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$kind", (int)entryKind);
         command.Parameters.AddWithValue("$object", objectId.ToArray());
         command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Records the content objects <paramref name="versionId"/> needs — its
+    /// segments and its alternate streams' content — so that damage to one
+    /// can be traced to the version, and through it to the snapshots and
+    /// paths holding it (FR-VER-005).
+    /// </summary>
+    public void RecordVersionContents(ObjectId versionId, IEnumerable<ObjectId> contents)
+    {
+        ThrowHelper.ThrowIfNull(contents);
+
+        using var transaction = _connection.BeginTransaction();
+        using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT OR IGNORE INTO version_contents (object_id, version_id) VALUES ($object, $version);";
+        var content = command.Parameters.Add("$object", SqliteType.Blob);
+        command.Parameters.AddWithValue("$version", versionId.ToArray());
+        foreach (var objectId in contents)
+        {
+            content.Value = objectId.ToArray();
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// Records one of the records <paramref name="snapshotId"/> is made of
+    /// besides its files' own: its manifest, its policy or error manifest, or
+    /// a tree manifest of its structure.
+    /// </summary>
+    public void RecordSnapshotStructure(ReadOnlySpan<byte> snapshotId, ObjectId objectId) =>
+        RecordSnapshotStructure(snapshotId, [objectId]);
+
+    /// <summary>Records records <paramref name="snapshotId"/> is made of, as <see cref="RecordSnapshotStructure(ReadOnlySpan{byte}, ObjectId)"/> does one.</summary>
+    public void RecordSnapshotStructure(ReadOnlySpan<byte> snapshotId, IEnumerable<ObjectId> objectIds)
+    {
+        ThrowHelper.ThrowIfNull(objectIds);
+
+        using var transaction = _connection.BeginTransaction();
+        using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT OR IGNORE INTO snapshot_structure (object_id, snapshot_id) VALUES ($object, $snapshot);";
+        var record = command.Parameters.Add("$object", SqliteType.Blob);
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        foreach (var objectId in objectIds)
+        {
+            record.Value = objectId.ToArray();
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>Every blob some object is located in, once each — what a store key names is matched against.</summary>
+    public IReadOnlyList<BlobId> LocatedBlobs()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT blob_id FROM object_locations;";
+
+        var blobs = new List<BlobId>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            blobs.Add(BlobId.FromBytes((byte[])reader.GetValue(0)));
+        }
+
+        return blobs;
+    }
+
+    /// <summary>
+    /// What <paramref name="blobs"/> reach, taken as damaged: the objects a
+    /// read would take from them, the file versions that need those objects,
+    /// and so the snapshots and paths holding those versions (FR-VER-005).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An object is taken from a damaged blob only when its winning location
+    /// is there (07 §3): a copy compaction has superseded is nothing a read
+    /// would reach. An object nothing traces — no version needs it, it is no
+    /// version, and no snapshot is built of it — is counted rather than
+    /// dropped, because a caller that cannot place damage must not report the
+    /// snapshots it could not rule out as untouched.
+    /// </para>
+    /// <para>
+    /// The paths come from one pass over the snapshots' listings, which
+    /// <c>tree_entries</c> keeps by snapshot and path and not by version: the
+    /// cost of a listing's count, paid only when damage is outstanding.
+    /// </para>
+    /// </remarks>
+    /// <param name="blobs">The damaged blobs.</param>
+    /// <param name="sampleLimit">How many paths to name; the count covers them all.</param>
+    public DamageReach ReachOf(IReadOnlyCollection<BlobId> blobs, int sampleLimit)
+    {
+        ThrowHelper.ThrowIfNull(blobs);
+        ThrowHelper.ThrowIfLessThan(sampleLimit, 0);
+
+        var damaged = blobs.ToHashSet();
+        var reached = new HashSet<ObjectId>();
+        foreach (var blob in damaged)
+        {
+            foreach (var objectId in ObjectsLocatedIn(blob))
+            {
+                if (QueryWinner(objectId, excludeDeleted: true) is { } winner && damaged.Contains(winner.BlobId))
+                {
+                    reached.Add(objectId);
+                }
+            }
+        }
+
+        var versions = new HashSet<ObjectId>();
+        var structures = new HashSet<string>(StringComparer.Ordinal);
+        var untraced = 0;
+        foreach (var objectId in reached)
+        {
+            var traced = false;
+            foreach (var version in VersionsNeeding(objectId))
+            {
+                versions.Add(version);
+                traced = true;
+            }
+
+            if (IsFileVersion(objectId))
+            {
+                versions.Add(objectId);
+                traced = true;
+            }
+
+            foreach (var snapshot in SnapshotsBuiltOf(objectId))
+            {
+                structures.Add(snapshot);
+                traced = true;
+            }
+
+            if (!traced)
+            {
+                untraced++;
+            }
+        }
+
+        var snapshots = new HashSet<string>(structures, StringComparer.Ordinal);
+        var paths = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var (snapshot, path) in PathsHolding(versions))
+        {
+            snapshots.Add(snapshot);
+            paths.Add(path);
+        }
+
+        return new DamageReach(snapshots, paths.Count, [.. paths.Take(sampleLimit)], structures.Count, untraced);
+    }
+
+    private List<ObjectId> ObjectsLocatedIn(BlobId blob)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT object_id FROM object_locations WHERE blob_id = $blob;";
+        command.Parameters.AddWithValue("$blob", blob.ToArray());
+
+        var objects = new List<ObjectId>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            objects.Add(ObjectId.FromBytes((byte[])reader.GetValue(0)));
+        }
+
+        return objects;
+    }
+
+    private List<ObjectId> VersionsNeeding(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT version_id FROM version_contents WHERE object_id = $object;";
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+
+        var versions = new List<ObjectId>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            versions.Add(ObjectId.FromBytes((byte[])reader.GetValue(0)));
+        }
+
+        return versions;
+    }
+
+    private bool IsFileVersion(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM file_versions WHERE object_id = $object);";
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        return (long)command.ExecuteScalar()! > 0;
+    }
+
+    private List<string> SnapshotsBuiltOf(ObjectId objectId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT snapshot_id FROM snapshot_structure WHERE object_id = $object;";
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+
+        var snapshots = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            snapshots.Add(Convert.ToHexStringLower((byte[])reader.GetValue(0)));
+        }
+
+        return snapshots;
+    }
+
+    /// <summary>Every (snapshot, path) whose file entry is one of <paramref name="versions"/>.</summary>
+    private List<(string Snapshot, string Path)> PathsHolding(HashSet<ObjectId> versions)
+    {
+        var held = new List<(string, string)>();
+        if (versions.Count == 0)
+        {
+            return held;
+        }
+
+        // Deferred: the only table written is the connection's own temporary
+        // one, so the catalogue's write lock is never taken. An immediate
+        // transaction would stall a status read behind a capture's writes.
+        using var transaction = _connection.BeginTransaction(deferred: true);
+        using (var create = _connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = """
+                CREATE TEMP TABLE IF NOT EXISTS reach_versions (id BLOB PRIMARY KEY) WITHOUT ROWID;
+                DELETE FROM reach_versions;
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        using (var insert = _connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT OR IGNORE INTO reach_versions (id) VALUES ($id);";
+            var id = insert.Parameters.Add("$id", SqliteType.Blob);
+            foreach (var version in versions)
+            {
+                id.Value = version.ToArray();
+                insert.ExecuteNonQuery();
+            }
+        }
+
+        using (var query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = $"""
+                SELECT t.snapshot_id, t.path FROM tree_entries t
+                WHERE t.entry_kind <> {(int)EntryKind.DirectoryPlaceholder}
+                  AND t.object_id IN (SELECT id FROM reach_versions);
+                """;
+            using var reader = query.ExecuteReader();
+            while (reader.Read())
+            {
+                held.Add((Convert.ToHexStringLower((byte[])reader.GetValue(0)), reader.GetString(1)));
+            }
+        }
+
+        using (var clear = _connection.CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = "DELETE FROM reach_versions;";
+            clear.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return held;
     }
 
     /// <summary>Every known snapshot, newest capture first.</summary>

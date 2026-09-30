@@ -1168,8 +1168,10 @@ public static class FanOut
                     .DamagedKeys;
                 if (remaining is { Count: > 0 })
                 {
-                    ledger.RecordFailure(
-                        set.Id, destination.Name, DestinationSyncState.Failed,
+                    // The copy answered: what holds the pair now is the damage
+                    // alone, whatever failure stood before (FR-VER-005).
+                    ledger.RecordHeldForDamage(
+                        set.Id, destination.Name,
                         DestinationSyncStore.DamageStatement(remaining)
                             + (unrepaired.Count > 0 ? $" ({unrepaired[0].Detail})" : string.Empty),
                         nowMs);

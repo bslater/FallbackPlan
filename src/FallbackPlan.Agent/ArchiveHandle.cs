@@ -1,7 +1,9 @@
+using Bodu;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Abstractions;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using DamageReach = FallbackPlan.Repository.Catalogue.DamageReach;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Agent;
@@ -74,6 +76,31 @@ public sealed class ArchiveHandle : IDisposable
     /// <returns>A catalogue the caller owns and must dispose.</returns>
     public CatalogueDb OpenReadCatalogue() =>
         CatalogueDb.Open(CataloguePath, Repository.RepositoryId, CatalogueLogger);
+
+    /// <summary>
+    /// What damage to the blobs stored under <paramref name="damagedKeys"/>
+    /// reaches, as this set's catalogue traces it (FR-VER-005), read on a
+    /// connection of its own.
+    /// </summary>
+    /// <remarks>
+    /// A catalogue that cannot be read traces nothing, and says so: every key
+    /// comes back untraced, which counts every snapshot as reached rather than
+    /// none.
+    /// </remarks>
+    public DamageReach TraceDamage(IReadOnlyCollection<string> damagedKeys)
+    {
+        ThrowHelper.ThrowIfNull(damagedKeys);
+
+        try
+        {
+            using var catalogue = OpenReadCatalogue();
+            return DamageScope.Trace(catalogue, Repository.Keys, damagedKeys);
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or IOException)
+        {
+            return DamageReach.None with { Untraced = damagedKeys.Count };
+        }
+    }
 
     /// <inheritdoc />
     public void Dispose()

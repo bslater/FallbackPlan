@@ -883,7 +883,7 @@ public sealed partial class ServiceCommandHandler(
             var receiptPath = PersistReceipt(receipt, options.RunId);
             if (copies is not null)
             {
-                RecordReadAroundFindings(context.Set!, copies, reader, context.RepositoryId, options.NowUnixMilliseconds);
+                RecordReadAroundFindings(context.Set!, context.Archive!, copies, reader, options.NowUnixMilliseconds);
             }
 
             // What a person needs to hear of: a file that came from another
@@ -1805,11 +1805,19 @@ public sealed partial class ServiceCommandHandler(
                 // person asks (ADR-0035 Amendment 2), so nothing scheduled
                 // carries on from here.
                 var swept = declared is not { Kind: DestinationKind.Peer, DeepVerifyIntervalDays: null };
+
+                // What the damage still standing there reaches, by name
+                // (FR-VER-005) — all of it, not only what this read found.
+                var standing = found > 0 && record?.DamagedKeys is { Count: > 0 } damagedKeys
+                    && await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is { } archive
+                    ? " — " + DamageReachText.Clause(archive.TraceDamage(damagedKeys))
+                    : string.Empty;
                 lines.Add(found > 0
                     ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read — "
                         + (repaired == found
                             ? "each was replaced from a sound copy and re-verified"
                             : $"{repaired} replaced from a sound copy, {found - repaired} with no sound copy to replace them")
+                        + standing
                         + (stopped is null ? string.Empty : $"; then {stopped}")
                     : stopped is not null
                         ? $"{set.Name} -> {reference.Ref}: "
@@ -2269,17 +2277,34 @@ public sealed partial class ServiceCommandHandler(
             var sequences = await SnapshotSequencesAsync(archive, cancellationToken).ConfigureAwait(false);
 
             using var catalogue = archive.OpenReadCatalogue();
+
+            // What each destination's outstanding damage reaches, traced once
+            // per destination and now rather than when it was found, so a
+            // snapshot taken since that needs the same objects is counted too
+            // (FR-VER-005).
+            var reached = new Dictionary<string, Repository.Catalogue.DamageReach>(StringComparer.Ordinal);
+            foreach (var reference in set.Destinations)
+            {
+                if (runtime.DestinationSync.Find(set.Id, reference.Ref)?.DamagedKeys is { Count: > 0 } damaged)
+                {
+                    reached[reference.Ref] = TraceOrUntraced(catalogue, archive, damaged);
+                }
+            }
+
             foreach (var row in catalogue.EnumerateSnapshots())
             {
                 List<string>? destinations = null;
                 if (sequences.TryGetValue(row.ObjectId, out var sequence))
                 {
+                    var snapshotHex = Convert.ToHexStringLower(row.SnapshotId.Span);
                     destinations = [.. set.Destinations.Select(reference => string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
                         $"{reference.Ref}: {SnapshotReplication.Label(SnapshotReplication.Derive(
                             sequence,
                             runtime.DestinationSync.Find(set.Id, reference.Ref),
-                            runtime.Queue.IsActive(FanOut.JobIdFor(set.Id, reference.Ref))))}"))];
+                            runtime.Queue.IsActive(FanOut.JobIdFor(set.Id, reference.Ref)),
+                            touchesDamage: reached.TryGetValue(reference.Ref, out var reach)
+                                && (!reach.Complete || reach.Snapshots.Contains(snapshotHex))))}"))];
                 }
 
                 snapshots.Add(new SnapshotDescriptor(
@@ -2294,6 +2319,24 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new SnapshotsResult(snapshots);
+    }
+
+    /// <summary>
+    /// What damage to <paramref name="damagedKeys"/> reaches through a
+    /// catalogue already open, or — when that catalogue cannot be read —
+    /// nothing traced, which counts every snapshot as reached.
+    /// </summary>
+    private static Repository.Catalogue.DamageReach TraceOrUntraced(
+        Repository.Catalogue.Catalogue catalogue, ArchiveHandle archive, IReadOnlyList<string> damagedKeys)
+    {
+        try
+        {
+            return DamageScope.Trace(catalogue, archive.Repository.Keys, damagedKeys);
+        }
+        catch (Exception exception) when (exception is System.Data.Common.DbException or IOException)
+        {
+            return Repository.Catalogue.DamageReach.None with { Untraced = damagedKeys.Count };
+        }
     }
 
     /// <summary>
