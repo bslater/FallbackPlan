@@ -124,6 +124,7 @@ public static class StagingTrim
     /// <param name="intents">The live-intent survey — a covered blob belongs to a publication in flight and never trims.</param>
     /// <param name="now">The clock the policy windows evaluate against.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
+    /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
     /// <returns>The plan, with its report lines.</returns>
     public static async ValueTask<TrimPlan> PlanAsync(
         IObjectStore store,
@@ -135,7 +136,8 @@ public static class StagingTrim
         Func<string, DestinationSyncRecord?> syncRecordFor,
         IntentSurvey intents,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? clockSkewMargin = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(reader);
@@ -200,7 +202,7 @@ public static class StagingTrim
             }
 
             var selection = RetentionPlanner.Select(
-                [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], effective!, now);
+                [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], effective!, now, clockSkewMargin);
             var keepIds = selection.Keep.Select(keep => keep.Snapshot.SnapshotId).ToHashSet(StringComparer.Ordinal);
             var kept = survey.Snapshots.Where(snapshot => keepIds.Contains(snapshot.Fact.SnapshotId)).ToList();
 

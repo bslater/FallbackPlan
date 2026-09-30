@@ -63,6 +63,14 @@ public sealed record ConvergencePlan(
 
     /// <summary>No filter: the destination gets the conservative whole copy, for this reason.</summary>
     public static ConvergencePlan Refused(ConvergenceRefusal refusal) => new(null, refusal);
+
+    /// <summary>
+    /// The snapshots the keep-set holds because their capture time is
+    /// implausible (FR-GC-012), for the caller to raise a notice from. Null
+    /// where the survey never reached a selection, which says nothing either
+    /// way, so a caller must not read it as "none".
+    /// </summary>
+    public IReadOnlyList<ImplausibleCapture>? Implausible { get; init; }
 }
 
 /// <summary>
@@ -85,13 +93,15 @@ public static class DestinationConvergence
     /// <param name="policy">The destination's effective policy (override, else the set's).</param>
     /// <param name="now">The clock the policy windows evaluate against.</param>
     /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
     /// <returns>The filter, or the reason the conservative whole copy is being demanded.</returns>
     public static async ValueTask<ConvergencePlan> ComputeKeepsAsync(
         IObjectStore store,
         OpenedRepository repository,
         RetentionConfiguration policy,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? clockSkewMargin = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -104,7 +114,7 @@ public static class DestinationConvergence
         }
 
         var selection = RetentionPlanner.Select(
-            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], policy, now);
+            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], policy, now, clockSkewMargin);
         var keepIds = selection.Keep.Select(keep => keep.Snapshot.SnapshotId).ToHashSet(StringComparer.Ordinal);
         var keptSnapshots = survey.Snapshots
             .Where(snapshot => keepIds.Contains(snapshot.Fact.SnapshotId))
@@ -117,7 +127,10 @@ public static class DestinationConvergence
             .ConfigureAwait(false);
         if (unwalkable.Count > 0)
         {
-            return ConvergencePlan.Refused(ConvergenceRefusal.UnwalkableClosure);
+            return ConvergencePlan.Refused(ConvergenceRefusal.UnwalkableClosure) with
+            {
+                Implausible = selection.Implausible,
+            };
         }
 
         // The keep-set is built from what a listing of this store could
@@ -128,7 +141,10 @@ public static class DestinationConvergence
         // to act on, with a worse blast radius (architecture 05 §1).
         if (store.Capabilities.ListingConsistency != ListingConsistency.Strong)
         {
-            return ConvergencePlan.Refused(ConvergenceRefusal.LaggingListing);
+            return ConvergencePlan.Refused(ConvergenceRefusal.LaggingListing) with
+            {
+                Implausible = selection.Implausible,
+            };
         }
 
         var keptSnapshotKeys = keptSnapshots.Select(snapshot => snapshot.StoreKey.Value)
@@ -148,7 +164,10 @@ public static class DestinationConvergence
                 key.StartsWith("blobs/", StringComparison.Ordinal) ? keptBlobKeys.Contains(key)
                 : key.StartsWith("snapshots/", StringComparison.Ordinal) ? keptSnapshotKeys.Contains(key)
                 : true,
-            Fingerprint(keptBlobKeys, keptSnapshotKeys));
+            Fingerprint(keptBlobKeys, keptSnapshotKeys)) with
+        {
+            Implausible = selection.Implausible,
+        };
     }
 
     /// <summary>
@@ -208,12 +227,14 @@ public static class DestinationConvergence
     /// <param name="destinations">The set's declared destination references, overrides included.</param>
     /// <param name="setPolicy">The set's policy — the fallback for a reference without an override.</param>
     /// <param name="now">The clock the policy windows evaluate against.</param>
+    /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
     /// <returns>Kept snapshot ids per destination name; null value means keeps-all.</returns>
     public static Dictionary<string, HashSet<string>?> KeepSetsByDestination(
         IReadOnlyList<SnapshotFact> facts,
         IReadOnlyList<SetDestinationReference> destinations,
         RetentionConfiguration? setPolicy,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        TimeSpan? clockSkewMargin = null)
     {
         ThrowHelper.ThrowIfNull(facts);
         ThrowHelper.ThrowIfNull(destinations);
@@ -228,7 +249,7 @@ public static class DestinationConvergence
             var effective = reference.Retention ?? setPolicy;
             keptByDestination[reference.Ref] = !HasRules(effective)
                 ? null
-                : RetentionPlanner.Select(facts, effective!, now)
+                : RetentionPlanner.Select(facts, effective!, now, clockSkewMargin)
                     .Keep.Select(keep => keep.Snapshot.SnapshotId)
                     .ToHashSet(StringComparer.Ordinal);
         }
@@ -255,6 +276,7 @@ public static class DestinationConvergence
     /// <param name="recordFor">The sync-ledger row for a destination, or null when never attempted.</param>
     /// <param name="nowUnixMilliseconds">The clock the policy windows evaluate against.</param>
     /// <param name="cancellationToken">Cancels the walk.</param>
+    /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
     /// <returns>
     /// The spare filter, or null when every destination provably holds every
     /// snapshot its policy keeps — the common case, costing nothing. A survey
@@ -269,7 +291,8 @@ public static class DestinationConvergence
         RetentionConfiguration? setPolicy,
         Func<string, DestinationSyncRecord?> recordFor,
         ulong nowUnixMilliseconds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? clockSkewMargin = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -284,7 +307,7 @@ public static class DestinationConvergence
 
         var now = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds);
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
-        var keptByDestination = KeepSetsByDestination(facts, destinations, setPolicy, now);
+        var keptByDestination = KeepSetsByDestination(facts, destinations, setPolicy, now, clockSkewMargin);
 
         // The gate's own comparison — publication sequence against synced
         // sequence, proof over record of sending (FR-GC-009) — applied to

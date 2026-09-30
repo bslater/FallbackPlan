@@ -955,6 +955,20 @@ function clockSkew(ms) {
     : `<div class="detail">${esc(text)}</div>`;
 }
 
+// A capture time that does not fit the order its writer published it in
+// (FR-GC-012, contract 1.48). Retention keeps the snapshot on account of it,
+// so the row says so as a warning. Nothing is drawn for a capture that fits,
+// or from a service older than 1.48.
+function implausibleCaptureTime(direction) {
+  if (direction == null) return "";
+  const text = direction === "behind"
+    ? "capture time implausible: dated before snapshots taken ahead of it — kept, never expired"
+    : direction === "ahead"
+      ? "capture time implausible: dated after snapshots taken after it — kept, never expired"
+      : `capture time implausible (${direction}) — kept, never expired`;
+  return `<div class="detail"><b class="warn">${esc(text)}</b></div>`;
+}
+
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
   // One timeline, newest first across every set. list_snapshots gives each
@@ -980,7 +994,8 @@ function renderSnapshots() {
           <thead><tr><th>Captured</th><th>Set</th><th class="num">Files</th><th>Capture</th><th>Destinations</th><th></th></tr></thead>
           <tbody>${snapshots.map(s => `
             <tr>
-              <td><b>${esc(fmtWhen(s.capturedAt))}</b><div class="detail mono">${esc(s.snapshotId.slice(0, 16))}…</div></td>
+              <td><b>${esc(fmtWhen(s.capturedAt))}</b><div class="detail mono">${esc(s.snapshotId.slice(0, 16))}…</div>
+                  ${implausibleCaptureTime(s.implausibleCaptureTime)}</td>
               <td>${esc(setName(s.backupSetId))}</td>
               <td class="num">${fmtCount(s.files)}</td>
               <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}

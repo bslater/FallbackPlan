@@ -28,6 +28,25 @@ public sealed record BackupOutcome(string SetName, string Outcome, string? Detai
 /// </remarks>
 public static class BackupRunner
 {
+    /// <summary>
+    /// The clock a capture's completion is stamped with: the live one. It is
+    /// a property rather than the constant so a suite can take a capture under
+    /// a wrong clock through the real pipeline, which is the only way to show
+    /// what retention makes of one (FR-GC-012). The service never sets it. A
+    /// value set belongs to the flow that set it and to the work that flow
+    /// starts afterwards, so a test sets it before starting its runtime and
+    /// runs beside any other: a capture anywhere else is still stamped live.
+    /// </summary>
+    internal static Func<ulong> CaptureClock
+    {
+        get => CaptureClockInFlow.Value ?? LiveClock;
+        set => CaptureClockInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<Func<ulong>?> CaptureClockInFlow = new();
+
+    private static readonly Func<ulong> LiveClock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     /// <summary>Runs one set and journals every transition.</summary>
     /// <param name="runtime">The service's shared state.</param>
     /// <param name="set">The set to run.</param>
@@ -193,7 +212,7 @@ public static class BackupRunner
                     // The pass clock above keeps schedule derivation pure; the
                     // capture-completion stamp wants the time capture actually
                     // finished, which only a live clock can say.
-                    Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Clock = CaptureClock,
                     // How far this clock stood from a peer's (NFR-TIME-002):
                     // the freshest reading the set's destinations hold, because
                     // this run's own exchange ends after its manifest is signed.

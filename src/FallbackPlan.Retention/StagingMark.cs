@@ -89,7 +89,8 @@ public static class StagingMark
                             Convert.ToHexStringLower(decoded.Manifest.SnapshotId.Span),
                             decoded.Manifest.CaptureCompletedAt,
                             publicationSequence,
-                            decoded.Manifest.CaptureStatus),
+                            decoded.Manifest.CaptureStatus,
+                            record.WriterId.ToString()),
                         decoded.Manifest,
                         entry.Key,
                         deriver.Derive(

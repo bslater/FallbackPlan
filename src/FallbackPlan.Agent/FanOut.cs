@@ -490,9 +490,11 @@ public static class FanOut
                 {
                     var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                         archive.Store, archive.Repository, effective!,
-                        DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                        DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
+                        runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                     keeps = convergence.Keeps;
                     ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                    ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
                     runtime.Notices.Resolve(awaitsGrantKey, nowMs);
                 }
             }
@@ -1018,10 +1020,12 @@ public static class FanOut
             {
                 var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
                     archive.Store, archive.Repository, effective!,
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken).ConfigureAwait(false);
+                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
+                    runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                 keeps = convergence.Keeps;
                 keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
                 ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
             }
 
             // What this pass has to do, decided before it reads anything
@@ -1078,7 +1082,8 @@ public static class FanOut
             {
                 var sparePlan = await Retention.DestinationConvergence.ComputeSparesAsync(
                     archive.Store, archive.Repository, set.Destinations, set.Retention,
-                    name => ledger.Find(set.Id, name), nowMs, cancellationToken).ConfigureAwait(false);
+                    name => ledger.Find(set.Id, name), nowMs, cancellationToken,
+                    runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                 spares = sparePlan.Spares;
 
                 // Folded into the fingerprint the gate compares, because a

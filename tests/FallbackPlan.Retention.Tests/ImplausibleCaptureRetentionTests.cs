@@ -55,6 +55,16 @@ public sealed class ImplausibleCaptureRetentionTests : IDisposable
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
+            Destinations =
+            [
+                new DestinationConfiguration
+                {
+                    Id = new string('d', 32),
+                    Name = "vault",
+                    Kind = DestinationKind.LocalPath,
+                    Path = Directory.CreateDirectory(Path.Combine(_root, "vault")).FullName,
+                },
+            ],
             BackupSets =
             [
                 new BackupSetConfiguration
@@ -64,6 +74,7 @@ public sealed class ImplausibleCaptureRetentionTests : IDisposable
                     Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                     Schedule = "every 4h",
                     Retention = new RetentionConfiguration { KeepDaily = 7, MinGenerations = 1 },
+                    Destinations = [new SetDestinationReference { Ref = "vault" }],
                 },
             ],
         }.Save(Path.Combine(StateDirectory, "config.json"));
@@ -130,8 +141,8 @@ public sealed class ImplausibleCaptureRetentionTests : IDisposable
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         var sync = DestinationSyncStore.Open(StateDirectory);
 
-        // No destinations, so nothing waits on a sync and the gate holds
-        // nothing: what the pass keeps, it keeps by policy or by flag.
+        // Handed no destinations, so nothing waits on a sync and the gate
+        // holds nothing: what the pass keeps, it keeps by policy or by flag.
         return await RetentionRunner.RunAsync(
             store, opened.Repository, new RetentionConfiguration { KeepDaily = 7, MinGenerations = 1 },
             [], name => sync.Find(SetId, name), _ => TrimVerification.None,

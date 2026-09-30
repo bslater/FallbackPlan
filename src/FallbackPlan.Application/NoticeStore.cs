@@ -160,6 +160,45 @@ public sealed class NoticeStore
     }
 
     /// <summary>
+    /// Raises a notice as <see cref="Raise"/> does, unless one under the same
+    /// key saying exactly this was already acknowledged or resolved. In that
+    /// case nothing is raised.
+    /// </summary>
+    /// <remarks>
+    /// This is for a finding that can stay true for good, such as snapshots a
+    /// wrong clock misdated (FR-GC-012). Raise re-raises after an
+    /// acknowledgement, because a failure that recurs is news. A finding that
+    /// has not changed is not: asking again on every pass, saying the same
+    /// thing, is how a person learns to stop reading. When the finding changes,
+    /// its message changes, and that is news again.
+    /// </remarks>
+    /// <param name="key">The stable machine key: one per (kind, subject).</param>
+    /// <param name="message">What was found, for the human. The same finding must render the same text.</param>
+    /// <param name="nowUnixMilliseconds">When it was observed.</param>
+    /// <returns>The notice on record, or null when this finding was already acknowledged.</returns>
+    public Notice? RaiseUnlessAcknowledged(string key, string message, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(key);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(message);
+
+        lock (_gate)
+        {
+            var seen = _notices.Any(notice =>
+                notice.AcknowledgedAt is not null
+                && string.Equals(notice.Key, key, StringComparison.Ordinal)
+                && string.Equals(notice.Message, message, StringComparison.Ordinal));
+            var outstanding = _notices.Any(notice =>
+                notice.AcknowledgedAt is null && string.Equals(notice.Key, key, StringComparison.Ordinal));
+            if (seen && !outstanding)
+            {
+                return null;
+            }
+
+            return Raise(key, message, nowUnixMilliseconds);
+        }
+    }
+
+    /// <summary>
     /// Withdraws the unacknowledged notice under <paramref name="key"/>,
     /// because the condition it reported has gone.
     /// </summary>
