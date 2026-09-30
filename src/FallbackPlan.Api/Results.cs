@@ -878,6 +878,15 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// set's data plane has, since its records are sealed to a key the service
 /// does not hold. Zero from services before 1.32, which had no such tier.
 /// </param>
+/// <param name="DeepSweep">
+/// The destination's deep sweep: when its stored bytes were last read back
+/// in full, how far the circuit under way has read, and how often one runs
+/// (contract 1.46, ADR-0035 Amendment 3). Null where there is no sweep to
+/// report — a kind nothing reads back in full, a destination no longer
+/// declared — and from services before 1.46. Null is not "never swept": a
+/// client draws nothing for it, and a sweep that has not run is a descriptor
+/// with nothing closed.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -898,7 +907,50 @@ public sealed record DestinationStatusDescriptor(
     string? DrillLimit = null,
     int VerifiedSealed = 0,
     int VerifiedDigest = 0,
-    int VerifiedChunk = 0);
+    int VerifiedChunk = 0,
+    DeepSweepDescriptor? DeepSweep = null);
+
+/// <summary>
+/// A destination's deep sweep as its status row reports it (contract 1.46,
+/// ADR-0035 Amendment 3): the re-read of every stored blob against the digest
+/// sealed into its own footer, carried over consecutive passes as a circuit.
+/// </summary>
+/// <remarks>
+/// The sweep answers a different question from the sampled challenges
+/// behind <see cref="DestinationStatusDescriptor.Verification"/>: not how
+/// much of what was last sent has been proven, but when every stored object
+/// was last read back. Only <paramref name="CircuitClosedAt"/> supports that
+/// claim. A count read in the circuit under way is progress, and a client
+/// must never render it as coverage.
+/// </remarks>
+/// <param name="IntervalDays">
+/// Days between the close of one circuit and the start of the next, as the
+/// scheduler keeps them; null when nothing sweeps this destination on a
+/// schedule — a peer whose operator stated no cadence, read in full only when
+/// a person asks through <c>verify_destination</c>.
+/// </param>
+/// <param name="CircuitClosedAt">
+/// When a circuit last closed — every stored blob read back and matched to
+/// its seal — Unix milliseconds; null when none ever has.
+/// </param>
+/// <param name="ReadThisCircuit">Blobs read in the circuit under way; zero when none is.</param>
+/// <param name="LastReadAt">When the sweep last read anything, Unix milliseconds; null when it never has.</param>
+/// <param name="Stalls">
+/// Segments in a row that stopped short, at a blob that would not read or at
+/// a replica that could not be read; zero once one gets through. The circuit
+/// is retried under back-off meanwhile, and three in a row raise a notice.
+/// </param>
+/// <param name="StalledOn">
+/// The store key of the blob the last stalled segment could not read; null
+/// when the replica itself could not be read, and when nothing is stalled.
+/// </param>
+public sealed record DeepSweepDescriptor(
+    int? IntervalDays,
+    ulong? CircuitClosedAt,
+    int ReadThisCircuit = 0,
+    ulong? LastReadAt = null,
+    int Stalls = 0,
+    string? StalledOn = null);
 
 /// <summary>One set's derived protection status, with the per-destination matrix beneath it.</summary>
 /// <param name="SetName">The set's name.</param>

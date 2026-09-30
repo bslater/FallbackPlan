@@ -1760,7 +1760,7 @@ public sealed partial class ServiceCommandHandler(
                     continue;
                 }
 
-                if (declared is not { Kind: DestinationKind.LocalPath or DestinationKind.Peer })
+                if (declared is null || !ReplicaSweepJob.Sweeps(declared.Kind))
                 {
                     // Said rather than skipped.
                     lines.Add(
@@ -1804,7 +1804,7 @@ public sealed partial class ServiceCommandHandler(
                 // A peer whose operator stated no cadence is read only when a
                 // person asks (ADR-0035 Amendment 2), so nothing scheduled
                 // carries on from here.
-                var swept = declared is not { Kind: DestinationKind.Peer, DeepVerifyIntervalDays: null };
+                var swept = ReplicaSweepJob.ScheduledIntervalDays(declared) is not null;
 
                 // What the damage still standing there reaches, by name
                 // (FR-VER-005) — all of it, not only what this read found.
@@ -2639,11 +2639,32 @@ public sealed partial class ServiceCommandHandler(
                 DrillLimit: ledger?.DrillLimit,
                 VerifiedSealed: ledger?.VerifiedSealed ?? 0,
                 VerifiedDigest: ledger?.VerifiedDigest ?? 0,
-                VerifiedChunk: ledger?.VerifiedChunk ?? 0));
+                VerifiedChunk: ledger?.VerifiedChunk ?? 0,
+                DeepSweep: DescribeSweep(destination, ledger)));
         }
 
         return (inputs, rows, lastCompleted);
     }
+
+    /// <summary>
+    /// A destination's deep sweep for its status row (contract 1.46, ADR-0035
+    /// Amendment 3): the ledger's facts, and the cadence the scheduler keeps.
+    /// </summary>
+    /// <returns>
+    /// Null where there is no sweep to report — a kind nothing reads back in
+    /// full, or a destination no longer declared. A sweep that has not run is
+    /// a descriptor with nothing closed, never a null.
+    /// </returns>
+    internal static DeepSweepDescriptor? DescribeSweep(DestinationConfiguration? destination, DestinationSyncRecord? ledger) =>
+        destination is null || !ReplicaSweepJob.Sweeps(destination.Kind)
+            ? null
+            : new DeepSweepDescriptor(
+                ReplicaSweepJob.ScheduledIntervalDays(destination),
+                ledger?.SweepCompletedAt,
+                ledger?.SweptThisCircuit ?? 0,
+                ledger?.SweptAt,
+                ledger?.SweepStalls ?? 0,
+                ledger?.SweepStalledOn);
 
     /// <summary>The documented kebab vocabulary for <see cref="DestinationStatusDescriptor.Reason"/>; null when there is nothing to explain.</summary>
     private static string? ReasonLabel(SyncCause cause) => cause switch

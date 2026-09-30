@@ -238,6 +238,7 @@ public sealed class ClientModeTests : IDisposable
         _harness.WriteSourceFile("notes.txt", "hello");
         await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
 
         await using var runtime = await StartServiceAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
@@ -253,7 +254,7 @@ public sealed class ClientModeTests : IDisposable
         Assert.AreEqual(0, verified.ExitCode, verified.All);
 
         var closed = runtime.DestinationSync.Find(runtime.Configuration.BackupSets.Single().Id, "vault")?.SweepCompletedAt;
-        Assert.IsNotNull(closed, "the control: verify-destination --full read the whole replica back");
+        Assert.IsNotNull(closed, $"the control: verify-destination --full read the whole replica back — {synced.All} | {verified.All}");
 
         var after = await ServiceCliAsync("status", "--state", _harness.StateDirectory);
         Assert.AreEqual(0, after.ExitCode, after.All);

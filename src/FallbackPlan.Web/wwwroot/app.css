@@ -461,6 +461,7 @@ details.dest > summary::before { padding-top: 12px; }
    destination row has to say, so it is coloured rather than left to read
    like the rest of the facts around it. */
 .dest-body b.bad { color: var(--bad); }
+.dest-body b.warn { color: var(--warn); }
 
 .job-stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 /* The file being processed: one line, already middle-truncated in script —

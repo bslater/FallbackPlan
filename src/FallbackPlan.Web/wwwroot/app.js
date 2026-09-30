@@ -730,6 +730,40 @@ function drillLabel(d) {
   return `${esc(files)} <span class="detail">${esc(rel(d.drilledAt))}</span>`;
 }
 
+// The deep sweep (contract 1.46): when every stored object at the
+// destination was last read back and matched its seal. Only a closed circuit
+// supports that claim; what the circuit under way has read is progress, and
+// is said as progress. A stall is said first, whatever closed before it,
+// because a circuit stuck at a blob is the part that needs a person. A
+// destination only a person's request reads in full is said as such: drawn
+// as "never", it would look overdue. No sweep at all — a kind nothing reads
+// back, or a service older than 1.46 — draws no line.
+function sweepLabel(d) {
+  if (d.deepSweep == null) return null;
+  const s = d.deepSweep;
+  const cadence = s.intervalDays == null
+    ? "only when asked — verify-destination reads it in full"
+    : `every ${fmtCount(s.intervalDays)} day(s)`;
+
+  if (s.stalls > 0) {
+    const where = s.stalledOn ? "at a blob that will not read" : "because the replica could not be read";
+    const since = s.circuitClosedAt == null ? "" : ` · every stored object last read back ${rel(s.circuitClosedAt)}`;
+    return `<b class="warn">stopped</b> <span class="detail">${fmtCount(s.stalls)} time(s) in a row ${esc(where)}${esc(since)}</span>`;
+  }
+
+  if (s.circuitClosedAt != null) {
+    const next = s.readThisCircuit > 0 ? `${fmtCount(s.readThisCircuit)} blob(s) read of the next` : null;
+    return `every stored object read back ${esc(rel(s.circuitClosedAt))} <span class="detail">${esc([next, cadence].filter(Boolean).join(" · "))}</span>`;
+  }
+
+  if (s.lastReadAt != null) {
+    const read = s.readThisCircuit > 0 ? `${fmtCount(s.readThisCircuit)} blob(s) read so far` : "under way";
+    return `first full read ${esc(read)} <span class="detail">${esc(cadence)}</span>`;
+  }
+
+  return `<span class="detail">not read back in full yet · ${esc(cadence)}</span>`;
+}
+
 // The ring: an SVG arc whose offset is set from script, because the CSP
 // forbids inline style attributes — the same reason the meters' widths are.
 // The unknown state draws the track alone rather than a zero-length arc, so
@@ -804,6 +838,7 @@ function renderSetCard(set) {
         : `<span class="detail">never</span>`;
     const key = `${set.setName}|${d.name}`;
     const pr = destPriority(d.name);
+    const sweep = sweepLabel(d);
 
     // The card's one caption line. While this set's run is live AND it ships
     // straight to its destinations, the run's own progress IS this
@@ -837,6 +872,7 @@ function renderSetCard(set) {
         <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
         <div><span class="detail">Possession</span><span>${esc(d.verification)}${verificationTiers(d)}</span></div>
         <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
+        ${sweep ? `<div><span class="detail">Deep verify</span><span>${sweep}</span></div>` : ""}
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
         ${d.reason === "catching-up" && set.lastCompletedAt

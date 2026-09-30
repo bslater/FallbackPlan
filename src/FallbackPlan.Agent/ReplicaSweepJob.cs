@@ -1,3 +1,4 @@
+using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.Repository;
@@ -36,6 +37,37 @@ internal static class ReplicaSweepJob
     /// never between segments (ADR-0035 Amendment 1).
     /// </summary>
     public const int DefaultIntervalDays = 7;
+
+    /// <summary>
+    /// Whether this service reads a destination of <paramref name="kind"/>
+    /// back in full: a local path off its disk, a peer over the retrieval
+    /// session. The reserved kinds are not served, so nothing reads them.
+    /// </summary>
+    internal static bool Sweeps(DestinationKind kind) => kind is DestinationKind.LocalPath or DestinationKind.Peer;
+
+    /// <summary>
+    /// The days the scheduler rests between one circuit's close and the next
+    /// one's start at <paramref name="destination"/>; null when nothing sweeps
+    /// it on a schedule (FR-VER-002, FR-VER-008).
+    /// </summary>
+    /// <remarks>
+    /// A local path is swept on its stated interval or the default. A peer is
+    /// swept only on a cadence its source's operator states, because
+    /// re-reading all of a replica is a standing cost on somebody else's link
+    /// (ADR-0035 Amendment 2). The scheduler keeps this and the status matrix
+    /// reports it, so a row cannot promise a cadence the scheduler never keeps.
+    /// </remarks>
+    internal static int? ScheduledIntervalDays(DestinationConfiguration destination)
+    {
+        ThrowHelper.ThrowIfNull(destination);
+
+        return destination.Kind switch
+        {
+            DestinationKind.LocalPath => destination.DeepVerifyIntervalDays ?? DefaultIntervalDays,
+            DestinationKind.Peer => destination.DeepVerifyIntervalDays,
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// How long a background segment of a limited destination reads for: a
