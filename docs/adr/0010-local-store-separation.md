@@ -38,6 +38,11 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 > the newest of them — see
 > [Amendment 2](#amendment-2-2026-09--the-catalogues-commits-are-atomic-not-flushed).
 
+> **Amendment 4 (2026-09).** "Slow rebuild" had nothing doing the rebuild:
+> the service now rebuilds a catalogue it finds discarded or lost when it
+> opens the set, before anything reads it — see
+> [Amendment 4](#amendment-4-2026-09--a-catalogue-discarded-is-rebuilt-before-it-is-read).
+
 **Durable local state:** separate store, OS-key-store protected where available. The device *private key* is never written to the recovery kit — a recovering device establishes a new identity and is re-authorised.
 
 **Configuration:** file-based, schema-versioned, validated before use, exportable without secrets. Files rather than a database because users edit, version-control, and diff them.
@@ -175,6 +180,68 @@ process. With pooling on it failed three runs of three within about two
 seconds, after 2,242 to 2,898 clean opens. With pooling off it runs its full
 five seconds clean.
 
+## Amendment 4 (2026-09) — a catalogue discarded is rebuilt before it is read
+
+The decision prices losing the catalogue as a slow rebuild. That held only
+while something ran the rebuild, and in the service nothing did.
+`Catalogue.Open` has always discarded a file it cannot use rather than
+migrate it: one another schema version or another repository wrote is
+deleted and created again, empty. The service opens a set's catalogue once,
+when it first opens the archive, and reads it from then on. The rebuild
+recipe — the index plane, then the manifest projection — ran for a restore
+source's throwaway copy, for adoption
+([ADR-0061](0061-adopt-a-destinations-archives.md)) and for the heal after a rollback
+([ADR-0062](0062-the-destination-is-the-rollback-witness.md)), and never
+for the set's own catalogue.
+
+So every catalogue schema change emptied the history of every set it met.
+The v7 change, when the consistency method became a column, said the
+catalogue would drop and rebuild on first open; only the drop happened.
+Measured against main before this amendment: back up, stop, stamp the
+catalogue with an older schema version, start again, and `list_snapshots`
+answers no snapshots. Nothing was lost from the repository, but nothing
+read it back: the snapshots taken before the upgrade were not listed, a
+restore planned from the catalogue could not find them, and the next
+backup stored again whatever the empty catalogue could not locate.
+
+Now:
+
+- A catalogue `Catalogue.Open` creates — new, or in place of one it
+  discarded — says so in its own file, and keeps saying so until a rebuild
+  that saw every record it needed clears it (`NeedsRebuild`,
+  `MarkRebuilt`). In the file rather than the process, so a rebuild cut
+  short is tried again instead of being taken for one that finished.
+- The service rebuilds a marked catalogue when it opens the set, before the
+  handle is shared, through the same recipe as every other rebuild, reading
+  the set's own store.
+- A rebuild clears the mark only when the projection saw every record it
+  needed. A direct-ship set's metadata blobs live at its destinations
+  ([ADR-0046](0046-direct-to-destination-publication.md)); with the one holding them
+  away, the projection lists the snapshot from its local record and cannot
+  see its files, and counts the records it could not see. The mark stays,
+  and the next open tries again. A record that was seen and would not read
+  is damage, a finding like any other, and does not keep the mark: another
+  open would only meet it again.
+- Reading those blobs went through the ship sink, which opened a replica
+  store for every destination present — and opening one creates the
+  replica's root. So the rebuild wrote a directory at a destination the set
+  held nothing at, including one under its floor that the set must not
+  write to at all (FR-DEST-010); `DirectShipFaultSweepTests` caught it.
+  Reads through the sink now pass over a destination that holds no replica
+  of the repository. Writes still create one.
+- A rebuild that cannot read the repository at all leaves the mark and the
+  set open. A backup into a catalogue short of its history costs a rewrite
+  and never a restore, the direction Amendment 2 already prices. Events
+  3788 to 3790 say what each rebuild did.
+
+`Repository.Tests/CatalogueTests` holds the mark: a catalogue created, or
+recreated over another schema's file, needs rebuilding, and marking it
+rebuilt lasts across an open. `Hosts.Tests/CatalogueRebuildAtOpenTests`
+holds the rest through restarts of the real service: a staging set's
+catalogue stamped with an older schema, and a direct-ship set's deleted
+while the service was stopped, both list their snapshots and files again,
+and a rebuild with the destination away is tried again at the next open.
+
 ## Status history
 
 | Date | Status | Note |
@@ -184,3 +251,4 @@ five seconds clean.
 | 2026-08 | Accepted (amended) | Amendment 1: destinations are configuration, sync state and notices are sacrificial journals beside `jobs.json` ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-09 | Accepted (amended) | Amendment 2: the catalogue's commits are atomic but no longer flushed one by one, so a power loss can take the newest of them and leave it behind the store, which costs a rewrite. Set in `Repository.Catalogue/Catalogue`, read back from SQLite by `CatalogueTests`. |
 | 2026-09 | Accepted (amended) | Amendment 3: the catalogue's connections are not pooled, so a pool clear anywhere in the process cannot dispose one under the operation that opened it, and the service no longer clears pools to delete a catalogue file. Set in `Repository.Catalogue/Catalogue`, held by `CataloguePoolingTests`. |
+| 2026-09 | Accepted (amended) | Amendment 4: a catalogue the service finds discarded or lost is rebuilt from the repository when it opens the set, before anything reads it, and a rebuild that could not see every record it needed is tried again at the next open. Marked by `Repository.Catalogue/Catalogue`, rebuilt by `Agent/ServiceRuntime` through `Agent/CatalogueRebuild`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |

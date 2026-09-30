@@ -269,6 +269,10 @@ Rebuild produces a verified catalogue and a damage report. It does not rewrite o
 
 Damage is reported by kind, because the kinds have different consequences and different remedies: catalogue corruption, missing index objects, missing blobs, corrupt records, and unreachable orphan data. Each report names the affected snapshots and file versions (FR-MAN-012).
 
+### 8.4 When a rebuild runs
+
+The catalogue discards itself rather than migrate: a file another schema version or another repository wrote is deleted and created again, empty. An empty catalogue answers as though its repository had no history, so the service rebuilds it by the normal path when it opens the set, before anything reads it, and a rebuild that could not see every record it needed — a direct-ship set's metadata blobs are read back from its destinations, and they may be away — leaves the catalogue marked so the next open tries again ([ADR-0010](../adr/0010-local-store-separation.md) Amendment 4, FR-MAN-002). Reading those blobs creates nothing at a destination that holds no replica of the set.
+
 ---
 
 **Previous:** [01 — Domain model](01-domain-model.md) · **Next:** [03 — Cryptography](03-crypto.md)

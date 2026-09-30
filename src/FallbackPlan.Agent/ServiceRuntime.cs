@@ -1030,6 +1030,23 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
             await AdoptObservedHeadAsync(setId, archive, cancellationToken).ConfigureAwait(false);
 
+            // Before the handle is shared: a catalogue created here, or in
+            // place of one another schema wrote, is empty whatever the
+            // repository holds, and everything that reads it would take that
+            // for a set with no history (FR-MAN-002).
+            if (archive.Catalogue.NeedsRebuild)
+            {
+                try
+                {
+                    await RebuildCatalogueAsync(setId, archive, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    archive.Dispose();
+                    throw;
+                }
+            }
+
             _archives.Add(setId, archive);
             return archive;
         }
@@ -1125,6 +1142,48 @@ public sealed class ServiceRuntime : IAsyncDisposable
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return new HealOutcome(exception.Message, 0, 0);
+        }
+    }
+
+    /// <summary>
+    /// Fills the catalogue of a set being opened from the set's own
+    /// repository: its index plane for the locations, then its manifests for
+    /// the snapshots and their paths (FR-MAN-002).
+    /// </summary>
+    /// <remarks>
+    /// Read through the set's own store, which for a direct-ship set answers
+    /// its metadata blobs from whichever destination holds them. A rebuild
+    /// that could not read the repository, or could not see every record it
+    /// needed, leaves the catalogue marked and the set open: a backup into a
+    /// catalogue short of its history stores again what it cannot find, which
+    /// costs a rewrite and never a restore, and the next open tries again.
+    /// </remarks>
+    private async ValueTask RebuildCatalogueAsync(string setId, ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        var log = LoggerFor<ServiceRuntime>();
+        var warnings = new List<string>();
+        try
+        {
+            using var reader = await CatalogueRebuild
+                .OpenMetadataReaderAsync(archive.Store, archive.Repository, cancellationToken)
+                .ConfigureAwait(false);
+            var projected = await CatalogueRebuild.RebuildIntoAsync(
+                this, archive.Catalogue, archive.Store, archive.Repository, reader, warnings, cancellationToken)
+                .ConfigureAwait(false);
+            Log.CatalogueRebuiltAtOpen(log, setId, projected.Snapshots, projected.FileVersions, projected.Missing);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
+            or FormatException or System.Security.Cryptography.CryptographicException)
+        {
+            // Damage included: a record the rebuild cannot decode must not
+            // keep the set from opening at every attempt, which would deny
+            // the backup and the restore that are the way out of it.
+            Log.CatalogueRebuildAtOpenFailed(log, setId, exception.Message);
+        }
+
+        foreach (var warning in warnings)
+        {
+            Log.CatalogueRebuildAtOpenFinding(log, setId, warning);
         }
     }
 

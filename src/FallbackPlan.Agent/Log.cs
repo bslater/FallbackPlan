@@ -208,6 +208,25 @@ internal static partial class Log
         Message = "Scheduled passes run again, after {LostPasses} that could not in this process")]
     internal static partial void PassesResumed(ILogger logger, int lostPasses);
 
+    // FR-MAN-002: a catalogue created at open — new, or in place of one
+    // another schema wrote — is filled from the repository before it is read.
+    [LoggerMessage(
+        EventId = 3788, Level = LogLevel.Information,
+        Message = "Set {SetId}: catalogue rebuilt from the repository at open — {Snapshots} snapshot(s), "
+            + "{FileVersions} file version(s), {Missing} record(s) not seen; a rebuild that did not see every record runs again at the next open")]
+    internal static partial void CatalogueRebuiltAtOpen(
+        ILogger logger, string setId, int snapshots, int fileVersions, int missing);
+
+    [LoggerMessage(
+        EventId = 3789, Level = LogLevel.Warning,
+        Message = "Set {SetId}: the catalogue could not be rebuilt from the repository at open ({Reason}); the set opens, and the next open tries again")]
+    internal static partial void CatalogueRebuildAtOpenFailed(ILogger logger, string setId, string reason);
+
+    [LoggerMessage(
+        EventId = 3790, Level = LogLevel.Information,
+        Message = "Set {SetId}: catalogue rebuild at open reported {Finding}")]
+    internal static partial void CatalogueRebuildAtOpenFinding(ILogger logger, string setId, string finding);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

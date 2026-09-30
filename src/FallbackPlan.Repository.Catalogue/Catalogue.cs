@@ -117,12 +117,16 @@ public sealed class Catalogue : IDisposable
             create.CommandText = CatalogueSchema.Ddl;
             create.ExecuteNonQuery();
 
+            // Created empty, and so marked: a new file holds nothing whatever
+            // the repository holds, and it says so until a rebuild that read
+            // everything clears it (FR-MAN-002).
             using var stamp = connection.CreateCommand();
             stamp.CommandText = """
                 INSERT INTO catalogue_info (key, value) VALUES
                 ('schema_version', $version),
                 ('repository_id', $repository),
-                ('source', 'live');
+                ('source', 'live'),
+                ('rebuild_pending', '1');
                 """;
             stamp.Parameters.AddWithValue("$version", CatalogueSchema.Version.ToString(System.Globalization.CultureInfo.InvariantCulture));
             stamp.Parameters.AddWithValue("$repository", Convert.ToHexStringLower(repositoryId.ToArray()));
@@ -132,6 +136,35 @@ public sealed class Catalogue : IDisposable
         Log.CatalogueOpened(logger ?? NullLogger.Instance, repositoryId, disposition);
 
         return new Catalogue(connection, logger);
+    }
+
+    /// <summary>
+    /// Whether this catalogue was created — new, or in place of one another
+    /// schema or repository wrote — and has not since been rebuilt from its
+    /// repository by a rebuild that read every record it needed (FR-MAN-002).
+    /// </summary>
+    /// <remarks>
+    /// Held in the file rather than the process, so a rebuild cut short is
+    /// tried again instead of being taken for one that finished. A catalogue
+    /// that needs rebuilding answers as though its repository had no history,
+    /// which is what a reader must not be left to believe.
+    /// </remarks>
+    public bool NeedsRebuild
+    {
+        get
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT EXISTS (SELECT 1 FROM catalogue_info WHERE key = 'rebuild_pending');";
+            return (long)command.ExecuteScalar()! > 0;
+        }
+    }
+
+    /// <summary>Records that a rebuild read every record it needed into this catalogue.</summary>
+    public void MarkRebuilt()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "DELETE FROM catalogue_info WHERE key = 'rebuild_pending';";
+        command.ExecuteNonQuery();
     }
 
     /// <summary>Marks how this catalogue was produced: live, checkpoint-rebuild, or forensic-rebuild.</summary>

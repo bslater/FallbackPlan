@@ -631,7 +631,7 @@ public sealed class DestinationShipSink : IObjectStore
             return await _metadata.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
         }
 
-        foreach (var holder in ReadOrder())
+        foreach (var holder in ReadOrder(holdingOnly: true))
         {
             var result = await holder.Store.GetMetadataAsync(key, cancellationToken).ConfigureAwait(false);
             if (result.Found)
@@ -661,7 +661,7 @@ public sealed class DestinationShipSink : IObjectStore
             return await _metadata.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
         }
 
-        foreach (var holder in ReadOrder())
+        foreach (var holder in ReadOrder(holdingOnly: true))
         {
             var result = await holder.Store.OpenReadAsync(key, range, cancellationToken).ConfigureAwait(false);
             if (result.Outcome != OpenReadOutcome.NotFound)
@@ -712,7 +712,7 @@ public sealed class DestinationShipSink : IObjectStore
         // snapshot's closure exists somewhere in this union by construction.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var blobPrefix = value.Length == 0 ? ObjectPrefix.Parse("blobs/") : prefix;
-        foreach (var holder in ReadOrder())
+        foreach (var holder in ReadOrder(holdingOnly: true))
         {
             await foreach (var entry in holder.Store.ListAsync(blobPrefix, options, cancellationToken)
                 .ConfigureAwait(false))
@@ -778,7 +778,14 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>The destinations a read may consult: every configured, reachable local path, priority first.</summary>
-    private List<Shipment> ReadOrder()
+    /// <param name="holdingOnly">
+    /// Leaves out, outside a run, a destination with no replica of this
+    /// repository yet. A read passes true: such a destination has nothing to
+    /// answer with, and opening its store would create the replica's root
+    /// there — a write, made by a read, at a destination that may be one the
+    /// set must not write to at all (FR-DEST-010).
+    /// </param>
+    private List<Shipment> ReadOrder(bool holdingOnly = false)
     {
         lock (_gate)
         {
@@ -809,7 +816,8 @@ public sealed class DestinationShipSink : IObjectStore
         {
             if (configuration.FindDestination(reference.Ref) is not
                 { Kind: DestinationKind.LocalPath, AddressDefect: null } destination
-                || !Directory.Exists(destination.Path))
+                || !Directory.Exists(destination.Path)
+                || (holdingOnly && !Directory.Exists(Path.Combine(destination.Path, _repositoryIdHex))))
             {
                 continue;
             }
