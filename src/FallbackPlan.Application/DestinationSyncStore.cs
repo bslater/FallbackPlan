@@ -416,6 +416,33 @@ public sealed record DestinationSyncRecord
     [JsonPropertyName("consecutive_incomplete_drills")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int ConsecutiveIncompleteDrills { get; init; }
+
+    /// <summary>
+    /// The peer's clock minus this one's, as the latest verified receipt from
+    /// this destination read it (schema 8, NFR-TIME-002,
+    /// [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)); null where no
+    /// exchange has read one, which is every kind but a peer.
+    /// </summary>
+    [JsonPropertyName("clock_skew_ms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ClockSkewMs { get; init; }
+
+    /// <summary>When that reading was complete, by this machine's clock.</summary>
+    [JsonPropertyName("clock_observed_at")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? ClockObservedAt { get; init; }
+
+    /// <summary>How long the bracketed exchange took; half of it bounds the reading's error.</summary>
+    [JsonPropertyName("clock_round_trip_ms")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? ClockRoundTripMs { get; init; }
+
+    /// <summary>The three fields above as one reading, or null when the row holds none.</summary>
+    [JsonIgnore]
+    public ClockObservation? Clock =>
+        ClockSkewMs is { } skew && ClockObservedAt is { } at && ClockRoundTripMs is { } roundTrip
+            ? new ClockObservation(skew, at, roundTrip)
+            : null;
 }
 
 /// <summary>
@@ -470,7 +497,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 7;
+    private const int CurrentSchemaVersion = 8;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -601,7 +628,8 @@ public sealed class DestinationSyncStore
         // that did not complete, the keys found damaged and not repaired, and
         // whether a failure is that damage alone — false, the whole copy's,
         // being the reading of an older row that cannot understate damage.
-        // Only 1 → 2 changes a row, below.
+        // Schema 8 added a reading of the peer's clock, absent from an older
+        // row because nothing had read one. Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -750,6 +778,28 @@ public sealed class DestinationSyncStore
             HeldBytes = heldBytes,
             OwedBytes = owedBytes,
             MeasuredAt = nowUnixMilliseconds,
+        });
+    }
+
+    /// <summary>
+    /// Records a reading of the destination's clock against this one's
+    /// (NFR-TIME-002, [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)),
+    /// replacing the pair's previous reading and nothing else on the row: a
+    /// reading is not a sync, and says nothing of one.
+    /// </summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="observation">The reading.</param>
+    public DestinationSyncRecord RecordClockObservation(
+        string setId, string destination, ClockObservation observation)
+    {
+        ThrowHelper.ThrowIfNull(observation);
+
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, observation.ObservedAt, DestinationSyncState.Behind) with
+        {
+            ClockSkewMs = observation.SkewMilliseconds,
+            ClockObservedAt = observation.ObservedAt,
+            ClockRoundTripMs = observation.RoundTripMilliseconds,
         });
     }
 

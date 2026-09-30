@@ -338,11 +338,16 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
             _closed = true;
 
             var sent = Interlocked.Read(ref _sent);
+
+            // The bracket the sync pass takes, for the same reading
+            // (NFR-TIME-002): the peer stamps its receipt between the two.
+            var exchangeSent = ReplicationInitiator.UnixMillisecondsNow();
             await PeerFrame.WriteAsync(
                 _session.Stream, new ReplicationComplete((ulong)sent), cancellationToken).ConfigureAwait(false);
             var ack = await ReplicationWire.ReadAsync(
                 _session.Stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, cancellationToken)
                 .ConfigureAwait(false);
+            var exchangeReceived = ReplicationInitiator.UnixMillisecondsNow();
 
             if ((long)ack.Count < sent)
             {
@@ -372,7 +377,14 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
                 new HashSet<string>(sentKeys, StringComparer.Ordinal),
                 _heldAtStart);
 
-            return new CompletedShipment((long)ack.Count, receipt, problem);
+            return new CompletedShipment(
+                (long)ack.Count,
+                receipt,
+                problem,
+                receipt is { } verified
+                    ? ClockObservation.FromExchange(
+                        exchangeSent, exchangeReceived, verified.Receipt.IssuedAtUnixMilliseconds)
+                    : null);
         }
         catch (OperationCanceledException)
         {
@@ -675,5 +687,12 @@ internal sealed class PeerShipStore : IObjectStore, IAsyncDisposable
 /// and when none came, which are different facts the caller tells apart by
 /// <paramref name="Receipt"/>.
 /// </param>
+/// <param name="ObservedClock">
+/// How far the destination's clock stood from this one's, read from the
+/// verified receipt (NFR-TIME-002); null with no verified receipt.
+/// </param>
 internal sealed record CompletedShipment(
-    long Committed, ReplicationInitiator.VerifiedReplicationReceipt? Receipt, string? Problem);
+    long Committed,
+    ReplicationInitiator.VerifiedReplicationReceipt? Receipt,
+    string? Problem,
+    ClockObservation? ObservedClock = null);

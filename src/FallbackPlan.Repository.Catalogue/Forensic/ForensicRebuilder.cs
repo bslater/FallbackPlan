@@ -321,7 +321,8 @@ public sealed class ForensicRebuilder : IDisposable
                 decoded.Manifest.CaptureStatus,
                 signatureState,
                 decoded.Manifest.CaptureCompletedAt,
-                decoded.Manifest.ConsistencyMethod);
+                decoded.Manifest.ConsistencyMethod,
+                decoded.Manifest.ObservedClockSkewMs);
 
             // What the snapshot is made of besides its files, as the capture
             // records it, so damage to one of its own records can be traced

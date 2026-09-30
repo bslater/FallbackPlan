@@ -1564,6 +1564,13 @@ public static class FanOut
         // checked, and a copy this side could not keep changes nothing about
         // what the peer holds.
         ledger.RecordCompleteness(set.Id, destination.Name, outcome.OwedBytes, outcome.OwedBytes, nowMs);
+
+        // The receipt's stamp against this clock either side of the exchange
+        // (NFR-TIME-002): what the set's next capture records in its manifest.
+        if (outcome.ObservedClock is { } observed)
+        {
+            ledger.RecordClockObservation(set.Id, destination.Name, observed);
+        }
     }
 
     private static void ReportDestinationAhead(

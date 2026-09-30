@@ -101,6 +101,15 @@ public sealed record SnapshotJob
     /// </summary>
     public Func<ulong>? Clock { get; init; }
 
+    /// <summary>
+    /// How far the capturing machine's clock stood from a peer's, as last read
+    /// before this capture began (specification 06 §6 key 14, NFR-TIME-002):
+    /// the peer's clock minus this one's, in milliseconds. Null when there was
+    /// no reading to record, which the manifest states by omitting the key —
+    /// never by recording 0, which would claim a clock in step.
+    /// </summary>
+    public long? ObservedClockSkewMs { get; init; }
+
     /// <summary>The declared maximum job duration for intent covering.</summary>
     public required ulong DeclaredMaxDurationMs { get; init; }
 
@@ -474,6 +483,7 @@ public sealed partial class PublicationOrchestrator
                     filesystem.ReservedNames),
                 PublicationGeneration = _generation.Value,
                 ClientVersion = job.ClientVersion,
+                ObservedClockSkewMs = job.ObservedClockSkewMs,
             };
 
             byte[] encodedSnapshot;
@@ -571,7 +581,8 @@ public sealed partial class PublicationOrchestrator
             if (_catalogue is not null)
             {
                 ProjectIntoCatalogue(
-                    job, walker, session, builder, snapshotObjectId, rootTreeId, policyId, deltaId, delta, errorId);
+                    job, snapshot, walker, session, builder, snapshotObjectId, rootTreeId, policyId, deltaId, delta,
+                    errorId);
             }
 
             EngineDiagnostics.PublicationDuration.Record(
@@ -618,6 +629,7 @@ public sealed partial class PublicationOrchestrator
     /// </summary>
     private void ProjectIntoCatalogue(
         SnapshotJob job,
+        SnapshotManifest manifest,
         TreeWalkPublisher walker,
         ArchiveSession session,
         ManifestBuilder builder,
@@ -644,11 +656,15 @@ public sealed partial class PublicationOrchestrator
 
         _catalogue!.ApplyDelta(deltaId, delta);
 
-        // Signature state 1: this writer signed it in this process.
+        // Signature state 1: this writer signed it in this process. The
+        // capture time and the observed skew are the manifest's, as a rebuild
+        // reads them — a row that said something else here would change when
+        // the catalogue was next rebuilt.
         _catalogue.RecordSnapshot(
             job.SnapshotId.Span, job.DeviceId.Span, job.BackupSetId.Span,
             snapshotObjectId, rootTreeId, _generation.Value,
-            (byte)(errorId is null ? 1 : 2), signatureState: 1, capturedAt: job.NowUnixMilliseconds);
+            (byte)(errorId is null ? 1 : 2), signatureState: 1, capturedAt: manifest.CaptureCompletedAt,
+            consistencyMethod: manifest.ConsistencyMethod, observedClockSkewMs: manifest.ObservedClockSkewMs);
 
         List<ObjectId> structure = [snapshotObjectId, policyId, .. walker.Trees];
         if (errorId is { } error)

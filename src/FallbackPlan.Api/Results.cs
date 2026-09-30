@@ -316,7 +316,7 @@ public sealed record ReplicaAttributionDescriptor(
 public sealed record ReplicaAttributionsResult(IReadOnlyList<ReplicaAttributionDescriptor> Attributions) : ServiceResult;
 
 /// <summary>
-/// One filed peer receipt (contract 1.33), as facts: what the signed bytes
+/// One filed peer receipt (contract 1.35), as facts: what the signed bytes
 /// attest and the service's verdict on whether the signature still holds
 /// over the bytes on disk. Neither the file's path nor any byte of the
 /// signed statement or of a key crosses — a client that needs those reads
@@ -358,7 +358,7 @@ public sealed record ReceiptDescriptor(
     ulong? HeldObjects,
     ulong? HeldBytes);
 
-/// <summary>The receipts filed here, newest first by issue time (contract 1.33).</summary>
+/// <summary>The receipts filed here, newest first by issue time (contract 1.35).</summary>
 /// <param name="Receipts">One row per filed receipt, both kinds interleaved.</param>
 /// <param name="Total">
 /// How many receipts are on file for the kind and repository asked for,
@@ -611,6 +611,14 @@ public sealed record JobFailuresResult(
 /// not say" send a person restoring a database to different places, and this
 /// value exists precisely because those are different promises.
 /// </param>
+/// <param name="ObservedClockSkewMs">
+/// How far the capturing machine's clock stood from a peer's when the snapshot
+/// was taken, as its manifest records it (specification 06 §6 key 14,
+/// NFR-TIME-002): the peer's clock minus the capturing one's, in milliseconds,
+/// so a positive value is a clock that was behind. Null when the capture had
+/// no reading to record, and from a service older than 1.47 — never 0, which
+/// is a clock in step.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
@@ -618,7 +626,8 @@ public sealed record SnapshotDescriptor(
     byte CaptureStatus,
     long Files,
     IReadOnlyList<string>? Destinations = null,
-    byte? ConsistencyMethod = null);
+    byte? ConsistencyMethod = null,
+    long? ObservedClockSkewMs = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">The snapshots, oldest first.</param>

@@ -21,7 +21,8 @@ public sealed record CatalogueSnapshot(
     byte CaptureStatus,
     int SignatureState,
     ulong CapturedAt,
-    byte ConsistencyMethod = 1);
+    byte ConsistencyMethod = 1,
+    long? ObservedClockSkewMs = null);
 
 /// <summary>
 /// One path within a snapshot (schema v2 <c>tree_entries</c>), joined with
@@ -805,7 +806,7 @@ public sealed class Catalogue : IDisposable
         command.CommandText = """
             SELECT snapshot_id, device_id, backup_set_id, object_id, root_tree,
                    publication_generation, capture_status, signature_state, captured_at,
-                   consistency_method
+                   consistency_method, observed_clock_skew_ms
             FROM snapshots
             ORDER BY captured_at DESC, snapshot_id;
             """;
@@ -824,7 +825,8 @@ public sealed class Catalogue : IDisposable
                 (byte)reader.GetInt64(6),
                 (int)reader.GetInt64(7),
                 (ulong)reader.GetInt64(8),
-                (byte)reader.GetInt64(9)));
+                (byte)reader.GetInt64(9),
+                reader.IsDBNull(10) ? null : reader.GetInt64(10)));
         }
 
         return snapshots;
@@ -1062,13 +1064,14 @@ public sealed class Catalogue : IDisposable
         byte captureStatus,
         int signatureState,
         ulong capturedAt = 0,
-        byte consistencyMethod = 1)
+        byte consistencyMethod = 1,
+        long? observedClockSkewMs = null)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = """
             INSERT OR REPLACE INTO snapshots
-                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state, captured_at, consistency_method)
-            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature, $captured, $consistency);
+                (snapshot_id, device_id, backup_set_id, object_id, root_tree, publication_generation, capture_status, signature_state, captured_at, consistency_method, observed_clock_skew_ms)
+            VALUES ($id, $device, $set, $object, $root, $generation, $status, $signature, $captured, $consistency, $skew);
             """;
         command.Parameters.AddWithValue("$id", snapshotId.ToArray());
         command.Parameters.AddWithValue("$device", deviceId.ToArray());
@@ -1080,6 +1083,7 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$signature", signatureState);
         command.Parameters.AddWithValue("$captured", (long)capturedAt);
         command.Parameters.AddWithValue("$consistency", consistencyMethod);
+        command.Parameters.AddWithValue("$skew", observedClockSkewMs is { } skew ? skew : DBNull.Value);
         command.ExecuteNonQuery();
     }
 

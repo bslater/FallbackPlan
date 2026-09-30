@@ -932,6 +932,29 @@ function consistencyName(method) {
   }
 }
 
+// How far the capturing machine's clock stood from its peer's (NFR-TIME-002,
+// contract 1.47): the peer's clock minus the capturing one's, so positive is
+// behind. Relative to the peer, because two clocks disagreeing do not say
+// which is wrong. A capture with no reading — and a service older than 1.47 —
+// draws nothing, which is not a clock in step. Under two seconds is in step,
+// the reading's own uncertainty being half a round trip; from five minutes it
+// is a warning, where the machine's stamps stop being fit to compare.
+function clockSkew(ms) {
+  if (ms == null) return "";
+  const magnitude = Math.abs(ms);
+  if (magnitude < 2000) return `<div class="detail">clock in step with its peer</div>`;
+
+  const seconds = Math.floor(magnitude / 1000);
+  const units = [[Math.floor(seconds / 86400), "d"], [Math.floor(seconds / 3600) % 24, "h"],
+    [Math.floor(seconds / 60) % 60, "min"], [seconds % 60, "s"]];
+  const first = units.findIndex(([n]) => n > 0);
+  const span = units.slice(first, first + 2).filter(([n]) => n > 0).map(([n, u]) => `${n} ${u}`).join(" ");
+  const text = `clock ${span} ${ms > 0 ? "behind its peer" : "ahead of its peer"}`;
+  return magnitude >= 300000
+    ? `<div class="detail"><b class="warn">${esc(text)}</b></div>`
+    : `<div class="detail">${esc(text)}</div>`;
+}
+
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
   const snapshots = [...S.snapshots].reverse()
@@ -958,7 +981,8 @@ function renderSnapshots() {
               <td>${esc(setName(s.backupSetId))}</td>
               <td class="num">${fmtCount(s.files)}</td>
               <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}
-                  ${s.consistencyMethod == null ? "" : `<div class="detail">${esc(consistencyName(s.consistencyMethod))}</div>`}</td>
+                  ${s.consistencyMethod == null ? "" : `<div class="detail">${esc(consistencyName(s.consistencyMethod))}</div>`}
+                  ${clockSkew(s.observedClockSkewMs)}</td>
               <td>${(s.destinations ?? []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ") || "<span class='detail'>—</span>"}</td>
               <td>
                 <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}">Browse</button>

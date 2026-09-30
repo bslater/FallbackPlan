@@ -406,21 +406,6 @@ public static class CliApplication
                     $"{candidates.Count} peers are pinned to store for this machine; name one with --fingerprint."),
             };
         }
-        // The specification's own vocabulary (06 §6), not a friendlier
-        // paraphrase: "best-effort live capture" and "application-consistent"
-        // are materially different promises, and softening either is how a
-        // person ends up trusting a database restore they should not.
-        // An unassigned value is printed rather than guessed at — a future
-        // writer may use one this build has never heard of.
-        static string ConsistencyName(byte method) => method switch
-        {
-            1 => "live",
-            2 => "vss",
-            3 => "filesystem-snapshot",
-            4 => "application-quiesced",
-            _ => string.Create(CultureInfo.InvariantCulture, $"unknown({method})"),
-        };
-
         static bool TryParseEndpoint(string target, out string host, out int port)
         {
             host = string.Empty;
@@ -1069,21 +1054,7 @@ public static class CliApplication
 
                     foreach (var snapshot in result.Snapshots)
                     {
-                        var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
-                            .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-                        var captureStatus = snapshot.CaptureStatus == 1 ? "complete" : "partial";
-                        var destinations = snapshot.Destinations is { Count: > 0 }
-                            ? "  " + string.Join(", ", snapshot.Destinations)
-                            : string.Empty;
-
-                        // A service too old to report the method says nothing
-                        // rather than claiming "live" on its behalf: those are
-                        // different answers (specification 06 §6).
-                        var consistency = snapshot.ConsistencyMethod is { } method
-                            ? $"  {ConsistencyName(method)}"
-                            : string.Empty;
-                        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{destinations}"));
+                        output.WriteLine(DescribeSnapshot(snapshot));
                     }
 
                     return 0;
@@ -1123,7 +1094,8 @@ public static class CliApplication
                     var signature = snapshot.SignatureState == 1 ? "verified" : snapshot.SignatureState == 2 ? "BAD-SIG" : "unverified";
                     output.WriteLine(
                         $"{Hex(snapshot.SnapshotId)}  {when}  {status,-8}  {signature,-10}  " +
-                        ConsistencyName(snapshot.ConsistencyMethod));
+                        ConsistencyName(snapshot.ConsistencyMethod) +
+                        (DescribeClock(snapshot.ObservedClockSkewMs) is { } clock ? $"  {clock}" : string.Empty));
                 }
 
                 return 0;
@@ -2885,6 +2857,91 @@ public static class CliApplication
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"drill:{(row.DrillFailure is null ? "ok" : "FAILED")}@{DateTimeOffset.FromUnixTimeMilliseconds((long)drilled):yyyy-MM-dd}");
+
+    // The specification's own vocabulary (06 §6), not a friendlier
+    // paraphrase: "best-effort live capture" and "application-consistent"
+    // are materially different promises, and softening either is how a
+    // person ends up trusting a database restore they should not.
+    // An unassigned value is printed rather than guessed at — a future
+    // writer may use one this build has never heard of.
+    private static string ConsistencyName(byte method) => method switch
+    {
+        1 => "live",
+        2 => "vss",
+        3 => "filesystem-snapshot",
+        4 => "application-quiesced",
+        _ => string.Create(CultureInfo.InvariantCulture, $"unknown({method})"),
+    };
+
+    /// <summary>One line of <c>snapshots</c>, as a service reports the snapshot.</summary>
+    internal static string DescribeSnapshot(SnapshotDescriptor snapshot)
+    {
+        ThrowHelper.ThrowIfNull(snapshot);
+
+        var capturedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.CapturedAt)
+            .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        var captureStatus = snapshot.CaptureStatus == 1 ? "complete" : "partial";
+        var destinations = snapshot.Destinations is { Count: > 0 }
+            ? "  " + string.Join(", ", snapshot.Destinations)
+            : string.Empty;
+
+        // A service too old to report the method says nothing rather than
+        // claiming "live" on its behalf: those are different answers
+        // (specification 06 §6). The clock follows the same rule.
+        var consistency = snapshot.ConsistencyMethod is { } method
+            ? $"  {ConsistencyName(method)}"
+            : string.Empty;
+        var clock = DescribeClock(snapshot.ObservedClockSkewMs) is { } token ? $"  {token}" : string.Empty;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{clock}{destinations}");
+    }
+
+    /// <summary>
+    /// How far the capturing machine's clock stood from its peer's
+    /// (NFR-TIME-002, contract 1.47), or null where the capture had no reading.
+    /// </summary>
+    /// <remarks>
+    /// Relative to the peer, never "slow" or "fast": two clocks disagreeing do
+    /// not say which is wrong. Under two seconds is in step, the reading's own
+    /// uncertainty being half a round trip; from five minutes the direction is
+    /// shouted, where this machine's stamps stop being fit to compare with
+    /// another's.
+    /// </remarks>
+    internal static string? DescribeClock(long? observedClockSkewMs)
+    {
+        if (observedClockSkewMs is not { } skew)
+        {
+            return null;
+        }
+
+        // Unchecked on purpose: the magnitude of long.MinValue is 2^63, which
+        // negation wraps back to and the cast then reads correctly.
+        var magnitude = unchecked((ulong)(skew < 0 ? -skew : skew));
+        if (magnitude < 2_000)
+        {
+            return "clock:in-step";
+        }
+
+        var direction = skew > 0 ? "behind" : "ahead";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"clock:{Span(magnitude / 1_000)}-{(magnitude >= 300_000 ? direction.ToUpperInvariant() : direction)}");
+
+        // The two largest units, as a person would say it: 4m12s, 2h5m, 1d2h.
+        static string Span(ulong seconds)
+        {
+            var (days, hours, minutes, rest) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60, seconds % 60);
+            return days > 0 ? Pair(days, "d", hours, "h")
+                : hours > 0 ? Pair(hours, "h", minutes, "m")
+                : minutes > 0 ? Pair(minutes, "m", rest, "s")
+                : string.Create(CultureInfo.InvariantCulture, $"{rest}s");
+        }
+
+        static string Pair(ulong major, string majorUnit, ulong minor, string minorUnit) =>
+            minor > 0
+                ? string.Create(CultureInfo.InvariantCulture, $"{major}{majorUnit}{minor}{minorUnit}")
+                : string.Create(CultureInfo.InvariantCulture, $"{major}{majorUnit}");
+    }
 
     /// <summary>
     /// The deep sweep (contract 1.46): the day every stored object was last

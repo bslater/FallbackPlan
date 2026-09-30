@@ -38,6 +38,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     private readonly string? _stateDirectory;
     private readonly FallbackPlan.Application.ReplicaOwnerStore? _owners;
     private readonly FallbackPlan.Application.NoticeStore? _notices;
+    private readonly TimeProvider? _receiptClock;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _connections = [];
     private readonly Lock _gate = new();
@@ -54,9 +55,11 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string? replicationStateDirectory,
         IReadOnlyList<string>? offeredFeatures,
         FallbackPlan.Application.ReplicaOwnerStore? owners,
-        FallbackPlan.Application.NoticeStore? notices)
+        FallbackPlan.Application.NoticeStore? notices,
+        TimeProvider? receiptClock)
     {
         _keypair = keypair;
+        _receiptClock = receiptClock;
         _grants = grants;
         _socket = socket;
         _agentVersion = agentVersion;
@@ -146,6 +149,12 @@ public sealed class RemoteServiceListener : IAsyncDisposable
     /// opens one of its own over <paramref name="replicationStateDirectory"/>,
     /// which is only right for a listener with no runtime beside it.
     /// </param>
+    /// <param name="receiptClock">
+    /// The clock this side stamps a replication receipt's <c>issued_at</c> by,
+    /// the system's by default — the one clock a source reads of this side
+    /// (NFR-TIME-002). A moved one is how a test stands up a peer whose clock
+    /// was set wrong; nothing in production passes anything but the default.
+    /// </param>
     public static RemoteServiceListener Start(
         PeerKeypair keypair,
         PeerGrantStore grants,
@@ -155,7 +164,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         string? replicationStateDirectory = null,
         IReadOnlyList<string>? offeredFeatures = null,
         FallbackPlan.Application.ReplicaOwnerStore? owners = null,
-        FallbackPlan.Application.NoticeStore? notices = null)
+        FallbackPlan.Application.NoticeStore? notices = null,
+        TimeProvider? receiptClock = null)
     {
         ThrowHelper.ThrowIfNull(keypair);
         ThrowHelper.ThrowIfNull(grants);
@@ -168,7 +178,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             socket.Listen(backlog: 16);
             return new RemoteServiceListener(
                 keypair, grants, socket, agentVersion, log ?? NullLogger.Instance,
-                replicationStateDirectory, offeredFeatures, owners, notices);
+                replicationStateDirectory, offeredFeatures, owners, notices, receiptClock);
         }
         catch
         {
@@ -468,7 +478,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     new ReplicationResponder.ReceiptIssuer(
                         session.Binding, _keypair,
                         _stateDirectory is null ? null : DeletionReceiptStore.Open(_stateDirectory),
-                        _stateDirectory is null ? null : ReplicationReceiptStore.Open(_stateDirectory)),
+                        _stateDirectory is null ? null : ReplicationReceiptStore.Open(_stateDirectory),
+                        _receiptClock),
                     _stopping.Token,
                     preread: payload)
                     .ConfigureAwait(false);

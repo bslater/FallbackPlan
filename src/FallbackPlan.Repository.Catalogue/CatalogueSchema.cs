@@ -59,8 +59,14 @@ public static class CatalogueSchema
     /// the forensic rebuild. Without them, naming what a damaged segment
     /// belongs to means opening every manifest of every snapshot.
     /// </para>
+    /// <para>
+    /// v9 over v8: <c>snapshots.observed_clock_skew_ms</c>, the manifest's key
+    /// 14 — how far the capturing machine's clock stood from a peer's
+    /// (NFR-TIME-002). Nullable, because a capture with no reading records
+    /// none, and a row that read it as 0 would claim a clock in step.
+    /// </para>
     /// </remarks>
-    public const int Version = 8;
+    public const int Version = 9;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -131,7 +137,8 @@ public static class CatalogueSchema
             capture_status         INTEGER NOT NULL,
             signature_state        INTEGER NOT NULL,
             captured_at            INTEGER NOT NULL DEFAULT 0,
-            consistency_method     INTEGER NOT NULL DEFAULT 1
+            consistency_method     INTEGER NOT NULL DEFAULT 1,
+            observed_clock_skew_ms INTEGER
         ) WITHOUT ROWID;
 
         CREATE TABLE file_versions (
