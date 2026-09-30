@@ -10,6 +10,7 @@
 |----------|---------|
 | `‖` | Concatenation of byte strings, with no separator and no length prefix unless stated |
 | `u8`, `u16`, `u32`, `u64` | Unsigned integers of that width, **big-endian** |
+| `i64` | A signed 64-bit integer. It appears only inside CBOR objects, where CBOR's own rules encode it (§4): major type 0 when non-negative, major type 1 when negative |
 | `bytes[n]` | Exactly *n* bytes |
 | `0x…` | Hexadecimal literal |
 | *italic* | A value defined elsewhere in this specification |
