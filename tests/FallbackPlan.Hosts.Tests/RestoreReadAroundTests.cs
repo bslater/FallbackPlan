@@ -159,6 +159,24 @@ public sealed class RestoreReadAroundTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Restore_TheDamageItFound_IsNamedByTheFilesAndSnapshotsThatNeedIt()
+    {
+        // FR-VER-005: the notice gives the damage a scope, so a person knows
+        // what that destination could not have given back on its own.
+        await using var runtime = await StartAsync(directShip: true, ("vault", 10), ("spare", 1));
+        await BackUpAsync(runtime);
+        TamperEveryDataBlob(ReplicaRoot(Vault));
+
+        var restored = await RestoreAsync(runtime);
+        Assert.AreEqual("complete", restored.Outcome, string.Join(" | ", restored.FailedSample ?? []));
+
+        var notice = Notice(runtime, "vault").Message;
+        Assert.Contains("docs/notes.txt", notice, StringComparison.Ordinal);
+        Assert.Contains("docs/report.txt", notice, StringComparison.Ordinal);
+        Assert.Contains("1 snapshot(s)", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Restore_FromANamedDestination_ReadsThatCopyAlone()
     {
         await using var runtime = await StartAsync(directShip: true, ("vault", 10), ("spare", 1));

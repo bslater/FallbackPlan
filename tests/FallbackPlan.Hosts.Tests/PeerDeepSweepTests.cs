@@ -125,6 +125,45 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ASweepFindingAtAPeer_NamesWhatNeedsTheObjects_AndTheCopyHereThatHoldsThemSound()
+    {
+        // FR-VER-005: damage with a scope a person can act on. Nothing here
+        // can replace an object at a peer, so what matters to the person
+        // reading is what needs it and whether a copy they can reach is
+        // sound — which the staging archive, here, is.
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        Rot(await PeerReplicaAsync());
+
+        await SweepAsync(runtime);
+
+        var notice = DeepVerifyNotice(runtime).Message;
+        Assert.Contains("docs/big.bin", notice, StringComparison.Ordinal);
+        Assert.Contains("1 snapshot(s)", notice, StringComparison.Ordinal);
+        Assert.Contains("held sound by the staging archive", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASweepFindingAtAPeer_ThatNoCopyHereHoldsSound_SaysSo()
+    {
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var (key, _) = Rot(await PeerReplicaAsync());
+        var staged = PathOf(_harness.RepositoryPath, key);
+        Assert.IsTrue(File.Exists(staged), "the staging archive holds the newest snapshot's blobs");
+        var bytes = await File.ReadAllBytesAsync(staged, Timeout);
+        bytes[bytes.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(staged, bytes, Timeout);
+
+        await SweepAsync(runtime);
+
+        Assert.Contains(
+            "No other copy of the set here holds them sound", DeepVerifyNotice(runtime).Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task OnceThePeersOwnerRemovesTheDamagedObject_TheNextSyncSendsItAgain_AndThePairRecovers()
     {
         await using var runtime = await StartAsync(cadenceDays: 30);

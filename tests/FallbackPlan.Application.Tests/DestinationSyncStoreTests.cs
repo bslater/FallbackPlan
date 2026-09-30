@@ -232,6 +232,75 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordFailure_ForTheDamageAlone_SaysSo_AndAFailureOfAnotherKindUnsaysIt()
+    {
+        // FR-VER-005 (schema 7): a pair failed for what it holds damaged, and
+        // for nothing else, degrades only the snapshots that need those
+        // objects. The row has to say which kind of failure is standing.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 9);
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a"], resolved: [], 2_000);
+
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "deep verification found damage", 2_000, damageOnly: true);
+        Assert.IsTrue(DestinationSyncStore.Open(_state).Find(SetId, "vault")!.DamageOnly, "and it survives a restart");
+
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "the destination refused the session", 3_000);
+        Assert.IsFalse(store.Find(SetId, "vault")!.DamageOnly);
+    }
+
+    [TestMethod]
+    public void RecordFailure_ForDamage_OverAFailureOfAnotherKind_DoesNotNarrowIt()
+    {
+        // The damage finding says nothing about what the earlier failure
+        // found; only a success clears that, and until one the whole copy
+        // stays suspect.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "verification failed: 2 of 16 objects", 1_000);
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a"], resolved: [], 2_000);
+
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "deep verification found damage", 2_000, damageOnly: true);
+
+        Assert.IsFalse(store.Find(SetId, "vault")!.DamageOnly);
+    }
+
+    [TestMethod]
+    public void RecordSuccess_OverUnrepairedDamage_LeavesItFailedForTheDamageAlone()
+    {
+        // A success is the whole copy answering: whatever failure stood
+        // before it, what is left standing after it is the damage.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordFailure(SetId, "vault", DestinationSyncState.Failed, "the drive was read-only", 1_000);
+        store.RecordDamage(SetId, "vault", unrepaired: ["blobs/data/a"], resolved: [], 2_000);
+
+        store.RecordSuccess(SetId, "vault", objects: 5, nowUnixMilliseconds: 3_000, syncedSequence: 12);
+        var damaged = store.Find(SetId, "vault")!;
+        Assert.AreEqual(DestinationSyncState.Failed, damaged.State);
+        Assert.IsTrue(damaged.DamageOnly);
+
+        store.RecordDamage(SetId, "vault", unrepaired: [], resolved: ["blobs/data/a"], 4_000);
+        store.RecordSuccess(SetId, "vault", objects: 0, nowUnixMilliseconds: 5_000, syncedSequence: 12);
+        Assert.IsFalse(store.Find(SetId, "vault")!.DamageOnly, "a pair in sync has no failure to scope");
+    }
+
+    [TestMethod]
+    public void Open_ASchemaSixLedger_ReadsEveryFailureAsOfTheWholeCopy()
+    {
+        // Schema 6 said nothing about why a pair was failed, and the old
+        // reading of a failed pair — every snapshot degraded — is the one that
+        // cannot understate damage.
+        File.WriteAllText(Path.Combine(_state, "destinations.json"), """
+            { "schema_version": 6, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "Failed",
+                  "last_attempt_at": 1000, "damaged_keys": [ "blobs/data/a" ] } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+
+        Assert.AreEqual(DestinationSyncState.Failed, record.State);
+        Assert.IsFalse(record.DamageOnly);
+    }
+
+    [TestMethod]
     public void RecordSweepStall_ThatReadNothing_CountsAnotherStall_AndMovesNoCursor()
     {
         // FR-VER-007. A segment that stopped at a blob it could not read
@@ -516,7 +585,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 7, "destinations": [
+            { "schema_version": 8, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -552,7 +621,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 6", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 7", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
