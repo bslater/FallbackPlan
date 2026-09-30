@@ -129,7 +129,7 @@ Not a phase — a gate that must pass before the format is declared stable. Unti
 5. **Threat model reviewed** against the frozen format.
 6. **Licence decided** — [ADR-0001](adr/0001-licence-and-contribution-model.md) Accepted, `LICENSE` present. *Done:* dual AGPL-3.0-only + commercial for code, Apache-2.0 for `specifications/` — the permissive spec carve-out is what keeps item 2's independent reader unencumbered.
 
-Supporting measurements published against the gate: [segmentation](segmentation-benchmark.md) for item 1, and [metadata encoding size](metadata-encoding-benchmark.md), which closed [Q4](open-questions.md#closed) and handed its residue to item 2.
+Supporting measurements published against the gate: [segmentation](segmentation-benchmark.md) for item 1, [metadata encoding size](metadata-encoding-benchmark.md), which closed [Q4](open-questions.md#closed) and handed its residue to item 2, and [segment hash throughput](segment-hash-benchmark.md), which closed [Q6](open-questions.md#q6--segment-hash-function) with SHA-256 kept and found that no field records the content hash.
 
 Two decisions the gate forced rather than measured are written up in [freeze-gate decisions](freeze-gate-decisions-2026-08.md): whether verify-on-reuse outcomes get a durable repository object (they do not), and how a POSIX name with no valid decoding is rendered where a host string is unavoidable (percent-encoding). Both were settled here because the alternative was a v1 object designed on speculation, or four call sites each inventing a convention.
 

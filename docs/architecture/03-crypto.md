@@ -144,7 +144,7 @@ Two identifiers, with different exposure:
 
 The keying is what stops a storage provider from testing whether a repository contains a known file by hashing that file and looking for its raw digest. Without it, any provider could enumerate which of a list of known documents a user holds.
 
-The hash function is profile-selected; the recommendation and its portability reasoning are in [ADR-0004](../adr/0004-segment-hash-function.md).
+The hash function is SHA-256, fixed by the format version rather than selected by any recorded field. The decision, its measurement against BLAKE3, and the correction of an earlier claim that a profile field selects it are in [ADR-0004](../adr/0004-segment-hash-function.md).
 
 ## 5. Deduplication trust domains
 

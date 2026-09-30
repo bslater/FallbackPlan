@@ -121,7 +121,7 @@ Only the final segment may be short. Nothing here depends on the file fitting in
 
 SHA-256 over each segment's plaintext yields its **content identifier**. Hashing is pipelined with reading and uses hardware acceleration where available.
 
-SHA-256 rather than the faster BLAKE3 because the standalone recovery tool must build and run on every platform with no native dependency — a portability constraint that outranks throughput for this particular choice. The function is profile-selected, so it can change later without a format break. → [ADR-0004](../adr/0004-segment-hash-function.md)
+SHA-256 rather than the faster BLAKE3 because the standalone recovery tool must build and run on every platform with no native dependency — a portability constraint that outranks throughput for this particular choice. No field records the function, so changing it would be a format change; it was measured against BLAKE3 and kept. → [ADR-0004](../adr/0004-segment-hash-function.md)
 
 ### 3c · Decide what actually needs storing
 
