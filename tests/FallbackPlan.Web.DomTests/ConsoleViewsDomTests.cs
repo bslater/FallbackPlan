@@ -99,6 +99,40 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Snapshots_SayWhenACaptureTimeDoesNotFitItsPublicationOrder()
+    {
+        // Contract 1.48 (FR-GC-012): a capture a wrong clock misdated is drawn
+        // as a warning naming which way it is out of step, and a capture that
+        // fits draws nothing.
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListSnapshotsCommand => new SnapshotsResult(
+            [
+                Wire.Snapshot(now, "snap-3"),
+                Wire.Snapshot(978_307_200_000, "snap-2", implausibleCaptureTime: "behind"),
+                Wire.Snapshot(now - 120_000, "snap-1"),
+            ]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+
+        var view = page.Locator("#view-snapshots");
+        var misdated = view.Locator("tr", new() { HasText = "snap-2" });
+        await Expect(misdated.Locator("b.warn", new() { HasText = "dated before snapshots taken ahead of it" }))
+            .ToBeVisibleAsync();
+        var fits = view.Locator("tr", new() { HasText = "snap-3" });
+        await Expect(fits).ToHaveCountAsync(1);
+        await Expect(fits).Not.ToContainTextAsync("implausible");
+    }
+
+    [TestMethod]
     public async Task Snapshots_AreListedNewestFirst_AcrossEverySet()
     {
         // list_snapshots answers each set newest first, one set after

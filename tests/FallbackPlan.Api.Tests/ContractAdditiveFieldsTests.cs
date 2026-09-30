@@ -18,8 +18,10 @@ namespace FallbackPlan.Api.Tests;
 /// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
 /// half of FR-DR-009, 1.44's destination settings, the wire half of
 /// FR-SVC-021, 1.46's deep sweep on each destination row, the wire half
-/// of FR-VER-003's report of a circuit, and 1.47's observed clock skew on
-/// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot".
+/// of FR-VER-003's report of a circuit, 1.47's observed clock skew on
+/// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot",
+/// and 1.48's implausible capture time on each snapshot, the wire half of
+/// FR-GC-012's "the snapshot list says which are flagged and why".
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -928,6 +930,37 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var old = unobserved.Replace(",\"observed_clock_skew_ms\":null", "", StringComparison.Ordinal);
         Assert.AreNotEqual(unobserved, old, "the strip must have removed the field, or the old frame proves nothing");
         Assert.IsNull(JsonSerializer.Deserialize<SnapshotDescriptor>(old, FrameCodec.SerializerOptions)!.ObservedClockSkewMs);
+    }
+
+    [TestMethod]
+    public void TheImplausibleCaptureTime_WireNameValuesAndPre148Default()
+    {
+        // Contract 1.48 (ADR-0078): a snapshot whose capture time does not fit
+        // the order its writer published it in says which way it is out of
+        // step. "behind" is dated before snapshots published ahead of it, and
+        // "ahead" after snapshots published after it.
+        foreach (var direction in new[] { "behind", "ahead" })
+        {
+            var modern = JsonSerializer.Serialize(
+                new SnapshotDescriptor(
+                    new string('e', 32), new string('a', 32), 42UL, 1, 3, ImplausibleCaptureTime: direction),
+                FrameCodec.SerializerOptions);
+
+            Assert.Contains($"\"implausible_capture_time\":\"{direction}\"", modern, StringComparison.Ordinal);
+            Assert.AreEqual(
+                direction,
+                JsonSerializer.Deserialize<SnapshotDescriptor>(modern, FrameCodec.SerializerOptions)!.ImplausibleCaptureTime);
+        }
+
+        // A capture that fits, and a pre-1.48 service, both read as nothing to
+        // report. Neither is read as a capture found plausible.
+        var plausible = JsonSerializer.Serialize(
+            new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3),
+            FrameCodec.SerializerOptions);
+        Assert.IsNull(JsonSerializer.Deserialize<SnapshotDescriptor>(plausible, FrameCodec.SerializerOptions)!.ImplausibleCaptureTime);
+        var old = plausible.Replace(",\"implausible_capture_time\":null", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(plausible, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<SnapshotDescriptor>(old, FrameCodec.SerializerOptions)!.ImplausibleCaptureTime);
     }
 
     [TestMethod]

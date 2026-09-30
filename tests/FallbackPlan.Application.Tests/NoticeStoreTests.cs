@@ -91,4 +91,49 @@ public sealed class NoticeStoreTests
         Assert.AreEqual(3_000UL, second.RaisedAt);
         Assert.HasCount(1, store.Unacknowledged);
     }
+
+    [TestMethod]
+    public void RaiseUnlessAcknowledged_AFindingAPersonAcknowledged_IsNotRaisedAgainWhileUnchanged()
+    {
+        // A finding that stays true for good, such as snapshots a wrong clock
+        // misdated, is looked at once. Asking again on every pass, saying the
+        // same thing, is how a person learns to stop reading.
+        var store = NoticeStore.Open(_state);
+        var raised = store.RaiseUnlessAcknowledged("capture-time-implausible:docs", "snapshot 5a5a is out of step", 1_000);
+        Assert.IsNotNull(raised);
+        Assert.IsTrue(store.Acknowledge(raised.Id, 2_000));
+
+        Assert.IsNull(store.RaiseUnlessAcknowledged("capture-time-implausible:docs", "snapshot 5a5a is out of step", 3_000));
+        Assert.IsEmpty(store.Unacknowledged);
+        Assert.IsEmpty(NoticeStore.Open(_state).Unacknowledged);
+    }
+
+    [TestMethod]
+    public void RaiseUnlessAcknowledged_AFindingThatChanged_IsNewsAgain()
+    {
+        var store = NoticeStore.Open(_state);
+        var first = store.RaiseUnlessAcknowledged("capture-time-implausible:docs", "snapshot 5a5a is out of step", 1_000)!;
+        store.Acknowledge(first.Id, 2_000);
+
+        var second = store.RaiseUnlessAcknowledged(
+            "capture-time-implausible:docs", "snapshots 5a5a and 6b6b are out of step", 3_000);
+
+        Assert.IsNotNull(second);
+        Assert.AreNotEqual(first.Id, second.Id);
+        Assert.AreEqual("snapshots 5a5a and 6b6b are out of step", Assert.ContainsSingle(store.Unacknowledged).Message);
+    }
+
+    [TestMethod]
+    public void RaiseUnlessAcknowledged_WhileUnacknowledged_RefreshesAsRaiseDoes()
+    {
+        var store = NoticeStore.Open(_state);
+        var first = store.RaiseUnlessAcknowledged("capture-time-implausible:docs", "snapshot 5a5a is out of step", 1_000)!;
+
+        var second = store.RaiseUnlessAcknowledged(
+            "capture-time-implausible:docs", "snapshots 5a5a and 6b6b are out of step", 3_000)!;
+
+        Assert.AreEqual(first.Id, second.Id, "one condition is one notice, not a pile");
+        Assert.AreEqual(1_000UL, second.RaisedAt);
+        Assert.AreEqual("snapshots 5a5a and 6b6b are out of step", Assert.ContainsSingle(store.Unacknowledged).Message);
+    }
 }
