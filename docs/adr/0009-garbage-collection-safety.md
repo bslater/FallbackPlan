@@ -91,6 +91,11 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 
 - Retention still uses wall-clock time, because "keep daily snapshots for 30 days" is inherently a wall-clock policy. It is applied to recorded capture times, and an implausible timestamp is flagged rather than silently acted on.
 
+  > **Built 2026-09 ([ADR-0078](0078-implausible-capture-times.md)).** A
+  > timestamp is implausible when it does not fit the order its writer
+  > published it in, by more than the configured skew margin. Retention keeps
+  > such a snapshot, never expires it, and lets it fill no floor place.
+
 ## Alternatives considered
 
 **Leases with generous timeouts.** Rejected. Makes the race less likely without eliminating it, and lengthening the timeout trades one failure (data loss) for another (collection never runs).

@@ -4,7 +4,7 @@
 
 ---
 
-Seventy-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Seventy-eight decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -102,6 +102,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0075](adr/0075-a-restore-reads-around-damage.md) | A restore reads around damage: a restore of a set's own archive reads a record its own store will not serve from the set's other copies, nearest first and verified as any other; receipt schema 5, contract 1.45 | **Built** | `Repository/RepositoryReader` · `Repository/CopySource` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/FirstHolderStore` · `Agent/SetCopies` · `Agent/ReplicaRepairer` · `Agent/ServiceCommandHandler` · `Agent/RestoreSourceRegistry` · `Cli/OperationGateway` · `Repository.Tests/ReadAroundTests`, `Hosts.Tests/RestoreReadAroundTests`, `Cli.Tests/GatewayRestoreReportTests`, `Web.Tests/ConsoleRestoreResultScriptTests` · [notes](#0075--one-copy-was-never-the-only-one) |
 | [0076](adr/0076-damage-is-traced-to-what-needs-it.md) | Damage is traced to what needs it: catalogue schema 8 indexes what each file version and snapshot is made of, the per-snapshot status degrades only what the damage reaches, and the words name the files and snapshots; ledger schema 7 | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository/DamageScope` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Application/SnapshotReplication` · `Application/DestinationSyncStore` · `Agent/DamageReachText` · `Agent/ReplicaSweepJob` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Repository.Tests/CatalogueReachTests`, `Repository.Tests/DamageReachTests`, `Application.Tests/SnapshotReplicationTests`, `Hosts.Tests/DamageScopeTests` · [notes](#0076--a-scope-a-person-can-act-on) |
 | [0077](adr/0077-observed-clock-skew.md) | Observed clock skew: a peer's verified replication receipt, bracketed by this machine's clock, is a reading of how far the two clocks stood apart. It waits on the ledger (schema 8), and the set's next capture signs it into its manifest as key 14, read back per snapshot through catalogue schema v9 and contract 1.47 | **Built** | `Application/ClockObservation` · `Application/DestinationSyncStore` · `Agent/ReplicationInitiator` · `Agent/PeerShipStore` · `Agent/ReplicationResponder` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Domain/Status/ObservedClockSkewText` · `Recovery/RecoveryHost` · `Application.Tests/ObservedClockSkewTests`, `Repository.Tests/ObservedClockSkewTests`, `Hosts.Tests/ObservedClockSkewServiceTests`, `Cli.Tests/SnapshotClockTokenTests`, `Web.Tests/ConsoleSnapshotClockScriptTests` · [notes](#0077--a-clock-can-only-be-compared) |
+| [0078](adr/0078-implausible-capture-times.md) | Implausible capture times: a snapshot whose recorded time does not fit the order its writer published it in, by more than the configured skew margin, is flagged and kept. It is never expired on that time, fills no min-generations place and represents no bucket, at the hub and in every destination's keep-set. The report, contract 1.48's listing and a notice say so | **Built** | `Retention/RetentionPlanner` · `Retention/StagingMark` · `Retention/RetentionRunner` · `Retention/DestinationConvergence` · `Retention/StagingTrim` · `Application/NoticeStore` · `Agent/ImplausibleCaptureNotice` · `Agent/ServiceCommandHandler` · `Agent/FanOut` · `Agent/BackupRunner` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Retention.Tests/ImplausibleCaptureTimeTests`, `Retention.Tests/ImplausibleCaptureRetentionTests`, `Hosts.Tests/ImplausibleCaptureServiceTests`, `Application.Tests/NoticeStoreTests`, `Cli.Tests/SnapshotImplausibleTimeTokenTests`, `Web.Tests/ConsoleSnapshotImplausibleTimeScriptTests` · [notes](#0078--the-order-a-writer-published-in-is-the-one-a-clock-cannot-move) |
 
 ---
 
@@ -1847,3 +1848,46 @@ from the manifest alone. It shipped a little after the rest, because the
 token was the CLI's and the recovery tool may not reference the CLI. The
 token now lives in Domain, which both reach, so the two listings say the same
 thing by construction.
+
+### 0078 — the order a writer published in is the one a clock cannot move
+
+Architecture 04 §7 promised that a snapshot whose recorded time is
+implausible beside its neighbours is flagged rather than silently expired.
+The planner judged every snapshot by the time its writer's clock stamped, so
+a capture taken while the clock read 2001 expired at the first pass after the
+clock was put right. It also expired at every destination on the next sync,
+because convergence runs the same planner. A capture taken while the clock
+ran ahead took a min-generations place from the real newest.
+
+A writer's publication sequence reads no clock, so the yardstick is the
+longest run of a writer's snapshots whose times never fall as that sequence
+rises.
+
+- **Off the run by more than the margin:** implausible, behind or ahead.
+- **Two runs as long:** the later times win, because the other choice is
+  the one that could let a run expire.
+- **Across writers, or without a sequence:** nothing is judged.
+
+This machine's clock decides only which captures may anchor the run. A rule
+that flagged anything dated a day ahead of the collector was measured first,
+and it changed 25 of the retention suite's 108 tests. Those suites capture
+at the live clock and collect at a fixed August date.
+
+Two things surfaced on the way:
+
+- **The survey never carried the writer.** Sequences are one writer's own,
+  and an archive adopted under a new identity starts a second sequence near
+  1. Read as one order, every one of the new writer's snapshots would have
+  been out of step. The survey now reads the writer from the standalone
+  record's cleartext, as it already read the sequence, and the order is
+  judged writer by writer.
+- **A stamp past the calendar threw.** `DateTimeOffset` cannot hold a time
+  past the year 9999. The window rules handed one straight to it, and the
+  largest stamp a manifest can carry read as 1969 and expired as ancient.
+  Both are now the calendar's last instant, as a stamp from the future
+  always was.
+
+A misdated snapshot stays misdated once the clock is put right, so its
+notice is not raised again after a person acknowledges it unchanged
+(`RaiseUnlessAcknowledged`). A flagged snapshot is kept indefinitely. There
+is no snapshot deletion verb, so for now it stays until one exists.

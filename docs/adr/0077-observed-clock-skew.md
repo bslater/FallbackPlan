@@ -262,6 +262,10 @@ refuse a peer, shift a retention window or move a grace. That is specification
 - **It does not flag an implausible capture time.** Architecture 04 §7 also
   says a snapshot whose recorded time is implausible beside its neighbours is
   flagged rather than silently expired. That is retention's, and still unbuilt.
+
+  > **Built since 2026-09 by [ADR-0078](0078-implausible-capture-times.md).**
+  > It judges a capture time against its writer's publication order, not
+  > against this reading, which still decides nothing.
 - **It does not change how filed receipts age.** Receipt retention ages a
   peer's receipt by its `issued_at` against this clock, so a peer whose clock
   is wrong has its receipts aged early or late here. The floor of newest
