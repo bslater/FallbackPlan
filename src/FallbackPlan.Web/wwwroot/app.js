@@ -957,7 +957,10 @@ function clockSkew(ms) {
 
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
-  const snapshots = [...S.snapshots].reverse()
+  // One timeline, newest first across every set. list_snapshots gives each
+  // set newest first but one set after another, and the browser's
+  // older/newer rail reads that order from S.snapshots, so sort a copy.
+  const snapshots = [...S.snapshots].sort((a, b) => Number(b.capturedAt) - Number(a.capturedAt))
     .filter(s => !S.snapshotFilter || s.backupSetId === S.snapshotFilter);
 
   const filter = S.sets.length > 1 ? `

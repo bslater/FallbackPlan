@@ -630,7 +630,11 @@ public sealed record SnapshotDescriptor(
     long? ObservedClockSkewMs = null);
 
 /// <summary>The committed snapshots.</summary>
-/// <param name="Snapshots">The snapshots, oldest first.</param>
+/// <param name="Snapshots">
+/// Each set's snapshots newest first by capture time, the sets in the order
+/// the configuration lists them. The reverse of what a restore source
+/// answers (<see cref="RestoreSourceOpenedResult"/>).
+/// </param>
 public sealed record SnapshotsResult(IReadOnlyList<SnapshotDescriptor> Snapshots) : ServiceResult;
 
 /// <summary>One durable notice, as the ledger holds it (FR-DEST-008).</summary>
@@ -748,7 +752,11 @@ public sealed record RestoreResult(
 /// <param name="SourceId">The handle; expires after idle disuse, closed by <c>close_restore_source</c>.</param>
 /// <param name="SetName">The set whose repository this is.</param>
 /// <param name="Location"><c>staging</c>, or the destination's declared name.</param>
-/// <param name="Snapshots">The snapshots this source holds, oldest first.</param>
+/// <param name="Snapshots">
+/// The snapshots this source holds, oldest first: the guided flow reads them
+/// as a timeline, taking the last at or before a date. The reverse of
+/// <c>list_snapshots</c>.
+/// </param>
 /// <param name="Warnings">
 /// What opening had to note — catalogue-rebuild findings, blobs that would
 /// not open. A warned source still answers; the operator decides with the

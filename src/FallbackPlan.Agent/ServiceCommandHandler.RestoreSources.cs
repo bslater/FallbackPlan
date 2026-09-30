@@ -214,8 +214,10 @@ public sealed partial class ServiceCommandHandler
         var snapshots = new List<SnapshotDescriptor>();
         using (var catalogue = handle.OpenReadCatalogue())
         {
-            // Oldest first, matching list_snapshots — the wizard's
-            // effective-date step resolves against CapturedAt client-side.
+            // Oldest first, the reverse of list_snapshots: the wizard's
+            // effective-date step reads the list as a timeline, taking the
+            // last snapshot at or before the date and calling the first the
+            // earliest.
             foreach (var row in catalogue.EnumerateSnapshots().Reverse())
             {
                 snapshots.Add(new SnapshotDescriptor(
