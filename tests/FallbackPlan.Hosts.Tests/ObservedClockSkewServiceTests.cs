@@ -2,7 +2,9 @@ using System.Net;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Status;
 using FallbackPlan.Protocol;
+using FallbackPlan.Recovery;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -11,7 +13,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// clock runs three hours ahead signs its replication receipts by that clock;
 /// the hub reads its own clock either side of the exchange and keeps the
 /// difference on the pair's ledger row; and the next capture records it in
-/// its manifest, where <c>list_snapshots</c> reads it back per snapshot.
+/// its manifest, where <c>list_snapshots</c> reads it back per snapshot and
+/// the standalone recovery tool reads it from the store alone.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -95,6 +98,37 @@ public sealed class ObservedClockSkewServiceTests : IDisposable
             snapshots.MinBy(s => s.CapturedAt)!.ObservedClockSkewMs,
             "the first run's manifest was signed before its peer answered");
         AssertThreeHoursBehind(snapshots.MaxBy(s => s.CapturedAt)!.ObservedClockSkewMs!.Value);
+    }
+
+    [TestMethod]
+    public async Task TheRecoveryTool_PrintsTheReading_FromTheStoreAlone()
+    {
+        // The recovery tool reads manifests from the store and nothing else
+        // (architecture 08 §5), so what it prints is key 14 as signed, in the
+        // CLI's words, and nothing on a capture that recorded no reading.
+        long recorded;
+        await using (var runtime = await StartAsync(directShip: false))
+        {
+            await BackUpAsync(runtime);
+            await SyncAsync(runtime);
+            _harness.WriteSourceFile("docs/second.txt", "a second capture, after the peer was met");
+            await BackUpAsync(runtime);
+
+            var snapshots = await SnapshotsAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off));
+            recorded = snapshots.MaxBy(s => s.CapturedAt)!.ObservedClockSkewMs!.Value;
+        }
+
+        var listed = await HostHarness.RunAsync(
+            RecoveryHost.RunAsync,
+            "snapshots", "--repo", _harness.RepositoryPath, "--passphrase-env", _harness.PassphraseVariable);
+        Assert.AreEqual(0, listed.ExitCode, listed.Error);
+
+        // Newest first: the capture that met the peer, then the one before.
+        var rows = listed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.HasCount(2, rows, listed.Output);
+        Assert.EndsWith($"  {ObservedClockSkewText.Token(recorded)}", rows[0], StringComparison.Ordinal);
+        Assert.Contains("-BEHIND", rows[0], StringComparison.Ordinal, "three hours is well past the point the direction is shouted");
+        Assert.DoesNotContain("clock:", rows[1], StringComparison.Ordinal, "the first capture had met no peer");
     }
 
     private static void AssertThreeHoursBehind(long skew) =>

@@ -179,11 +179,13 @@ internal static class Wire
             DeviceId: DeviceIdHex,
             SignedInUser: signedInUser);
 
-    public static BackupSetDescriptor Set(string name = "docs") =>
-        new(SetId, name, "/src", null, [], [], ["vault"]);
+    public static BackupSetDescriptor Set(string name = "docs", string? id = null) =>
+        new(id ?? SetId, name, "/src", null, [], [], ["vault"]);
 
-    public static SnapshotDescriptor Snapshot(ulong capturedAt, string id = "snap-1", long? observedClockSkewMs = null) =>
-        new(id, SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1, ObservedClockSkewMs: observedClockSkewMs);
+    public static SnapshotDescriptor Snapshot(
+        ulong capturedAt, string id = "snap-1", long? observedClockSkewMs = null, string? setId = null) =>
+        new(id, setId ?? SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1,
+            ObservedClockSkewMs: observedClockSkewMs);
 }
 
 /// <summary>
