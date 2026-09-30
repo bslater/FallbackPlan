@@ -242,7 +242,13 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
+
+    /// <summary>
+    /// The clock skew margin, in hours, a configuration that states none
+    /// means: a day, the skew NFR-TIME-001 is proved against.
+    /// </summary>
+    public const int DefaultClockSkewMarginHours = 24;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -342,6 +348,29 @@ public sealed record ClientConfiguration
     public ByteRate? EffectiveBackgroundReadLimit =>
         BackgroundReadLimit is { } text && ByteRate.TryParse(text, out var rate, out _) ? rate : null;
 
+    /// <summary>
+    /// How far, in hours, a collector allows its clock to disagree with the
+    /// clock that stamped a write intent before the intent may expire
+    /// (specification 08 §7, ADR-0009 Amendment 7), 1..8760. **Absent means
+    /// a day**, which is what every file written before schema 8 says by not
+    /// mentioning it.
+    /// </summary>
+    /// <remarks>
+    /// Installation-wide, because the clocks it allows for are this
+    /// installation's. Read afresh by each retention pass, as the window is.
+    /// It binds only once an intent's generation has passed, and it trades
+    /// space for tolerance: a larger margin holds an abandoned job's blobs
+    /// longer, never a live one's shorter.
+    /// </remarks>
+    [JsonPropertyName("clock_skew_margin_hours")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ClockSkewMarginHours { get; init; }
+
+    /// <summary>The margin this configuration means, the default applied.</summary>
+    [JsonIgnore]
+    public TimeSpan EffectiveClockSkewMargin =>
+        TimeSpan.FromHours(ClockSkewMarginHours ?? DefaultClockSkewMarginHours);
+
     /// <summary>A default configuration with no sets.</summary>
     public static ClientConfiguration Default { get; } = new() { SchemaVersion = CurrentSchemaVersion };
 
@@ -423,10 +452,15 @@ public sealed record ClientConfiguration
     /// <c>transfer_limit</c>. As with 3 → 4 there is nothing to move — absent
     /// means unlimited — and the version rises for the same reason.
     /// </para>
+    /// <para>
+    /// <b>7 → 8</b> (ADR-0009 Amendment 7): the file gains an optional
+    /// <c>clock_skew_margin_hours</c>. Nothing moves — absent means a day —
+    /// and the version rises for the same reason again.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -511,6 +545,16 @@ public sealed record ClientConfiguration
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_BackgroundReadLimitInvalid(path, readDefect!));
+        }
+
+        // An hour to a year. Zero is the assumption that every clock agrees,
+        // which is the one the margin exists not to make; negative would
+        // expire an intent before its writer's own declared duration; and
+        // past a year it no longer absorbs skew but turns expiry off.
+        if (ClockSkewMarginHours is { } margin and (< 1 or > 8760))
+        {
+            throw new ClientStateException(
+                Strings.FormatClientConfiguration_ClockSkewMarginOutOfRange(path, margin));
         }
 
         var destinationNames = new HashSet<string>(StringComparer.Ordinal);

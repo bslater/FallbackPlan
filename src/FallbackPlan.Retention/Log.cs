@@ -46,4 +46,14 @@ internal static partial class Log
         int tombstonesCleared,
         int trimmed,
         long trimmedBytes);
+
+    // The generation beside the margin, because the margin binds only once an
+    // intent's generation has passed: together they are what decided which
+    // intents were live.
+    [LoggerMessage(
+        EventId = 2904, Level = LogLevel.Debug,
+        Message = "Write intents for {SetName}: {LiveIntents} live at generation {Generation}, "
+            + "surveyed with a {ClockSkewMargin} clock skew margin")]
+    internal static partial void IntentsSurveyed(
+        ILogger logger, string setName, int liveIntents, ulong generation, TimeSpan clockSkewMargin);
 }

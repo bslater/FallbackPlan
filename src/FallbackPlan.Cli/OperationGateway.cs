@@ -1011,12 +1011,16 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 .LoadAsync(session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
             problems += unparseable + journalFindings.Count;
 
+            // The collector's margin, so the count is the collector's: a
+            // check calling an intent expired while the collector still
+            // honours it would disagree with the thing it checks.
+            var margin = ClientConfiguration.Load(session.ConfigurationPath, logger).EffectiveClockSkewMargin;
             var survey = IntentSurveyor.Survey(
                 records, unparseable, session.CurrentGeneration.Value,
-                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), skewMarginMs: 300_000);
+                (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), (ulong)margin.TotalMilliseconds);
 
             lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"journal    {records.Count} record(s), {unparseable} unparseable, {survey.LiveIntents.Count} live intent(s)"));
+                $"journal    {records.Count} record(s), {unparseable} unparseable, {survey.LiveIntents.Count} live intent(s); skew margin {margin.TotalHours} h"));
             lines.AddRange(journalFindings.Select(finding => $"journal    {finding.Kind}: {finding.Detail}"));
         }
 

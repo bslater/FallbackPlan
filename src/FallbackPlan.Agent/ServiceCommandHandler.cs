@@ -256,6 +256,7 @@ public sealed partial class ServiceCommandHandler(
     {
         var lines = new List<string>();
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var clockSkewMargin = runtime.Configuration.EffectiveClockSkewMargin;
 
         foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -329,7 +330,8 @@ public sealed partial class ServiceCommandHandler(
                     // its records are still reachable and still physically
                     // present — and compaction would reclaim nothing, ever
                     // (ADR-0067).
-                    objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId).ConfigureAwait(false);
+                    objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId,
+                    clockSkewMargin: clockSkewMargin).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
                 // the scheduled sync holds no authority to delete, so it

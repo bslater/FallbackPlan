@@ -7,6 +7,7 @@ using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Retention;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -18,7 +19,10 @@ namespace FallbackPlan.Retention.Tests;
 /// and expires no write intent whose generation has not passed. What a
 /// retention window keeps does follow the collector's own clock, because a
 /// window is a statement about its calendar, and that is policy rather than
-/// safety.
+/// safety. Once an intent's generation has passed, what keeps a collector's
+/// wrong clock from expiring it is the configured skew margin (NFR-TIME-002,
+/// ADR-0009 Amendment 7): a day unless the installation says otherwise, which
+/// the collector is handed and says it surveyed with.
 /// </summary>
 /// <remarks>
 /// The skew is injected as the collector's clock against a writer running on
@@ -132,10 +136,11 @@ public sealed class ClockSkewTests : IDisposable
     public void AWriteIntent_WhoseGenerationHasNotPassed_IsLive_WhateverTheCollectorsClock()
     {
         // The service declares an hour and expiry two generations on (the
-        // backup runner), and a collector surveys with a five-minute margin.
-        // A collector a day or a year ahead has let the hour pass many times
-        // over; the intent still covers its blobs, because the generation half
-        // has not passed and a clock cannot pass it.
+        // backup runner). Surveyed with the five minutes collectors had before
+        // the margin was configured, the least a margin has been, a collector
+        // a day or a year ahead has let the hour pass many times over; the
+        // intent still covers its blobs, because the generation half has not
+        // passed and a clock cannot pass it.
         const ulong IssuedAt = 1_785_000_000_000;
         var writer = WriterId.FromBytes([.. Enumerable.Repeat((byte)0x77, 16)]);
         var blob = BlobId.FromBytes([.. Enumerable.Repeat((byte)0x42, 16)]);
@@ -152,6 +157,58 @@ public sealed class ClockSkewTests : IDisposable
 
             Assert.IsTrue(survey.IsCovered(blob), $"a collector {skew.TotalHours:+0;-0} h off the writer expired a live intent");
         }
+    }
+
+    [TestMethod]
+    public void OnceItsGenerationHasPassed_TheDefaultMargin_AbsorbsADayOfSkew()
+    {
+        // The margin binds only once the generation half has passed, and then
+        // it is all that stands between a collector's clock a day ahead and an
+        // intent expired while its writer still runs. Surveyed in the last
+        // minute of the writer's declared hour by a collector a day ahead, the
+        // default holds the intent, where the five minutes it replaces let it
+        // go.
+        const ulong IssuedAt = 1_785_000_000_000;
+        var blob = BlobId.FromBytes([.. Enumerable.Repeat((byte)0x43, 16)]);
+        IReadOnlyList<JournalRecord> records =
+        [
+            new(JournalRecordKind.WriteIntent, WriterId.FromBytes([.. Enumerable.Repeat((byte)0x78, 16)]), 1, IssuedAt,
+                new JournalPayload.WriteIntent(new byte[16], [blob], 3_600_000, ExpiryGeneration: 2, IntentPurpose.Backup)),
+        ];
+        var margin = (ulong)ClientConfiguration.Default.EffectiveClockSkewMargin.TotalMilliseconds;
+        var aDayAhead = IssuedAt + (ulong)(TimeSpan.FromDays(1) + TimeSpan.FromMinutes(59)).TotalMilliseconds;
+
+        Assert.IsTrue(
+            IntentSurveyor.Survey(records, 0, currentGeneration: 3, aDayAhead, margin).IsCovered(blob),
+            "a collector a day ahead expired an intent inside its writer's declared hour");
+        Assert.IsFalse(
+            IntentSurveyor.Survey(records, 0, currentGeneration: 3, aDayAhead, skewMarginMs: 300_000).IsCovered(blob),
+            "the control: five minutes does not absorb the day");
+
+        // The margin delays expiry; it does not abolish it. Once the declared
+        // hour and the whole margin have run by the collector's clock, the
+        // intent goes.
+        Assert.IsFalse(
+            IntentSurveyor.Survey(records, 0, currentGeneration: 3, IssuedAt + 3_600_000 + margin, margin).IsCovered(blob));
+    }
+
+    [TestMethod]
+    public async Task TheCollector_SurveysIntentsUnderTheMarginItIsGiven_AndADayWhenGivenNone()
+    {
+        // Nothing a pass deletes can show the margin while the key generation
+        // never advances, so the pass says it: which margin decided the
+        // intents is what somebody reading the log afterwards needs, and what
+        // the service's wiring is held to.
+        await BackUpAsync(PassDay, "day one content");
+        var store = new LocalFileSystemObjectStore(Path.Combine(ArchivesRoot, SetId));
+
+        var configured = new RecordingLogger();
+        await RunAsync(store, apply: false, DateTimeOffset.UtcNow, configured, TimeSpan.FromHours(6));
+        Assert.AreEqual(TimeSpan.FromHours(6), SurveyedMargin(configured));
+
+        var unstated = new RecordingLogger();
+        await RunAsync(store, apply: false, DateTimeOffset.UtcNow, unstated);
+        Assert.AreEqual(TimeSpan.FromDays(1), SurveyedMargin(unstated));
     }
 
     [TestMethod]
@@ -182,7 +239,12 @@ public sealed class ClockSkewTests : IDisposable
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
-    private async Task<RetentionReport> RunAsync(LocalFileSystemObjectStore store, bool apply, DateTimeOffset collectorNow)
+    private async Task<RetentionReport> RunAsync(
+        LocalFileSystemObjectStore store,
+        bool apply,
+        DateTimeOffset collectorNow,
+        RecordingLogger? logger = null,
+        TimeSpan? clockSkewMargin = null)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         var sync = DestinationSyncStore.Open(StateDirectory);
@@ -196,7 +258,16 @@ public sealed class ClockSkewTests : IDisposable
             (ulong)collectorNow.ToUnixTimeMilliseconds(),
             CancellationToken.None,
             "docs",
-            reclaim: opened.Reclaim);
+            logger,
+            reclaim: opened.Reclaim,
+            clockSkewMargin: clockSkewMargin);
+    }
+
+    private static object? SurveyedMargin(RecordingLogger log)
+    {
+        const int IntentsSurveyed = 2904;
+        return Assert.ContainsSingle(log.Records.Where(record => record.EventId == IntentsSurveyed))
+            .Value("ClockSkewMargin");
     }
 
     private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)

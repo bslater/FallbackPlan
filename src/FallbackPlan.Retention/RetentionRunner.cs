@@ -59,6 +59,11 @@ public static class RetentionRunner
     /// </param>
     /// <param name="resolveLocation">Where the index says an object now lives — what lets this pass condemn a blob compaction drained (ADR-0067). Null plans as it did before compaction existed.</param>
     /// <param name="compactionPolicy">Which of the compaction backlog a pass would rewrite; <see cref="CompactionPolicy.Default"/> when omitted.</param>
+    /// <param name="clockSkewMargin">
+    /// The installation's clock skew margin, added to a write intent's declared
+    /// duration before it may expire (specification 08 §7); a day when omitted,
+    /// as a configuration that states none means.
+    /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -75,16 +80,19 @@ public static class RetentionRunner
         ILogger? logger = null,
         ReclaimAuthority? reclaim = null,
         Func<ObjectId, BlobId?>? resolveLocation = null,
-        CompactionPolicy? compactionPolicy = null)
+        CompactionPolicy? compactionPolicy = null,
+        TimeSpan? clockSkewMargin = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
+        var margin = clockSkewMargin ?? TimeSpan.FromHours(ClientConfiguration.DefaultClockSkewMarginHours);
 
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(destinations);
         ThrowHelper.ThrowIfNull(syncRecordFor);
         ThrowHelper.ThrowIfNull(trimVerificationFor);
+        ArgumentOutOfRangeException.ThrowIfLessThan(margin, TimeSpan.Zero, nameof(clockSkewMargin));
 
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
 
@@ -139,7 +147,8 @@ public static class RetentionRunner
         }
 
         var intents = IntentSurveyor.Survey(
-            records, unparseable, sealingGeneration, nowUnixMilliseconds, skewMarginMs: 300_000);
+            records, unparseable, sealingGeneration, nowUnixMilliseconds, (ulong)margin.TotalMilliseconds);
+        Log.IntentsSurveyed(log, set, intents.LiveIntents.Count, sealingGeneration, margin);
 
         var plan = CollectionPlanner.Plan(
             survey, selection, gate, reader, reachable, unwalkable, intents,

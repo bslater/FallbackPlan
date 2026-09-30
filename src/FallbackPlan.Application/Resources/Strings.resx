@@ -151,6 +151,9 @@
   <data name="ClientConfiguration_BackgroundReadLimitInvalid" xml:space="preserve">
     <value>'{0}' declares a background_read_limit this build cannot read: {1}</value>
   </data>
+  <data name="ClientConfiguration_ClockSkewMarginOutOfRange" xml:space="preserve">
+    <value>'{0}' declares clock_skew_margin_hours {1}; the margin takes 1 to 8760 hours, an hour to a year (ADR-0009).</value>
+  </data>
   <data name="ClientConfiguration_DestinationTransferLimitInvalid" xml:space="preserve">
     <value>Destination '{0}' declares a transfer_limit this build cannot read: {1}</value>
   </data>

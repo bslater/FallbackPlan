@@ -223,12 +223,11 @@ No component treats wall-clock time as authoritative for correctness. Specifical
 - Snapshot manifests record **observed clock skew** where a peer or store exposes a time reference, so a device with a badly wrong clock is diagnosable after the fact.
 - Grace periods are expressed with enough margin to absorb realistic skew, and the margin is a configured value rather than an assumption.
 
-> **Proved 2026-09 (NFR-TIME-001, `Retention.Tests/ClockSkewTests`):** a collector a day ahead of the writer, a day behind, or a year ahead sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no write intent whose generation has not passed. What a window keeps moves with the collector's clock, as a window's must. Three statements above are not yet built:
+> **Proved 2026-09 (NFR-TIME-001, `Retention.Tests/ClockSkewTests`):** a collector a day ahead of the writer, a day behind, or a year ahead sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no write intent whose generation has not passed. What a window keeps moves with the collector's clock, as a window's must. Two statements above are not yet built:
 > - a snapshot with an implausible timestamp is not flagged;
-> - observed skew is not recorded in manifests;
-> - the intent margin is a fixed five minutes, not a configured value (NFR-TIME-002).
+> - observed skew is not recorded in manifests (NFR-TIME-002).
 >
-> The margin matters only once a generation passes, and the key generation expiry is measured in never advances today.
+> **Configured 2026-09 ([ADR-0009 Amendment 7](../adr/0009-garbage-collection-safety.md#amendment-7-2026-09--the-skew-margin-configured)):** the intent margin is `clock_skew_margin_hours`, a day when the configuration file states none, where it had been a fixed five minutes. Each retention pass and the check read it. It binds only once a generation passes, and the key generation expiry is measured in never advances today.
 
 ## 8. Concurrent maintenance
 
