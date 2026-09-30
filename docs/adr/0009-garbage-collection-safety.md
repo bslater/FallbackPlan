@@ -2,7 +2,7 @@
 
 **Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md))
 **Date:** 2026-08
-**Requirements:** FR-SNP-004, FR-GC-002, FR-GC-003, FR-GC-006, NFR-TIME-001
+**Requirements:** FR-SNP-004, FR-GC-002, FR-GC-003, FR-GC-006, NFR-TIME-001, NFR-TIME-002
 **Review finding:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot)
 
 ---
@@ -55,6 +55,8 @@ An intent names blobs before they exist, which is impossible for a content-deriv
 ### Amendment 3 — expiry needs two conditions
 
 An intent expires only when the repository has advanced past `expiry_generation` **and** the writer's `declared_max_duration` has elapsed with a configured skew margin.
+
+> **Configured 2026-09 ([Amendment 7](#amendment-7-2026-09--the-skew-margin-configured)).** Until then the margin was a fixed five minutes. It is now `clock_skew_margin_hours`, and a day when the configuration file states none.
 
 Generation alone couples one writer's liveness to other writers' activity — generations advance when *others* publish, so a laptop running a three-week initial backup can be expired in two days by siblings backing up hourly, and have its blobs collected mid-job. Wall-clock alone reintroduces the clock dependency this ADR exists to remove. The duration is declared by the writer rather than fixed globally, because a 4 TB first backup and a 20 MB incremental have no single safe constant between them ([PT-5](../review/2026-08-fix-pressure-test.md#pt-5--intent-expiry-mixes-generation-and-wall-clock-and-couples-slow-writers-to-busy-repositories)). An audited administrative force-expire covers genuinely abandoned jobs.
 
@@ -181,6 +183,53 @@ Steps 6 and 9 of this record's algorithm are what make that safe, and the
 built pass keeps them in the order this record requires while running the
 whole phase after the sweep rather than inside it (architecture 07 §3.3).
 
+## Amendment 7 (2026-09) — the skew margin, configured
+
+Amendment 3 has the duration half of expiry carry "a configured skew margin".
+It was not configured. Both places that survey intents added a fixed five
+minutes: the collector's pass and the CLI's check. Five minutes absorbs a
+clock drifting, not a clock set wrong. Proving NFR-TIME-001 showed what that
+would cost. Once an intent's generation has passed, a collector a day ahead
+of the writer would expire the intent while its writer was still inside its
+declared hour. That cannot happen today only because the key generation,
+which expiry is measured in, never advances (Amendment 5).
+
+1. **The margin is an installation setting.** It is
+   `clock_skew_margin_hours` in the configuration file, and the file's schema
+   rises from 7 to 8. **Absent means a day**, the skew NFR-TIME-001 is proved
+   against. The range is an hour to a year, and a value outside it is refused
+   at load, by name:
+   - zero, because it assumes every clock agrees, which is the one
+     assumption the margin exists not to make;
+   - a negative value, which would expire an intent before its writer's own
+     declared duration had run;
+   - more than a year, which no longer absorbs skew but turns expiry off.
+
+   A larger margin costs space and never safety: an abandoned job's blobs
+   are held longer, and a live job's are never held shorter.
+2. **Read where it is used.** Each retention pass reads the margin afresh, as
+   it reads the background window, and surveys intents under it. The pass
+   logs the margin beside the generation (event 2904), because together they
+   decide which intents are live. What a pass deletes cannot show the margin
+   while the generation never advances, so the log is how a person reading it
+   afterwards learns which margin was in force.
+3. **One margin, not two.** The check counts live intents under the same
+   configured margin and names it in its journal line. A check that called
+   an intent expired while the collector still honoured it would disagree
+   with the thing it checks.
+4. **In the file, not yet in the settings verbs.** The window, the limits
+   and the pool width are read and set through the service
+   ([ADR-0037](0037-configuration-over-the-command-contract.md) Amendment 1).
+   The margin is set only in the file, because it binds nothing until a
+   generation can pass, and a control that visibly changes nothing reads as
+   a broken one. It joins the verbs when key rotation makes it bind. Until
+   then `update_service_settings` keeps it, as it keeps every field it does
+   not carry.
+
+The tombstone grace needs no margin: it is a publication, not a span of time
+(Amendment 5). The other half of NFR-TIME-002, the observed skew recorded in
+each snapshot's manifest, is not part of this amendment.
+
 ## Status history
 
 | Date | Status | Note |
@@ -190,3 +239,4 @@ whole phase after the sweep rather than inside it (architecture 07 §3.3).
 | 2026-08 | Accepted (amended) | Amendment 4: the hub marks against staging, destinations are converged on instruction, and deletion never outruns replication ([ADR-0034](0034-hub-and-spoke-destinations.md)). |
 | 2026-08 | Accepted (amended) | Amendment 6: for direct-ship sets the hub marks against the metadata store through the sink, convergence is the deleting half, and compaction's placement is deferred to ADR-0025's record ([ADR-0046](0046-direct-to-destination-publication.md)). |
 | 2026-09 | Accepted | NFR-TIME-001 proved for GC safety under injected skew: a collector a day ahead, a day behind or a year ahead of the writer sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no intent whose generation has not passed (`Retention.Tests/ClockSkewTests`). "None of them a clock" holds for intents only by circumstance: expiry's duration half reads the collector's clock against the writer's stamp over a fixed five-minute margin, and is safe under skew today because the key generation never advances. A configured margin is NFR-TIME-002's |
+| 2026-09 | Accepted (amended) | Amendment 7: the skew margin is configured. It is `clock_skew_margin_hours`, a day when absent, where it was a fixed five minutes. Each retention pass and the check read it, and a pass logs it beside the generation it binds against (NFR-TIME-002, `Retention.Tests/ClockSkewTests`, `Hosts.Tests/ClockSkewMarginServiceTests`) |
