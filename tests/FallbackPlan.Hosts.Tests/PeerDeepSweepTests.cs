@@ -14,7 +14,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// carried on every pass, a segment bounded by what the peer's link can spare.
 /// What it finds is held against the pair until it has gone, and a peer that
 /// will not serve the session is said to be unreadable, never blamed
-/// (FR-VER-008, ADR-0035 Amendment 2).
+/// (FR-VER-008, ADR-0035 Amendment 2). Its row in the status matrix reports
+/// the cadence, or that only a person's request reads it (FR-VER-003).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -409,6 +410,44 @@ public sealed class PeerDeepSweepTests : IDisposable
         {
             // Best effort: a test directory that will not delete is not a test failure.
         }
+    }
+
+    [TestMethod]
+    public async Task Status_APeerWhoseOperatorStatedNoCadence_ReportsASweepOnlyAPersonRuns()
+    {
+        // A peer with no stated cadence is never swept on a schedule (FR-VER-008).
+        // Its row says so, rather than reading like a sweep that is overdue.
+        await using var runtime = await StartAsync(cadenceDays: null);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var sweep = (await StatusRowAsync(runtime)).DeepSweep;
+        Assert.IsNotNull(sweep, "a person can still have a peer read in full, so its row reports the sweep");
+        Assert.IsNull(sweep.IntervalDays, "nothing sweeps this peer on a schedule");
+        Assert.IsNull(sweep.LastReadAt);
+        Assert.IsNull(sweep.CircuitClosedAt);
+    }
+
+    [TestMethod]
+    public async Task Status_APeerWithAStatedCadence_ReportsThatCadence_AndTheCircuitItClosed()
+    {
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        Assert.IsNotNull(Row(runtime).SweepCompletedAt, "the control: one segment reads a replica this small whole");
+
+        var sweep = (await StatusRowAsync(runtime)).DeepSweep;
+        Assert.IsNotNull(sweep);
+        Assert.AreEqual(30, sweep.IntervalDays);
+        Assert.AreEqual(Row(runtime).SweepCompletedAt, sweep.CircuitClosedAt);
+    }
+
+    /// <summary>The peer's row as the status matrix answers it, through the command handler.</summary>
+    private async Task<DestinationStatusDescriptor> StatusRowAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
+        return status.Sets.Single().Destinations.Single(row => row.Name == "friend");
     }
 
     private static DestinationSyncRecord Row(ServiceRuntime runtime) =>

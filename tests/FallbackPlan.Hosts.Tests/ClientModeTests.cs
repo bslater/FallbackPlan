@@ -10,7 +10,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
-/// Establishes FR-SVC-008, and the CLI half of FR-SVC-021.
+/// Establishes FR-SVC-008, the CLI half of FR-SVC-021, and the CLI half of
+/// FR-VER-003's report of a circuit.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -225,6 +226,43 @@ public sealed class ClientModeTests : IDisposable
 
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.DoesNotContain("limited to", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Status_SaysWhenADestinationWasLastReadBackInFull_AndNeverBeforeItWas()
+    {
+        // Contract 1.46: the row's sweep token, from the service's own ledger.
+        // Before, the matrix could not tell a replica read back last night
+        // from one never read back at all.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var before = await ServiceCliAsync("status", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, before.ExitCode, before.All);
+        Assert.Contains("sweep:never", before.All, StringComparison.Ordinal);
+
+        var synced = await ServiceCliAsync("sync", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, synced.ExitCode, synced.All);
+        var verified = await ServiceCliAsync("verify-destination", "--full", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, verified.ExitCode, verified.All);
+
+        var closed = runtime.DestinationSync.Find(runtime.Configuration.BackupSets.Single().Id, "vault")?.SweepCompletedAt;
+        Assert.IsNotNull(closed, "the control: verify-destination --full read the whole replica back");
+
+        var after = await ServiceCliAsync("status", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, after.ExitCode, after.All);
+        Assert.Contains(
+            string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"sweep:ok@{DateTimeOffset.FromUnixTimeMilliseconds((long)closed.Value):yyyy-MM-dd}"),
+            after.All,
+            StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -660,6 +698,13 @@ public sealed class ClientModeTests : IDisposable
 
     /// <summary>Runs a CLI verb against the service this harness started, with no direct-mode flags.</summary>
     private static Task<HostHarness.Invocation> RunAgainstServiceAsync(params string[] args) =>
+        HostHarness.RunAsync(
+            (a, o, e, c) => Cli.CliApplication.RunAsync(
+                a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),
+            args);
+
+    /// <summary>Runs a CLI verb as a client of the running service: no direct-mode options appended.</summary>
+    private static Task<HostHarness.Invocation> ServiceCliAsync(params string[] args) =>
         HostHarness.RunAsync(
             (a, o, e, c) => Cli.CliApplication.RunAsync(
                 a, new InvocationConfiguration { Output = o, Error = e, EnableDefaultExceptionHandler = false }),

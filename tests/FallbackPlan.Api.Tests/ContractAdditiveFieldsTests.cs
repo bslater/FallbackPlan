@@ -16,8 +16,9 @@ namespace FallbackPlan.Api.Tests;
 /// FR-SVC-006's plan. Later additions ride here too, among them contract
 /// 1.40's adoption answer naming the retention an archive recorded, the wire
 /// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
-/// half of FR-DR-009, and 1.44's destination settings, the wire half of
-/// FR-SVC-021.
+/// half of FR-DR-009, 1.44's destination settings, the wire half of
+/// FR-SVC-021, and 1.46's deep sweep on each destination row, the wire half
+/// of FR-VER-003's report of a circuit.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -835,6 +836,58 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.AreEqual(0, row.VerifiedDigest);
         Assert.AreEqual(0, row.VerifiedChunk);
         Assert.AreEqual("proven", row.Verification);
+    }
+
+    [TestMethod]
+    public void TheDeepSweep_WireNamesAndPre146Default()
+    {
+        // Contract 1.46 (ADR-0035 Amendment 3): each destination row carries
+        // its deep sweep — when a circuit last closed, how far the one under
+        // way has read, whether it has stopped, and how often it runs.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null,
+                "other-drive", "proven",
+                DeepSweep: new DeepSweepDescriptor(
+                    IntervalDays: 7, CircuitClosedAt: 5_000, ReadThisCircuit: 12, LastReadAt: 6_000,
+                    Stalls: 2, StalledOn: "blobs/data/ab/abcdef")),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"deep_sweep\":{", modern, StringComparison.Ordinal);
+        Assert.Contains("\"interval_days\":7", modern, StringComparison.Ordinal);
+        Assert.Contains("\"circuit_closed_at\":5000", modern, StringComparison.Ordinal);
+        Assert.Contains("\"read_this_circuit\":12", modern, StringComparison.Ordinal);
+        Assert.Contains("\"last_read_at\":6000", modern, StringComparison.Ordinal);
+        Assert.Contains("\"stalls\":2", modern, StringComparison.Ordinal);
+        Assert.Contains("\"stalled_on\":\"blobs/data/ab/abcdef\"", modern, StringComparison.Ordinal);
+
+        var read = JsonSerializer.Deserialize<DestinationStatusDescriptor>(modern, FrameCodec.SerializerOptions)!;
+        Assert.AreEqual(5_000UL, read.DeepSweep!.CircuitClosedAt);
+        Assert.AreEqual(12, read.DeepSweep.ReadThisCircuit);
+
+        // A destination only a person's request reads in full has a sweep
+        // with no interval — which is not a destination nothing can read in
+        // full: that one has no sweep at all.
+        var manual = JsonSerializer.Deserialize<DestinationStatusDescriptor>(
+            JsonSerializer.Serialize(
+                new DestinationStatusDescriptor(
+                    "friend", "peer", "in-sync", LastSuccessAt: 1_000, Detail: null, "other-site", "proven",
+                    DeepSweep: new DeepSweepDescriptor(IntervalDays: null, CircuitClosedAt: null)),
+                FrameCodec.SerializerOptions),
+            FrameCodec.SerializerOptions)!;
+        Assert.IsNotNull(manual.DeepSweep);
+        Assert.IsNull(manual.DeepSweep.IntervalDays);
+        Assert.AreEqual(0, manual.DeepSweep.Stalls);
+
+        // A pre-1.46 frame carries no sweep and reads as none reported, never
+        // as a sweep that has not run.
+        var unswept = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null, "other-drive", "proven"),
+            FrameCodec.SerializerOptions);
+        var old = unswept.Replace(",\"deep_sweep\":null", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(unswept, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!.DeepSweep);
     }
 
     [TestMethod]
