@@ -525,6 +525,53 @@ somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
   and said by `verify-destination`, but not yet on the contract, the status
   matrix or the console, for a local path or a peer.
 
+  > **Built 2026-09 ([Amendment 3](#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is)):**
+  > contract 1.46 carries each destination's deep sweep on its status row, and
+  > the CLI and the console say it.
+
+## Amendment 3 (2026-09) — a circuit is reported where the status is
+
+Amendment 2 left the report owed. When a circuit last closed was on the ledger
+and said by `verify-destination`, but not on the contract, the status matrix
+or the console. So nothing a person looks at routinely could tell a replica
+read back in full last night from one never read back at all (FR-VER-003).
+
+**Decisions.**
+
+1. **The status row carries the sweep, as one object (contract 1.46).**
+   `deep_sweep` holds:
+   - `circuit_closed_at`, when a circuit last closed: the one fact that
+     supports "every stored object was read back and matched its seal";
+   - `read_this_circuit` and `last_read_at`, for the circuit under way;
+   - `stalls` and `stalled_on`, for a circuit stopped at a blob that will not
+     read;
+   - `interval_days`, the cadence the scheduler keeps.
+
+   Each is the ledger's fact as it stands. Nothing is derived beside them.
+2. **No sweep is not a sweep that has not run.** The object is null where no
+   sweep exists: a reserved kind nothing reads back in full, a destination no
+   longer declared, and a service older than 1.46. A client draws nothing for
+   it. A sweep that has not run is an object with nothing closed, and the CLI
+   prints `never` for it.
+3. **Read only on request is not never.** A peer whose operator stated no
+   cadence has a sweep with a null `interval_days`, because
+   `verify-destination` reads it when a person asks (Amendment 2, decision 7).
+   The CLI prints `manual`, and the console says it is read in full only when
+   asked. Drawn as never, it would read as a sweep overdue.
+4. **A stall is said first.** Whatever closed before it, a circuit stopped at
+   a blob is the part of the row that needs a person. The CLI prints
+   `STALLED`, and the console says how many times in a row, and whether at a
+   blob or because the replica could not be read.
+5. **Progress is never coverage.** What the circuit under way has read is a
+   count of blobs, never a share of the replica: the sweep's cursor is a key,
+   and nothing on the ledger counts what remains. Only a closed circuit
+   supports a claim about every stored object.
+6. **One rule for the cadence.** Which destinations are swept, and on what
+   interval, is stated once (`ReplicaSweepJob.ScheduledIntervalDays`). The
+   scheduler keeps it, `verify-destination` words its line by it, and the
+   status reports it, so a row cannot promise a cadence the scheduler never
+   keeps.
+
 ## Status history
 
 | Date | Status | Note |
@@ -535,3 +582,4 @@ somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
 | 2026-09 | Amended | [Amendment 2](#amendment-2-2026-09--a-peer-is-swept-on-a-stated-cadence-and-what-is-found-there-is-held): a peer is swept over the retrieval session on a cadence its source's operator states and never without one, paced by its transfer limit and bounded per segment (`Agent/Scheduler`, `Agent/ReplicaSweepJob`); what it finds is held against the pair and named with the remedy the peer's owner can carry out, and cleared by the push that re-sends a removed object or by a segment that reads it sound (`Agent/FanOut`, `Application/DestinationSyncStore`, `Repository/ReplicaSweep`); a peer that will not serve the session is said to be unreadable and not redialled every pass, and one gone between syncs is recorded unreachable by the segment that meets it. Held by `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepTests` and `Web.Tests/ConsoleServiceSettingsScriptTests` |
 | 2026-09 | Amended (related) | [ADR-0075](0075-a-restore-reads-around-damage.md) makes a restore a detector too: damage a restore of the set's own archive reads around is put on the destination's ledger row as the sweep's findings are, so the next sync repairs a local path's and holds a peer's. `Agent/ServiceCommandHandler`; `Hosts.Tests/RestoreReadAroundTests` |
 | 2026-09 | Amended (related) | [ADR-0076](0076-damage-is-traced-to-what-needs-it.md) gives the findings a scope: the sweep's notice and verify-destination's line name the files and snapshots the damage reaches, a peer's finding says whether a copy here holds the objects sound, and a pair failed for its damage alone degrades only the snapshots that need it. `Agent/ReplicaSweepJob`, `Agent/FanOut` |
+| 2026-09 | Amended | [Amendment 3](#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is): each destination's status row carries its deep sweep — when a circuit last closed, how far the one under way has read, whether it has stopped, and the cadence the scheduler keeps — as contract 1.46's `deep_sweep` (`Api/Results`, `Agent/ServiceCommandHandler`), and the CLI (`Cli/CliApplication`) and the console say it. The cadence rule is stated once for the scheduler and the status (`Agent/ReplicaSweepJob`, `Agent/Scheduler`). Built tests first, with each rule's removal confirmed to turn its tests red: a stall checked after the close, and a reserved kind reported as swept. Held by `Hosts.Tests/DeepSweepTests`, `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepCadenceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/StatusSweepTokenTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` and `Web.Tests/ConsoleDestinationCardTests` |
