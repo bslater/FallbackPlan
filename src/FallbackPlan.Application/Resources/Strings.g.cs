@@ -369,6 +369,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_BackgroundReadLimitInvalid, arg0, arg1);
 
     /// <summary>
+    /// '{0}' declares clock_skew_margin_hours {1}; the margin takes 1 to 8760 hours, an hour to a year (ADR-0009).
+    /// </summary>
+    private static string ClientConfiguration_ClockSkewMarginOutOfRange => Get(nameof(ClientConfiguration_ClockSkewMarginOutOfRange));
+
+    /// <summary>
+    /// '{0}' declares clock_skew_margin_hours {1}; the margin takes 1 to 8760 hours, an hour to a year (ADR-0009).
+    /// </summary>
+    internal static string FormatClientConfiguration_ClockSkewMarginOutOfRange(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_ClockSkewMarginOutOfRange, arg0, arg1);
+
+    /// <summary>
     /// Destination '{0}' declares a transfer_limit this build cannot read: {1}
     /// </summary>
     private static string ClientConfiguration_DestinationTransferLimitInvalid => Get(nameof(ClientConfiguration_DestinationTransferLimitInvalid));
