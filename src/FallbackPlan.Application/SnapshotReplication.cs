@@ -33,17 +33,36 @@ public static class SnapshotReplication
     /// <param name="publicationSequence">The snapshot's publication sequence — the same currency the replication gate speaks (FR-GC-009).</param>
     /// <param name="record">The pair's ledger row; null when no sync has ever been attempted.</param>
     /// <param name="syncActive">Whether a sync for this pair is queued or running now.</param>
+    /// <param name="touchesDamage">
+    /// Whether this snapshot needs an object the row names as damaged. A
+    /// caller that has not traced the damage passes true, and every snapshot
+    /// is then counted as needing it (FR-VER-005).
+    /// </param>
     /// <remarks>
+    /// <para>
     /// A <see cref="DestinationSyncState.Failed"/> row degrades every
     /// snapshot at that destination — reached-and-wrong (a refusal, a failed
     /// verification) makes the whole copy suspect — while
     /// <see cref="DestinationSyncState.Unavailable"/> degrades only what has
     /// not crossed yet: an unplugged drive still holds what it holds.
+    /// </para>
+    /// <para>
+    /// Damage is the exception, because it has a scope. Objects the row names
+    /// as damaged degrade the snapshots that need them, whatever else the row
+    /// says, and a row failed for that damage alone degrades those snapshots
+    /// and no others: the rest of the copy was read and answered, and a
+    /// snapshot that needs none of the damaged objects is restorable from it.
+    /// </para>
     /// </remarks>
     public static SnapshotReplicationState Derive(
-        ulong publicationSequence, DestinationSyncRecord? record, bool syncActive)
+        ulong publicationSequence, DestinationSyncRecord? record, bool syncActive, bool touchesDamage = true)
     {
-        if (record?.State == DestinationSyncState.Failed)
+        if (touchesDamage && record?.DamagedKeys is { Count: > 0 })
+        {
+            return SnapshotReplicationState.Degraded;
+        }
+
+        if (record?.State == DestinationSyncState.Failed && (touchesDamage || !record.DamageOnly))
         {
             return SnapshotReplicationState.Degraded;
         }

@@ -199,6 +199,25 @@ public sealed record DestinationSyncRecord
     public IReadOnlyList<string>? DamagedKeys { get; init; }
 
     /// <summary>
+    /// Whether the failure standing on this row is damage the ledger names in
+    /// <see cref="DamagedKeys"/> and nothing else: the destination was reached
+    /// and read, and what is wrong with it is those objects (schema 7,
+    /// FR-VER-005).
+    /// </summary>
+    /// <remarks>
+    /// What lets a pair failed for its damage degrade only the snapshots that
+    /// need the damaged objects. A failure of any other kind — a refusal, a
+    /// failed proof, a copy that broke off — makes the whole copy suspect, and
+    /// a damage finding recorded over one does not narrow it: only a success
+    /// says the rest of the copy answers. False on a row written before the
+    /// field existed, which reads every failure as the whole copy's, the
+    /// reading that cannot understate damage.
+    /// </remarks>
+    [JsonPropertyName("damage_only")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DamageOnly { get; init; }
+
+    /// <summary>
     /// Deep-sweep segments in a row that stopped short at a blob they could
     /// not read, or could not read the replica at all; zero once a segment
     /// finishes (schema 6, [ADR-0035](../../docs/adr/0035-destination-fitness.md)
@@ -451,7 +470,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 6;
+    private const int CurrentSchemaVersion = 7;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -578,8 +597,10 @@ public sealed class DestinationSyncStore
         // Schema 3 added the verification tiers as plain additive columns: a
         // schema-2 row reads them as zero, which says exactly what is true of
         // it — the tiers were not counted — so 2 → 3 needs no rewrite. Schemas
-        // 4, 5 and 6 did the same with the chunk tier, the count of drills
-        // that did not complete, and the keys found damaged and not repaired.
+        // 4, 5, 6 and 7 did the same with the chunk tier, the count of drills
+        // that did not complete, the keys found damaged and not repaired, and
+        // whether a failure is that damage alone — false, the whole copy's,
+        // being the reading of an older row that cannot understate damage.
         // Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
@@ -663,6 +684,9 @@ public sealed class DestinationSyncStore
             var synced = Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.InSync) with
             {
                 State = damaged is null ? DestinationSyncState.InSync : DestinationSyncState.Failed,
+                // The copy answered, so whatever failure stood before, all
+                // that is left standing is the damage.
+                DamageOnly = damaged is not null,
                 LastAttemptAt = nowUnixMilliseconds,
                 LastSuccessAt = nowUnixMilliseconds,
                 Objects = objects,
@@ -841,6 +865,7 @@ public sealed class DestinationSyncStore
             State = DestinationSyncState.Behind,
             LastAttemptAt = nowUnixMilliseconds,
             LastError = reason,
+            DamageOnly = false,
         });
     }
 
@@ -1076,8 +1101,21 @@ public sealed class DestinationSyncStore
     }
 
     /// <summary>Records a failed or refused attempt, keeping the last success and counting toward back-off.</summary>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="state">Where the attempt leaves the pair.</param>
+    /// <param name="error">What the failure said, for status to repeat.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    /// <param name="damageOnly">
+    /// Whether this failure is the damage the row's <see cref="DestinationSyncRecord.DamagedKeys"/>
+    /// names and nothing else — a deep sweep, a sync's re-check or a restore
+    /// finding objects altered (FR-VER-005). It holds only while no failure
+    /// of another kind stands: one recorded over such a failure leaves the
+    /// whole copy suspect until a success.
+    /// </param>
     public DestinationSyncRecord RecordFailure(
-        string setId, string destination, DestinationSyncState state, string error, ulong nowUnixMilliseconds)
+        string setId, string destination, DestinationSyncState state, string error, ulong nowUnixMilliseconds,
+        bool damageOnly = false)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(error);
 
@@ -1090,6 +1128,38 @@ public sealed class DestinationSyncStore
             LastAttemptAt = nowUnixMilliseconds,
             ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
             LastError = error,
+            DamageOnly = damageOnly && previous is not { State: DestinationSyncState.Failed, DamageOnly: false },
+        });
+    }
+
+    /// <summary>
+    /// Records a sync that reached the destination, copied what it was owed
+    /// and re-checked the objects its row names as damaged, and is held failed
+    /// only because some of them could not be replaced (FR-VER-007, FR-VER-005).
+    /// </summary>
+    /// <remarks>
+    /// Unlike a damage finding through <see cref="RecordFailure"/>, this
+    /// narrows a failure of another kind that stood before it: the attempt
+    /// has just shown the rest of the copy answers. It is still a failure for
+    /// the back-off, so the next attempt does not re-read the same blobs on
+    /// the very next pass.
+    /// </remarks>
+    /// <param name="setId">The backup set.</param>
+    /// <param name="destination">The destination's declared name.</param>
+    /// <param name="error">What holds the pair, for status to repeat.</param>
+    /// <param name="nowUnixMilliseconds">The clock.</param>
+    public DestinationSyncRecord RecordHeldForDamage(
+        string setId, string destination, string error, ulong nowUnixMilliseconds)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(error);
+
+        return Mutate(setId, destination, previous => Seed(previous, setId, destination, nowUnixMilliseconds, DestinationSyncState.Behind) with
+        {
+            State = DestinationSyncState.Failed,
+            LastAttemptAt = nowUnixMilliseconds,
+            ConsecutiveFailures = (previous?.ConsecutiveFailures ?? 0) + 1,
+            LastError = error,
+            DamageOnly = true,
         });
     }
 

@@ -90,6 +90,11 @@ internal static class CatalogueRebuild
     /// nothing that is there — which is what lets the heal run over the
     /// runtime's live handle rather than evicting it.
     /// </summary>
+    /// <remarks>
+    /// A rebuild that read every record it needed marks the catalogue
+    /// rebuilt (FR-MAN-002). One that could not see some — their blobs were
+    /// nowhere it could read — leaves the mark, so the next open tries again.
+    /// </remarks>
     /// <param name="runtime">For the loggers.</param>
     /// <param name="catalogue">The open catalogue to rebuild into.</param>
     /// <param name="store">The repository, or a replica of it.</param>
@@ -97,7 +102,8 @@ internal static class CatalogueRebuild
     /// <param name="reader">A reader already loaded with the metadata blobs.</param>
     /// <param name="warnings">Where rebuild findings are appended.</param>
     /// <param name="cancellationToken">Cancels the rebuild.</param>
-    internal static async ValueTask RebuildIntoAsync(
+    /// <returns>What the manifest projection recorded, and what it could not see.</returns>
+    internal static async ValueTask<CatalogueProjector.ProjectionReport> RebuildIntoAsync(
         ServiceRuntime runtime,
         CatalogueDb catalogue,
         IObjectStore store,
@@ -121,10 +127,16 @@ internal static class CatalogueRebuild
                 isSequenceAccountedAsync: null, cancellationToken)
             .ConfigureAwait(false);
 
-        await CatalogueProjector.ProjectAsync(
+        var projected = await CatalogueProjector.ProjectAsync(
             catalogue, reader, store, repository.RepositoryId, repository.Keys,
             repository.Credential, cancellationToken).ConfigureAwait(false);
 
         warnings.AddRange(report.Findings.Select(finding => $"{finding.Kind}: {finding.Detail}"));
+        if (projected.Missing == 0)
+        {
+            catalogue.MarkRebuilt();
+        }
+
+        return projected;
     }
 }

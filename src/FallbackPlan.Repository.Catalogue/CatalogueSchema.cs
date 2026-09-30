@@ -49,8 +49,18 @@ public static class CatalogueSchema
     /// one, and until this column existed there was nowhere for that answer to
     /// come from without decoding a manifest per snapshot.
     /// </para>
+    /// <para>
+    /// v8 over v7: <c>version_contents</c> and <c>snapshot_structure</c>, the
+    /// reverse of what the manifests say — which content objects each file
+    /// version needs, and which records each snapshot is made of besides its
+    /// files. They are what a damaged object's reach is traced through
+    /// (FR-VER-005, specification 04 §7), and they are derived data every
+    /// route that fills a catalogue writes: the capture, the projection and
+    /// the forensic rebuild. Without them, naming what a damaged segment
+    /// belongs to means opening every manifest of every snapshot.
+    /// </para>
     /// </remarks>
-    public const int Version = 7;
+    public const int Version = 8;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -160,6 +170,26 @@ public static class CatalogueSchema
         CREATE INDEX ix_tree_entries_parent ON tree_entries (snapshot_id, parent, path, entry_kind, object_id);
 
         CREATE INDEX ix_tree_entries_casefold ON tree_entries (snapshot_id, path_casefold);
+
+        -- The content objects each file version needs — its segments and its
+        -- alternate streams' content — keyed by the object: the reverse of the
+        -- list the version's sealed manifest holds (FR-VER-005).
+        CREATE TABLE version_contents (
+            object_id  BLOB NOT NULL,
+            version_id BLOB NOT NULL,
+            PRIMARY KEY (object_id, version_id)
+        ) WITHOUT ROWID;
+
+        -- The records each snapshot is made of besides its files' own: its
+        -- manifest, its policy and error manifests, and every tree manifest of
+        -- its structure, continuations included. Damage to one reaches the
+        -- snapshot as a whole: a restore that rebuilds from that copy loses
+        -- whatever the record lists.
+        CREATE TABLE snapshot_structure (
+            object_id   BLOB NOT NULL,
+            snapshot_id BLOB NOT NULL,
+            PRIMARY KEY (object_id, snapshot_id)
+        ) WITHOUT ROWID;
 
         CREATE TABLE segment_dedup (
             content_id BLOB PRIMARY KEY,

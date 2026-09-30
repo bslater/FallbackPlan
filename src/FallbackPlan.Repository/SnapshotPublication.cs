@@ -129,7 +129,10 @@ public sealed record SnapshotJob
 /// rewritten from, when its content was inherited rather than captured.
 /// <c>Archive</c> is null in that case — nothing was archived — so the
 /// inherited manifest is what states the version's real length and hash to
-/// the catalogue.
+/// the catalogue. <c>Streams</c> is the content of a captured version's
+/// alternate streams; with the segments <c>Archive</c> or <c>Inherited</c>
+/// already carries, it is what the catalogue traces damage back to the version
+/// through.
 /// </remarks>
 public sealed record PublishedFileVersion(
     string RelativePath,
@@ -143,7 +146,8 @@ public sealed record PublishedFileVersion(
     bool Reused = false,
     FileVersionManifest? Inherited = null,
     bool HasAlternateStreams = false,
-    ReadOnlyMemory<byte>? MetadataDigest = null);
+    ReadOnlyMemory<byte>? MetadataDigest = null,
+    IReadOnlyList<ObjectId>? Streams = null);
 
 /// <summary>The published outcome of a tree snapshot.</summary>
 public sealed record PublishedTreeSnapshot(
@@ -566,7 +570,8 @@ public sealed partial class PublicationOrchestrator
             // (architecture 02 §7). A cache write, never a correctness step.
             if (_catalogue is not null)
             {
-                ProjectIntoCatalogue(job, walker, session, builder, snapshotObjectId, rootTreeId, deltaId, delta, errorId);
+                ProjectIntoCatalogue(
+                    job, walker, session, builder, snapshotObjectId, rootTreeId, policyId, deltaId, delta, errorId);
             }
 
             EngineDiagnostics.PublicationDuration.Record(
@@ -607,7 +612,9 @@ public sealed partial class PublicationOrchestrator
     /// the applied delta, the snapshot row with its capture time, every
     /// tree path, and each new file version with the identity and time the
     /// next incremental compares (NFR-PERF-003). Reused versions get a
-    /// tree-entry row only — their file-version rows already exist.
+    /// tree-entry row only — their file-version rows already exist. What each
+    /// new version needs and what the snapshot is made of are recorded too,
+    /// which is what a damaged object is traced back through (FR-VER-005).
     /// </summary>
     private void ProjectIntoCatalogue(
         SnapshotJob job,
@@ -616,6 +623,7 @@ public sealed partial class PublicationOrchestrator
         ManifestBuilder builder,
         ObjectId snapshotObjectId,
         ObjectId rootTreeId,
+        ObjectId policyId,
         DeltaId deltaId,
         IndexDelta delta,
         ObjectId? errorId)
@@ -641,6 +649,14 @@ public sealed partial class PublicationOrchestrator
             job.SnapshotId.Span, job.DeviceId.Span, job.BackupSetId.Span,
             snapshotObjectId, rootTreeId, _generation.Value,
             (byte)(errorId is null ? 1 : 2), signatureState: 1, capturedAt: job.NowUnixMilliseconds);
+
+        List<ObjectId> structure = [snapshotObjectId, policyId, .. walker.Trees];
+        if (errorId is { } error)
+        {
+            structure.Add(error);
+        }
+
+        _catalogue.RecordSnapshotStructure(job.SnapshotId.Span, structure);
 
         foreach (var (path, treeId) in walker.Directories)
         {
@@ -677,6 +693,15 @@ public sealed partial class PublicationOrchestrator
                 file.IdentityFileId,
                 file.HasAlternateStreams,
                 file.MetadataDigest);
+
+            // What the version needs, for damage to be traced back to it: the
+            // segments it archived or inherited, and its streams' content.
+            _catalogue.RecordVersionContents(
+                file.ObjectId,
+                inherited is not null
+                    ? inherited.ContentObjects()
+                    : (archive?.SegmentReferences.Select(reference => reference.ObjectId) ?? [])
+                        .Concat(file.Streams ?? []));
 
             if (archive is not null)
             {
@@ -715,6 +740,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<PublishedFileVersion> _files = [];
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
+        private readonly List<ObjectId> _trees = [];
         private readonly Dictionary<SourceKey, SourceIdentityHint?> _hints = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
@@ -727,6 +753,9 @@ public sealed partial class PublicationOrchestrator
 
         /// <summary>Every published subdirectory (path, head tree id); the root is the snapshot's own row.</summary>
         public IReadOnlyList<(string Path, ObjectId ObjectId)> Directories => _directories;
+
+        /// <summary>Every tree manifest this walk appended — each directory's head and its continuations, the root's included.</summary>
+        public IReadOnlyList<ObjectId> Trees => _trees;
 
         /// <summary>
         /// The 06 §11 hints this snapshot owes: one per file version it
@@ -813,7 +842,7 @@ public sealed partial class PublicationOrchestrator
             var name = isRoot ? "/"u8.ToArray() : frame.Directory.NameBytes;
             var headId = await TreeChainWriter.WriteAsync(
                 builder, frame.Entries, name, frame.Directory.NameNormalisation, frame.Directory.Metadata,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, written: _trees).ConfigureAwait(false);
 
             if (isRoot)
             {
@@ -919,7 +948,10 @@ public sealed partial class PublicationOrchestrator
                     entry.RelativePath, entry.NameBytes, objectId, manifest.EntryKind, LastArchive,
                     entry.Metadata.ModifiedAt, entry.Identity?.Device, entry.Identity?.FileId,
                     HasAlternateStreams: withParent.Metadata.AlternateStreams.Count > 0,
-                    MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata)));
+                    MetadataDigest: FileVersionManifestCodec.MetadataDigest(withParent.Metadata),
+                    Streams: withParent.Metadata.AlternateStreams.Count > 0
+                        ? [.. withParent.Metadata.AlternateStreams.Select(stream => stream.ObjectId)]
+                        : null));
                 RecordSourceIdentity(entry, objectId);
                 LastArchive = null;
             }
@@ -1455,6 +1487,18 @@ public static class TreeChainWriter
     public const int DefaultShardBudget = 15 * 1024 * 1024;
 
     /// <summary>Writes the chain and returns the head manifest's object identifier.</summary>
+    /// <param name="builder">Where the manifests are appended.</param>
+    /// <param name="entries">The directory's entries, in the scanner's byte-sorted order.</param>
+    /// <param name="name">The directory's own name.</param>
+    /// <param name="normalisation">How <paramref name="name"/> was normalised.</param>
+    /// <param name="metadata">The directory's own metadata, carried by the head.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <param name="shardBudget">The per-shard budget for estimated entry bytes.</param>
+    /// <param name="written">
+    /// Receives every manifest of the chain as it is appended, the head last,
+    /// so a caller can record what the snapshot is made of — continuations
+    /// included, which no parent entry names.
+    /// </param>
     public static async ValueTask<ObjectId> WriteAsync(
         ManifestBuilder builder,
         IReadOnlyList<TreeEntry> entries,
@@ -1462,7 +1506,8 @@ public static class TreeChainWriter
         NameNormalisation normalisation,
         EntryMetadata metadata,
         CancellationToken cancellationToken,
-        int shardBudget = DefaultShardBudget)
+        int shardBudget = DefaultShardBudget,
+        ICollection<ObjectId>? written = null)
     {
         var shards = Shard(entries, shardBudget);
 
@@ -1474,6 +1519,7 @@ public static class TreeChainWriter
             var shard = new TreeManifest { Entries = shards[i], Continuation = continuation };
             continuation = await builder.AppendManifestAsync(
                 ObjectType.TreeManifest, TreeManifestCodec.Encode(shard), cancellationToken).ConfigureAwait(false);
+            written?.Add(continuation.Value);
         }
 
         var head = new TreeManifest
@@ -1485,8 +1531,10 @@ public static class TreeChainWriter
             Continuation = continuation,
         };
 
-        return await builder.AppendManifestAsync(
+        var headId = await builder.AppendManifestAsync(
             ObjectType.TreeManifest, TreeManifestCodec.Encode(head), cancellationToken).ConfigureAwait(false);
+        written?.Add(headId);
+        return headId;
     }
 
     private static List<List<TreeEntry>> Shard(IReadOnlyList<TreeEntry> entries, int shardBudget)

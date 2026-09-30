@@ -22,15 +22,20 @@ public sealed partial class ServiceCommandHandler
     /// condemn a device for going away (ADR-0035 Amendment 1).
     /// </remarks>
     private void RecordReadAroundFindings(
-        BackupSetConfiguration set, SetCopies copies, RepositoryReader reader, RepositoryId repositoryId, ulong nowMs)
+        BackupSetConfiguration set, ArchiveHandle archive, SetCopies copies, RepositoryReader reader, ulong nowMs)
     {
+        var repositoryId = archive.Repository.RepositoryId;
         var passedOver = reader.ReadAround.SelectMany(around => around.PassedOver).ToHashSet();
         foreach (var found in reader.Refusals
             .Where(refusal => refusal is { Fault: CopyFault.Damaged, BlobKey: not null })
             .GroupBy(refusal => refusal.Source, StringComparer.Ordinal))
         {
             List<string> keys = [.. found.Select(refusal => refusal.BlobKey!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
-            var what = $"{keys.Count} object(s) that no longer match what was sealed: {found.First().Detail}";
+
+            // Named by what needs them, not only by their keys (FR-VER-005):
+            // everything that copy could not give back on its own.
+            var what = $"{keys.Count} object(s) that no longer match what was sealed: {found.First().Detail.TrimEnd('.')}. "
+                + DamageReachText.Sentences(archive.TraceDamage(keys));
             var after = found.All(passedOver.Contains)
                 ? "The files that needed them were read from another copy of the set instead, and verified. "
                 : "Files that no other copy of the set held sound did not restore. ";
@@ -39,7 +44,7 @@ public sealed partial class ServiceCommandHandler
             {
                 runtime.Notices.Raise(
                     $"restore-found-damage:{set.Id}:staging",
-                    $"A restore found the staging archive of set '{set.Name}' holding {what}. {after}Nothing here "
+                    $"A restore found the staging archive of set '{set.Name}' holding {what} {after}Nothing here "
                     + "repairs a staging archive in place, so those objects stay as they are: check the disk that "
                     + "holds it, and the filesystem, before counting on it.",
                     nowMs);
@@ -59,9 +64,10 @@ public sealed partial class ServiceCommandHandler
                 set.Id, destination.Name, DestinationSyncState.Failed,
                 $"a restore found {keys.Count} damaged object(s) here: {found.First().Detail}; "
                 + DestinationSyncStore.DamageStatement(outstanding),
-                nowMs);
+                nowMs,
+                damageOnly: true);
 
-            var said = $"A restore found destination '{destination.Name}' of set '{set.Name}' holding {what}. {after}";
+            var said = $"A restore found destination '{destination.Name}' of set '{set.Name}' holding {what} {after}";
             runtime.Notices.Raise(
                 $"restore-found-damage:{set.Id}:{destination.Name}",
                 destination.Kind == DestinationKind.Peer

@@ -14,7 +14,10 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// the signed blob digests every delta publishes survive a rebuild from the
 /// index plane alone, which is what the digest tier of verification reads.
 /// And that each commit is atomic but not flushed, the protection
-/// ADR-0010 Amendment 2 gives a cache.
+/// ADR-0010 Amendment 2 gives a cache. And that a catalogue it creates —
+/// new, or in place of one another schema wrote — says it needs rebuilding
+/// until a rebuild says otherwise (FR-MAN-002): a cache discarded is safe
+/// only while something fills it again.
 /// </summary>
 [TestClass]
 public sealed class CatalogueTests : IDisposable
@@ -339,6 +342,60 @@ public sealed class CatalogueTests : IDisposable
         // (FR-MAN-002 — the catalogue is disposable, never authoritative).
         Assert.AreEqual(0, reopened.AppliedDeltaCount());
         Assert.IsNull(reopened.ResolveLocation(Object(1)));
+    }
+
+    [TestMethod]
+    public void Open_ACatalogueItCreates_NeedsRebuilding()
+    {
+        // A new file holds nothing, whatever the repository holds.
+        using var catalogue = Open();
+
+        Assert.IsTrue(catalogue.NeedsRebuild);
+    }
+
+    [TestMethod]
+    public void MarkRebuilt_IsDurable_AndACatalogueOpenedAgainStaysRebuilt()
+    {
+        using (var catalogue = Open())
+        {
+            catalogue.MarkRebuilt();
+            Assert.IsFalse(catalogue.NeedsRebuild);
+        }
+
+        using var reopened = Open();
+        Assert.IsFalse(reopened.NeedsRebuild);
+    }
+
+    [TestMethod]
+    public void Open_ACatalogueAnotherSchemaWrote_IsRecreated_AndNeedsRebuilding()
+    {
+        using (var catalogue = Open())
+        {
+            catalogue.ApplyDelta(Delta(1), new IndexDelta
+            {
+                WriterId = Writer(1),
+                Sequence = 1,
+                Generation = 0,
+                Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+            });
+            catalogue.MarkRebuilt();
+        }
+
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = CataloguePath, Pooling = false }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE catalogue_info SET value = '6' WHERE key = 'schema_version';";
+            command.ExecuteNonQuery();
+        }
+
+        using var reopened = Open();
+
+        // Discarded, not migrated — and so empty, which the next reader must
+        // be told rather than left to take for a repository with no history.
+        Assert.AreEqual(0, reopened.AppliedDeltaCount());
+        Assert.IsTrue(reopened.NeedsRebuild);
     }
 
     [TestMethod]
