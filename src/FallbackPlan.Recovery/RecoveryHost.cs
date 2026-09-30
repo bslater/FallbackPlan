@@ -1,5 +1,6 @@
 using Bodu;
 using System.Globalization;
+using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.Recovery.Resources;
@@ -151,8 +152,14 @@ public static class RecoveryHost
                         var when = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.Manifest.CaptureCompletedAt)
                             .ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                         var signature = snapshot.SignatureVerified ? "verified" : "SIGNATURE-FAILED";
+
+                        // Last, so a script that takes the id and the time
+                        // off the front reads every line as it always did.
+                        var clock = ObservedClockSkewText.Token(snapshot.Manifest.ObservedClockSkewMs) is { } token
+                            ? $"  {token}"
+                            : string.Empty;
                         output.WriteLine(
-                            $"{Convert.ToHexString(snapshot.Manifest.SnapshotId.Span).ToLowerInvariant()}  {when}  {signature}");
+                            $"{Convert.ToHexString(snapshot.Manifest.SnapshotId.Span).ToLowerInvariant()}  {when}  {signature}{clock}");
                     }
 
                     return snapshots.Count == 0 ? 2 : 0;

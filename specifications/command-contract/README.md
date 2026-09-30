@@ -102,6 +102,9 @@ over was damaged or would not read, says how many (`read_around`) and which
 Since 1.47, each snapshot of `list_snapshots` and `open_restore_source` says
 how far the capturing machine's clock stood from a peer's
 (`observed_clock_skew_ms`, [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)).
+The two answer in opposite orders. `list_snapshots` gives each set's snapshots
+newest first, the sets in configuration order. `open_restore_source` gives a
+source's oldest first, because the guided restore reads it as a timeline.
 
 **Destinations at work** — `sync`, `verify_destination`, `verify`, `check`,
 `retention`, `retire_staging` (1.20, ADR-0046), `upgrade_set_format`

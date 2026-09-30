@@ -99,6 +99,48 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Snapshots_AreListedNewestFirst_AcrossEverySet()
+    {
+        // list_snapshots answers each set newest first, one set after
+        // another. The view is one timeline of every set, the newest capture
+        // on top whichever set took it; the filter narrows it and keeps the
+        // order.
+        var now = NowMs;
+        var photos = new string('b', 32);
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set(), Wire.Set("photos", photos)]),
+            ListSnapshotsCommand => new SnapshotsResult(
+            [
+                Wire.Snapshot(now, "docs-2"),
+                Wire.Snapshot(now - 120_000, "docs-1"),
+                Wire.Snapshot(now - 60_000, "photos-2", setId: photos),
+                Wire.Snapshot(now - 180_000, "photos-1", setId: photos),
+            ]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+
+        var rows = page.Locator("#view-snapshots tbody tr");
+        await Expect(rows).ToHaveCountAsync(4);
+        string[] timeline = ["docs-2", "photos-2", "docs-1", "photos-1"];
+        for (var i = 0; i < timeline.Length; i++)
+        {
+            await Expect(rows.Nth(i)).ToContainTextAsync(timeline[i]);
+        }
+
+        await page.SelectOptionAsync("#snapshot-filter", Wire.SetId);
+        await Expect(rows).ToHaveCountAsync(2);
+        await Expect(rows.Nth(0)).ToContainTextAsync("docs-2");
+        await Expect(rows.Nth(1)).ToContainTextAsync("docs-1");
+    }
+
+    [TestMethod]
     public async Task Snapshots_RenderTheCaptureVocabulary_AndBrowseOpensTheListing()
     {
         var now = NowMs;

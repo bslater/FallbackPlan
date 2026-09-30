@@ -19,7 +19,9 @@
   filled by the capture, `Repository/CatalogueProjector` and
   `Repository.Catalogue/Forensic/ForensicRebuilder`; contract 1.47 on
   `Agent/ServiceCommandHandler`'s snapshot rows; the `snapshots` token in
-  `Cli/CliApplication`; the console's snapshot row in `wwwroot/app.js`.
+  `Cli/CliApplication` and the standalone recovery tool's listing in
+  `Recovery/RecoveryHost`, both rendered by `Domain/Status/ObservedClockSkewText`;
+  the console's snapshot row in `wwwroot/app.js`.
 - The tests: `Application.Tests/ObservedClockSkewTests`,
   `Repository.Tests/ObservedClockSkewTests`,
   `Hosts.Tests/ObservedClockSkewServiceTests`,
@@ -250,6 +252,11 @@ refuse a peer, shift a retention window or move a grace. That is specification
   carries it and a rebuilt catalogue holds it, so the listing can show it
   later without any format change.
 
+  > **Printed since 2026-09.** The recovery tool's `snapshots` listing ends a
+  > line with the same token the CLI prints, read from the manifest alone. One
+  > routine renders it for both, in Domain, because the recovery tool's
+  > dependency closure reaches Domain and never the CLI (architecture 11 §2).
+
 ## What this does not do
 
 - **It does not flag an implausible capture time.** Architecture 04 §7 also
@@ -292,3 +299,4 @@ what the manifests already are: one signed reading per snapshot.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built tests first (the reading, the choice a capture makes, the ledger's schema 8, the three routes that fill a catalogue, the contract, the CLI token, the console row, and both hub paths end to end against a peer whose receipt clock runs three hours ahead). Removing each piece of wiring was confirmed to turn its tests red: a sync that does not keep its reading, a direct-ship run that does not keep its reading, a capture that does not record the reading, and a capture's own row that writes the start time as the capture time |
+| 2026-09 | Accepted (amended) | The standalone recovery tool prints the reading. Its `snapshots` listing ends a line with the CLI's token, which one routine in Domain now renders for both (`Hosts.Tests/ObservedClockSkewServiceTests`). A listing that dropped the reading was confirmed to turn the test red |
