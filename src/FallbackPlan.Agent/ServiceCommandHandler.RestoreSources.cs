@@ -225,7 +225,8 @@ public sealed partial class ServiceCommandHandler
                     row.CaptureStatus,
                     catalogue.CountFiles(row.SnapshotId.Span),
                     Destinations: null,
-                    ConsistencyMethod: row.ConsistencyMethod));
+                    ConsistencyMethod: row.ConsistencyMethod,
+                    ObservedClockSkewMs: row.ObservedClockSkewMs));
             }
         }
 

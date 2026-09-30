@@ -230,6 +230,11 @@ The tombstone grace needs no margin: it is a publication, not a span of time
 (Amendment 5). The other half of NFR-TIME-002, the observed skew recorded in
 each snapshot's manifest, is not part of this amendment.
 
+> **Built by [ADR-0077](0077-observed-clock-skew.md) (2026-09).** The
+> observed skew is read from a paired peer's signed replication receipt and
+> recorded in the manifest of the set's next capture. It is a diagnostic:
+> nothing here, the margin included, reads it.
+
 ## Status history
 
 | Date | Status | Note |

@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.10, §8.1–8.2 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
 
-**Built:** Publication yes — including the direct-ship shape ([ADR-0046](../adr/0046-direct-to-destination-publication.md)), where step 4 fans one sealed spool file to N destinations through the ship sink; the writer pool and preemption of [ADR-0047](../adr/0047-backup-pool-and-priorities.md) are built (§9, §5.1); the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead — see [implementation status](../implementation-status.md).
+**Built:** Publication yes — including the direct-ship shape ([ADR-0046](../adr/0046-direct-to-destination-publication.md)), where step 4 fans one sealed spool file to N destinations through the ship sink; the writer pool and preemption of [ADR-0047](../adr/0047-backup-pool-and-priorities.md) are built (§9, §5.1); the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead; each snapshot records how far its machine's clock stood from a peer's where one was read (§7, [ADR-0077](../adr/0077-observed-clock-skew.md)) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -223,11 +223,11 @@ No component treats wall-clock time as authoritative for correctness. Specifical
 - Snapshot manifests record **observed clock skew** where a peer or store exposes a time reference, so a device with a badly wrong clock is diagnosable after the fact.
 - Grace periods are expressed with enough margin to absorb realistic skew, and the margin is a configured value rather than an assumption.
 
-> **Proved 2026-09 (NFR-TIME-001, `Retention.Tests/ClockSkewTests`):** a collector a day ahead of the writer, a day behind, or a year ahead sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no write intent whose generation has not passed. What a window keeps moves with the collector's clock, as a window's must. Two statements above are not yet built:
-> - a snapshot with an implausible timestamp is not flagged;
-> - observed skew is not recorded in manifests (NFR-TIME-002).
+> **Proved 2026-09 (NFR-TIME-001, `Retention.Tests/ClockSkewTests`):** a collector a day ahead of the writer, a day behind, or a year ahead sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no write intent whose generation has not passed. What a window keeps moves with the collector's clock, as a window's must. One statement above is not yet built: a snapshot with an implausible timestamp is not flagged. Observed skew was the other, until ADR-0077 below.
 >
 > **Configured 2026-09 ([ADR-0009 Amendment 7](../adr/0009-garbage-collection-safety.md#amendment-7-2026-09--the-skew-margin-configured)):** the intent margin is `clock_skew_margin_hours`, a day when the configuration file states none, where it had been a fixed five minutes. Each retention pass and the check read it. It binds only once a generation passes, and the key generation expiry is measured in never advances today.
+>
+> **Recorded 2026-09 ([ADR-0077](../adr/0077-observed-clock-skew.md)):** the one routine time reference is a paired peer's replication receipt. The peer signs its `issued_at` between the hub's `ReplicationComplete` and its acknowledgement, and the hub reads its own clock either side. A verified receipt's stamp against the midpoint says how far the two clocks stood apart, to within half the round trip. The set's next capture records the freshest such reading, no older than a day, as its manifest's `observed_clock_skew_ms` — the peer's clock minus this one's — and every catalogue route and `list_snapshots` read it back per snapshot. A capture with no peer to compare with records nothing, never 0. No store exposes a time reference yet.
 
 ## 8. Concurrent maintenance
 

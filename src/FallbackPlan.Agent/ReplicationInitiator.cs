@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Bodu;
+using FallbackPlan.Application;
 using FallbackPlan.Protocol;
 using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
@@ -98,6 +99,11 @@ internal static class ReplicationInitiator
     /// Why the replication receipt that arrived was rejected, or null — as
     /// for <paramref name="ReceiptProblem"/>, none is a fact and not a fault.
     /// </param>
+    /// <param name="ObservedClock">
+    /// How far the destination's clock stood from this one's, read from the
+    /// verified receipt's <c>issued_at</c> against this clock either side of
+    /// the exchange (NFR-TIME-002); null with no verified receipt.
+    /// </param>
     public sealed record PushOutcome(
         long Committed,
         long Deleted,
@@ -112,7 +118,11 @@ internal static class ReplicationInitiator
         string? ReceiptProblem = null,
         long OwedBytes = 0,
         VerifiedReplicationReceipt? ReplicationReceipt = null,
-        string? ReplicationReceiptProblem = null);
+        string? ReplicationReceiptProblem = null,
+        ClockObservation? ObservedClock = null);
+
+    /// <summary>This machine's clock, for bracketing an exchange a peer stamps.</summary>
+    internal static ulong UnixMillisecondsNow() => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     /// <summary>
     /// What a commander holds a deletion receipt against
@@ -298,11 +308,16 @@ internal static class ReplicationInitiator
 
             var sent = (long)sentKeys.Count;
 
+            // This clock either side of the one exchange a peer stamps with
+            // its own (03 §3.5): the receipt is issued between the two, so
+            // they bracket its issued_at (NFR-TIME-002, ADR-0077).
+            var exchangeSent = UnixMillisecondsNow();
             await PeerFrame.WriteAsync(stream, new ReplicationComplete((ulong)sent), cancellationToken)
                 .ConfigureAwait(false);
 
             var ack = await ReplicationWire.ReadAsync(
                 stream, PeerMessageType.ReplicationAck, ReplicationAck.Read, cancellationToken).ConfigureAwait(false);
+            var exchangeReceived = UnixMillisecondsNow();
 
             // The two counts must agree. A spoke commits each object whole or
             // refuses (03 §5) — a quota trip throws rather than under-counting
@@ -326,6 +341,13 @@ internal static class ReplicationInitiator
                 ? (null, ack.Receipt.IsEmpty ? null : "this commander had nothing to verify it against")
                 : VerifyReplicationReceipt(ack, expectReceipt, repositoryId, sentKeys, held.Count);
 
+            // Only a receipt that verified is a reading: an unverified stamp is
+            // anyone's number.
+            var observedClock = replicationReceipt is { } verified
+                ? ClockObservation.FromExchange(
+                    exchangeSent, exchangeReceived, verified.Receipt.IssuedAtUnixMilliseconds)
+                : null;
+
             if (keeps is null)
             {
                 return new PushOutcome(
@@ -333,6 +355,7 @@ internal static class ReplicationInitiator
                 {
                     OwedBytes = owedBytes,
                     ReplicationReceipt = replicationReceipt,
+                    ObservedClock = observedClock,
                     ReplicationReceiptProblem = replicationReceiptProblem,
                 };
             }
@@ -363,6 +386,7 @@ internal static class ReplicationInitiator
                 {
                     OwedBytes = owedBytes,
                     ReplicationReceipt = replicationReceipt,
+                    ObservedClock = observedClock,
                     ReplicationReceiptProblem = replicationReceiptProblem,
                 };
             }
@@ -408,6 +432,7 @@ internal static class ReplicationInitiator
                 ReceiptProblem = receiptProblem,
                 OwedBytes = owedBytes,
                 ReplicationReceipt = replicationReceipt,
+                ObservedClock = observedClock,
                 ReplicationReceiptProblem = replicationReceiptProblem,
             };
         }

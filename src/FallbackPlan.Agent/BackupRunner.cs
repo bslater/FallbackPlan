@@ -194,6 +194,12 @@ public static class BackupRunner
                     // capture-completion stamp wants the time capture actually
                     // finished, which only a live clock can say.
                     Clock = static () => (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    // How far this clock stood from a peer's (NFR-TIME-002):
+                    // the freshest reading the set's destinations hold, because
+                    // this run's own exchange ends after its manifest is signed.
+                    ObservedClockSkewMs = ClockObservation.ForCapture(
+                        set.Destinations.Select(reference => runtime.DestinationSync.Find(set.Id, reference.Ref)?.Clock),
+                        (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())?.SkewMilliseconds,
                     DeclaredMaxDurationMs = 3_600_000,
                     ExpiryGeneration = generation.Value + 2,
                     ClientVersion = "fallbackplan-agent/0.1",

@@ -66,6 +66,39 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Snapshots_SayHowFarTheCapturingClockStoodFromItsPeer()
+    {
+        // Contract 1.47 (NFR-TIME-002): three hours behind its peer is drawn
+        // as a warning, a clock in step says so, and a capture with no peer
+        // to compare with draws nothing at all.
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            ListSnapshotsCommand => new SnapshotsResult(
+            [
+                Wire.Snapshot(now, "snap-3", observedClockSkewMs: 10_800_000),
+                Wire.Snapshot(now - 60_000, "snap-2", observedClockSkewMs: 400),
+                Wire.Snapshot(now - 120_000, "snap-1"),
+            ]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+
+        var view = page.Locator("#view-snapshots");
+        await Expect(view.Locator("b.warn", new() { HasText = "clock 3 h behind its peer" })).ToBeVisibleAsync();
+        await Expect(view.GetByText("clock in step with its peer")).ToBeVisibleAsync();
+        var unobserved = view.Locator("tr", new() { HasText = "snap-1" });
+        await Expect(unobserved).ToHaveCountAsync(1);
+        await Expect(unobserved).Not.ToContainTextAsync("clock");
+    }
+
+    [TestMethod]
     public async Task Snapshots_RenderTheCaptureVocabulary_AndBrowseOpensTheListing()
     {
         var now = NowMs;

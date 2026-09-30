@@ -182,8 +182,8 @@ internal static class Wire
     public static BackupSetDescriptor Set(string name = "docs") =>
         new(SetId, name, "/src", null, [], [], ["vault"]);
 
-    public static SnapshotDescriptor Snapshot(ulong capturedAt, string id = "snap-1") =>
-        new(id, SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1);
+    public static SnapshotDescriptor Snapshot(ulong capturedAt, string id = "snap-1", long? observedClockSkewMs = null) =>
+        new(id, SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1, ObservedClockSkewMs: observedClockSkewMs);
 }
 
 /// <summary>

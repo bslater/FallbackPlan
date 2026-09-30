@@ -201,6 +201,21 @@ Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a m
 
 `consistency_method` is recorded and surfaced because "best-effort live capture" and "application-consistent" are materially different promises, and a user restoring a database needs to know which one they have.
 
+> **Erratum (phase 4).** Key 14's sign and its reference were unstated.
+> Pending a normative edit, [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)
+> pins them. `observed_clock_skew_ms` is the reference clock minus the
+> writer's, in milliseconds, so a positive value means the writer's clock
+> was behind. The reference is a paired peer's clock, read from the
+> `issued_at` of a replication receipt the writer verified
+> ([peer-protocol 03 §3.5](../peer-protocol/03-replication.md#35-the-replication-receipt)),
+> against the writer's own clock either side of that exchange. A reading
+> predates the capture it is recorded in, by up to a day in this
+> implementation, because a manifest is signed before its own run meets a
+> peer. Like every timestamp in this format it is a diagnostic (00 §7):
+> nothing in the format depends on it, and a reader MUST NOT correct another
+> timestamp by it. Absent means the writer had no reading. It never means
+> zero, which is a clock in step.
+
 ### 6.1 Signature
 
 Ed25519 over the deterministic CBOR encoding of the map containing keys 1–16, using the signing key for the generation recorded in `publication_generation` ([03 §4](03-keys.md#4-derived-keys)). A reader MUST verify it against the **repository signing public key for that generation** — derived from the signing root, so any holder of the write credential computes it itself and no key distribution is required — and MUST report a failure as a **security finding** rather than a corruption finding: a bad signature means substitution or forgery, not a bad disk.

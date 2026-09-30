@@ -441,8 +441,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// none, which a client reads as no sweep reported and draws nothing for,
     /// never as a sweep that has not run.
     /// </para>
+    /// <para>
+    /// 1.47 adds `observed_clock_skew_ms` to each snapshot descriptor of
+    /// `list_snapshots` and `open_restore_source` (ADR-0077, NFR-TIME-002):
+    /// how far the capturing machine's clock stood from a peer's when the
+    /// snapshot was taken, as its manifest records it — the peer's clock minus
+    /// the capturing one's, in milliseconds, so positive is a clock that was
+    /// behind. Additive with a null default: a capture with no reading and a
+    /// pre-1.47 service both send none, which a client reads as nothing to
+    /// report, never as a clock in step.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 46);
+    public static ContractVersion Current { get; } = new(1, 47);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

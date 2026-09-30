@@ -112,7 +112,8 @@ public sealed class CatalogueProjector
                 manifest.CaptureStatus,
                 signatureState,
                 manifest.CaptureCompletedAt,
-                manifest.ConsistencyMethod);
+                manifest.ConsistencyMethod,
+                manifest.ObservedClockSkewMs);
             snapshots++;
 
             // What the snapshot is made of besides its files, for damage to be

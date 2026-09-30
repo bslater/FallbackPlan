@@ -47,11 +47,17 @@ internal static class ReplicationResponder
     /// <param name="Keypair">This device's key; the receipt is its statement.</param>
     /// <param name="Store">Where this side files its copy of a deletion receipt, or null to keep none.</param>
     /// <param name="Replications">Where this side files its copy of a replication receipt, or null to keep none.</param>
+    /// <param name="Clock">
+    /// The clock a replication receipt's <c>issued_at</c> is stamped by, the
+    /// system's when null. A source reads this side's clock from that stamp
+    /// and nothing else (NFR-TIME-002).
+    /// </param>
     public sealed record ReceiptIssuer(
         ReadOnlyMemory<byte> SessionId,
         PeerKeypair Keypair,
         DeletionReceiptStore? Store,
-        ReplicationReceiptStore? Replications = null);
+        ReplicationReceiptStore? Replications = null,
+        TimeProvider? Clock = null);
 
     /// <summary>What a retention exchange did, for the session's outcome.</summary>
     private readonly record struct RetentionServed(long Deleted, string? FilingProblem);
@@ -231,7 +237,8 @@ internal static class ReplicationResponder
                     SessionId: receiptIssuer.SessionId,
                     RepositoryId: offer.RepositoryId,
                     CommanderPublicKey: peer.Identity.PublicKey.ToArray(),
-                    IssuedAtUnixMilliseconds: (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    IssuedAtUnixMilliseconds:
+                        (ulong)(receiptIssuer.Clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds(),
                     CommittedCount: (ulong)committed,
                     Committed: received.Keys,
                     HeldObjects: inventory.Objects + (ulong)committed,

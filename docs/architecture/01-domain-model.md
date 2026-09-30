@@ -44,6 +44,7 @@ This document is **normative for terminology**. Where any other document, code i
 | **Catalogue** | The local, disposable, transactional database that materialises repository state for fast lookup. Never authoritative. |
 | **Write intent** | A journal record published *before* a writer uploads blobs, naming the blobs it will create. Makes in-flight work reachable. See [`04-concurrency-and-publication.md` §4](04-concurrency-and-publication.md#4-write-intent). |
 | **Clock skew margin** | What a collector adds to a write intent's declared duration before the intent may expire, so a clock that disagrees with the writer's cannot cut a live job short: `clock_skew_margin_hours`, installation-wide in the configuration file, a day when absent ([ADR-0009](../adr/0009-garbage-collection-safety.md) Amendment 7). It binds only once the intent's generation has passed. |
+| **Observed clock skew** | How far a machine's clock stood from a paired peer's, read from the `issued_at` the peer signs in a replication receipt against this machine's clock either side of that exchange, and good to half its round trip ([ADR-0077](../adr/0077-observed-clock-skew.md)). The peer's clock minus this one's, so positive means this clock was behind; named relative to the peer and never as slow or fast, because a disagreement does not say which clock is wrong. Each capture records the freshest reading, no older than a day, in its snapshot manifest (key 14), and records none — never 0 — when it has nothing to compare with. A diagnostic: nothing decides on it. |
 | **Lease** | An advisory, time-limited coordination record. **Never** a correctness mechanism — see [`07-retention-and-gc.md` §4](07-retention-and-gc.md#4-why-leases-are-not-load-bearing). |
 | **Tombstone** | A record marking an object as eligible for physical deletion after a grace period. |
 | **Root** | The 32 bytes Argon2id derives from the passphrase and the descriptor's public salt and parameters; never stored, never wrapped, used only as the input to every other key's derivation ([spec 03 §2](../../specifications/repository-format/03-keys.md#2-the-root)). *Master key*, *key-encryption key (KEK)* and *key object* named format 1's stored, wrapped root; format 1 was withdrawn before any freeze and those terms no longer name anything on disk ([ADR-0014 Amendment 1](../adr/0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)). |
@@ -136,7 +137,7 @@ A snapshot manifest records:
 - policy version and the effective format profiles used;
 - consistency method — live scan, VSS, or filesystem snapshot;
 - errors, unreadable paths, and partial-capture status;
-- source clock observations and any detected skew (see [`04-concurrency-and-publication.md` §7](04-concurrency-and-publication.md#7-time-and-clock-skew));
+- the **observed clock skew** — how far the source's clock stood from a peer's, where one was read (see [`04-concurrency-and-publication.md` §7](04-concurrency-and-publication.md#7-time-and-clock-skew));
 - client and repository format versions;
 - a signed declaration by the writing device.
 

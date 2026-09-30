@@ -424,6 +424,13 @@ public sealed class DestinationShipSink : IObjectStore
         var attested = (long)Math.Min(receipt.Receipt.HeldBytes, long.MaxValue);
         _runtime.DestinationSync.RecordCompleteness(
             _setId, destinationName, attested, attested, nowUnixMilliseconds);
+
+        // This run's manifest was signed before the peer answered, so the
+        // reading waits on the ledger for the set's next capture (NFR-TIME-002).
+        if (completed.ObservedClock is { } observed)
+        {
+            _runtime.DestinationSync.RecordClockObservation(_setId, destinationName, observed);
+        }
     }
 
     /// <summary>
