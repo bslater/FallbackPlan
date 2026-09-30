@@ -17,8 +17,9 @@ namespace FallbackPlan.Api.Tests;
 /// 1.40's adoption answer naming the retention an archive recorded, the wire
 /// half of FR-DR-006, and 1.42's adoption preview and confirmation, the wire
 /// half of FR-DR-009, 1.44's destination settings, the wire half of
-/// FR-SVC-021, and 1.46's deep sweep on each destination row, the wire half
-/// of FR-VER-003's report of a circuit.
+/// FR-SVC-021, 1.46's deep sweep on each destination row, the wire half
+/// of FR-VER-003's report of a circuit, and 1.47's observed clock skew on
+/// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot".
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -888,6 +889,45 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var old = unswept.Replace(",\"deep_sweep\":null", "", StringComparison.Ordinal);
         Assert.AreNotEqual(unswept, old, "the strip must have removed the field, or the old frame proves nothing");
         Assert.IsNull(JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!.DeepSweep);
+    }
+
+    [TestMethod]
+    public void TheObservedClockSkew_WireNameAndPre147Default()
+    {
+        // Contract 1.47 (ADR-0077): a snapshot carries the skew its capture
+        // observed — a reference's clock minus the capturing machine's, so a
+        // positive value is a clock that was behind its peer.
+        var modern = JsonSerializer.Serialize(
+            new SnapshotDescriptor(
+                new string('e', 32), new string('a', 32), 42UL, 1, 3, ObservedClockSkewMs: 10_800_000),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"observed_clock_skew_ms\":10800000", modern, StringComparison.Ordinal);
+        Assert.AreEqual(
+            10_800_000L,
+            JsonSerializer.Deserialize<SnapshotDescriptor>(modern, FrameCodec.SerializerOptions)!.ObservedClockSkewMs);
+
+        // A clock ahead of its peer is the negative half, and a clock in step
+        // is a zero that must survive as a zero.
+        foreach (var skew in new long[] { -90_000, 0 })
+        {
+            var read = JsonSerializer.Deserialize<SnapshotDescriptor>(
+                JsonSerializer.Serialize(
+                    new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3, ObservedClockSkewMs: skew),
+                    FrameCodec.SerializerOptions),
+                FrameCodec.SerializerOptions)!;
+            Assert.AreEqual(skew, read.ObservedClockSkewMs);
+        }
+
+        // A capture with no reference, and a pre-1.47 service, both read as
+        // no reading at all — never as a clock in step.
+        var unobserved = JsonSerializer.Serialize(
+            new SnapshotDescriptor(new string('e', 32), new string('a', 32), 42UL, 1, 3),
+            FrameCodec.SerializerOptions);
+        Assert.IsNull(JsonSerializer.Deserialize<SnapshotDescriptor>(unobserved, FrameCodec.SerializerOptions)!.ObservedClockSkewMs);
+        var old = unobserved.Replace(",\"observed_clock_skew_ms\":null", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(unobserved, old, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<SnapshotDescriptor>(old, FrameCodec.SerializerOptions)!.ObservedClockSkewMs);
     }
 
     [TestMethod]

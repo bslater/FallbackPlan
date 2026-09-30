@@ -605,7 +605,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 8, "destinations": [
+            { "schema_version": 9, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -641,7 +641,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 7", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 8", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);
