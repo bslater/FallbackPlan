@@ -4,7 +4,8 @@ namespace FallbackPlan.Web.Tests;
 /// The overview's destination cards, pinned structurally: a completion ring
 /// per destination, read from the service's own figures (contract 1.24) and
 /// never re-derived, with the uncounted case drawn as uncounted rather than
-/// as empty.
+/// as empty; and the deep sweep's row (contract 1.46), the console half of
+/// FR-VER-003's report of a circuit.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleProgressScriptTests"/>: no browser, just the
@@ -107,6 +108,53 @@ public sealed class ConsoleDestinationCardTests
         Assert.IsFalse(
             FunctionBody(script, "ring").Contains("style=", StringComparison.Ordinal),
             "the ring markup must carry no inline style attribute");
+    }
+
+    [TestMethod]
+    public void Card_TheDeepSweep_HasARowOfItsOwn()
+    {
+        var body = FunctionBody(AppJs(), "renderSetCard");
+
+        Assert.Contains("sweepLabel(d)", body, StringComparison.Ordinal);
+        Assert.Contains("Deep verify", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void SweepLabel_ARowWithNoSweep_DrawsNoLine()
+    {
+        var body = FunctionBody(AppJs(), "sweepLabel");
+
+        // A kind nothing reads back in full, or a service older than 1.46.
+        // "Never read back" there would claim a sweep that does not exist.
+        Assert.Contains("d.deepSweep == null", body, StringComparison.Ordinal);
+        Assert.Contains("return null", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void SweepLabel_OnlyWhenAsked_IsNotNever()
+    {
+        var body = FunctionBody(AppJs(), "sweepLabel");
+
+        // A peer whose operator stated no cadence is read in full only when a
+        // person asks (FR-VER-008). Drawn as "never", it would look overdue.
+        Assert.Contains("intervalDays == null", body, StringComparison.Ordinal);
+        Assert.Contains("verify-destination", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void SweepLabel_AStall_IsSaidWhateverClosedBefore_AndTheCloseIsTheClaim()
+    {
+        var body = FunctionBody(AppJs(), "sweepLabel");
+
+        Assert.Contains("stalls > 0", body, StringComparison.Ordinal);
+
+        // Only a closed circuit supports "every stored object was read back";
+        // the count read in the circuit under way is progress, never that.
+        Assert.Contains("circuitClosedAt", body, StringComparison.Ordinal);
+        Assert.Contains("readThisCircuit", body, StringComparison.Ordinal);
+        Assert.IsTrue(
+            body.IndexOf("stalls > 0", StringComparison.Ordinal) < body.IndexOf("circuitClosedAt != null", StringComparison.Ordinal),
+            "the stall is checked before the close, so a stuck circuit is never drawn as settled");
     }
 
     [TestMethod]

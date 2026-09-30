@@ -62,6 +62,52 @@ public sealed class StatusRelayNamesTests
     }
 
     [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheDeepSweepNamesTheViewReads()
+    {
+        // Contract 1.46 (ADR-0035 Amendment 3). sweepLabel() reads six
+        // camelCase names off the row's deepSweep, and tells a row with no
+        // sweep from one whose sweep has not run by the object being null.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [
+                        new DestinationStatusDescriptor(
+                            "vault", "local-path", "in-sync", LastSuccessAt: 9_000, Detail: null,
+                            "other-drive", "proven",
+                            DeepSweep: new DeepSweepDescriptor(
+                                IntervalDays: 7, CircuitClosedAt: 5_000, ReadThisCircuit: 3, LastReadAt: 8_000,
+                                Stalls: 1, StalledOn: "blobs/data/ab/abcdef")),
+                        new DestinationStatusDescriptor(
+                            "cloud", "s3", "not-supported", LastSuccessAt: null, Detail: null,
+                            "other-site", "unproven"),
+                    ]),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var destinations = body.RootElement.GetProperty("sets")[0].GetProperty("destinations");
+
+        var sweep = destinations[0].GetProperty("deepSweep");
+        Assert.AreEqual(7, sweep.GetProperty("intervalDays").GetInt32());
+        Assert.AreEqual(5_000, sweep.GetProperty("circuitClosedAt").GetInt64());
+        Assert.AreEqual(3, sweep.GetProperty("readThisCircuit").GetInt32());
+        Assert.AreEqual(8_000, sweep.GetProperty("lastReadAt").GetInt64());
+        Assert.AreEqual(1, sweep.GetProperty("stalls").GetInt32());
+        Assert.AreEqual("blobs/data/ab/abcdef", sweep.GetProperty("stalledOn").GetString());
+
+        Assert.AreEqual(JsonValueKind.Null, destinations[1].GetProperty("deepSweep").ValueKind);
+    }
+
+    [TestMethod]
     public async Task GetStatus_OverTheRelay_CarriesTheBackgroundWindowNamesTheViewReads()
     {
         // Contract 1.39 (ADR-0069). windowNote() reads three camelCase names

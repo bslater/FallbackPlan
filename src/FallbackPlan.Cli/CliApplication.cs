@@ -2714,7 +2714,7 @@ public static class CliApplication
                         foreach (var row in set.Destinations)
                         {
                             output.WriteLine(
-                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21} {DescribeDrill(row)}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                                $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21} {DescribeDrill(row)}{(DescribeSweep(row) is { Length: > 0 } sweep ? $" {sweep}" : string.Empty)}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
                         }
                     }
                 }
@@ -2885,4 +2885,27 @@ public static class CliApplication
             : string.Create(
                 CultureInfo.InvariantCulture,
                 $"drill:{(row.DrillFailure is null ? "ok" : "FAILED")}@{DateTimeOffset.FromUnixTimeMilliseconds((long)drilled):yyyy-MM-dd}");
+
+    /// <summary>
+    /// The deep sweep (contract 1.46): the day every stored object was last
+    /// read back and matched its seal, or why there is no such day — or
+    /// nothing, where no sweep exists to describe.
+    /// </summary>
+    /// <remarks>
+    /// A stall comes first, whatever closed before it: a circuit stuck at a
+    /// blob is the one thing here that needs a person. <c>manual</c> is a
+    /// destination only a person's request reads in full, which "never" would
+    /// make look overdue.
+    /// </remarks>
+    internal static string DescribeSweep(DestinationStatusDescriptor row) => row.DeepSweep switch
+    {
+        null => string.Empty,
+        { Stalls: > 0 } => "sweep:STALLED",
+        { CircuitClosedAt: { } closed } => string.Create(
+            CultureInfo.InvariantCulture,
+            $"sweep:ok@{DateTimeOffset.FromUnixTimeMilliseconds((long)closed):yyyy-MM-dd}"),
+        { LastReadAt: not null } => "sweep:under-way",
+        { IntervalDays: null } => "sweep:manual",
+        _ => "sweep:never",
+    };
 }

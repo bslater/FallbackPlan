@@ -516,21 +516,10 @@ public static class Scheduler
     private static bool ShouldSweep(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DateTimeOffset now)
     {
-        if (runtime.Configuration.FindDestination(destinationName) is not { } destination)
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination
+            || ReplicaSweepJob.ScheduledIntervalDays(destination) is not { } intervalDays)
         {
             return false;
-        }
-
-        switch (destination.Kind)
-        {
-            case DestinationKind.LocalPath:
-                break;
-
-            case DestinationKind.Peer when destination.DeepVerifyIntervalDays is not null:
-                break;
-
-            default:
-                return false;
         }
 
         var record = runtime.DestinationSync.Find(set.Id, destinationName);
@@ -560,8 +549,7 @@ public static class Scheduler
             return true;
         }
 
-        var interval = (ulong)(destination.DeepVerifyIntervalDays ?? ReplicaSweepJob.DefaultIntervalDays)
-            * 24UL * 3_600_000UL;
+        var interval = (ulong)intervalDays * 24UL * 3_600_000UL;
         return (ulong)now.ToUnixTimeMilliseconds() >= swept + interval;
     }
 

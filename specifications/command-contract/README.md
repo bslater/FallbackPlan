@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.45
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.46
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.45 — 60 commands. One line each; parameters, results
+The register as of 1.46 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -168,3 +168,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.43 | `background_limits` on `status` ([ADR-0074](../../docs/adr/0074-background-byte-rate-limits.md), NFR-PERF-013): the byte rates background work is held to, beside the window — `read_limit`, the rate background captures read their sources at, and `transfer_limits`, each limited destination by `destination_name`, each as the configured `text` and as `bytes_per_second`. Reporting only: both are edited in the configuration file, and a person's work is never held to either. Additive with a null default: a pre-1.43 service never sends it, which a client reads as "nothing limited" — what a 1.43 service with no limit configured says too |
 | 1.44 | `get_service_settings` / `update_service_settings` and `transfer_limit` / `drill_interval_days` on the destination descriptor ([ADR-0037](../../docs/adr/0037-configuration-over-the-command-contract.md) Amendment 1, FR-SVC-021): the settings 1.39 and 1.43 report, settable through the service as ADR-0069 §8 and ADR-0074 §7 named as owed. Null keeps a setting, an empty text or a zero clears it, a refused value refuses the request whole and names the setting, never the configuration file's path. `service_settings` carries `effective_max_concurrent_backups`, the width the running pool has — the pool is sized when the service starts, so a width change applies at the next restart. Additive: two verbs, one result and two optional descriptor fields, and a pre-1.44 client's upsert carries neither field and so keeps both |
 | 1.45 | `read_around` and `read_around_sample` on `restore` ([ADR-0075](../../docs/adr/0075-a-restore-reads-around-damage.md), FR-RST-007): a restore of a set's own archive reads a record its own store will not serve from the set's other copies, and the answer counts the files that came from another copy because a copy passed over was damaged or would not read, with up to twenty lines naming the copy each came from and what was wrong with those passed over. A file read from a destination only because staging no longer holds it is not counted. Additive with defaults: a pre-1.45 service sends neither, which reads as nothing read around |
+| 1.46 | `deep_sweep` on each destination row of `status` ([ADR-0035 Amendment 3](../../docs/adr/0035-destination-fitness.md#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is), FR-VER-003): the destination's deep sweep as the ledger holds it. `circuit_closed_at` is when a circuit last closed — every stored blob read back and matched to its seal, the one fact that supports that claim; `read_this_circuit` and `last_read_at` describe the circuit under way, a count of blobs and never a share of the replica; `stalls` and `stalled_on` say a circuit stopped at a blob that will not read, or at a replica that could not be read; `interval_days` is the cadence the scheduler keeps, **null** for a peer read in full only when a person asks. The object is null where no sweep exists — a reserved kind nothing reads back, a destination no longer declared — which is not a sweep that has not run. Additive with a null default: a pre-1.46 service sends none, which reads as no sweep reported |

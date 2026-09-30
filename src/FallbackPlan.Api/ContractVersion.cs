@@ -427,8 +427,22 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// which a client reads as nothing read around, and that is what a
     /// pre-1.45 service did.
     /// </para>
+    /// <para>
+    /// 1.46 adds `deep_sweep` to each destination row of `status` (ADR-0035
+    /// Amendment 3, FR-VER-003). It holds when a circuit of the deep sweep
+    /// last closed (`circuit_closed_at`), the one fact that supports "every
+    /// stored object was read back and matched its seal". Beside it are
+    /// `read_this_circuit` and `last_read_at` for the circuit under way, and
+    /// `stalls` and `stalled_on` for one stopped at a blob that will not read.
+    /// `interval_days` is the cadence the scheduler keeps, null for a peer
+    /// read in full only when a person asks. The object is null where no
+    /// sweep exists — a kind nothing reads back in full, a destination no
+    /// longer declared. Additive with a null default: a pre-1.46 service sends
+    /// none, which a client reads as no sweep reported and draws nothing for,
+    /// never as a sweep that has not run.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 45);
+    public static ContractVersion Current { get; } = new(1, 46);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

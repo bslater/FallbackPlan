@@ -14,7 +14,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// at a local path is repaired from a copy proven sound first — the staging
 /// archive, another local destination, or a paired peer over the retrieval
 /// session — or, where none exists, left in place, named, and held against
-/// the pair until it is gone (FR-VER-005, FR-VER-007).
+/// the pair until it is gone (FR-VER-005, FR-VER-007). The status matrix
+/// reports each circuit — when one last closed, how far the one under way has
+/// read, and whether it has stopped (FR-VER-003, contract 1.46).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -427,6 +429,78 @@ public sealed class DeepSweepTests : IDisposable
         Assert.Contains(UnreadableObjectStore.Refusal, line, StringComparison.Ordinal);
         Assert.DoesNotContain("every stored object has now been checked", line, StringComparison.Ordinal);
         Assert.AreEqual(1, Row(runtime, "vault").SweepStalls, "a person's attempt is an attempt, and a full pass stops at it");
+    }
+
+    [TestMethod]
+    public async Task Status_ACircuitUnderWay_SaysHowFarItHasRead_AndThatNoneHasClosed()
+    {
+        // Contract 1.46: until now the only place a circuit was said was
+        // verify-destination's line, so the status matrix could not tell a
+        // replica read back last night from one never read back at all.
+        ReplicaSweepJob.SegmentBudget = 1;
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        _harness.WriteSourceFile("docs/second.txt", "a second capture, so the replica spans more blobs");
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var row = Row(runtime, "vault");
+        Assert.IsNull(row.SweepCompletedAt, "one blob of several cannot close a circuit");
+
+        var sweep = (await StatusRowAsync(runtime, "vault")).DeepSweep;
+        Assert.IsNotNull(sweep, "a local path is read back in full, so its row reports the sweep");
+        Assert.AreEqual(ReplicaSweepJob.DefaultIntervalDays, sweep.IntervalDays);
+        Assert.IsNull(sweep.CircuitClosedAt, "no circuit has closed, and the row must not say one has");
+        Assert.AreEqual(1, sweep.ReadThisCircuit, "one blob a segment");
+        Assert.AreEqual(row.SweptAt, sweep.LastReadAt);
+        Assert.AreEqual(0, sweep.Stalls);
+    }
+
+    [TestMethod]
+    public async Task Status_ACircuitThatClosed_SaysWhenEveryStoredObjectWasLastRead()
+    {
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var row = Row(runtime, "vault");
+        Assert.IsNotNull(row.SweepCompletedAt, "the control: one segment reads a replica this small whole");
+
+        var sweep = (await StatusRowAsync(runtime, "vault")).DeepSweep;
+        Assert.IsNotNull(sweep);
+        Assert.AreEqual(row.SweepCompletedAt, sweep.CircuitClosedAt);
+        Assert.AreEqual(0, sweep.ReadThisCircuit, "no circuit is under way once one has closed");
+        Assert.AreEqual(row.SweptAt, sweep.LastReadAt);
+    }
+
+    [TestMethod]
+    public async Task Status_ACircuitStoppedAtABlobThatWillNotRead_SaysSo_AndWhatItReadBeforeIt()
+    {
+        string? unreadable = null;
+        ReplicaSweepJob.ReplicaDecorator = replica => new UnreadableObjectStore(replica, key => key == unreadable);
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        await SyncAsync(runtime, "vault");
+        var blobs = BlobKeys(ReplicaRoot(Vault));
+        Assert.IsGreaterThanOrEqualTo(2, blobs.Count, "the replica must span several blobs");
+        unreadable = blobs[1];
+
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var sweep = (await StatusRowAsync(runtime, "vault")).DeepSweep;
+        Assert.IsNotNull(sweep);
+        Assert.AreEqual(1, sweep.Stalls);
+        Assert.AreEqual(unreadable, sweep.StalledOn);
+        Assert.AreEqual(1, sweep.ReadThisCircuit, "what was read before the blob stands");
+        Assert.IsNull(sweep.CircuitClosedAt);
+    }
+
+    /// <summary>The destination's row as the status matrix answers it, through the command handler.</summary>
+    private async Task<DestinationStatusDescriptor> StatusRowAsync(ServiceRuntime runtime, string destination)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
+        return status.Sets.Single().Destinations.Single(row => row.Name == destination);
     }
 
     private static DestinationSyncRecord Row(ServiceRuntime runtime, string destination) =>
