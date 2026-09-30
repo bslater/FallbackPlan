@@ -251,3 +251,4 @@ reason: it would condemn a drive for being unplugged.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built tests first (the reader, the receipt, the service, the contract, the CLI and the console), with each rule's removal confirmed to turn exactly its tests red: a named source read around, the findings dropped, the plan blind to the copies, and a failed location taken for damage at a copy or at the own store. Amends ADR-0034 §6 |
+| 2026-09 | Accepted (related) | [ADR-0076](0076-damage-is-traced-to-what-needs-it.md): the notice a restore raises for damage it found names the files and snapshots the damage reaches, and the pair it fails is failed for that damage alone. `Agent/ServiceCommandHandler` |

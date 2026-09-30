@@ -100,6 +100,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0073](adr/0073-a-browser-suite-for-the-console.md) | A browser suite for the console | **Built** | `Web.DomTests/SetupCeremonyDomTests` walks the ceremony in real Chromium; `Web.DomTests/RestoreWizardDomTests` walks the wizard against a real archive's gate; views, sign-in, configuration editing and the chrome live beside them; `TestSupport/BrowserFacts` is the skip gate; the dedicated CI job installs the browser and opts in |
 | [0074](adr/0074-background-byte-rate-limits.md) | Background byte-rate limits: a destination's `transfer_limit` and the installation's `background_read_limit` pace what the scheduler starts with nobody waiting — never a person; schema 7, contract 1.43 | **Built** | `Application/ByteRate` · `Application/ByteRateLimiter` · `Application/PacedStream` · `Application/PacingClock` · `Agent/BackgroundPacing` · `Agent/PacedObjectStore` · `Agent/PacedFileSystemSource` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/ReplicaSweepJob` · `Agent/RecoveryDrillJob` · `Application.Tests/ByteRateTests`, `Application.Tests/ByteRateLimiterTests`, `Hosts.Tests/BackgroundRateLimitTests`, `Hosts.Tests/PeerRateLimitTests`, `Web.Tests/ConsoleBackgroundLimitsScriptTests` · [notes](#0074--two-more-of-four) |
 | [0075](adr/0075-a-restore-reads-around-damage.md) | A restore reads around damage: a restore of a set's own archive reads a record its own store will not serve from the set's other copies, nearest first and verified as any other; receipt schema 5, contract 1.45 | **Built** | `Repository/RepositoryReader` · `Repository/CopySource` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/FirstHolderStore` · `Agent/SetCopies` · `Agent/ReplicaRepairer` · `Agent/ServiceCommandHandler` · `Agent/RestoreSourceRegistry` · `Cli/OperationGateway` · `Repository.Tests/ReadAroundTests`, `Hosts.Tests/RestoreReadAroundTests`, `Cli.Tests/GatewayRestoreReportTests`, `Web.Tests/ConsoleRestoreResultScriptTests` · [notes](#0075--one-copy-was-never-the-only-one) |
+| [0076](adr/0076-damage-is-traced-to-what-needs-it.md) | Damage is traced to what needs it: catalogue schema 8 indexes what each file version and snapshot is made of, the per-snapshot status degrades only what the damage reaches, and the words name the files and snapshots; ledger schema 7 | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository/DamageScope` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Application/SnapshotReplication` · `Application/DestinationSyncStore` · `Agent/DamageReachText` · `Agent/ReplicaSweepJob` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Repository.Tests/CatalogueReachTests`, `Repository.Tests/DamageReachTests`, `Application.Tests/SnapshotReplicationTests`, `Hosts.Tests/DamageScopeTests` · [notes](#0076--a-scope-a-person-can-act-on) |
 
 ---
 
@@ -1749,3 +1750,53 @@ What a restore finds damaged at a destination goes on its ledger row, as the
 sweep's findings do: the next sync repairs a local path's objects, and holds a
 peer's with its owner's remedy. Damage in the staging archive is a notice
 alone, since nothing repairs it in place.
+
+### 0076 — a scope a person can act on
+
+A destination holding damage nothing could replace degraded every snapshot
+held there, and its notice named blob keys. The first overstated the harm and
+the second understated what a person needed to know. The catalogue could go
+from a blob to its objects, but not from a segment back to the versions using
+it, because that list lives in sealed manifests.
+
+Catalogue schema 8 now keeps that list the other way round: which content
+objects each version needs, and which records each snapshot is made of,
+continuations included. The capture writes it, and so do the projection and
+the forensic rebuild. A test over each of the three holds that every blob a
+capture wrote traces to what needs it, so no route can leave the index out
+without being noticed.
+
+The trace runs whenever a status is read, and is never stored with the
+finding. A capture that finds content already held reuses those objects,
+damaged ones included, so a snapshot taken after the finding can need the
+damage too. A stored scope would miss it.
+
+The trace takes no write lock on the catalogue, so a status read never waits
+behind a capture. Review found the first version taking one for its scratch
+table, and a test that traces while another connection holds the lock came
+before the fix.
+
+What could not be traced counts against every snapshot, rather than none.
+That includes a store key the catalogue locates nothing in.
+
+The ledger records whether a pair's failure is its damage alone (schema 7).
+Only then is the degradation scoped to the snapshots the damage reaches.
+Three rules keep that honest:
+
+- A damage finding recorded over another kind of failure does not narrow it.
+- A sync that copies everything and still finds the damage standing does
+  narrow it. That write appeared during implementation, because without it a
+  failure unrelated to the damage would have kept the whole copy suspect for
+  as long as the damage stood.
+- A finding whose every object was replaced degrades nothing.
+
+A peer's finding also says whether the staging archive or a local path holds
+the objects sound. It proves them there and never dials another peer to find
+out.
+
+The ADR states three limits. A pruned snapshot's rows linger in the catalogue,
+so a count can run high. The sample is ordinal, not ranked. A directory is
+counted, not named.
+
+The catalogue schema change needed the rebuild at open to land first
+([ADR-0010 Amendment 4](adr/0010-local-store-separation.md#amendment-4-2026-09--a-catalogue-discarded-is-rebuilt-before-it-is-read)).
