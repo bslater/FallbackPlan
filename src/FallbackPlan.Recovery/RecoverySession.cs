@@ -439,17 +439,9 @@ public sealed class RecoverySession : IDisposable
                         Reference: (SegmentReference?)reference, Extent: (SparseExtent?)null))
                     .Concat(manifest.SparseExtents.Select(extent =>
                         (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
-                    .OrderBy(piece => piece.Item1)
-                    .ToList();
+                    .OrderBy(piece => piece.Item1);
 
-                // The pieces cover the file end to end, so their lengths sum
-                // to it, and a file with holes is given it before anything is
-                // written (see SparseFile).
-                var length = pieces.Sum(piece => piece.Item2 is { } segment
-                    ? segment.LogicalLength
-                    : (long)piece.Item3!.Value.Length);
-                var output = SparseFile.Create(
-                    spool, FileMode.Create, holes: manifest.SparseExtents.Count > 0, length);
+                var output = SparseFile.Create(spool, FileMode.Create, holes: manifest.SparseExtents.Count > 0);
                 await using (output.ConfigureAwait(false))
                 {
                     foreach (var (_, reference, extent) in pieces)
@@ -492,9 +484,10 @@ public sealed class RecoverySession : IDisposable
                         }
                     }
 
-                    // To where the last piece ended, which is where the hash
-                    // stopped, so the file is exactly the bytes hashed. A file
-                    // with holes already has this length.
+                    // A file ending in a hole has nothing written past its
+                    // last data, so its length is set rather than reached: to
+                    // where the last piece ends, which is where the hash
+                    // stopped.
                     output.SetLength(output.Position);
                 }
 

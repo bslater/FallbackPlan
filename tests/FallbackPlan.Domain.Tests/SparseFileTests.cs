@@ -5,19 +5,19 @@ namespace FallbackPlan.Domain.Tests;
 
 /// <summary>
 /// The file a restore writes a hole into (FR-ARCH-013; specification 09 §4):
-/// given its whole length while still empty, and its data written inside
-/// that length, a file leaves every range nothing was written to unallocated
-/// wherever the filesystem can hold a hole, and reads it back as zeroes
-/// everywhere. NTFS allocates and zero-fills such a range unless the file was
-/// marked sparse first, so the mark is what these tests hold on Windows.
-/// APFS allocates the range a write skips past the end of a file, so the
-/// length comes first, and a test here pins that on macOS.
+/// a range the writer skips is left unallocated wherever the filesystem can
+/// hold a hole, and reads back as zeroes everywhere. Skipping alone does that
+/// on Linux, and on APFS for a hole of 16 MiB or more. APFS fills a shorter
+/// hole with zeroes once it writes the file back, and a test here pins that.
+/// NTFS allocates and zero-fills a skipped range unless the file was marked
+/// sparse first, so the mark is what these tests hold on Windows.
 /// </summary>
 /// <remarks>
 /// <see cref="AllocatedSize"/> is the oracle, because only allocation tells a
-/// hole from written zeroes, and it writes the file back before it measures.
+/// hole from written zeroes, and it writes a file back before it measures.
 /// Every layout here keeps its data on 1 MiB boundaries, so no filesystem's
-/// allocation unit straddles data and hole.
+/// allocation unit straddles data and hole. A hole meant to stay one is
+/// 32 MiB, twice the shortest APFS keeps.
 /// </remarks>
 [TestClass]
 public sealed class SparseFileTests : IDisposable
@@ -30,132 +30,105 @@ public sealed class SparseFileTests : IDisposable
     private string PathOf(string name) => Path.Combine(_root, name);
 
     [TestMethod]
-    public void Create_ForAFileWithHoles_LeavesTheUnwrittenRangesUnallocatedAndReadingAsZeroes()
+    public void Create_ForAFileWithHoles_LeavesTheSkippedRangesUnallocatedAndReadingAsZeroes()
     {
         var path = PathOf("holes.bin");
         var data = Data(MiB, 3);
 
-        using (var file = SparseFile.Create(path, FileMode.CreateNew, holes: true, length: 32 * MiB))
+        using (var file = SparseFile.Create(path, FileMode.CreateNew, holes: true))
         {
-            Assert.AreEqual(32 * MiB, file.Length, "the length is set before anything is written");
-            file.Seek(4 * MiB, SeekOrigin.Begin);
+            file.Seek(32 * MiB, SeekOrigin.Begin);
             file.Write(data);
+            file.SetLength(65 * MiB);
         }
 
         var allocated = AllocatedSize.Of(path);
-        Assert.IsLessThan(16L * MiB, allocated, $"{allocated} bytes allocated for 1 MiB written into a 32 MiB file");
+        Assert.IsLessThan(16L * MiB, allocated, $"{allocated} bytes allocated for 1 MiB written into a 65 MiB file");
 
-        var content = File.ReadAllBytes(path);
-        Assert.AreEqual(32 * MiB, content.Length);
-        Assert.IsLessThan(0, content.AsSpan(0, 4 * MiB).IndexOfAnyExcept((byte)0), "the leading hole did not read as zeroes");
-        Assert.IsTrue(content.AsSpan(4 * MiB, MiB).SequenceEqual(data), "the data did not read back where it was written");
-        Assert.IsLessThan(0, content.AsSpan(5 * MiB).IndexOfAnyExcept((byte)0), "the trailing hole did not read as zeroes");
+        // Read a mebibyte at a time: each is all hole or all data.
+        using var content = File.OpenRead(path);
+        Assert.AreEqual(65 * MiB, content.Length);
+        var chunk = new byte[MiB];
+        for (var offset = 0; offset < 65 * MiB; offset += MiB)
+        {
+            content.ReadExactly(chunk);
+            if (offset == 32 * MiB)
+            {
+                Assert.IsTrue(chunk.AsSpan().SequenceEqual(data), "the data did not read back where it was written");
+            }
+            else
+            {
+                Assert.IsLessThan(0, chunk.AsSpan().IndexOfAnyExcept((byte)0), $"the hole did not read as zeroes at {offset}");
+            }
+        }
     }
 
     [TestMethod]
-    public void AllowHoles_OnAFileTheCallerCreated_LeavesItsUnwrittenRangesUnallocated()
+    public void AllowHoles_OnAFileTheCallerCreated_LeavesItsSkippedRangesUnallocated()
     {
         // The shape a restore destination arrives in: created by its caller,
-        // with File.Create, and handed over as a stream, which the restore
-        // gives its length before it writes the data.
+        // with File.Create, and handed over as a stream.
         var path = PathOf("caller.bin");
 
         using (var file = File.Create(path))
         {
             Assert.IsTrue(SparseFile.AllowHoles(file.SafeFileHandle), "a file on this filesystem refused to hold holes");
-            file.SetLength(32 * MiB);
-            file.Seek(20 * MiB, SeekOrigin.Begin);
+            file.Seek(32 * MiB, SeekOrigin.Begin);
             file.Write(Data(MiB, 5));
+            file.SetLength(65 * MiB);
         }
 
         var allocated = AllocatedSize.Of(path);
-        Assert.IsLessThan(16L * MiB, allocated, $"{allocated} bytes allocated for 1 MiB written into a 32 MiB file");
+        Assert.IsLessThan(16L * MiB, allocated, $"{allocated} bytes allocated for 1 MiB written into a 65 MiB file");
     }
 
     [TestMethod]
-    [PlatformCondition(TestPlatforms.MacOs, "only APFS allocates the range a write skips past the end of a file")]
+    [PlatformCondition(TestPlatforms.MacOs, "only APFS fills a hole it judges too short")]
     [PlatformTrait(TestPlatforms.MacOs)]
-    public void OnApfs_AWriteThatExtendsTheFile_HasTheRangeItSkippedAllocated()
+    public void OnApfs_AHoleShorterThan16MiB_IsAllocated_WhicheverOrderTheFileWasWrittenIn()
     {
-        // Why the length comes first. The range this write skips reads as
-        // zeroes, and it is zero-filled and allocated once the file is written
-        // back, so it is not a hole. Found when the macOS suite first ran a
-        // sparse restore: every restored file was fully allocated.
-        var path = PathOf("extended.bin");
-
-        using (var file = File.Create(path))
+        // Why a hole meant to stay one is 32 MiB in these suites. Each file is
+        // 33 MiB, with 1 MiB of data at its start and 1 MiB at 17 MiB: a 16 MiB
+        // hole between them and a 15 MiB hole after. APFS leaves the first and
+        // fills the second with zeroes once the file is written back, whether
+        // the length is set after the data, as a restore sets it, or before.
+        // It goes by a hole's length, not where the hole lies, so the 16 MiB
+        // one sits off the 16 MiB boundaries. Found when the first macOS run
+        // of the sparse restore had every hole filled: they were 4, 15 and
+        // 11 MiB.
+        foreach (var lengthFirst in new[] { false, true })
         {
-            file.Seek(20 * MiB, SeekOrigin.Begin);
-            file.Write(Data(MiB, 9));
-            file.SetLength(32 * MiB);
-        }
-
-        var allocated = AllocatedSize.Of(path);
-        Assert.IsGreaterThanOrEqualTo(
-            16L * MiB, allocated,
-            $"{allocated} bytes allocated for 1 MiB written past the end of a 32 MiB file: APFS now leaves that "
-            + "range a hole, and the length need no longer come first");
-    }
-
-    [TestMethod]
-    [PlatformCondition(TestPlatforms.MacOs, "a diagnostic of how APFS keeps holes, removed once read")]
-    [PlatformTrait(TestPlatforms.MacOs)]
-    public void Diagnostic_WhichHolesApfsKeeps_ReportedAsAFailure()
-    {
-        // Temporary, and the second of two. The first found that APFS keeps
-        // a 16 MiB hole and fills a 15 MiB one, but every hole it kept that
-        // was shorter than 32 MiB also held a 16 MiB-aligned block. These
-        // layouts tell a rule by length from a rule by aligned block. Each
-        // run is 1 MiB of data at the given offset, written in one call
-        // unless a chunk size is given.
-        var layouts = new (string Name, int SizeMiB, int[] DataAtMiB, bool LengthFirst, int Chunk)[]
-        {
-            ("K", 64, [0, 18], true, MiB),
-            ("L", 64, [8, 30], true, MiB),
-            ("M", 32, [16], false, MiB),
-            ("N", 64, [0, 17], false, MiB),
-            ("O", 64, [0, 17], true, MiB),
-            ("P", 48, [31], true, MiB),
-            ("Q", 40, [0, 23], true, MiB),
-            ("S", 64, [8], true, 64 * 1024),
-            ("T", 34, [0, 17], true, MiB),
-        };
-
-        var lines = new List<string>();
-        var data = Data(MiB, 13);
-        foreach (var (name, sizeMiB, dataAt, lengthFirst, chunk) in layouts)
-        {
-            var path = PathOf($"diag-{name}.bin");
-            using (var file = File.Create(path))
+            var path = PathOf(lengthFirst ? "length-first.bin" : "length-last.bin");
+            using (var file = SparseFile.Create(path, FileMode.CreateNew, holes: true))
             {
                 if (lengthFirst)
                 {
-                    file.SetLength((long)sizeMiB * MiB);
+                    file.SetLength(33 * MiB);
                 }
 
-                foreach (var offset in dataAt)
-                {
-                    file.Seek((long)offset * MiB, SeekOrigin.Begin);
-                    for (var written = 0; written < MiB; written += chunk)
-                    {
-                        file.Write(data.AsSpan(written, chunk));
-                    }
-                }
+                file.Write(Data(MiB, 9));
+                file.Seek(17 * MiB, SeekOrigin.Begin);
+                file.Write(Data(MiB, 10));
 
                 if (!lengthFirst)
                 {
-                    file.SetLength((long)sizeMiB * MiB);
+                    file.SetLength(33 * MiB);
                 }
             }
 
-            var allocated = AllocatedSize.Of(path) / (double)MiB;
-            lines.Add(string.Create(
-                System.Globalization.CultureInfo.InvariantCulture,
-                $"{name}: {sizeMiB} MiB, data at [{string.Join(",", dataAt)}] MiB, {(lengthFirst ? "length first" : "length last")}, {chunk / 1024} KiB writes: {allocated:f1} MiB allocated"));
-            File.Delete(path);
+            // The data and the 15 MiB hole: 17 MiB. With neither hole filled
+            // it would be 2 MiB, and with both, 33.
+            var allocated = AllocatedSize.Of(path);
+            var order = lengthFirst ? "given its length first" : "given its length last";
+            Assert.IsGreaterThanOrEqualTo(
+                10L * MiB, allocated,
+                $"{allocated} bytes allocated for a file {order}: APFS now keeps a 15 MiB hole, so the 16 MiB "
+                + "the records give for the shortest hole it keeps is stale");
+            Assert.IsLessThan(
+                25L * MiB, allocated,
+                $"{allocated} bytes allocated for a file {order}: APFS now fills a 16 MiB hole, so the records are "
+                + "stale, and the 32 MiB holes these suites leave may be too short");
         }
-
-        Assert.Fail(string.Join(" | ", lines));
     }
 
     [TestMethod]
@@ -166,8 +139,8 @@ public sealed class SparseFileTests : IDisposable
     {
         // A dense file restored with the sparse attribute would not be the
         // file that was captured, so the mark goes only where a hole will.
-        using (SparseFile.Create(PathOf("sparse.bin"), FileMode.CreateNew, holes: true, length: MiB))
-        using (SparseFile.Create(PathOf("dense.bin"), FileMode.CreateNew, holes: false, length: 0))
+        using (SparseFile.Create(PathOf("sparse.bin"), FileMode.CreateNew, holes: true))
+        using (SparseFile.Create(PathOf("dense.bin"), FileMode.CreateNew, holes: false))
         {
         }
 

@@ -20,11 +20,11 @@ namespace FallbackPlan.TestSupport;
 /// <para>
 /// On Linux and macOS the file is written back first, with <c>fsync</c> on a
 /// descriptor of its own. A filesystem that defers allocation reports only
-/// what it has allocated so far, and APFS allocates the zeroes it filled into
-/// a skipped range only when it writes them back, so a file measured before
-/// then looks sparser than it is. The descriptor is opened with the system
-/// call, not through .NET, whose emulated share modes would refuse a file a
-/// restore still holds exclusively.
+/// what it has allocated so far, and APFS fills a hole it will not keep with
+/// zeroes, and allocates them, only when it writes the file back. A file
+/// measured before then looks sparser than it is. The descriptor is opened
+/// with the system call, not through .NET, whose emulated share modes would
+/// refuse a file a restore still holds exclusively.
 /// </para>
 /// </remarks>
 public static partial class AllocatedSize

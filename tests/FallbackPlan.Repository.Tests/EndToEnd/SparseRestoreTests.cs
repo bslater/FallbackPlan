@@ -28,11 +28,13 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// <para>
 /// <see cref="AllocatedSize"/> is the oracle, because only allocation tells a
 /// hole from written zeroes; the restore these replace wrote every hole out
-/// and passed every byte comparison. The file is 32 MiB holding 2 MiB of data,
+/// and passed every byte comparison. The file is 98 MiB holding 2 MiB of data,
 /// all on 1 MiB boundaries, so no filesystem's allocation unit straddles data
-/// and hole. Holding allocation under half the length separates the 2 MiB a
-/// sparse restore allocates from the 32 MiB a dense one does, with room for
-/// any filesystem's rounding.
+/// and hole. Each of its three holes is 32 MiB, twice the shortest APFS keeps:
+/// APFS fills a shorter hole with zeroes when it writes the file back, which
+/// <c>Domain.Tests/SparseFileTests</c> pins. Holding allocation under the data
+/// plus half the shortest hole separates a restore that left every hole from
+/// one that filled even one of them, with room for any filesystem's rounding.
 /// </para>
 /// <para>
 /// A file that is one hole from end to end is here too. Capture used to
@@ -44,20 +46,18 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 public sealed class SparseRestoreTests : ArchiveTestHarness
 {
     private const int MiB = 1024 * 1024;
-    private const long Logical = 32L * MiB;
+    private const long Logical = 98L * MiB;
     private const string PassphraseText = "sparse-restore-drill-passphrase!";
 
     private static readonly byte[] SnapshotId = Enumerable.Repeat((byte)0x5e, 16).ToArray();
 
-    // In MiB: [0, 4) hole · [4, 5) data · [5, 20) hole · [20, 21) data · [21, 32) hole.
+    // In MiB: [0, 32) hole · [32, 33) data · [33, 65) hole · [65, 66) data · [66, 98) hole.
     private static readonly SparseExtent[] Holes =
     [
-        new(0, 4 * MiB),
-        new(5 * MiB, 15 * MiB),
-        new(21 * MiB, 11 * MiB),
+        new(0, 32 * MiB),
+        new(33 * MiB, 32 * MiB),
+        new(66 * MiB, 32 * MiB),
     ];
-
-    private static readonly byte[] Content = Layout();
 
     private string Root => Path.GetDirectoryName(StoreRoot)!;
 
@@ -66,7 +66,8 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         // The shape of the CLI's restore verb: a file it created, handed to
         // the engine as a stream.
-        using var published = await PublishAsync(Holes, Content);
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
         var path = Path.Combine(Root, "engine.img");
 
         RestoreResult result;
@@ -74,11 +75,15 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
         {
             result = await new RestoreEngine(published.Reader).RestoreFileAsync(
                 published.Manifest, destination, CancellationToken.None);
+
+            // Where a dense copy leaves it, though the file ends in a hole
+            // that nothing was written to.
+            Assert.AreEqual(Logical, destination.Position, "the destination was not left at the end of the file");
         }
 
         Assert.IsTrue(result.Success, result.FailureDetail);
         Assert.AreEqual(Logical, result.Length);
-        AssertRestoredSparse(path, Content);
+        AssertRestoredSparse(path, content, Holes);
     }
 
     [TestMethod]
@@ -86,7 +91,8 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         // The spool is measured while the engine emits from it, which is the
         // last moment it exists.
-        using var published = await PublishAsync(Holes, Content);
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
         var spoolDirectory = Directory.CreateDirectory(Path.Combine(Root, "engine-spool")).FullName;
         using var destination = new SpoolMeasuringStream(spoolDirectory);
 
@@ -96,16 +102,17 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
         Assert.IsTrue(result.Success, result.FailureDetail);
         Assert.IsNotNull(destination.SpoolAllocated, "the engine emitted nothing while its spool existed");
         Assert.IsLessThan(
-            Logical / 2, destination.SpoolAllocated.Value,
-            $"the spool allocated {destination.SpoolAllocated} bytes for a file holding {2 * MiB}");
-        AssertSameBytes(Content, destination.ToArray());
+            AllocationBound(Logical, Holes), destination.SpoolAllocated.Value,
+            $"the spool allocated {destination.SpoolAllocated} bytes for a file holding {DataIn(Logical, Holes)} bytes of data");
+        AssertSameBytes(content, destination.Written);
         Assert.IsEmpty(Directory.GetFiles(spoolDirectory), "the spool outlived the restore");
     }
 
     [TestMethod]
     public async Task TheExecutor_RestoringASparseFile_LandsItWithItsHoles()
     {
-        using var published = await PublishAsync(Holes, Content);
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
         var output = Path.Combine(Root, "restored");
 
         var receipt = await new RestoreExecutor(published.Reader, published.Target).ExecuteAsync(
@@ -121,7 +128,7 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
         var item = Assert.ContainsSingle(receipt.Items.Where(candidate => candidate.Path == "disk.img"));
         Assert.AreEqual((ulong)Logical, item.Bytes);
-        AssertRestoredSparse(Path.Combine(output, "disk.img"), Content);
+        AssertRestoredSparse(Path.Combine(output, "disk.img"), content, Holes);
     }
 
     [TestMethod]
@@ -129,6 +136,7 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         // The tool opens from the passphrase and the store alone, so the
         // repository is one a passphrase made.
+        var content = Layout();
         var store = new LocalFileSystemObjectStore(Path.Combine(Root, "recovery-repo"));
         using (var passphrase = Passphrase.Create(PassphraseText))
         {
@@ -145,7 +153,7 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
                     repository.CurrentDataGeneration, repository.Keys, repository.Credential, store,
                     new WriterSequence(new FileSequenceStateStore(Path.Combine(spool, "sequence.txt"))),
                     spool, FormatVersions.SealedDataPlane)
-                .PublishAsync(Job(SparseSource(Holes, Content)), CancellationToken.None);
+                .PublishAsync(Job(SparseSource(Holes, content)), CancellationToken.None);
         }
 
         using var openPassphrase = Passphrase.Create(PassphraseText);
@@ -158,7 +166,7 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
 
         Assert.AreEqual(1, report.Restored, string.Join(" | ", report.Notes));
         Assert.AreEqual(0, report.Failed, string.Join(" | ", report.Notes));
-        AssertRestoredSparse(Path.Combine(output, "disk.img"), Content);
+        AssertRestoredSparse(Path.Combine(output, "disk.img"), content, Holes);
     }
 
     [TestMethod]
@@ -166,11 +174,12 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         // The shape a freshly created disk image has: a length, and no data.
         var empty = new byte[Logical];
-        using var published = await PublishAsync([new SparseExtent(0, (ulong)Logical)], empty);
+        SparseExtent[] wholeFile = [new(0, (ulong)Logical)];
+        using var published = await PublishAsync(wholeFile, empty);
 
         Assert.IsEmpty(published.Manifest.SegmentReferences);
         var hole = Assert.ContainsSingle(published.Manifest.SparseExtents);
-        Assert.AreEqual(new SparseExtent(0, (ulong)Logical), hole);
+        Assert.AreEqual(wholeFile[0], hole);
 
         var path = Path.Combine(Root, "blank.img");
         RestoreResult result;
@@ -181,20 +190,21 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
         }
 
         Assert.IsTrue(result.Success, result.FailureDetail);
-        AssertRestoredSparse(path, empty);
+        AssertRestoredSparse(path, empty, wholeFile);
     }
 
     [TestMethod]
     public async Task TheEngine_ADestinationThatCannotSeek_GetsTheHolesWrittenAsZeroes()
     {
-        using var published = await PublishAsync(Holes, Content);
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
         using var destination = new ForwardOnlyStream();
 
         var result = await new RestoreEngine(published.Reader).RestoreFileAsync(
             published.Manifest, destination, CancellationToken.None);
 
         Assert.IsTrue(result.Success, result.FailureDetail);
-        AssertSameBytes(Content, destination.ToArray());
+        AssertSameBytes(content, destination.Written);
     }
 
     [TestMethod]
@@ -202,40 +212,71 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         // A skipped range keeps whatever it held, so a hole may be left only
         // where nothing is: here, every hole would otherwise read 0xEE.
-        using var published = await PublishAsync(Holes, Content);
-        using var destination = new MemoryStream();
-        destination.Write(Enumerable.Repeat((byte)0xEE, (int)Logical).ToArray());
-        destination.Position = 0;
+        var content = Layout();
+        using var published = await PublishAsync(Holes, content);
+        var held = new byte[Logical];
+        held.AsSpan().Fill(0xEE);
+        using var destination = new MemoryStream(held);
 
         var result = await new RestoreEngine(published.Reader).RestoreFileAsync(
             published.Manifest, destination, CancellationToken.None);
 
         Assert.IsTrue(result.Success, result.FailureDetail);
-        AssertSameBytes(Content, destination.ToArray());
+        AssertSameBytes(content, held);
     }
 
-    private static void AssertRestoredSparse(string path, byte[] expected)
+    private static void AssertRestoredSparse(string path, byte[] expected, SparseExtent[] holes)
     {
-        AssertSameBytes(expected, File.ReadAllBytes(path));
+        using (var restored = File.OpenRead(path))
+        {
+            AssertSameBytes(expected, restored);
+        }
 
         var allocated = AllocatedSize.Of(path);
         Assert.IsLessThan(
-            Logical / 2, allocated,
-            $"{allocated} bytes allocated for a {Logical}-byte file holding {expected.Length - Holes.Sum(hole => (long)hole.Length)} bytes of data");
+            AllocationBound(expected.LongLength, holes), allocated,
+            $"{allocated} bytes allocated for a {expected.LongLength}-byte file holding {DataIn(expected.LongLength, holes)} bytes of data");
     }
 
-    private static void AssertSameBytes(byte[] expected, byte[] actual)
+    /// <summary>
+    /// What a file of <paramref name="length"/> allocates at most once every
+    /// one of its <paramref name="holes"/> was left: its data, and half its
+    /// shortest hole for rounding. A single hole filled puts it over.
+    /// </summary>
+    private static long AllocationBound(long length, SparseExtent[] holes) =>
+        DataIn(length, holes) + (long)holes.Min(hole => hole.Length) / 2;
+
+    private static long DataIn(long length, SparseExtent[] holes) =>
+        length - holes.Sum(hole => (long)hole.Length);
+
+    private static void AssertSameBytes(ReadOnlySpan<byte> expected, ReadOnlySpan<byte> actual)
     {
-        Assert.AreEqual(expected.LongLength, actual.LongLength, "the restored length");
-        var same = expected.AsSpan().CommonPrefixLength(actual);
+        Assert.AreEqual(expected.Length, actual.Length, "the restored length");
+        var same = expected.CommonPrefixLength(actual);
         Assert.AreEqual(expected.Length, same, $"the restored bytes first differ at offset {same}");
+    }
+
+    private static void AssertSameBytes(byte[] expected, Stream actual)
+    {
+        Assert.AreEqual(expected.LongLength, actual.Length, "the restored length");
+
+        var buffer = new byte[MiB];
+        var offset = 0;
+        while (offset < expected.Length)
+        {
+            var read = actual.Read(buffer);
+            Assert.IsGreaterThan(0, read, $"the restored file ended at offset {offset}");
+            var same = expected.AsSpan(offset, read).CommonPrefixLength(buffer.AsSpan(0, read));
+            Assert.AreEqual(read, same, $"the restored bytes first differ at offset {offset + same}");
+            offset += read;
+        }
     }
 
     private static byte[] Layout()
     {
         var content = new byte[Logical];
-        new Random(7).NextBytes(content.AsSpan(4 * MiB, MiB));
-        new Random(11).NextBytes(content.AsSpan(20 * MiB, MiB));
+        new Random(7).NextBytes(content.AsSpan(32 * MiB, MiB));
+        new Random(11).NextBytes(content.AsSpan(65 * MiB, MiB));
         return content;
     }
 
@@ -303,6 +344,8 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
     {
         public long? SpoolAllocated { get; private set; }
 
+        public ReadOnlySpan<byte> Written => GetBuffer().AsSpan(0, checked((int)Length));
+
         public override void Write(ReadOnlySpan<byte> buffer)
         {
             Measure();
@@ -350,7 +393,7 @@ public sealed class SparseRestoreTests : ArchiveTestHarness
             set => throw new NotSupportedException();
         }
 
-        public byte[] ToArray() => _written.ToArray();
+        public ReadOnlySpan<byte> Written => _written.GetBuffer().AsSpan(0, checked((int)_written.Length));
 
         public override void Flush()
         {
