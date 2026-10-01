@@ -207,6 +207,13 @@ granted for.
 > refuses that whole, on every pass, for ever. See
 > [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant).
 
+> **Amended (2026-10): a grant per set, and proved against the archive's
+> key.** As shipped, one grant stood for every set, and it was proved only
+> against a tombstone already on disk, so an archive with none accepted any
+> grant at all. Neither the console nor the CLI sent a grant, so neither
+> could apply. See
+> [Amendment 3](#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key).
+
 ## Amendment 2 (2026-09) — a write-only set's peers converge under the grant
 
 Found by moving the peer retention fixtures onto a set-up installation
@@ -246,6 +253,70 @@ wire. `Retention.Tests/PeerRetentionTests` holds it: the scheduled passes
 leave the spoke holding everything and say so; the granted run converges it,
 is refused whole below the floor, and is refused whole under a recorded key
 that is not the repository's.
+
+## Amendment 3 (2026-10) — a grant per set, from every client, proved against the archive's key
+
+Found from the console. Its **Apply retention** button sent `retention` with
+`apply` and no grant, and so did `fallbackplan retention --apply` against a
+running service. Every repository a write-only service makes declares
+`reclaim-authority` (§4), so §6 refused both by name, every time. Only the
+agent's own `fallbackplan-agent retention --apply --passphrase-env` derived a
+grant. Amendment 2's statement of cost named "a console" as a way to apply,
+and there was none.
+
+Two defects sat behind the first:
+
+- **One grant stood for every set.** The agent's verb derived the reclaim
+  sub-root under the installation's salt and sent it for every set. A set
+  adopted from a destination keeps the salt it was born under
+  ([ADR-0061](0061-adopt-a-destinations-archives.md)), and an installation
+  provisioned set by set has no installation salt at all. For those sets that
+  grant is not the authority, and the verb sent no grant at all where there
+  was no installation credential.
+- **An archive with no tombstone accepted any grant.** §6 proved a grant by
+  verifying a tombstone already on disk, so on an archive with none there was
+  nothing to disagree with, and the first tombstone a wrong grant wrote would
+  have defined the key. Every true grant after it would have been refused for
+  disagreeing, and the sweep would have reported the wrong grant's tombstones
+  as forgeries. Yet every write credential has carried the reclaim public key
+  since §5.
+
+**Decision.**
+
+- **A grant per set (contract 1.50).** `retention` carries `reclaim_grants`,
+  a map from set id to a grant in §6's shape. A set the map names is collected
+  under its own entry; one it leaves out falls back to the single
+  `reclaim_grant`. With neither, the set is **reported and not applied**, and
+  a report line says so, because a passphrase that opens some sets and not
+  others should still collect the sets it opens. A command with no map is
+  answered as before: one grant for every set, or a refusal by name.
+- **Every client derives where the passphrase was typed.** The console's
+  Apply dialog asks for the passphrase beside the typed word and posts it to
+  the console's own endpoint, `/api/retention-apply`. The console derives
+  there, as its write-only ceremonies do, resumes the browser's session so the
+  deletion is attributed to whoever confirmed it, and sends the service only
+  the sealed grants. `fallbackplan retention --apply --passphrase-env` does
+  the same in the CLI. The agent's verb reads each set's archive descriptor.
+  Each client derives once per distinct salt and parameters, from the facts
+  the service publishes for each set (contract 1.30), and proves each
+  derivation against the sealing public key published beside them. A set it
+  does not reproduce is left out of the map. A passphrase that opens no set is
+  refused by the client, and nothing is sent.
+- **Every grant is proved before any set runs, against the credential
+  first.** The service proves each set's grant against the reclaim public key
+  its archive's credential carries, then against a tombstone already on disk.
+  A grant that is not the set's authority is refused, naming the set, before
+  the run writes anything for any set: one from another passphrase, one
+  derived under another set's salt, or a restore grant sent in its place. A
+  credential written before §5 carries no public key, so its grant keeps the
+  tombstone proof alone.
+
+The passphrase still never crosses the command surface. What crosses is §6's
+envelope, once per set. `Hosts.Tests/WriteOnlySetTests` holds the service and
+the agent's verb, `Hosts.Tests/ClientModeTests` the CLI,
+`Web.Tests/RetentionApplyCeremonyTests` and `Web.DomTests/RetentionApplyDomTests`
+the console, `Repository.Tests/ReclaimAuthorityTests` the key check, and
+`Api.Tests/ConfigurationContractTests` the wire.
 
 ## Consequences
 
@@ -316,3 +387,4 @@ nothing about cloud IAM.
 | 2026-09 | Amended | §3's limit closed: format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)), so no service derives the reclaim key and the split defends every repository |
 | 2026-09 | Amended (audit record on the peer plane) | [ADR-0063](0063-deletion-receipts.md) gives FR-GC-008's audit half its peer-plane artefact: the destination's deletion receipt under its own device key, verified by the commander against the instruction §5 signs and filed by both parties. `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests` |
 | 2026-09 | Amended (the peer instruction rides the grant) | [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant): a write-only set's scheduled sync sent its peer instruction unsigned and was refused whole on every pass. The instruction now rides the granted retention run, and the scheduled sync pushes whole copies and names the grant it waits on. `Retention.Tests/PeerRetentionTests` |
+| 2026-10 | Amended (a grant per set, proved against the archive's key) | [Amendment 3](#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key): the console and the CLI never sent a grant, so neither could apply, and the agent's verb sent one grant for every set. Grants now travel per set (contract 1.50), each derived by the client under its set's own salt, and each is proved against the reclaim public key the archive's credential carries before any set runs. `Retention/StagingSweep`, `Web/ConsoleRestoreGate`, `Cli/OperationGateway`, `Agent/AgentHost`, `Hosts.Tests/WriteOnlySetTests`, `Hosts.Tests/ClientModeTests`, `Web.Tests/RetentionApplyCeremonyTests` |
