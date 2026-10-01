@@ -945,6 +945,19 @@ public sealed partial class ServiceCommandHandler
             };
             defects.AddRange(CircularCapture.Defects(
                 [draft], declared.Destinations, ServiceStorage(), named: false));
+
+            // The placement condition (ADR-0051, FR-DEST-017) is a defect for
+            // the same reason, judged as the save judges it, in its words.
+            // That takes the set the draft is of: a draft naming none comes
+            // from a client older than the question (contract 1.49), and a
+            // standing binding the save would leave alone cannot be told from
+            // a new one, so it is not asked.
+            if (command.SetId is { Length: > 0 } setId && command.Destinations is { Count: > 0 } chosen)
+            {
+                var existing = declared.BackupSets.FirstOrDefault(set =>
+                    string.Equals(set.Id, setId, StringComparison.Ordinal));
+                defects.AddRange(PlacementRefusals(declared, existing, draftRoots, chosen));
+            }
         }
 
         List<string> nextRuns = [];

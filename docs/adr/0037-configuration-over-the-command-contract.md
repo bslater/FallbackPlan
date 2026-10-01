@@ -162,6 +162,53 @@ The CLI's `settings` and `destination-settings` commands, the console's
 Service settings card and the destination form are all clients of the two
 verbs and the widened descriptor.
 
+## Amendment 2 (2026-10) — a new set is made in steps, and its draft is judged for placement
+
+Two things went wrong for someone making a backup set in the console.
+
+- **The editor gave no order.** A new set opened the way an existing one is
+  edited: a summary of seven sections, each behind its own dialog, and one
+  confirm at the end. Nothing in it said where to start, what a set needs
+  before it can be saved, or which settings can be left alone.
+- **The draft was silent about placement.** §2's `validate_set_draft` said
+  live what the save would refuse for a rule, a schedule or a circular
+  capture, but not for the condition [ADR-0051](0051-local-destination-placement.md)
+  puts on choosing a local destination. A destination on a root's drive was
+  refused only at the confirm.
+
+1. **A new set is made in six steps** ([FR-SVC-022](../requirements/functional.md)):
+   1. its name;
+   2. what it backs up, with the selection filters (include rules) that
+      narrow it;
+   3. its destinations;
+   4. its exclusions (optional);
+   5. its retention (optional);
+   6. its other settings: schedule, priority and storage shape (optional).
+
+   The first three are each answered before the next. Create is offered from
+   the third on and sends the one upsert, and nothing reaches the service
+   before it. The step Create is pressed on says what the optional steps not
+   reached will leave. Editing an existing set keeps the summary, because a
+   change is one setting at a time.
+2. **A step holds on a defect.** Leaving a step forward asks
+   `validate_set_draft` about the draft as it then stands, and a defect holds
+   the walk on the step that shows it, which is the step that can resolve
+   it. A service that cannot be asked holds nobody, because the save still
+   judges.
+3. **A draft names its set (contract 1.49).** `validate_set_draft` takes
+   `set_id`: the set the draft edits, or the id a new one will be created
+   under. With it, the answer names each placement refusal the save would
+   give, in the save's words, judged as the save judges it:
+   - for a set the configuration does not hold, every local destination;
+   - for one it does, the destinations the draft newly references, or all of
+     them when its roots change.
+
+   A draft that names no set, as every pre-1.49 client's does, is not judged
+   for placement. Without the set, a standing binding the save leaves alone
+   (ADR-0035) cannot be told from a new one, and a refusal the save would
+   never give is worse than none. The save and the draft share one judgement
+   in `Agent/ServiceCommandHandler`, so they cannot drift apart.
+
 ## Status history
 
 | Date | Status | Note |
@@ -170,3 +217,4 @@ verbs and the widened descriptor.
 | 2026-08 | Accepted | Built: contract 1.7, handlers, include enforcement in the orchestrator, and the web console's Configuration surface over it |
 | 2026-09 | Accepted (amended) | §1's preservation rule stated for fields with no wire field at all (FR-SVC-020): the destination upsert kept the verification policy but dropped the drill cadence and the transfer limit; all three are kept now, and every field a destination persists must be carried by the descriptor or kept by an edit |
 | 2026-09 | Accepted (amended) | Amendment 1: the installation's settings join the contract. The window, the read limit and the pool width go through two verbs; a destination's limit and cadence ride its descriptor. Null keeps a setting and empty or zero clears it; a request is one decision; the pool width applies at the next start (FR-SVC-021, contract 1.44) |
+| 2026-10 | Accepted (amended) | Amendment 2: the console makes a new set in six steps, the first three required, and holds a step on a defect the draft's validation names (FR-SVC-022). The draft validation takes the set's id and names the placement refusal its save would give, judged as the save judges it (ADR-0051, FR-DEST-017, contract 1.49) |

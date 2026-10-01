@@ -15,6 +15,7 @@ This document is **normative for terminology**. Where any other document, code i
 | **Device** | A cryptographically identified FallbackPlan installation. Holds a keypair; the keypair is not derivable from the repository. |
 | **Source** | A device together with the filesystem roots whose state it captures. |
 | **Backup set** | A named unit of policy: source selection, exclusions, schedule, retention, destinations, and format profiles. |
+| **Selection filter** | An include rule ([ADR-0024](../adr/0024-include-exclude-rule-dialect.md)), as the console names it where a new set's folders are chosen ([ADR-0037](../adr/0037-configuration-over-the-command-contract.md) Amendment 2). With none, a set captures everything under its roots; with any, only what matches one, and everything inside a folder that matches. An exclusion, whether an exclude rule or an unticked folder, always wins over it. |
 | **Snapshot** | An immutable point-in-time representation of a backup set. |
 | **Protection state** | A backup set's derived status — the closed vocabulary and its console glance layer are normative at [10 §1.1](10-observability.md#11-states-must-be-distinguishable). |
 | **Repository** | The logical collection of encrypted content, metadata, indexes, and snapshots, identified by a repository ID. |

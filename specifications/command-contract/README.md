@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.48
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.49
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.48 — 60 commands. One line each; parameters, results
+The register as of 1.49 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -81,7 +81,11 @@ set defaults to direct-ship). Since 1.44, `get_service_settings` /
 background window, the background read limit and `max_concurrent_backups`
 (ADR-0037 Amendment 1, FR-SVC-021) — and the destination descriptor carries
 `transfer_limit` and `drill_interval_days`. On every one of them null keeps
-the stored value, and an empty text or a zero clears it.
+the stored value, and an empty text or a zero clears it. Since 1.49,
+`validate_set_draft` takes `set_id`, the set the draft edits or would create,
+and with it names each placement refusal the save would give (ADR-0037
+Amendment 2, ADR-0051, FR-DEST-017). A draft that names no set is not judged
+for placement.
 
 **Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
 1.24 with the run's terminal numbers on each row and an optional newest-N
@@ -181,3 +185,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.46 | `deep_sweep` on each destination row of `status` ([ADR-0035 Amendment 3](../../docs/adr/0035-destination-fitness.md#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is), FR-VER-003): the destination's deep sweep as the ledger holds it. `circuit_closed_at` is when a circuit last closed — every stored blob read back and matched to its seal, the one fact that supports that claim; `read_this_circuit` and `last_read_at` describe the circuit under way, a count of blobs and never a share of the replica; `stalls` and `stalled_on` say a circuit stopped at a blob that will not read, or at a replica that could not be read; `interval_days` is the cadence the scheduler keeps, **null** for a peer read in full only when a person asks. The object is null where no sweep exists — a reserved kind nothing reads back, a destination no longer declared — which is not a sweep that has not run. Additive with a null default: a pre-1.46 service sends none, which reads as no sweep reported |
 | 1.47 | `observed_clock_skew_ms` on each snapshot of `list_snapshots` and `open_restore_source` ([ADR-0077](../../docs/adr/0077-observed-clock-skew.md), NFR-TIME-002): how far the capturing machine's clock stood from a peer's when the snapshot was taken, as its manifest records it — the peer's clock minus the capturing one's, in milliseconds, so positive is a clock that was behind. Null where the capture had no reading, which is not a clock in step. Additive with a null default: a pre-1.47 service sends none, which reads as nothing to report |
 | 1.48 | `implausible_capture_time` on each snapshot of `list_snapshots` ([ADR-0078](../../docs/adr/0078-implausible-capture-times.md), FR-GC-012): whether the snapshot's capture time is out of step with the order its writer published it in, by more than the configured clock skew margin, and which way — `behind` is dated before snapshots published ahead of it, `ahead` after snapshots published after it. Retention keeps such a snapshot and never expires it, and its keep line in the `retention` report says why. Additive with a null default: a capture that fits, a restore source (which does not judge) and a pre-1.48 service send none, which reads as nothing to report |
+| 1.49 | `set_id` on `validate_set_draft` ([ADR-0037 Amendment 2](../../docs/adr/0037-configuration-over-the-command-contract.md#amendment-2-2026-10--a-new-set-is-made-in-steps-and-its-draft-is-judged-for-placement), FR-DEST-017, FR-SVC-022): the set the draft edits, or the id a new one will be created under. With it, the answer names each placement refusal ([ADR-0051](../../docs/adr/0051-local-destination-placement.md)) the save would give, in the save's words, judged as the save judges it: every local destination of a set the configuration does not hold, and for one it does, the destinations newly referenced, or all of them when its roots change. Additive with a null default: a pre-1.49 client names no set, and its draft is not judged for placement, because a standing binding the save would leave alone cannot be told from a new one |
