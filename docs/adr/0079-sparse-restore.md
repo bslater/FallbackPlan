@@ -13,7 +13,7 @@
 - The tests:
   - `Repository.Tests/SparseRestoreTests`
   - `Domain.Tests/SparseFileTests`
-  - the allocation oracle both use, `TestSupport/AllocatedSize`
+  - the allocation oracle both use, `TestSupport/AllocatedSize`, which writes a file back before it measures
 
 ---
 
@@ -23,16 +23,17 @@ FR-ARCH-013 asks that sparse extents "restore without materialising zero payload
 
 The cost of the old behaviour was not only disk. A restore of a 100 GiB sparse disk image holding 10 GiB of data wrote 90 GiB of zeroes twice, once into the spool and once into the destination. It also needed 100 GiB free in the temporary directory as well as at the destination, so it could fail on a machine that held the original comfortably.
 
-Every platform this product supports reads zeroes from a range a write skipped:
+Every platform this product supports reads zeroes from a range inside a file's length that nothing was written to. Whether the range is allocated differs:
 
-- **POSIX.** `lseek` past the end followed by a write, and `ftruncate` extending a file, leave a gap that reads as zeroes. Wherever the filesystem supports holes (ext4, XFS, Btrfs, APFS, tmpfs), the gap is left unallocated.
+- **Linux.** `lseek` past the end followed by a write, and `ftruncate` extending a file, leave a gap that reads as zeroes. Wherever the filesystem supports holes (ext4, XFS, Btrfs, tmpfs), the gap is left unallocated.
+- **macOS.** APFS supports holes, but not every gap becomes one. It zero-fills and allocates a range that a write skips past the end of a file, or that a length change extends past data already written, once the file is written back. A range inside a length the file was given while it was still empty stays a hole. The first macOS run of these tests found this: every file the restore wrote there was fully allocated. The tests that passed had measured before the file was written back.
 - **Windows.** An extending write or `SetEndOfFile` leaves a gap that reads as zeroes too. But NTFS allocates and zero-fills it, unless the file was marked sparse with `FSCTL_SET_SPARSE` first.
 
 ## Decision
 
 ### 1. A hole is hashed and skipped, never written
 
-The whole-file hash still covers the zeroes a hole reads as (06 §4.2), so the hash is unchanged and a file restored onto a filesystem without holes still verifies. The writer then moves past the hole instead of writing it, and sets the file's length once the last piece is placed, so a file that ends in a hole has its full length.
+The whole-file hash still covers the zeroes a hole reads as (06 §4.2), so the hash is unchanged and a file restored onto a filesystem without holes still verifies. A file that will have a hole is given its whole length first, while it is still empty, and the writer then moves past each hole instead of writing it. So every hole is a range inside a length the file already had, which is the one form APFS leaves unallocated. Once the last piece is placed the length is set again, to where the hash stopped, so the file is exactly the bytes hashed.
 
 ### 2. On Windows, a file that will have a hole is marked sparse before anything is written
 
@@ -44,7 +45,7 @@ The mark is a synchronous ioctl. It is not attempted on an overlapped handle, be
 
 **The spool.** The spool the engine reassembles into is created through `SparseFile` and skips each hole. The hash is verified over the reassembly before anything leaves it (FR-RST-005), as before. Where the spool lives is the caller's to name, the system temporary directory by default; the tests name one so that they can measure it.
 
-**The emission.** After the hash verifies, the engine copies only the spool's data into the destination, each run at its offset from where the destination stands, and then sets the length. It does this only when the destination can seek and holds nothing past its position, because a skipped range keeps whatever it already held. A destination that cannot seek, such as a pipe, or one that already holds bytes where the file will go, is given the whole file with its zeroes written out. Its bytes are the same either way.
+**The emission.** After the hash verifies, the engine gives the destination the file's length and then copies only the spool's data into it, each run at its offset from where the destination stands. It does this only when the destination can seek and holds nothing past its position, because a skipped range keeps whatever it already held. A destination that cannot seek, such as a pipe, or one that already holds bytes where the file will go, is given the whole file with its zeroes written out. Its bytes are the same either way.
 
 A destination that is a file is marked sparse before the copy, on Windows. The executor's spool and the CLI's output are both created with `File.Create`, whose handle is synchronous.
 

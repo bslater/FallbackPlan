@@ -1916,11 +1916,17 @@ written zeroes, and that is how the gap went unseen. The oracle now
 is allocation: `TestSupport/AllocatedSize`, which asks each platform how much
 of a file it holds and shares no code with the product's own stat interop.
 
-Skipping a range is correct everywhere, because every platform reads zeroes
-from what an extending write skipped. Only allocation differs.
+A file that will have a hole is given its whole length while it is still
+empty, and its data is written inside that length, so every hole is a range
+nothing was written to. Every platform reads such a range as zeroes. Only
+allocation differs.
 
-- **POSIX** leaves the skipped range unallocated wherever the filesystem
-  holds holes, with nothing asked.
+- **Linux and APFS** leave it unallocated. The order matters on APFS: a range
+  that a write skips past the end of a file, or that a length change extends
+  past written data, is zero-filled and allocated once APFS writes the file
+  back. The first macOS CI run found it. Every file the restore wrote there
+  was fully allocated, and the tests that passed had measured before
+  writeback. The oracle now writes a file back before it measures.
 - **NTFS** allocates and zero-fills it unless the file was marked sparse
   first. So `Domain/SparseFile` marks a file that will have a hole, and only
   such a file, because a dense file carrying the sparse attribute is not the
