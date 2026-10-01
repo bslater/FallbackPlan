@@ -87,8 +87,55 @@ over derivation.
   layered volume would be refused on a guess; conservatism belongs to the
   status derivation, not the gate.
 
+## Amendment 1 (2026-10) — the Windows probe called every path volume 0
+
+The decision is unchanged. What was wrong was the probe it judges by, on
+Windows.
+
+There the volume a path sits on is the serial number
+`GetFileInformationByHandle` reports, read through a managed copy of
+`BY_HANDLE_FILE_INFORMATION`. That copy declared the struct's three
+`FILETIME`s as longs. C# aligns a long to eight bytes and Windows aligns a
+`FILETIME` to four, so every field after the first was read four bytes late.
+The serial number read as the high half of the file's size, which is zero for
+every directory. **Every path on Windows was volume 0**, so every local
+destination shared a volume with every root, and choosing one was refused,
+including a destination on an external drive. The refusal said "shares a
+volume", which was false, and named both paths, which were right. The status
+derivation reads the same probe, so it treated every standing local binding
+on Windows as sharing its source's volume.
+
+Nothing caught it. Every service suite that binds a local destination
+overrides the probe so that its fixture paths can pretend to sit on two
+drives, and the judgement's own suite is pure. No test had let the real probe
+answer on Windows.
+
+The fix gives the struct its native layout: `FILETIME` as two four-byte
+halves, 52 bytes in all.
+
+- `Filesystem.Tests/WindowsFileIdentityTests` pins that layout on every
+  platform. On Windows it checks the reported serial against
+  `GetVolumeInformationW`, and the link count against a file before and
+  after `CreateHardLinkW`.
+- `Hosts.Tests/LocalPlacementRealVolumeTests` runs the case that was
+  reported, through the service with no override. A destination on another
+  volume is accepted, and one beside its root is refused.
+
+The same misread gave capture two wrong fields, and the fix corrects both:
+
+- **The link count read part of the file index**, so every Windows file
+  looked hard-linked and carried a hard-link group of its own.
+- **The file identity was shifted.**
+
+Both now read true. The first backup of an existing Windows set after this
+change therefore finds every file's identity changed. It reads each file
+again rather than reusing the prior version, and writes new manifests without
+the stray groups. The content deduplicates against what is stored, so it
+costs a read and not the space.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-08 | Accepted | The owner's direction: drive separation as the condition of choosing a local destination, and the protection boundary moved from machine to volume — `Application/LocalDestinationPlacement`, `Filesystem.Local/PhysicalDisk`, the upsert guards, and the deriver's gates, pinned by `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` and the flipped deriver suite |
+| 2026-10 | Amended | Amendment 1: the Windows volume probe read the wrong field of `BY_HANDLE_FILE_INFORMATION` and called every path volume 0, so every local destination was refused. The struct has its native layout again, held by `Filesystem.Tests/WindowsFileIdentityTests` and `Hosts.Tests/LocalPlacementRealVolumeTests` |
