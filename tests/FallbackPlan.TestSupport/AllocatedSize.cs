@@ -9,12 +9,23 @@ namespace FallbackPlan.TestSupport;
 /// zeroes were written, which no read of its content can.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Kept apart from the product's own stat interop on purpose: an oracle that
 /// shared the subject's code could share its mistakes. Linux uses
 /// <c>statx</c>, whose layout is one fixed kernel ABI on every architecture;
 /// macOS uses <c>stat</c> against Darwin's 64-bit-inode layout; Windows uses
 /// <c>GetCompressedFileSizeW</c>, which reports a sparse file's allocated
 /// clusters rather than its length.
+/// </para>
+/// <para>
+/// On Linux and macOS the file is written back first, with <c>fsync</c> on a
+/// descriptor of its own. A filesystem that defers allocation reports only
+/// what it has allocated so far, and APFS allocates the zeroes it filled into
+/// a skipped range only when it writes them back, so a file measured before
+/// then looks sparser than it is. The descriptor is opened with the system
+/// call, not through .NET, whose emulated share modes would refuse a file a
+/// restore still holds exclusively.
+/// </para>
 /// </remarks>
 public static partial class AllocatedSize
 {
@@ -29,8 +40,59 @@ public static partial class AllocatedSize
             return OfWindows(path);
         }
 
-        return OperatingSystem.IsMacOS() ? OfDarwin(path) : OfLinux(path);
+        if (OperatingSystem.IsMacOS())
+        {
+            WriteBack(path, DarwinOpen, DarwinFsync, DarwinClose);
+            return OfDarwin(path);
+        }
+
+        WriteBack(path, LinuxOpen, LinuxFsync, LinuxClose);
+        return OfLinux(path);
     }
+
+    private const int ReadOnly = 0;
+
+    private static void WriteBack(
+        string path, Func<string, int, int> open, Func<int, int> fsync, Func<int, int> close)
+    {
+        var descriptor = open(path, ReadOnly);
+        if (descriptor < 0)
+        {
+            throw new IOException($"open({path}) failed with errno {Marshal.GetLastPInvokeError()}.");
+        }
+
+        try
+        {
+            if (fsync(descriptor) != 0)
+            {
+                throw new IOException($"fsync({path}) failed with errno {Marshal.GetLastPInvokeError()}.");
+            }
+        }
+        finally
+        {
+            _ = close(descriptor);
+        }
+    }
+
+    // open's mode argument is variadic, and passed only with O_CREAT, so the
+    // two fixed arguments are the whole call on every architecture.
+    [LibraryImport("libc", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int LinuxOpen(string path, int flags);
+
+    [LibraryImport("libc", EntryPoint = "fsync", SetLastError = true)]
+    private static partial int LinuxFsync(int descriptor);
+
+    [LibraryImport("libc", EntryPoint = "close", SetLastError = true)]
+    private static partial int LinuxClose(int descriptor);
+
+    [LibraryImport("libSystem", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int DarwinOpen(string path, int flags);
+
+    [LibraryImport("libSystem", EntryPoint = "fsync", SetLastError = true)]
+    private static partial int DarwinFsync(int descriptor);
+
+    [LibraryImport("libSystem", EntryPoint = "close", SetLastError = true)]
+    private static partial int DarwinClose(int descriptor);
 
     private const int AtFdcwd = -100;
     private const uint StatxBlocks = 0x400;
