@@ -98,6 +98,63 @@ public sealed class SparseFileTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.MacOs, "a diagnostic of how APFS keeps holes, removed once read")]
+    [PlatformTrait(TestPlatforms.MacOs)]
+    public void Diagnostic_HowApfsKeepsHoles_ReportedAsAFailure()
+    {
+        // Temporary. CI prints only a failing test's message, and macOS is
+        // reachable only through CI. Each layout is a file of the given size
+        // with 1 MiB of data at each offset, given its length first; the
+        // last two write the data first and set the length after.
+        var layouts = new (string Name, int SizeMiB, int[] DataAtMiB, bool LengthFirst)[]
+        {
+            ("A", 32, [16], true),
+            ("B", 48, [16], true),
+            ("C", 64, [8], true),
+            ("D", 64, [24], true),
+            ("E", 128, [17], true),
+            ("F", 128, [20, 60], true),
+            ("G", 256, [32, 128], true),
+            ("H", 1024, [100, 500], true),
+            ("I", 32, [4, 20], false),
+            ("J", 64, [30], false),
+        };
+
+        var lines = new List<string>();
+        var data = Data(MiB, 13);
+        foreach (var (name, sizeMiB, dataAt, lengthFirst) in layouts)
+        {
+            var path = PathOf($"diag-{name}.bin");
+            using (var file = File.Create(path))
+            {
+                if (lengthFirst)
+                {
+                    file.SetLength((long)sizeMiB * MiB);
+                }
+
+                foreach (var offset in dataAt)
+                {
+                    file.Seek((long)offset * MiB, SeekOrigin.Begin);
+                    file.Write(data);
+                }
+
+                if (!lengthFirst)
+                {
+                    file.SetLength((long)sizeMiB * MiB);
+                }
+            }
+
+            var allocated = AllocatedSize.Of(path) / (double)MiB;
+            lines.Add(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{name}: {sizeMiB} MiB, data at [{string.Join(",", dataAt)}] MiB, {(lengthFirst ? "length first" : "length last")}: {allocated:f1} MiB allocated"));
+            File.Delete(path);
+        }
+
+        Assert.Fail(string.Join(" | ", lines));
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Windows, "only NTFS needs a file marked before it can hold a hole")]
     [PlatformTrait(TestPlatforms.Windows)]
     [SupportedOSPlatform("windows")]
