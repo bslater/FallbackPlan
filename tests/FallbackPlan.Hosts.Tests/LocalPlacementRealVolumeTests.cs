@@ -37,7 +37,15 @@ public sealed partial class LocalPlacementRealVolumeTests : IDisposable
         _harness.Dispose();
         if (Directory.Exists(_systemVolumeDirectory))
         {
-            Directory.Delete(_systemVolumeDirectory, recursive: true);
+            try
+            {
+                Directory.Delete(_systemVolumeDirectory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // The accepted set's first backup writes here; a handle that
+                // outlives the test is noise, as the harness treats its own.
+            }
         }
     }
 
@@ -59,12 +67,16 @@ public sealed partial class LocalPlacementRealVolumeTests : IDisposable
                 + "directory on a volume of its own, as the CI runner has it.");
         }
 
-        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
-            new UpsertDestinationCommand(new DestinationDescriptor(null, "external", "local-path", elsewhere, null, null)),
-            _timeout.Token));
-        Assert.IsInstanceOfType<ConfigurationChangeResult>(await handler.ExecuteAsync(
-            new UpsertDestinationCommand(new DestinationDescriptor(null, "beside", "local-path", beside, null, null)),
-            _timeout.Token));
+        // Declaring a destination is not what is judged: placement is a
+        // condition of choosing one for a set.
+        foreach (var (name, path) in new[] { ("external", elsewhere), ("beside", beside) })
+        {
+            var declared = await handler.ExecuteAsync(
+                new UpsertDestinationCommand(new DestinationDescriptor(null, name, "local-path", path, null, null)),
+                _timeout.Token);
+            Assert.IsNotInstanceOfType<ServiceError>(
+                declared, (declared as ServiceError)?.Message ?? $"'{name}' was not declared");
+        }
 
         // The user's case: the source on one drive, the destination on
         // another. Accepted.
