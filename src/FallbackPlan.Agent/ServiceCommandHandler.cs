@@ -255,11 +255,67 @@ public sealed partial class ServiceCommandHandler(
     /// </summary>
     private async ValueTask<ServiceResult> RetentionAsync(RetentionCommand command, CancellationToken cancellationToken)
     {
+        var archives = await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false);
+
+        // The run's authority to author deletions (ADR-0055 §6), opened and
+        // proved for every set before any set runs, so a grant from another
+        // passphrase, or derived under another set's salt, is refused before
+        // the run has written anything anywhere (Amendment 3). Each is zeroed
+        // when its set's run ends, so a service compromised between runs
+        // holds nothing that can delete.
+        var grants = new Dictionary<string, Repository.Crypto.ReclaimAuthority>(StringComparer.Ordinal);
+        var ungranted = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var (set, archive) in archives)
+            {
+                var (grant, unnamed, refusal) = await OpenReclaimGrantAsync(
+                    set, archive, command, cancellationToken).ConfigureAwait(false);
+                if (refusal is not null)
+                {
+                    return refusal;
+                }
+
+                if (grant is not null)
+                {
+                    grants[set.Id] = grant;
+                }
+
+                if (unnamed)
+                {
+                    ungranted.Add(set.Id);
+                }
+            }
+
+            return await RunRetentionAsync(command, archives, grants, ungranted, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var grant in grants.Values)
+            {
+                grant.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The pass itself, set by set, under the grants already proved. A set in
+    /// <paramref name="ungranted"/> was left out of the command's grants, and
+    /// is reported and not applied.
+    /// </summary>
+    private async ValueTask<ServiceResult> RunRetentionAsync(
+        RetentionCommand command,
+        IReadOnlyList<(Application.BackupSetConfiguration Set, ArchiveHandle Archive)> archives,
+        Dictionary<string, Repository.Crypto.ReclaimAuthority> grants,
+        HashSet<string> ungranted,
+        CancellationToken cancellationToken)
+    {
         var lines = new List<string>();
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var clockSkewMargin = runtime.Configuration.EffectiveClockSkewMargin;
 
-        foreach (var (set, archive) in await runtime.ExistingArchivesAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var (set, archive) in archives)
         {
             // The set gate (ADR-0029 Amendment 2): the destructive half must
             // not run while a sync for this set is mid-flight — the two can
@@ -268,7 +324,7 @@ public sealed partial class ServiceCommandHandler(
             // one, so retention TRIES: unavailable means this set reports
             // only, and the deferral is named.
             SemaphoreSlim? acquiredGate = null;
-            var apply = command.Apply;
+            var apply = command.Apply && !ungranted.Contains(set.Id);
             if (apply)
             {
                 var gate = runtime.SetGate(set.Id);
@@ -298,16 +354,9 @@ public sealed partial class ServiceCommandHandler(
                 return verification;
             }
 
-            // The run's authority to author deletions (ADR-0055 §6). Opened
-            // here and disposed with the run, so a service compromised
-            // between runs holds nothing that can delete.
-            var (reclaim, grantRefusal) = await OpenReclaimGrantAsync(
-                set, archive, apply, command.ReclaimGrant, cancellationToken).ConfigureAwait(false);
-            if (grantRefusal is not null)
-            {
-                acquiredGate?.Release();
-                return grantRefusal;
-            }
+            // Held only while this set applies: a set whose sync holds the
+            // gate reports, and reporting needs no authority.
+            var reclaim = apply ? grants.GetValueOrDefault(set.Id) : null;
 
             Retention.RetentionReport report;
             try
@@ -363,12 +412,18 @@ public sealed partial class ServiceCommandHandler(
             }
             finally
             {
-                reclaim?.Dispose();
+                grants.GetValueOrDefault(set.Id)?.Dispose();
                 acquiredGate?.Release();
             }
 
             lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
-            if (command.Apply && !apply)
+            if (ungranted.Contains(set.Id))
+            {
+                lines.Add(
+                    $"{set.Name}: not applied — the run carried no reclaim grant for this set, so it was "
+                    + "reported only. A set adopted under another passphrase is collected with that one.");
+            }
+            else if (command.Apply && !apply)
             {
                 lines.Add($"{set.Name}: apply deferred — a sync for this set is in flight; re-run retention");
             }

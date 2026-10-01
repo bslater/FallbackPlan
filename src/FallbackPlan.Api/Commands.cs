@@ -781,7 +781,21 @@ public sealed record CheckCommand(string Level) : ServiceCommand;
 /// rather than falling back to the key it publishes with.
 /// </para>
 /// </param>
-public sealed record RetentionCommand(bool Apply, string? ReclaimGrant = null) : ServiceCommand;
+/// <param name="ReclaimGrants">
+/// One grant per set, keyed by set id, each in <paramref name="ReclaimGrant"/>'s
+/// shape (contract 1.50). A set adopted from a destination keeps the salt it
+/// was born under (ADR-0061), so a grant derived under the installation's salt
+/// is not its authority. A set the map names is collected under its own entry;
+/// one it leaves out falls back to <paramref name="ReclaimGrant"/>, and with
+/// neither it is reported and not applied, because a passphrase that opens
+/// some sets and not others still lets those it opens be collected. Without
+/// a map the command is answered as before 1.50: one grant for every set, or
+/// a refusal by name for want of one.
+/// </param>
+public sealed record RetentionCommand(
+    bool Apply,
+    string? ReclaimGrant = null,
+    IReadOnlyDictionary<string, string>? ReclaimGrants = null) : ServiceCommand;
 
 /// <summary>
 /// Converges destinations now, outside the schedule (ADR-0034 §3,

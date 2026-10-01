@@ -347,17 +347,20 @@ public static class StagingSweep
         Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
     /// <summary>
-    /// Whether a grant is this repository's, proved against a tombstone it
-    /// already holds ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// Whether a grant is this repository's
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6): proved
+    /// against the reclaim public key its credential carries, and against a
+    /// tombstone it already holds.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// There is no stored public key to check a granted seed against, so the
-    /// proof is by use. A tombstone already on disk was signed under the real
-    /// reclaim key; a grant that verifies it is the real one. A repository
-    /// holding none yet has nothing to disagree with, and answers true — the
-    /// first tombstone it writes is what every later grant is measured
-    /// against.
+    /// The public key settles it before anything is read, so a wrong grant is
+    /// caught on an archive with no tombstone yet (ADR-0055 Amendment 3).
+    /// Without that check the wrong grant would write the first tombstone, and
+    /// every true grant after it would be refused for disagreeing. A tombstone
+    /// already on disk was signed under the real reclaim key, so a grant that
+    /// verifies it is the real one; for a credential written before the
+    /// reclaim decision, which carries no public key, that is the whole proof.
     /// </para>
     /// <para>
     /// Checked before the run authors anything, because the alternative
@@ -378,6 +381,12 @@ public static class StagingSweep
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(reclaim);
+
+        if (!repository.Credential.ReclaimPublicKey.IsEmpty
+            && !reclaim.IsKeyOf(repository.Credential.ReclaimPublicKey))
+        {
+            return false;
+        }
 
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))

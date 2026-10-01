@@ -62,16 +62,46 @@ public sealed class ReclaimAuthority : IDisposable
     }
 
     /// <summary>
-    /// Whether this authority is the repository's — proved by verifying a
+    /// Whether this authority is the one <paramref name="reclaimPublicKey"/>
+    /// names: the public half a write credential carries
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §5), which the
+    /// credential derives at <see cref="KeyGeneration.Zero"/>.
+    /// </summary>
+    /// <remarks>
+    /// One generation proves them all, because every generation's seed is
+    /// expanded from the same sub-root. An empty key proves nothing: a
+    /// credential written before the reclaim decision carries none, and its
+    /// grant is proved by <see cref="Verifies"/> instead.
+    /// </remarks>
+    /// <param name="reclaimPublicKey">The credential's reclaim public key.</param>
+    /// <exception cref="ObjectDisposedException">The run that held this authority has ended.</exception>
+    public bool IsKeyOf(ReadOnlySpan<byte> reclaimPublicKey)
+    {
+        var seed = SeedFor(KeyGeneration.Zero);
+        try
+        {
+            using var signer = RepositorySigner.FromSeed(seed, KeyGeneration.Zero);
+            return reclaimPublicKey.Length == RepositorySigner.PublicKeyLength
+                && CryptographicOperations.FixedTimeEquals(signer.PublicKey, reclaimPublicKey);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(seed);
+        }
+    }
+
+    /// <summary>
+    /// Whether this authority signed <paramref name="signature"/> over
+    /// <paramref name="signedBytes"/>: how a grant is proved against a
     /// tombstone the repository already holds.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// There is no stored public key to check a granted seed against, so the
-    /// proof is by use: a tombstone already on disk was signed under the real
-    /// reclaim key, and a grant that verifies it is the real one. A repository
-    /// holding no tombstone yet has nothing to disagree with, and the first
-    /// one written defines the key every later grant is measured against.
+    /// A tombstone already on disk was signed under the real reclaim key, and a
+    /// grant that verifies it is the real one. That is the whole proof for a
+    /// credential that carries no public key; one that does is checked by
+    /// <see cref="IsKeyOf"/> first, so a wrong grant is caught on an archive
+    /// with no tombstone yet.
     /// </para>
     /// <para>
     /// Checking matters because the failure is otherwise silent and late: a

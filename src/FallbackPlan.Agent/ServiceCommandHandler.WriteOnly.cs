@@ -120,19 +120,22 @@ public sealed partial class ServiceCommandHandler
     }
 
     /// <summary>
-    /// Opens this run's reclaim grant, or explains why the run cannot proceed
-    /// without one ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
+    /// Opens a set's reclaim grant for this run, or explains why the run cannot
+    /// proceed without one ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Three answers, and the middle one is the whole point. A repository that
-    /// does not declare <c>reclaim-authority</c> needs nothing. A v1
-    /// repository that does declare it derives the key from the master key it
-    /// already holds, so it needs nothing either — §3 is explicit that the
-    /// split defends the write-only shape and not that one. A <b>write-only</b>
-    /// repository that declares it cannot derive the key at all, so without a
-    /// grant it is refused by name rather than falling back to the key it
-    /// publishes with.
+    /// A repository that does not declare <c>reclaim-authority</c> needs
+    /// nothing. One that does is write-only, since format 1 was withdrawn, and
+    /// cannot derive the key at all, so without a grant it is refused by name
+    /// rather than falling back to the key it publishes with.
+    /// </para>
+    /// <para>
+    /// The set's grant is its own entry in the command's map, else the single
+    /// grant (contract 1.50). A map that leaves the set out says the
+    /// passphrase did not open it, so the set is <c>Unnamed</c>: reported and
+    /// not applied, rather than a reason to refuse the sets the passphrase did
+    /// open.
     /// </para>
     /// <para>
     /// A dry run authors nothing and therefore needs no authority: refusing to
@@ -140,29 +143,34 @@ public sealed partial class ServiceCommandHandler
     /// dangerous half's credential.
     /// </para>
     /// </remarks>
-    private async ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, ServiceError? Refusal)> OpenReclaimGrantAsync(
-        Application.BackupSetConfiguration set,
-        ArchiveHandle archive,
-        bool apply,
-        string? envelopeHex,
-        CancellationToken cancellationToken)
+    private async ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, bool Unnamed, ServiceError? Refusal)>
+        OpenReclaimGrantAsync(
+            Application.BackupSetConfiguration set,
+            ArchiveHandle archive,
+            RetentionCommand command,
+            CancellationToken cancellationToken)
     {
         var declares = archive.Repository.Descriptor.RequiredFeatures.Contains(
             Repository.Format.Descriptor.RepositoryDescriptorCodec.FeatureReclaimAuthority);
 
-        if (!declares || !apply)
+        if (!declares || !command.Apply)
         {
-            return (null, null);
+            return (null, false, null);
         }
 
+        var envelopeHex = command.ReclaimGrants?.GetValueOrDefault(set.Id) is { Length: > 0 } own
+            ? own
+            : command.ReclaimGrant;
         if (envelopeHex is null or { Length: 0 })
         {
-            return (null, new ServiceError(
-                ServiceErrorReason.Refused,
-                $"Set '{set.Name}': applying retention needs a reclaim grant: this service "
-                + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
-                + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
-                + "with the command."));
+            return command.ReclaimGrants is not null
+                ? (null, true, null)
+                : (null, false, new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"Set '{set.Name}': applying retention needs a reclaim grant: this service "
+                    + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
+                    + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
+                    + "with the command."));
         }
 
         byte[] root;
@@ -172,12 +180,12 @@ public sealed partial class ServiceCommandHandler
         }
         catch (FormatException)
         {
-            return (null, new ServiceError(
+            return (null, false, new ServiceError(
                 ServiceErrorReason.InvalidArgument, "The reclaim-grant envelope is not hex."));
         }
         catch (Repository.Crypto.SealedContentException)
         {
-            return (null, new ServiceError(
+            return (null, false, new ServiceError(
                 ServiceErrorReason.InvalidArgument,
                 "The reclaim-grant envelope does not open — it was sealed to a different service's recipient key."));
         }
@@ -189,7 +197,7 @@ public sealed partial class ServiceCommandHandler
         }
         catch (ArgumentException)
         {
-            return (null, new ServiceError(
+            return (null, false, new ServiceError(
                 ServiceErrorReason.InvalidArgument,
                 "The reclaim-grant envelope did not carry a reclaim sub-root of the expected length."));
         }
@@ -205,12 +213,12 @@ public sealed partial class ServiceCommandHandler
             archive.Store, archive.Repository, grant, cancellationToken).ConfigureAwait(false))
         {
             grant.Dispose();
-            return (null, new ServiceError(
+            return (null, false, new ServiceError(
                 ServiceErrorReason.InvalidArgument,
-                $"The reclaim grant does not verify set '{set.Name}''s existing tombstones — it was derived from "
-                + "a different passphrase."));
+                $"The reclaim grant for set '{set.Name}' is not its authority — it was derived from another "
+                + "passphrase, or under another set's salt. Nothing was applied."));
         }
 
-        return (grant, null);
+        return (grant, false, null);
     }
 }

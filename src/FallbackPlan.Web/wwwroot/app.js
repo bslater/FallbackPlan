@@ -2389,29 +2389,61 @@ const actions = {
     });
   },
 
+  // The service holds the key that publishes and not the key that
+  // authorises a deletion (ADR-0055), so applying asks for the passphrase.
+  // It goes to this console's own endpoint, which derives each set's grant
+  // and sends the service only the sealed envelopes.
   "retention-apply"() {
     openDialog(`
       <h3>Apply retention</h3>
       <p class="dlg-sub">This tombstones every snapshot the policy condemns and deletes what an earlier
       pass condemned and the grace period has released. The dry-run report is shown after the pass.
       Destinations converge under their own policies.</p>
+      <p class="dlg-sub">The service can add to your backups but cannot delete from them on its own.
+      The passphrase gives it that authority for this one pass. It is used in this console and is never
+      sent to the service.</p>
+      <label class="field" for="retention-passphrase">Passphrase</label>
+      <input type="password" id="retention-passphrase" autocomplete="current-password" data-arms="confirm-word">
+      <div id="retention-said"></div>
       <label class="field" for="confirm-word">Type <b>apply</b> to confirm</label>
       <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-             data-action-input="confirm-word" data-word="apply" data-enables="retention-apply-go">
+             data-action-input="confirm-word" data-word="apply" data-enables="retention-apply-go"
+             data-needs="retention-passphrase">
       <div class="dlg-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn danger" id="retention-apply-go" data-action="retention-apply-go" disabled>Apply retention</button>
       </div>`);
-    document.getElementById("confirm-word").focus();
+    document.getElementById("retention-passphrase").focus();
   },
 
   async "retention-apply-go"(el) {
+    const passphrase = document.getElementById("retention-passphrase")?.value ?? "";
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
     await withBusy(el, async () => {
-      const result = await run({ command: "retention", apply: true }, { errToast: "Retention refused" });
-      if (result?.result === "retention") {
-        reportDialog("Retention — applied", result.lines);
+      let response;
+      try {
+        response = await fetch("/api/retention-apply", {
+          method: "POST",
+          headers: session
+            ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+            : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ passphrase }),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const body = await safeJson(response);
+      if (!response.ok) { toast("bad", body?.message ?? "Retention refused."); return; }
+      if (body?.outcome === "applied") {
+        reportDialog("Retention — applied", body.lines ?? []);
         refreshStatus(); refreshSnapshots();
-      } else closeDialog();
+        return;
+      }
+      // Said beside the field it is about, so a mistyped passphrase can be
+      // typed again without opening the dialog afresh.
+      const said = document.getElementById("retention-said");
+      if (said) said.innerHTML = `<ul class="warnings"><li>${esc(body?.detail ?? "Retention refused.")}</li></ul>`;
     });
   },
 
@@ -5485,10 +5517,16 @@ function boot() {
       return;
     }
 
-    const el = event.target.closest("[data-action-input='confirm-word']");
+    // A field a confirmation also needs re-judges that confirmation as it is
+    // typed in, whichever of the two is filled last.
+    const arming = event.target.closest("[data-arms]");
+    const el = arming
+      ? document.getElementById(arming.dataset.arms)
+      : event.target.closest("[data-action-input='confirm-word']");
     if (!el) return;
     const go = document.getElementById(el.dataset.enables);
-    if (go) go.disabled = el.value.trim().toLowerCase() !== el.dataset.word;
+    const needed = el.dataset.needs ? document.getElementById(el.dataset.needs) : null;
+    if (go) go.disabled = el.value.trim().toLowerCase() !== el.dataset.word || (needed !== null && !needed.value);
   });
 
   document.addEventListener("change", event => {

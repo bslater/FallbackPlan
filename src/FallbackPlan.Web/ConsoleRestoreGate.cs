@@ -434,6 +434,169 @@ public static class ConsoleRestoreGate
                 WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));
     }
 
+    /// <summary>An applied retention run's grants, resolved.</summary>
+    /// <param name="Outcome"><see cref="GateOutcome.Verified"/> when at least one set's grant was minted.</param>
+    /// <param name="Detail">Why not, when none was.</param>
+    /// <param name="Grants">Each opened set's sealed reclaim grant, hex, keyed by set id.</param>
+    public sealed record ReclaimAnswer(
+        GateOutcome Outcome, string? Detail = null, IReadOnlyDictionary<string, string>? Grants = null);
+
+    /// <summary>
+    /// The client half of applying retention on a set-up installation
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6, Amendment 3):
+    /// the service holds the key that publishes and not the key that
+    /// authorises a deletion, so the reclaim sub-root is derived here and
+    /// only the sealed grant goes to the service. One grant per set the
+    /// passphrase opens, derived under the facts the service publishes for
+    /// it: a set adopted from a destination keeps the salt it was born under
+    /// (ADR-0061), and every other set has the installation's. Pure, like
+    /// <see cref="BuildAdoptEnvelope"/>: the facts come from the service's
+    /// own answers.
+    /// </summary>
+    /// <remarks>
+    /// One derivation per distinct salt and parameters, so the ordinary
+    /// installation runs Argon2id once. Each derivation is proved against the
+    /// sealing public key published beside the salt before a set's grant is
+    /// sealed; a set it does not reproduce is left out, which the service
+    /// reports as not applied. A passphrase that opens no set is wrong, and
+    /// nothing is minted.
+    /// </remarks>
+    /// <param name="description">The service's <c>describe_service</c> answer.</param>
+    /// <param name="sets">The service's <c>list_backup_sets</c> answer.</param>
+    /// <param name="passphraseText">The typed passphrase; used for the derivations and released.</param>
+    /// <returns>The grants, or why there are none.</returns>
+    public static ReclaimAnswer BuildReclaimGrants(
+        ServiceDescriptionResult description, IReadOnlyList<BackupSetDescriptor> sets, string passphraseText)
+    {
+        ThrowHelper.ThrowIfNull(description);
+        ThrowHelper.ThrowIfNull(sets);
+        ThrowHelper.ThrowIfNull(passphraseText);
+
+        if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex
+            || !TryParseRecipient(recipientHex, out var recipient))
+        {
+            return new ReclaimAnswer(
+                GateOutcome.Unavailable,
+                "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                + "and try again (ADR-0042).");
+        }
+
+        // The installation's facts stand for a set whose archive publishes
+        // none of its own; a service provisioned set by set has no
+        // installation credential, and every set with an archive says its own.
+        (string Salt, Domain.Configuration.Argon2Parameters Parameters, string SealingPublicKey)? installation =
+            description is
+            {
+                KdfSalt.Length: > 0,
+                KdfMemoryKib: { } memoryKib,
+                KdfIterations: { } iterations,
+                KdfParallelism: { } parallelism,
+                SealingPublicKey.Length: > 0,
+            }
+                ? (description.KdfSalt,
+                    new Domain.Configuration.Argon2Parameters
+                    {
+                        MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism,
+                    },
+                    description.SealingPublicKey)
+                : null;
+
+        using var passphrase = Passphrase.Create(passphraseText);
+        var derived = new Dictionary<string, (byte[] SealingPublicKey, string Grant)>(StringComparer.Ordinal);
+        var grants = new Dictionary<string, string>(StringComparer.Ordinal);
+        var judged = false;
+        foreach (var set in sets)
+        {
+            var facts = set is
+                {
+                    KdfSalt.Length: > 0,
+                    KdfMemoryKib: { } setMemory,
+                    KdfIterations: { } setIterations,
+                    KdfParallelism: { } setLanes,
+                    SealingPublicKey.Length: > 0,
+                }
+                ? (set.KdfSalt,
+                    new Domain.Configuration.Argon2Parameters
+                    {
+                        MemoryKiB = setMemory, Iterations = setIterations, Parallelism = setLanes,
+                    },
+                    set.SealingPublicKey)
+                : installation;
+            if (facts is not { } chosen)
+            {
+                continue;
+            }
+
+            var (saltHex, parameters, sealingHex) = chosen;
+            judged = true;
+            byte[] salt, sealingPublicKey;
+            try
+            {
+                salt = Convert.FromHexString(saltHex);
+                sealingPublicKey = Convert.FromHexString(sealingHex);
+            }
+            catch (FormatException)
+            {
+                return new ReclaimAnswer(
+                    GateOutcome.Unavailable,
+                    $"Set '{set.Name}' was listed with derivation facts that do not parse.");
+            }
+
+            if (salt.Length != KekDerivation.SaltLength)
+            {
+                return new ReclaimAnswer(
+                    GateOutcome.Unavailable,
+                    $"Set '{set.Name}' was listed with a salt of {salt.Length} bytes; {KekDerivation.SaltLength} are expected.");
+            }
+
+            var key = $"{saltHex.ToUpperInvariant()}/{parameters.MemoryKiB}/{parameters.Iterations}/{parameters.Parallelism}";
+            if (!derived.TryGetValue(key, out var known))
+            {
+                RepositoryReadAuthority authority;
+                try
+                {
+                    authority = WriteOnlyDerivation.Derive(
+                        passphrase, parameters, salt, Domain.Configuration.KdfValidationMode.OpenRepository);
+                }
+                catch (ArgumentException refused)
+                {
+                    return new ReclaimAnswer(
+                        GateOutcome.Unavailable,
+                        $"Set '{set.Name}' was listed with derivation parameters this console will not use: {refused.Message}");
+                }
+
+                using (authority)
+                {
+                    known = (
+                        authority.Credential.SealingPublicKey.ToArray(),
+                        Convert.ToHexStringLower(
+                            WriteOnlyProvisioning.SealReclaimGrant(recipient!, authority.ReclaimKeySeed)));
+                }
+
+                derived[key] = known;
+            }
+
+            if (known.SealingPublicKey.AsSpan().SequenceEqual(sealingPublicKey))
+            {
+                grants[set.Id] = known.Grant;
+            }
+        }
+
+        if (!judged)
+        {
+            return new ReclaimAnswer(
+                GateOutcome.Unavailable,
+                "No backup set has an archive yet, so there is nothing to apply retention to.");
+        }
+
+        return grants.Count == 0
+            ? new ReclaimAnswer(
+                GateOutcome.Wrong,
+                "That passphrase does not open any backup set here — it does not reproduce a sealing key the "
+                + "service publishes. Nothing was sent.")
+            : new ReclaimAnswer(GateOutcome.Verified, Grants: grants);
+    }
+
     private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)
     {
         var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);

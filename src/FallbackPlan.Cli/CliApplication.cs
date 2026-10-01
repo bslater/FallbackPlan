@@ -1524,7 +1524,9 @@ public static class CliApplication
         {
             var applyOption = new Option<bool>("--apply")
             {
-                Description = "Tombstone, sweep and trim — the destructive half. Without it the pass reports only (FR-GC-005).",
+                Description = "Tombstone, sweep and trim — the destructive half. Without it the pass reports only (FR-GC-005). "
+                    + "Against a running service it needs --passphrase-env: the service cannot delete on its own, so "
+                    + "each set's reclaim grant is derived here from the passphrase (ADR-0055).",
             };
             var command = WithRemoteCapableSession(new Command(
                 "retention",
