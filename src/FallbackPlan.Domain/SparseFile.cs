@@ -12,13 +12,20 @@ namespace FallbackPlan.Domain;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Skipping is what leaves the hole, and it is correct on every platform:
-/// POSIX reads zeroes from a range an extending write or an <c>ftruncate</c>
-/// skipped, and Windows zero-fills one. What differs is whether the range is
-/// allocated. POSIX leaves it unallocated wherever the filesystem supports
-/// holes, with nothing asked. NTFS allocates and zero-fills it unless the
-/// file was marked sparse first, so on Windows a file that will have holes
-/// is marked before anything is written.
+/// A hole is a range inside the file's length that nothing was written to,
+/// so a file that will have holes is given its whole length first, while it
+/// is still empty, and its data is written inside that length. Every platform
+/// reads such a range as zeroes. What differs is whether it is allocated.
+/// Linux and APFS leave it unallocated. NTFS allocates and zero-fills it
+/// unless the file was marked sparse first, so on Windows such a file is
+/// marked before anything is written.
+/// </para>
+/// <para>
+/// The order matters on APFS. A range that a write skips past the end of a
+/// file, or that a length change extends past data already written, also
+/// reads as zeroes, but APFS zero-fills it and allocates it once the file is
+/// written back. Writing the data first and setting the length after, as an
+/// extending writer naturally would, leaves no hole there at all.
 /// </para>
 /// <para>
 /// Sits beside <see cref="AtomicFile"/> for the same reason: the engine's
@@ -33,7 +40,8 @@ public static partial class SparseFile
     /// <summary>
     /// Creates <paramref name="path"/> for reading and writing, ready for its
     /// holes to be skipped rather than written when <paramref name="holes"/>
-    /// says it will have any.
+    /// says it will have any: marked where the platform needs it, and given
+    /// <paramref name="length"/> before anything is written.
     /// </summary>
     /// <param name="path">The file to create.</param>
     /// <param name="mode">How to create it: <see cref="FileMode.CreateNew"/> or <see cref="FileMode.Create"/>.</param>
@@ -42,9 +50,15 @@ public static partial class SparseFile
     /// restored with the sparse attribute would not be the file that was
     /// captured.
     /// </param>
-    public static FileStream Create(string path, FileMode mode, bool holes)
+    /// <param name="length">
+    /// The file's whole length, for a file with holes; each range the writer
+    /// then skips inside it stays a hole. A file with no holes reaches its
+    /// length by being written, so this is ignored for one.
+    /// </param>
+    public static FileStream Create(string path, FileMode mode, bool holes, long length)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(path);
+        ThrowHelper.ThrowIfNegative(length);
 
         // A synchronous handle, because the mark is a synchronous ioctl (see
         // AllowHoles); the stream offloads its asynchronous calls itself.
@@ -54,6 +68,7 @@ public static partial class SparseFile
             if (holes)
             {
                 _ = AllowHoles(handle);
+                RandomAccess.SetLength(handle, length);
             }
 
             return new FileStream(handle, FileAccess.ReadWrite, BufferSize);

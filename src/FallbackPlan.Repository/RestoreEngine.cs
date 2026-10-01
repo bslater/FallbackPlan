@@ -77,7 +77,13 @@ public sealed class RestoreEngine
                 [.. manifest.SegmentReferences.Select(reference => reference.ObjectId)],
                 cancellationToken).ConfigureAwait(false);
 
-            var spool = SparseFile.Create(spoolPath, FileMode.CreateNew, holes);
+            // The pieces cover the file end to end (the codec checked), so
+            // their lengths sum to it. A file with holes is given it before
+            // anything is written (see SparseFile).
+            var length = pieces.Sum(piece => piece.Item2 is { } segment
+                ? segment.LogicalLength
+                : (long)piece.Item3!.Value.Length);
+            var spool = SparseFile.Create(spoolPath, FileMode.CreateNew, holes, length);
             await using (spool.ConfigureAwait(false))
             {
                 foreach (var (_, reference, extent) in pieces)
@@ -110,9 +116,10 @@ public sealed class RestoreEngine
                     }
                 }
 
-                // A file ending in a hole has nothing written past its last
-                // data, so its length is set rather than reached: to where the
-                // last piece ends, which is where the hash stopped.
+                // To where the last piece ended, which is where the hash
+                // stopped, so the spool is exactly the bytes hashed whatever a
+                // segment's declared length said. A file with holes already
+                // has this length; a dense one reached it by being written.
                 spool.SetLength(spool.Position);
 
                 var hash = new byte[32];
@@ -151,12 +158,14 @@ public sealed class RestoreEngine
     }
 
     /// <summary>
-    /// Copies only the spool's data into <paramref name="destination"/>, each
-    /// run where the spool holds it, counted from where the destination
-    /// stands, and sets the length — so a hole is never written there either.
+    /// Gives <paramref name="destination"/> the file's length, then copies
+    /// only the spool's data into it, each run where the spool holds it,
+    /// counted from where the destination stands, so a hole is never written
+    /// there either. The length comes first because a range is left a hole
+    /// only inside a length the file already had (see <see cref="SparseFile"/>).
     /// The pieces are walked as the spool was written, so what lands is what
     /// was hashed. Called only for a destination with nothing past its
-    /// position, where a skipped range reads as zeroes on every platform.
+    /// position, where an unwritten range reads as zeroes on every platform.
     /// </summary>
     private static async ValueTask EmitLeavingHolesAsync(
         FileStream spool,
@@ -170,6 +179,7 @@ public sealed class RestoreEngine
         }
 
         var start = destination.Position;
+        destination.SetLength(start + spool.Length);
         var buffer = new byte[64 * 1024];
         long position = 0;
 
@@ -195,7 +205,7 @@ public sealed class RestoreEngine
             }
         }
 
-        destination.SetLength(start + position);
+        destination.Position = start + position;
     }
 
     private static void AppendZeroes(IncrementalHash hash, ulong length)
