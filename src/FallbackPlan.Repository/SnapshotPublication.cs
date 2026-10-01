@@ -1265,7 +1265,11 @@ public sealed partial class PublicationOrchestrator
                 NameNormalisation = entry.NameNormalisation,
                 LogicalLength = (ulong)archive!.LogicalLength,
                 SegmentReferences = archive.SegmentReferences,
-                SparseExtents = entry.SparseExtents.Count > 0 && archive.SegmentReferences.Count > 0 &&
+                // Recorded whenever the stored data falls short of the length,
+                // a file with no data at all included: a file that is one hole
+                // is described by its extent alone, and without it the manifest
+                // covers none of its length.
+                SparseExtents = entry.SparseExtents.Count > 0 &&
                     (ulong)archive.SegmentReferences.Sum(r => r.LogicalLength) < (ulong)archive.LogicalLength
                     ? entry.SparseExtents
                     : [],

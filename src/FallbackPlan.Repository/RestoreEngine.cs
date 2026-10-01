@@ -8,27 +8,45 @@ namespace FallbackPlan.Repository;
 
 /// <summary>
 /// Restores a file version from its manifest (specification 06 §4, 04 §6–§7;
-/// FR-RST-002, FR-RST-005): coverage validated by the codec, sparse extents
-/// materialised as zeroes, every segment through the full 04 §6 sequence,
-/// and the whole-file hash verified over the reassembly <b>before</b> a
-/// single byte reaches the caller's destination — per-segment verification
-/// proves each part; the whole-file hash proves the assembly.
+/// FR-RST-002, FR-RST-005): coverage validated by the codec, every segment
+/// through the full 04 §6 sequence, and the whole-file hash verified over the
+/// reassembly <b>before</b> a single byte reaches the caller's destination —
+/// per-segment verification proves each part; the whole-file hash proves the
+/// assembly.
 /// </summary>
+/// <remarks>
+/// A sparse extent is hashed as the zeroes it reads as and never written
+/// (09 §4; FR-ARCH-013). The spool keeps it as a hole, and so does a
+/// destination with nothing past where the file begins, because every
+/// platform reads zeroes from a range a write skipped. A destination that
+/// cannot seek, or already holds bytes where the file will go, is given the
+/// zeroes written out instead.
+/// </remarks>
 public sealed class RestoreEngine
 {
+    private static readonly byte[] Zeroes = new byte[64 * 1024];
+
     private readonly RepositoryReader _reader;
+    private readonly string _spoolDirectory;
 
     /// <summary>Creates an engine over a loaded reader.</summary>
-    public RestoreEngine(RepositoryReader reader)
+    /// <param name="reader">The reader segments come from.</param>
+    /// <param name="spoolDirectory">
+    /// Where a file's reassembly waits for its whole-file hash to verify; the
+    /// system temporary directory by default.
+    /// </param>
+    public RestoreEngine(RepositoryReader reader, string? spoolDirectory = null)
     {
         ThrowHelper.ThrowIfNull(reader);
         _reader = reader;
+        _spoolDirectory = spoolDirectory ?? Path.GetTempPath();
     }
 
     /// <summary>
     /// Restores <paramref name="manifest"/> into
-    /// <paramref name="destination"/>. Nothing is written unless everything
-    /// — every segment and the final hash — verifies (FR-RST-005).
+    /// <paramref name="destination"/>, from its current position. Nothing is
+    /// written unless everything — every segment and the final hash —
+    /// verifies (FR-RST-005).
     /// </summary>
     public async ValueTask<RestoreResult> RestoreFileAsync(
         FileVersionManifest manifest,
@@ -38,7 +56,8 @@ public sealed class RestoreEngine
         ThrowHelper.ThrowIfNull(manifest);
         ThrowHelper.ThrowIfNull(destination);
 
-        var spoolPath = Path.Combine(Path.GetTempPath(), $"fbp-restore-{Guid.NewGuid():n}.spool");
+        var spoolPath = Path.Combine(_spoolDirectory, $"fbp-restore-{Guid.NewGuid():n}.spool");
+        var holes = manifest.SparseExtents.Count > 0;
 
         try
         {
@@ -58,8 +77,7 @@ public sealed class RestoreEngine
                 [.. manifest.SegmentReferences.Select(reference => reference.ObjectId)],
                 cancellationToken).ConfigureAwait(false);
 
-            var spool = new FileStream(
-                spoolPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 64 * 1024, useAsync: true);
+            var spool = SparseFile.Create(spoolPath, FileMode.CreateNew, holes);
             await using (spool.ConfigureAwait(false))
             {
                 foreach (var (_, reference, extent) in pieces)
@@ -84,20 +102,18 @@ public sealed class RestoreEngine
                     }
                     else if (extent is { } sparse)
                     {
-                        // A hole materialises as zeroes (09 §4) — and the
-                        // hash covers the materialised form, so a filesystem
-                        // without sparse support still verifies.
-                        var zeroes = new byte[Math.Min(sparse.Length, 64UL * 1024)];
-                        var remaining = sparse.Length;
-                        while (remaining > 0)
-                        {
-                            var take = (int)Math.Min(remaining, (ulong)zeroes.Length);
-                            await spool.WriteAsync(zeroes.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
-                            wholeFile.AppendData(zeroes.AsSpan(0, take));
-                            remaining -= (ulong)take;
-                        }
+                        // The hash covers the zeroes a hole reads as (06
+                        // §4.2), so a filesystem without sparse support
+                        // still verifies. The spool skips it.
+                        AppendZeroes(wholeFile, sparse.Length);
+                        spool.Seek((long)sparse.Length, SeekOrigin.Current);
                     }
                 }
+
+                // A file ending in a hole has nothing written past its last
+                // data, so its length is set rather than reached: to where the
+                // last piece ends, which is where the hash stopped.
+                spool.SetLength(spool.Position);
 
                 var hash = new byte[32];
                 wholeFile.GetHashAndReset(hash);
@@ -110,8 +126,15 @@ public sealed class RestoreEngine
                         "Every segment verified individually, but the reassembly does not hash to whole_file_hash (specification 06 §4.2; FR-RST-002).");
                 }
 
-                spool.Position = 0;
-                await spool.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+                if (holes && destination.CanSeek && destination.Position >= destination.Length)
+                {
+                    await EmitLeavingHolesAsync(spool, destination, pieces, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    spool.Position = 0;
+                    await spool.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+                }
 
                 return new RestoreResult(true, spool.Length, hash, null);
             }
@@ -125,5 +148,63 @@ public sealed class RestoreEngine
         }
 
         static RestoreResult Refuse(string detail) => new(false, 0, null, detail);
+    }
+
+    /// <summary>
+    /// Copies only the spool's data into <paramref name="destination"/>, each
+    /// run where the spool holds it, counted from where the destination
+    /// stands, and sets the length — so a hole is never written there either.
+    /// The pieces are walked as the spool was written, so what lands is what
+    /// was hashed. Called only for a destination with nothing past its
+    /// position, where a skipped range reads as zeroes on every platform.
+    /// </summary>
+    private static async ValueTask EmitLeavingHolesAsync(
+        FileStream spool,
+        Stream destination,
+        List<(ulong Offset, SegmentReference? Reference, SparseExtent? Extent)> pieces,
+        CancellationToken cancellationToken)
+    {
+        if (destination is FileStream file)
+        {
+            _ = SparseFile.AllowHoles(file.SafeFileHandle);
+        }
+
+        var start = destination.Position;
+        var buffer = new byte[64 * 1024];
+        long position = 0;
+
+        foreach (var (_, reference, extent) in pieces)
+        {
+            if (extent is { } hole)
+            {
+                position += (long)hole.Length;
+                continue;
+            }
+
+            spool.Position = position;
+            destination.Position = start + position;
+
+            var remaining = reference!.Value.LogicalLength;
+            while (remaining > 0)
+            {
+                var take = (int)Math.Min(remaining, (long)buffer.Length);
+                await spool.ReadExactlyAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
+                await destination.WriteAsync(buffer.AsMemory(0, take), cancellationToken).ConfigureAwait(false);
+                remaining -= take;
+                position += take;
+            }
+        }
+
+        destination.SetLength(start + position);
+    }
+
+    private static void AppendZeroes(IncrementalHash hash, ulong length)
+    {
+        while (length > 0)
+        {
+            var take = (int)Math.Min(length, (ulong)Zeroes.Length);
+            hash.AppendData(Zeroes.AsSpan(0, take));
+            length -= (ulong)take;
+        }
     }
 }

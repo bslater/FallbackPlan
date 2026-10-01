@@ -441,7 +441,7 @@ public sealed class RecoverySession : IDisposable
                         (extent.Offset, (SegmentReference?)null, (SparseExtent?)extent)))
                     .OrderBy(piece => piece.Item1);
 
-                var output = File.Create(spool);
+                var output = SparseFile.Create(spool, FileMode.Create, holes: manifest.SparseExtents.Count > 0);
                 await using (output.ConfigureAwait(false))
                 {
                     foreach (var (_, reference, extent) in pieces)
@@ -467,19 +467,28 @@ public sealed class RecoverySession : IDisposable
                         }
                         else if (extent is { } hole)
                         {
-                            // A hole materialises as zeroes; the hash covers
-                            // the materialised form (06 §4.2).
+                            // The hash covers the zeroes a hole reads as (06
+                            // §4.2); the spool skips it, so it stays a hole
+                            // wherever the output's filesystem can hold one
+                            // (09 §4).
                             var zeroes = new byte[Math.Min(hole.Length, 64 * 1024)];
                             var remaining = (long)hole.Length;
                             while (remaining > 0)
                             {
                                 var block = (int)Math.Min(remaining, zeroes.Length);
-                                await output.WriteAsync(zeroes.AsMemory(0, block), cancellationToken).ConfigureAwait(false);
                                 wholeFile.AppendData(zeroes.AsSpan(0, block));
                                 remaining -= block;
                             }
+
+                            output.Seek((long)hole.Length, SeekOrigin.Current);
                         }
                     }
+
+                    // A file ending in a hole has nothing written past its
+                    // last data, so its length is set rather than reached: to
+                    // where the last piece ends, which is where the hash
+                    // stopped.
+                    output.SetLength(output.Position);
                 }
 
                 Span<byte> hash = stackalloc byte[32];
