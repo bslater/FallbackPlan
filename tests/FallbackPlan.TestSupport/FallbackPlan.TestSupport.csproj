@@ -7,6 +7,10 @@
     <!-- A library of test attributes, not a test project: no runner, and the
          test SDK must not try to discover tests in it. -->
     <IsTestProject>false</IsTestProject>
+    <!-- Required by the source-generated LibraryImport marshalling behind
+         AllocatedSize, which asks each platform how much of a file is
+         allocated: stat on POSIX, GetCompressedFileSizeW on Windows. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
