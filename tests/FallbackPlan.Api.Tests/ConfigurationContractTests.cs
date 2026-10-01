@@ -34,11 +34,37 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ADraftNamingItsSet_IsRecordedAtOneFortyNine()
+    public void ContractVersion_ARetentionRunsGrantsPerSet_IsRecordedAtOneFifty()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.49", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.50", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void RetentionCommand_ItsGrantsPerSet_CrossUnderTheirWireName()
+    {
+        // FR-GC-008: a set adopted from a destination keeps the salt it was
+        // born under, so one grant cannot authorise every set; the map is
+        // keyed by set id.
+        var setId = new string('b', 32);
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new RetentionCommand(true, ReclaimGrants: new Dictionary<string, string> { [setId] = "c0ffee" }),
+            FrameCodec.SerializerOptions);
+        Assert.Contains($"\"reclaim_grants\":{{\"{setId}\":\"c0ffee\"}}", command, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RetentionCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(command, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("c0ffee", read.ReclaimGrants![setId]);
+
+        // A pre-1.50 client sends none: one grant, or none, for every set.
+        Assert.IsInstanceOfType<RetentionCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                "{\"command\":\"retention\",\"apply\":true,\"reclaim_grant\":\"c0ffee\"}",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.IsNull(older.ReclaimGrants);
+        Assert.AreEqual("c0ffee", older.ReclaimGrant);
     }
 
     [TestMethod]

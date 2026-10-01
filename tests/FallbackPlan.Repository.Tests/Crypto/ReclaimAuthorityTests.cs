@@ -247,4 +247,26 @@ public sealed class ReclaimAuthorityTests
     {
         Assert.ThrowsExactly<ArgumentException>(() => new ReclaimAuthority(new byte[16]));
     }
+
+    [TestMethod]
+    public void Grant_IsCheckedAgainstThePublicKeyTheCredentialCarries_BeforeAnyTombstoneExists()
+    {
+        // The write credential has carried the reclaim public key since §5, so
+        // a grant can be told from a wrong one on an archive with no tombstone
+        // to verify. The same passphrase under another salt is another key.
+        using var real = DeriveAuthority("one long passphrase to rule them");
+        using var wrong = DeriveAuthority("a different passphrase entirely!");
+        using var passphrase = Passphrase.Create("one long passphrase to rule them");
+        using var otherSalt = WriteOnlyDerivation.Derive(
+            passphrase, TinyParameters, Salt(0x22), KdfValidationMode.OpenRepository);
+
+        using var realGrant = new ReclaimAuthority(real.ReclaimKeySeed);
+        using var wrongGrant = new ReclaimAuthority(wrong.ReclaimKeySeed);
+        using var otherSaltGrant = new ReclaimAuthority(otherSalt.ReclaimKeySeed);
+
+        Assert.IsTrue(realGrant.IsKeyOf(real.Credential.ReclaimPublicKey));
+        Assert.IsFalse(wrongGrant.IsKeyOf(real.Credential.ReclaimPublicKey));
+        Assert.IsFalse(otherSaltGrant.IsKeyOf(real.Credential.ReclaimPublicKey));
+        Assert.IsFalse(realGrant.IsKeyOf([]), "a credential that carries no key proves nothing");
+    }
 }
