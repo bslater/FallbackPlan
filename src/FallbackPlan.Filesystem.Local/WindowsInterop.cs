@@ -5,6 +5,40 @@ using Microsoft.Win32.SafeHandles;
 namespace FallbackPlan.Filesystem.Local;
 
 /// <summary>
+/// <c>BY_HANDLE_FILE_INFORMATION</c> as <c>GetFileInformationByHandle</c>
+/// writes it (fileapi.h): 52 bytes, nothing in it wider than four. It sits
+/// outside <see cref="WindowsInterop"/> because a layout is not a platform
+/// call, so the test that pins it to the native one runs on every platform.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ByHandleFileInformation
+{
+    public uint FileAttributes;
+    public FileTime CreationTime;
+    public FileTime LastAccessTime;
+    public FileTime LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+}
+
+/// <summary>
+/// <c>FILETIME</c>: two DWORDs, aligned to four. A long in its place is
+/// aligned to eight, which moved every field after the first four bytes later
+/// than Windows writes it: the volume serial number became the high half of
+/// the file's size, zero for every directory.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct FileTime
+{
+    public uint Low;
+    public uint High;
+}
+
+/// <summary>
 /// Windows interop: stable file identity and link counts via
 /// <c>GetFileInformationByHandle</c>, alternate-stream enumeration via
 /// <c>FindFirstStreamW</c>, and the self-relative security descriptor via
@@ -14,21 +48,6 @@ namespace FallbackPlan.Filesystem.Local;
 [SupportedOSPlatform("windows")]
 internal static partial class WindowsInterop
 {
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ByHandleFileInformation
-    {
-        public uint FileAttributes;
-        public long CreationTime;
-        public long LastAccessTime;
-        public long LastWriteTime;
-        public uint VolumeSerialNumber;
-        public uint FileSizeHigh;
-        public uint FileSizeLow;
-        public uint NumberOfLinks;
-        public uint FileIndexHigh;
-        public uint FileIndexLow;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
     private unsafe struct FindStreamData
     {

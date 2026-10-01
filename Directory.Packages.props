@@ -46,8 +46,8 @@
          No provider, exporter or third-party sink package enters the tree: where
          the bytes land is the host's business, exactly as ADR-0027 §3 decided for
          metrics. -->
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.12" />
   </ItemGroup>
   <ItemGroup Label="CLI">
     <PackageVersion Include="System.CommandLine" Version="2.0.10" />
@@ -87,7 +87,16 @@
        them. An earlier revision pinned SQLitePCLRaw.lib.e_sqlite3, a package
        the 3.x bundle no longer pulls at all: an inert pin that looked like a
        security control. The native library now arrives as the package named
-       `SQLite`, and the config/core/provider trio at the bundle's version. -->
+       `SQLite`, and the config/core/provider trio at the bundle's version.
+
+       Microsoft.Extensions.DependencyModel reaches every test project through
+       MSTest's code-coverage extension, which asks for 6.0.2: a .NET 6
+       release, out of support since November 2024 and so outside any fix.
+       It is taken forward with the rest of the Microsoft.Extensions family.
+       The coverage extension's current release asks for 10.0.10 itself, so
+       the 10.0 line is one it is built against. No shipped assembly
+       reaches it. -->
+
   <ItemGroup Label="Transitive pins">
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.10" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
@@ -95,5 +104,6 @@
     <PackageVersion Include="SQLitePCLRaw.core" Version="3.0.5" />
     <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="SQLite" Version="3.53.4" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.12" />
   </ItemGroup>
 </Project>
