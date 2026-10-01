@@ -32,6 +32,14 @@ destination that satisfies it **earn protection**.
    enforces it on new bindings, on root changes, and on a referenced
    destination's path edit).
 
+   > **2026-10 ([ADR-0037](0037-configuration-over-the-command-contract.md)
+   > Amendment 2).** An editor is told before it saves. A draft that names
+   > its set (contract 1.49) is answered with the refusal its save would
+   > give, word for word, judged as the save judges it. So the console's
+   > destinations step says it while the destination is being chosen. A
+   > draft that names no set is not judged, because a standing binding could
+   > not be told from a new one.
+
 2. **"Where possible", honestly.** Volume separation is the hard core of
    the condition — judged by volume identity via the nearest existing
    ancestor. The physical-drive refinement applies only where the platform
@@ -139,3 +147,4 @@ costs a read and not the space.
 |------|--------|------|
 | 2026-08 | Accepted | The owner's direction: drive separation as the condition of choosing a local destination, and the protection boundary moved from machine to volume — `Application/LocalDestinationPlacement`, `Filesystem.Local/PhysicalDisk`, the upsert guards, and the deriver's gates, pinned by `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` and the flipped deriver suite |
 | 2026-10 | Amended | Amendment 1: the Windows volume probe read the wrong field of `BY_HANDLE_FILE_INFORMATION` and called every path volume 0, so every local destination was refused. The struct has its native layout again, held by `Filesystem.Tests/WindowsFileIdentityTests` and `Hosts.Tests/LocalPlacementRealVolumeTests` |
+| 2026-10 | Amended | §1's refusal is said in the draft too, under ADR-0037 Amendment 2: a draft that names its set is answered with the refusal its save would give, from the same judgement in `Agent/ServiceCommandHandler`, held by `Hosts.Tests/LocalPlacementTests` |
