@@ -103,6 +103,13 @@ Alternate data streams are captured (`SnapshotPublication.CaptureAlternateStream
 `RestoreEngine` writes explicit zero buffers into its spool for every hole and copies them to the destination: correct bytes, correct whole-file hash, and a fully allocated file where the source had holes. No sparse-allocation API is called anywhere. The requirement says one thing and the code does the other, and the test the matrix cited (`FixedSegmentReaderTests`) could not tell the difference.
 
 > **Open question, not a unilateral fix.** This needs a maintainer decision — implement platform sparse write-out, or amend FR-ARCH-013's acceptance to say v1 restores holes as zeroes — so it is filed as [Q22](../open-questions.md#q22--sparse-restore-materialises-zeroes) and the misdirected citation is corrected. What is not acceptable is the silent disagreement, and it no longer is silent.
+>
+> **Resolved (2026-10), on option (a).** The maintainer chose sparse write-out ([ADR-0079](../adr/0079-sparse-restore.md)). A restore now hashes each hole as the zeroes it reads as and skips it rather than writing it. It does this in the engine's spool, in what the engine emits and in the recovery tool, and on Windows a file that will have a hole is marked sparse first. The test this finding found missing is `Repository.Tests/SparseRestoreTests`. It holds allocation, not bytes, under half the length on all three CI platforms, through each of the engine, the executor and the recovery tool.
+>
+> Two things turned up on the way:
+>
+> - **Fixed: a file that is one hole could not be captured.** Capture recorded extents only for a file that also had data, so the manifest covered none of its length, and the codec refused it.
+> - **Recorded, not fixed: the engine's spool lives in the system temporary directory.** It still needs a dense file's full length free there. That caps the largest file a restore can produce where the directory is small or RAM-backed, as `/tmp` is by default on several current Linux distributions. Sparse files no longer pay it. Moving the spool, or writing the reassembly straight into the executor's own spool, is a change of its own, because the engine promises a caller's stream nothing unverified.
 
 ---
 
@@ -136,7 +143,7 @@ Named items with definitions of done on the [pickup list](../phase-2-execution-p
 | RR-4 | High | `Agent/ServiceCommandHandler` run id | **Fixed**: per-run id; held by `ServiceTests.Restore_CommandedTwice…` |
 | RR-5 | Medium | `Restore/RestoreExecutor.ExecuteAsync` | **Fixed**: cooperative stop, receipt produced; held by `RestoreExecution_Cancelled…` |
 | RR-6 | Medium | `Restore/RestoreExecutor.ApplyMetadata` + planner | **Honesty half fixed** (catalogue v5 flag → planner degradation → `degraded` receipt item, schema v3); Windows write-back still on the pickup list |
-| RR-7 | — | `Repository/RestoreEngine` sparse holes | **Open question** [Q22]; citation corrected |
+| RR-7 | — | `Repository/RestoreEngine` sparse holes | **Fixed** (2026-10): holes skipped, not written, in the spool, the emission and the recovery tool; held by `SparseRestoreTests`, Q22 closed ([ADR-0079](../adr/0079-sparse-restore.md)) |
 | RR-T1..T3 | — | Missing oracles | **Added** |
 | audit tooling | — | `eng/check-requirements.py` | **Repaired**: drift recognises MSTest; `--audit` added; in-scope citations fixed |
 
