@@ -136,6 +136,107 @@ public sealed class LocalPlacementTests : IDisposable
         Assert.Contains("docs", error.Message, StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public async Task Draft_ForANewSet_ADestinationOnTheRootsVolume_IsTheDefectTheSaveWouldRefuseWith()
+    {
+        // The editor learns of the refusal while the destination is being
+        // chosen, in the words the save would use, rather than after every
+        // later step of a new set has been filled in.
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var id = new string('b', 32);
+
+        var draft = await ValidateAsync(handler, id, [_harness.SourceRoot], ["vault-b"]);
+        var refusal = await handler.ExecuteAsync(new UpsertBackupSetCommand(new BackupSetDescriptor(
+            id, "second", _harness.SourceRoot, null, [], [], ["vault-b"])), Timeout);
+
+        Assert.IsInstanceOfType<ServiceError>(refusal, out var error);
+        Assert.AreEqual(error.Message, Assert.ContainsSingle(draft.Defects));
+    }
+
+    [TestMethod]
+    public async Task Draft_ForANewSet_ADestinationOnItsOwnDrive_HasNoDefect()
+    {
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync(options => options with
+        {
+            VolumeIdentityOverride = path =>
+                path.StartsWith(_harness.WorkPath, StringComparison.Ordinal) ? 2UL : 1UL,
+        });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var draft = await ValidateAsync(handler, new string('b', 32), [_harness.SourceRoot], ["vault-b"]);
+
+        Assert.IsEmpty(draft.Defects);
+    }
+
+    [TestMethod]
+    public async Task Draft_ForAnExistingSet_AStandingBindingItLeavesAlone_IsNotADefect()
+    {
+        // The save does not re-judge a binding an edit leaves alone
+        // (ADR-0035), so neither does the draft: an editor told its standing
+        // destination is refused would be told something the save never
+        // says.
+        _harness.WriteConfiguration("every 4h");
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var existing = runtime.Configuration.BackupSets.Single();
+
+        var draft = await ValidateAsync(
+            handler, existing.Id, [.. existing.Roots.Select(root => root.Path)],
+            [.. existing.Destinations.Select(reference => reference.Ref)]);
+
+        Assert.IsEmpty(draft.Defects);
+    }
+
+    [TestMethod]
+    public async Task Draft_ForAnExistingSet_ChangingItsRoots_JudgesItsStandingBindingAgain()
+    {
+        // New roots re-open the choice, in the save and in the draft alike.
+        _harness.WriteConfiguration("every 4h");
+        var otherRoot = Directory.CreateDirectory(Path.Combine(_harness.WorkPath, "other-root")).FullName;
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var existing = runtime.Configuration.BackupSets.Single();
+
+        var draft = await ValidateAsync(handler, existing.Id, [otherRoot], ["vault"]);
+
+        var defect = Assert.ContainsSingle(draft.Defects);
+        Assert.Contains("'vault' shares a volume", defect, StringComparison.Ordinal);
+        Assert.Contains(otherRoot, defect, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Draft_NamingNoSet_IsNotJudgedForPlacement()
+    {
+        // A pre-1.49 client names no set, so the service cannot tell a new
+        // binding from a standing one. It does not guess, and says nothing.
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var draft = await ValidateAsync(handler, setId: null, [_harness.SourceRoot], ["vault-b"]);
+
+        Assert.IsEmpty(draft.Defects);
+    }
+
+    private async Task<SetDraftValidationResult> ValidateAsync(
+        ServiceCommandHandler handler, string? setId, IReadOnlyList<string> roots, IReadOnlyList<string> destinations)
+    {
+        Assert.IsInstanceOfType<SetDraftValidationResult>(
+            await handler.ExecuteAsync(
+                new ValidateSetDraftCommand(null, [], [], roots, destinations, setId), Timeout),
+            out var result);
+        return result;
+    }
+
     /// <summary>Declares a second local-path destination beside the harness's default one.</summary>
     private void AddVaultDeclaration()
     {

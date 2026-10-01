@@ -34,11 +34,35 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ASnapshotsImplausibleCaptureTime_IsRecordedAtOneFortyEight()
+    public void ContractVersion_ADraftNamingItsSet_IsRecordedAtOneFortyNine()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.48", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.49", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void ValidateSetDraftCommand_TheSetItDrafts_CrossesUnderItsWireName()
+    {
+        // FR-DEST-017's draft answer: the set a draft edits or would create,
+        // so placement is judged as the save will judge it.
+        var setId = new string('b', 32);
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new ValidateSetDraftCommand(null, [], [], ["/data"], ["vault"], setId),
+            FrameCodec.SerializerOptions);
+        Assert.Contains($"\"set_id\":\"{setId}\"", command, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<ValidateSetDraftCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(command, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual(setId, read.SetId);
+
+        // A pre-1.49 client sends none: a draft that names no set.
+        Assert.IsInstanceOfType<ValidateSetDraftCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                "{\"command\":\"validate_set_draft\",\"schedule\":null,\"include_rules\":[],\"exclude_rules\":[]}",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.IsNull(older.SetId);
     }
 
     [TestMethod]

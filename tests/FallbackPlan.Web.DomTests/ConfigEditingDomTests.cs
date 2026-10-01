@@ -22,6 +22,10 @@ namespace FallbackPlan.Web.DomTests;
 /// per section and one confirm at the end. What is asserted — the tree's tick
 /// becomes a root, the draft is validated as it is built, and the editor sends
 /// exactly one upsert carrying the name, root and destination — is unchanged.
+/// Re-homed again in 2026-10, for a new set only: making a set became the
+/// stepped wizard (FR-SVC-022, <c>NewSetWizardDomTests</c>), so the walk below
+/// answers its three required steps and creates from the third. Editing a set
+/// keeps the summary.
 /// </remarks>
 [TestClass]
 [BrowserCondition]
@@ -199,11 +203,11 @@ public sealed class ConfigEditingDomTests
         await Expect(add).ToBeEnabledAsync();
         await add.ClickAsync();
 
-        // The editor opens on its summary: what the set says now, one row per
-        // section, each behind its own Change… dialog. Nothing reaches the
-        // service until the single confirm at the end, so the walk below is
-        // three staged sections and one command.
-        await page.ClickAsync("[data-action=\"sec-locations\"]");
+        // A new set opens on the wizard's first step. Nothing reaches the
+        // service until Create, so the walk below is three answered steps
+        // and one command.
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
 
         // Ticking a folder in the selection tree marks it as a root, and the
         // draft round-trips through validate_set_draft (350 ms debounce).
@@ -211,20 +215,13 @@ public sealed class ConfigEditingDomTests
         var validated = await harness.ReceivedAsync<ValidateSetDraftCommand>(draft =>
             draft.Roots is { } roots && roots.Contains("/data"));
         Assert.IsNotNull(validated);
-        await page.ClickAsync("[data-action=\"sec-save\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
 
-        await page.ClickAsync("[data-action=\"sec-name\"]");
-        await page.FillAsync("#set-name", "docs");
-        await page.ClickAsync("[data-action=\"sec-save\"]");
-
-        await page.ClickAsync("[data-action=\"sec-destinations\"]");
         await page.CheckAsync("[data-dest-check=\"vault\"]");
-        await page.ClickAsync("[data-action=\"sec-save\"]");
+        await page.ClickAsync("[data-action=\"wiz-create\"]");
 
-        await page.ClickAsync("[data-action=\"set-confirm-all\"]");
-
-        // A NEW set has no saved baseline, so the confirm is non-material and
-        // goes straight to the upsert — no two-step consequence dialog.
+        // A NEW set has no saved baseline to compare against, so Create goes
+        // straight to the upsert — no two-step consequence dialog.
         var upsert = await harness.ReceivedAsync<UpsertBackupSetCommand>();
         Assert.AreEqual("docs", upsert.Set.Name);
         Assert.AreEqual("/data", upsert.Set.Root);

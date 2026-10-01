@@ -5,7 +5,8 @@ namespace FallbackPlan.Web.Tests;
 /// the restart control exists on the Maintenance view, only for the Owner,
 /// behind the confirm-word dialog, and its go-handler sends the verb and
 /// drops the browser's dead session — the restart signs everybody out by
-/// design.
+/// design. The set editor's shape is pinned here too: a summary with a dialog
+/// per section for an edit, and six steps for a new set (FR-SVC-022).
 /// </summary>
 [TestClass]
 public sealed class ConsoleAdminScriptTests
@@ -171,6 +172,35 @@ public sealed class ConsoleAdminScriptTests
             "the summary carries the confirm-all step");
         Assert.Contains("set-cancel-all", summary, StringComparison.Ordinal,
             "and the cancel that discards every pending change");
+    }
+
+    [TestMethod]
+    public void ANewSet_IsMadeInSixSteps_AndAnEditOpensTheSummary()
+    {
+        // FR-SVC-022: making a set walks its name, what it backs up and where
+        // it goes, then its exclusions, retention and other settings, the
+        // last three optional. Editing a set keeps the summary above. A step
+        // stages into the draft; only Create reaches the service.
+        var script = AppJs();
+
+        var open = FunctionBody(script, "openSetEditor");
+        Assert.Contains("renderSetWizard(", open, StringComparison.Ordinal, "a new set opens on the wizard");
+        Assert.Contains("renderSetSummary(", open, StringComparison.Ordinal, "an existing set opens on its summary");
+
+        var start = script.IndexOf("const NEW_SET_STEPS", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "app.js no longer declares NEW_SET_STEPS");
+        var steps = script[start..script.IndexOf("];", start, StringComparison.Ordinal)];
+        var order = new[] { "name", "sources", "destinations", "exclusions", "retention", "other" }
+            .Select(key => steps.IndexOf($"\"{key}\"", StringComparison.Ordinal))
+            .ToList();
+        Assert.IsTrue(order.All(index => index >= 0), "every step the wizard was asked for is declared");
+        CollectionAssert.AreEqual(order.Order().ToList(), order, "the steps run in the order asked for");
+        Assert.AreEqual(3, steps.Split("optional: true").Length - 1, "the last three steps are optional");
+
+        Assert.DoesNotContain("applySetUpsert", ActionBody(script, "wiz-next"), StringComparison.Ordinal,
+            "a step's Next stages into the draft and never saves");
+        Assert.Contains("applySetUpsert(", ActionBody(script, "wiz-create"), StringComparison.Ordinal,
+            "Create is the one save");
     }
 
     [TestMethod]
