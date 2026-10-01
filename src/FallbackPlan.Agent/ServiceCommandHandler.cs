@@ -1327,44 +1327,13 @@ public sealed partial class ServiceCommandHandler(
         }
 
         // The condition of choosing a local destination (ADR-0051,
-        // FR-DEST-017): it must sit on a different volume than every root —
-        // and a different physical drive where the platform can say — or the
-        // backup dies with the files it protects. Judged only for bindings
-        // this edit chooses: a newly referenced destination, or every local
-        // reference when the roots change. A standing binding in an older
-        // configuration keeps loading and keeps its status warnings
-        // (ADR-0035); it is the choosing that is gated.
-        var rootPaths = resolvedRoots.Select(root => root.Path).ToList();
-        var rootsChanged = existing is null
-            || existing.Roots.Count != resolvedRoots.Count
-            || existing.Roots.Zip(resolvedRoots).Any(pair =>
-                !string.Equals(pair.First.Path, pair.Second.Path, StringComparison.Ordinal));
-        foreach (var name in command.Set.Destinations)
+        // FR-DEST-017), refused on the first binding that fails it.
+        if (PlacementRefusals(
+                configuration, existing, [.. resolvedRoots.Select(root => root.Path)], command.Set.Destinations)
+            .FirstOrDefault() is { } refusal)
         {
-            if (configuration.FindDestination(name) is not
-                { Kind: DestinationKind.LocalPath, Path: { Length: > 0 } destinationPath })
-            {
-                continue;
-            }
-
-            var newlyChosen = existing is null || !existing.Destinations.Any(reference =>
-                string.Equals(reference.Ref, name, StringComparison.Ordinal));
-            if (!newlyChosen && !rootsChanged)
-            {
-                continue;
-            }
-
-            if (LocalDestinationPlacement.Judge(
-                    rootPaths, destinationPath, runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
-            {
-                return new ServiceError(
-                    ServiceErrorReason.InvalidArgument,
-                    $"Destination '{name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
-                    + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
-                    + "Choose a local destination on a different drive (ADR-0051).");
-            }
+            return new ServiceError(ServiceErrorReason.InvalidArgument, refusal);
         }
-
 
         // Replace in place: the first set is the default RunBackupCommand
         // runs, and status renders declaration order — an edit must not
@@ -1538,6 +1507,63 @@ public sealed partial class ServiceCommandHandler(
             .SetEquals(replacement.Roots.Select(root => (root.Path, root.Label)))
         || !existing.IncludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.IncludeRules)
         || !existing.ExcludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.ExcludeRules);
+
+    /// <summary>
+    /// The refusals the condition of choosing a local destination (ADR-0051,
+    /// FR-DEST-017) gives a set's bindings, one per destination that fails
+    /// it, in the order the destinations are named. The save refuses with
+    /// the first, and a draft names them all (ADR-0037 Amendment 2), so the
+    /// two say the same thing in the same words.
+    /// </summary>
+    /// <param name="configuration">The configuration the destinations are declared in.</param>
+    /// <param name="existing">The set as the configuration holds it, or null for a new set.</param>
+    /// <param name="rootPaths">The set's roots, in the order it names them.</param>
+    /// <param name="destinationNames">The destinations the set references.</param>
+    /// <returns>Each refusal, worded as the save words it.</returns>
+    /// <remarks>
+    /// A destination must sit on a different volume than every root, and on
+    /// a different physical drive where the platform can say, or the backup
+    /// dies with the files it protects. Only the bindings a save chooses are
+    /// judged: a newly referenced destination, or every local one when the
+    /// roots change. A standing binding in an older configuration keeps
+    /// loading and keeps its status warnings (ADR-0035). It is the choosing
+    /// that is gated.
+    /// </remarks>
+    private IEnumerable<string> PlacementRefusals(
+        ClientConfiguration configuration,
+        BackupSetConfiguration? existing,
+        IReadOnlyList<string> rootPaths,
+        IEnumerable<string> destinationNames)
+    {
+        var rootsChanged = existing is null
+            || existing.Roots.Count != rootPaths.Count
+            || existing.Roots.Zip(rootPaths).Any(pair =>
+                !string.Equals(pair.First.Path, pair.Second, StringComparison.Ordinal));
+        foreach (var name in destinationNames)
+        {
+            if (configuration.FindDestination(name) is not
+                { Kind: DestinationKind.LocalPath, Path: { Length: > 0 } destinationPath })
+            {
+                continue;
+            }
+
+            var newlyChosen = existing is null || !existing.Destinations.Any(reference =>
+                string.Equals(reference.Ref, name, StringComparison.Ordinal));
+            if (!newlyChosen && !rootsChanged)
+            {
+                continue;
+            }
+
+            if (LocalDestinationPlacement.Judge(
+                    rootPaths, destinationPath, runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
+            {
+                yield return
+                    $"Destination '{name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
+                    + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
+                    + "Choose a local destination on a different drive (ADR-0051).";
+            }
+        }
+    }
 
     /// <summary>
     /// The 1↔N coordinate transitions (ADR-0040), applied per rule and only

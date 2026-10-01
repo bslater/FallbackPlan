@@ -241,12 +241,19 @@ public sealed record BrowseFoldersCommand(string? Path, bool IncludeFiles = fals
 /// is simply not asked.
 /// </param>
 /// <param name="Destinations">The destination names the draft references, by name.</param>
+/// <param name="SetId">
+/// The set this draft edits, or the id it would be created under (contract
+/// 1.49). Named, the draft is judged for the placement condition (ADR-0051)
+/// as its save would be; omitted, as a pre-1.49 client omits it, placement is
+/// not judged.
+/// </param>
 public sealed record ValidateSetDraftCommand(
     string? Schedule,
     IReadOnlyList<string> IncludeRules,
     IReadOnlyList<string> ExcludeRules,
     IReadOnlyList<string>? Roots = null,
-    IReadOnlyList<string>? Destinations = null) : ServiceCommand;
+    IReadOnlyList<string>? Destinations = null,
+    string? SetId = null) : ServiceCommand;
 
 /// <summary>
 /// Walks a set's source now — under its saved root and rules, or a draft's —

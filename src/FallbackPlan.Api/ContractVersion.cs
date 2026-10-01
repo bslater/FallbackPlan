@@ -463,8 +463,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// (which does not judge) and a pre-1.48 service all send none, which a
     /// client reads as nothing to report.
     /// </para>
+    /// <para>
+    /// 1.49 adds `set_id` to `validate_set_draft` (ADR-0037 Amendment 2,
+    /// FR-DEST-017): the set the draft edits, or the one it would create. With
+    /// it, the answer names the placement refusal (ADR-0051) the save would
+    /// meet, judged as the save judges it: every local destination of a set
+    /// the configuration does not hold, and for one it does, the destinations
+    /// the draft newly references, or all of them when its roots change.
+    /// Additive with a null default: a pre-1.49 client names no set, and its
+    /// draft is not judged for placement, because a standing binding the save
+    /// would leave alone cannot be told from a new one.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 48);
+    public static ContractVersion Current { get; } = new(1, 49);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

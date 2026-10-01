@@ -596,6 +596,8 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
 }
 .rst-step.now { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .rst-step.done { color: var(--ok, var(--accent)); }
+button.rst-step { background: none; font-family: inherit; cursor: pointer; }
+button.rst-step:hover { border-color: var(--accent); }
 .radio-block { display: block; padding: 6px 2px; }
 .radio-block .detail { margin-left: 6px; }
 .rst-indent { margin-left: 26px; }

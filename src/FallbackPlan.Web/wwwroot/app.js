@@ -3048,9 +3048,18 @@ function newDraft(set) {
   };
 }
 
+// A new set is made in steps; an existing one is changed a section at a
+// time from its summary. Both edit the one draft, and both reach the service
+// only through their last button.
 function openSetEditor(set) {
   E = newDraft(set);
-  renderSetSummary();
+  if (E.isNew) {
+    E.step = 0;      // the step on screen, an index into NEW_SET_STEPS
+    E.reached = 0;   // the furthest step reached, so the indicator can return to it
+    renderSetWizard();
+  } else {
+    renderSetSummary();
+  }
 }
 
 // The raw schedule grammar, said as a person would ("every 4 hours",
@@ -3131,6 +3140,149 @@ function renderSetSummary() {
     </div>`);
 }
 
+/* ----- the new-set wizard (FR-SVC-022) ----- */
+//
+// What a set is called, what it backs up with the selection filters that
+// narrow it, and where it goes, each answered before the next; then its
+// exclusions, retention and other settings, any of which may be left as
+// they stand. Every step stages into the same draft the summary edits, and
+// Create sends the one upsert. A step asks the service about the draft as it
+// is built, so a refusal the save would meet is said on the step that can
+// resolve it, and holds that step until it is.
+
+const NEW_SET_STEPS = [
+  { key: "name", label: "Name" },
+  { key: "sources", label: "Sources" },
+  { key: "destinations", label: "Destinations" },
+  { key: "exclusions", label: "Exclusions", optional: true },
+  { key: "retention", label: "Retention", optional: true },
+  { key: "other", label: "Other settings", optional: true },
+];
+
+// The last required step, from which Create is offered.
+const LAST_REQUIRED_STEP = NEW_SET_STEPS.findLastIndex(step => !step.optional);
+
+function renderSetWizard() {
+  const index = E.step;
+  const step = NEW_SET_STEPS[index];
+  const last = index === NEW_SET_STEPS.length - 1;
+  const canCreate = index >= LAST_REQUIRED_STEP;
+
+  // Steps reached before are buttons back to them; the rest only say where
+  // the walk goes.
+  const steps = NEW_SET_STEPS.map((candidate, at) => {
+    const label = `${at + 1}. ${candidate.label}${candidate.optional ? " (optional)" : ""}`;
+    const state = at === index ? "now" : at < index ? "done" : "";
+    return at !== index && at <= E.reached
+      ? `<button type="button" class="rst-step ${state}" data-action="wiz-goto" data-step="${at}">${esc(label)}</button>`
+      : `<span class="rst-step ${state}"${at === index ? ` aria-current="step"` : ""}>${esc(label)}</span>`;
+  }).join("");
+
+  const rest = canCreate && !last ? wizardRest(index) : "";
+  openDialog(`
+    <div id="set-editor" data-section="${step.key}">
+    <h3>New backup set</h3>
+    <div class="rst-steps">${steps}</div>
+    ${wizardStepHtml(step.key)}
+    ${rest ? `<p class="subtle" id="wiz-rest">${esc(rest)}</p>` : ""}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="set-cancel-all">Cancel</button>
+      ${index > 0 ? `<button type="button" class="btn" data-action="wiz-back">‹ Back</button>` : ""}
+      ${last ? "" : `<button type="button" class="btn ${canCreate ? "" : "primary"}" data-action="wiz-next">Next ›</button>`}
+      ${canCreate ? `<button type="button" class="btn primary" data-action="wiz-create">Create set</button>` : ""}
+    </div>
+    </div>`);
+  dialog.classList.add("wide");
+
+  if (step.key === "name") document.getElementById("set-name")?.focus();
+  if (step.key === "sources") {
+    renderTree(); renderSelectionSummary(); renderRuleChips(); validateDraftSoon(); expandToMarks();
+  }
+  if (step.key === "exclusions") renderRuleChips();
+  if (["destinations", "exclusions", "other"].includes(step.key)) validateDraftSoon();
+}
+
+// Each step's body. The sections the summary edits are reused where a step
+// is one of them; the sources step adds the include rules to the tree, and
+// the exclusions step has the exclude rules alone.
+function wizardStepHtml(key) {
+  switch (key) {
+    case "name":
+      return `
+        <p class="dlg-sub">What you will know this set by. It names the set wherever its backups are listed.</p>
+        ${setSectionHtml("name")}`;
+
+    case "sources":
+      return `
+        <p class="subtle">Tick the folders to back up on the service's machine — several, on any drive, in one
+        set. Untick a child to leave it out; everything ticked is captured, including what appears there later.</p>
+        <div id="sel-tree" class="tree"></div>
+        <div id="sel-summary" class="subtle"></div>
+        <label class="field" for="rule-new">Selection filters <span class="subtle">(optional)</span></label>
+        <p class="subtle">With none, everything in the ticked folders is captured. With any, only what matches one
+        is, and everything inside a folder that matches.</p>
+        ${ruleEditorHtml("include")}
+        <div id="draft-defects"></div>
+        <div class="field-row">
+          <button type="button" class="btn small" data-action="preview-changes">Preview what a backup would capture</button>
+        </div>
+        <div id="change-preview"></div>`;
+
+    case "exclusions":
+      return `
+        <p class="subtle">Anything matching an exclusion is left out, wherever it is in the ticked folders, and an
+        exclusion wins over a selection filter. Unticking a folder under Sources leaves it out too.</p>
+        ${ruleEditorHtml("exclude")}
+        <div id="draft-defects"></div>`;
+
+    case "other":
+      return `
+        <label class="field">Schedule</label>
+        ${setSectionHtml("schedule")}
+        <div id="draft-defects"></div>
+        ${setSectionHtml("other")}`;
+
+    default:
+      return setSectionHtml(key); // destinations, retention
+  }
+}
+
+// What Create leaves as it stands — the optional steps not yet reached, in
+// the summary's own prose — so a set created early holds no surprise.
+function wizardRest(index) {
+  const ahead = key => NEW_SET_STEPS.findIndex(step => step.key === key) > index;
+  const parts = [];
+  if (ahead("exclusions")) {
+    parts.push(`exclusions: ${E.handExcludes.length ? E.handExcludes.join(", ") : "none"}`);
+  }
+  if (ahead("retention")) parts.push(`retention: ${retentionProse(E.retention, E.overrides)}`);
+  if (ahead("other")) {
+    parts.push(`schedule: ${describeSchedule(E.schedule)}`);
+    parts.push(E.directShip ? "ships straight to its destinations" : "stages here, then copies out");
+  }
+  return parts.length ? `Created now, the rest stays as it is — ${parts.join(" · ")}.` : "";
+}
+
+// The first required step the draft leaves unanswered, or -1. Back keeps a
+// half-made answer, so Create asks again rather than trusting the walk.
+function firstUnansweredStep() {
+  if (!E.name) return 0;
+  if (compileMarks().roots.length === 0) return 1;
+  if (E.destinations.size === 0) return 2;
+  return -1;
+}
+
+// The service's word on the draft as it stands, asked now rather than on the
+// debounce. False when it names a defect, which the step then shows. A
+// service that cannot be asked holds nobody here: the save still judges.
+async function wizardStepClear() {
+  if (!document.getElementById("draft-defects")) return true;
+  const result = await validateDraftNow();
+  if (!result || result.defects.length === 0) return true;
+  toast("warn", "Resolve what this step says first.");
+  return false;
+}
+
 /* ----- the per-section Change… dialogs ----- */
 
 function sectionTitle(key) {
@@ -3200,7 +3352,8 @@ function setSectionHtml(key) {
       return `
         <p class="subtle">Every set needs at least one. An override replaces the whole set policy for that
         destination — unset fields do not fall back.</p>
-        <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>`;
+        <div id="dest-list">${S.destinations.map(destination => renderDestChoice(destination)).join("")}</div>
+        <div id="draft-defects"></div>`;
 
     case "retention": {
       const policy = E.retention ?? {};
@@ -3272,7 +3425,7 @@ function openSetSection(key) {
 
   if (key === "locations") { renderTree(); renderSelectionSummary(); validateDraftSoon(); expandToMarks(); }
   if (key === "exclusions") { renderRuleChips(); validateDraftSoon(); }
-  if (key === "schedule") validateDraftSoon();
+  if (key === "schedule" || key === "destinations") validateDraftSoon();
   if (key === "name") document.getElementById("set-name")?.focus();
 }
 
@@ -3296,6 +3449,82 @@ function payloadFromDraft() {
     // shows the checkbox must say what it shows.
     directShip: E.directShip,
   };
+}
+
+// A section's inputs, staged into the draft: the summary's dialogs and the
+// wizard's steps both come here. False, with a toast saying why, when they
+// cannot be — a malformed number always, and an unanswered requirement
+// unless the staging is lenient, as leaving a wizard step backwards is.
+function stageSection(key, { lenient = false } = {}) {
+  switch (key) {
+    case "name": {
+      const name = document.getElementById("set-name").value.trim();
+      if (!lenient && !name) { toast("warn", "A set needs a name."); return false; }
+      // Set names are unique, compared exactly as the service compares them.
+      if (!lenient && S.sets.some(set => set.name === name && set.id !== E.id)) {
+        toast("warn", `A set named '${name}' already exists.`); return false;
+      }
+      E.name = name;
+      return true;
+    }
+    case "schedule":
+      E.schedule = scheduleFromEditor();
+      return true;
+    case "locations":
+    case "sources":
+      // The tree's marks and the filter chips staged as they changed.
+      if (!lenient && compileMarks().roots.length === 0) {
+        toast("warn", "Tick at least one folder first."); return false;
+      }
+      endSourceScans();
+      return true;
+    case "exclusions":
+      return true; // the chips already staged into the draft
+    case "destinations": {
+      if (!lenient && E.destinations.size === 0) {
+        toast("warn", "Choose at least one destination."); return false;
+      }
+      const overrides = {};
+      for (const name of E.destinations) {
+        if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
+        const policy = {};
+        for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
+          const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
+          policy[field] = raw === "" ? null : Number(raw);
+        }
+        if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
+          toast("warn", `The override for '${name}' has a non-numeric value.`); return false;
+        }
+        overrides[name] = policy;
+      }
+      E.overrides = overrides;
+      return true;
+    }
+    case "retention": {
+      const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
+      if (Object.values(retention).some(Number.isNaN)) {
+        toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
+        return false;
+      }
+      E.retention = retention;
+      return true;
+    }
+    case "other": {
+      const priorityRaw = document.getElementById("set-priority")?.value ?? "";
+      const priority = intOrNull(priorityRaw);
+      if (priorityRaw.trim() !== "" && priority === null) {
+        toast("warn", "Priority is a whole number."); return false;
+      }
+      E.priority = priority;
+      E.directShip = document.getElementById("set-direct-ship")?.checked ?? false;
+      // The wizard's last step carries the schedule; the summary's Other
+      // settings dialog does not, and leaves it as staged.
+      if (document.querySelector("input[name=sched-mode]")) E.schedule = scheduleFromEditor();
+      return true;
+    }
+    default:
+      return false;
+  }
 }
 
 function rerenderDestChoices() {
@@ -3651,7 +3880,7 @@ function scheduleLivePreview() {
 
     const result = await run({
       command: "preview_set_changes",
-      setName: E.isNew ? (document.getElementById("set-name")?.value.trim() || "(draft)") : E.name,
+      setName: E.isNew ? (document.getElementById("set-name")?.value.trim() || E.name || "(draft)") : E.name,
       roots: roots.map(root => ({ path: root.path, label: root.label })),
       includeRules,
       excludeRules: allExcludes,
@@ -3666,63 +3895,100 @@ function scheduleLivePreview() {
   }, 1200);
 }
 
+// One list's rule editor, for a wizard step that holds that list alone: the
+// include rules are the sources step's selection filters, the exclude rules
+// the exclusions step. The summary's Exclusions dialog keeps both lists
+// behind one input and a chooser.
+function ruleEditorHtml(list) {
+  const include = list === "include";
+  return `
+    <div class="field-row">
+      <input type="text" id="rule-new" class="mono" spellcheck="false" data-list="${list}"
+        aria-label="${include ? "New selection filter" : "New exclusion"}"
+        placeholder="${include ? "pattern, e.g.  *.docx   or   Projects/**" : "pattern, e.g.  *.iso   or   node_modules"}">
+      <button type="button" class="btn small" data-action="rule-add-raw">${include ? "Add filter" : "Add exclusion"}</button>
+    </div>
+    <div id="rule-chips" data-list="${list}"></div>`;
+}
+
 function renderRuleChips() {
   const host = document.getElementById("rule-chips");
   if (!host || !E) return;
+  const only = host.dataset.list; // a wizard step shows its own list alone
   const chip = (rule, list) => `
     <span class="chip removable ${list === "exclude" ? "warn" : "accent"}">
       ${list === "exclude" ? "− " : "＋ "}${esc(rule)}
       <button type="button" class="chip-x" data-action="rule-remove" data-rule="${esc(rule)}" data-list="${list}" aria-label="Remove rule">×</button>
     </span>`;
+  const empty = only === "include" ? "No filters — everything in the ticked folders is captured."
+    : only === "exclude" ? "No exclusions — only unticked folders are left out."
+    : "No pattern rules — the checkboxes alone say what is captured.";
   host.innerHTML =
-    E.handIncludes.map(rule => chip(rule, "include")).join("")
-    + E.handExcludes.map(rule => chip(rule, "exclude")).join("")
-    || `<span class="subtle">No pattern rules — the checkboxes alone say what is captured.</span>`;
+    (only === "exclude" ? "" : E.handIncludes.map(rule => chip(rule, "include")).join(""))
+    + (only === "include" ? "" : E.handExcludes.map(rule => chip(rule, "exclude")).join(""))
+    || `<span class="subtle">${empty}</span>`;
 }
 
 let draftTimer = null;
 function validateDraftSoon() {
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(async () => {
-    if (!E) return;
-    const schedule = scheduleFromEditor();
-    const compiled = compileMarks();
-    const result = await run({
-      command: "validate_set_draft",
-      schedule,
-      includeRules: [...E.handIncludes],
-      excludeRules: [...compiled.excludeRules, ...E.handExcludes],
+  draftTimer = setTimeout(validateDraftNow, 350);
+}
 
-      // Roots and destinations together let the service answer where this
-      // set would actually be durable (FR-SNP-007). Sent only once both
-      // exist: an editor mid-way through choosing folders should not be
-      // told its set survives nothing.
-      roots: compiled.roots.map(root => root.path),
-      destinations: [...E.destinations],
-    });
-    if (result?.result !== "set_draft_validation" || !E) return;
+// One validate_set_draft round trip, its answer painted where the open
+// dialog shows defects and the schedule's next runs. Resolves to the answer,
+// or null when there is none. Only the newest question paints, and only
+// into the dialog it was asked from: an answer outrun by a later edit, or
+// arriving after the wizard moved on a step, would show what is no longer
+// so.
+let draftQuestion = 0;
+async function validateDraftNow() {
+  clearTimeout(draftTimer);
+  if (!E) return null;
+  const asked = ++draftQuestion;
+  const defects = document.getElementById("draft-defects");
+  const preview = document.getElementById("sched-preview");
+  const schedule = scheduleFromEditor();
+  const compiled = compileMarks();
+  const result = await run({
+    command: "validate_set_draft",
+    schedule,
+    includeRules: [...E.handIncludes],
+    excludeRules: [...compiled.excludeRules, ...E.handExcludes],
 
-    const defects = document.getElementById("draft-defects");
-    if (defects) {
-      // Defects and warnings are shown together but never merged: a defect
-      // refuses the save, a warning is a thing worth knowing before the
-      // first backup rather than after it.
-      defects.innerHTML = (result.defects.length || result.warnings?.length)
-        ? `<ul class="warnings">`
-            + result.defects.map(defect => `<li>${esc(defect)}</li>`).join("")
-            + (result.warnings ?? []).map(warning => `<li class="advisory">${esc(warning)}</li>`).join("")
-            + `</ul>`
+    // Roots and destinations together let the service answer where this
+    // set would actually be durable (FR-SNP-007). Sent only once both
+    // exist: an editor mid-way through choosing folders should not be
+    // told its set survives nothing.
+    roots: compiled.roots.map(root => root.path),
+    destinations: [...E.destinations],
+
+    // The set the draft is of, new or saved, so the placement condition
+    // (ADR-0051) is judged as this very set's save will judge it.
+    setId: E.id,
+  });
+  if (result?.result !== "set_draft_validation" || !E) return null;
+  if (asked !== draftQuestion) return result;
+
+  if (defects?.isConnected) {
+    // Defects and warnings are shown together but never merged: a defect
+    // refuses the save, a warning is a thing worth knowing before the
+    // first backup rather than after it.
+    defects.innerHTML = (result.defects.length || result.warnings?.length)
+      ? `<ul class="warnings">`
+          + result.defects.map(defect => `<li>${esc(defect)}</li>`).join("")
+          + (result.warnings ?? []).map(warning => `<li class="advisory">${esc(warning)}</li>`).join("")
+          + `</ul>`
+      : "";
+  }
+  if (preview?.isConnected) {
+    preview.textContent = !schedule
+      ? "Runs only when you press “Back up now”."
+      : result.nextRuns.length
+        ? "Next runs: " + result.nextRuns.map(when => fmtWhen(Date.parse(when))).join("  ·  ")
         : "";
-    }
-    const preview = document.getElementById("sched-preview");
-    if (preview) {
-      preview.textContent = !schedule
-        ? "Runs only when you press “Back up now”."
-        : result.nextRuns.length
-          ? "Next runs: " + result.nextRuns.map(when => fmtWhen(Date.parse(when))).join("  ·  ")
-          : "";
-    }
-  }, 350);
+  }
+  return result;
 }
 
 function scheduleFromEditor() {
@@ -3848,7 +4114,9 @@ Object.assign(actions, {
     const input = document.getElementById("rule-new");
     const rule = input.value.trim();
     if (!rule) return;
-    const list = document.getElementById("rule-list").value === "exclude" ? "handExcludes" : "handIncludes";
+    // The summary's dialog asks which list; a wizard step's editor is one.
+    const which = document.getElementById("rule-list")?.value ?? input.dataset.list;
+    const list = which === "exclude" ? "handExcludes" : "handIncludes";
     if (!E[list].includes(rule)) E[list] = [...E[list], rule];
     input.value = "";
     renderRuleChips(); renderSelectionSummary(); validateDraftSoon(); scheduleLivePreview();
@@ -3906,67 +4174,59 @@ Object.assign(actions, {
   // summary — the service hears nothing until the one confirm below.
   "sec-save"() {
     const section = document.getElementById("set-editor")?.dataset.section;
-    switch (section) {
-      case "name": {
-        const name = document.getElementById("set-name").value.trim();
-        if (!name) { toast("warn", "A set needs a name."); return; }
-        E.name = name;
-        break;
-      }
-      case "schedule":
-        E.schedule = scheduleFromEditor();
-        break;
-      case "locations": {
-        if (compileMarks().roots.length === 0) {
-          toast("warn", "Tick at least one folder first."); return;
-        }
-        endSourceScans();
-        break;
-      }
-      case "exclusions":
-        break; // the chips already staged into the draft; Save keeps them
-      case "destinations": {
-        const overrides = {};
-        for (const name of E.destinations) {
-          if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
-          const policy = {};
-          for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
-            const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
-            policy[field] = raw === "" ? null : Number(raw);
-          }
-          if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
-            toast("warn", `The override for '${name}' has a non-numeric value.`); return;
-          }
-          overrides[name] = policy;
-        }
-        E.overrides = overrides;
-        break;
-      }
-      case "retention": {
-        const retention = readPolicyInputs(id => document.getElementById("ret-" + id)?.value);
-        if (Object.values(retention).some(Number.isNaN)) {
-          toast("warn", "Retention values are whole numbers of days, weeks, months or snapshots.");
-          return;
-        }
-        E.retention = retention;
-        break;
-      }
-      case "other": {
-        const priorityRaw = document.getElementById("set-priority")?.value ?? "";
-        const priority = intOrNull(priorityRaw);
-        if (priorityRaw.trim() !== "" && priority === null) {
-          toast("warn", "Priority is a whole number."); return;
-        }
-        E.priority = priority;
-        E.directShip = document.getElementById("set-direct-ship")?.checked ?? false;
-        break;
-      }
-      default: return;
-    }
-
+    if (!stageSection(section)) return;
     E.touched.add(section);
     E.sectionSnapshot = null;
     renderSetSummary();
+  },
+
+  // A wizard step's Next stages it, then holds while the service names a
+  // defect in the draft as it now stands.
+  async "wiz-next"(el) {
+    await withBusy(el, async () => {
+      const at = E.step;
+      if (!stageSection(NEW_SET_STEPS[at].key)) return;
+      if (!(await wizardStepClear())) return;
+      if (!E || E.step !== at) return; // closed, or moved on, while the service answered
+      E.step = at + 1;
+      E.reached = Math.max(E.reached, E.step);
+      renderSetWizard();
+    });
+  },
+
+  // Back and the step indicator keep what the step holds, answered or not.
+  "wiz-back"() {
+    if (!stageSection(NEW_SET_STEPS[E.step].key, { lenient: true })) return;
+    E.step -= 1;
+    renderSetWizard();
+  },
+
+  "wiz-goto"(el) {
+    const target = Number(el.dataset.step);
+    if (!Number.isInteger(target) || target > E.reached || target === E.step) return;
+    if (!stageSection(NEW_SET_STEPS[E.step].key, { lenient: true })) return;
+    E.step = target;
+    renderSetWizard();
+  },
+
+  // Create is the wizard's one save. A new set has no saved baseline, so
+  // there is no material comparison to make; the service queues its first
+  // backup the moment it is saved (FR-SVC-015).
+  async "wiz-create"(el) {
+    await withBusy(el, async () => {
+      const at = E.step;
+      if (!stageSection(NEW_SET_STEPS[at].key)) return;
+      const unanswered = firstUnansweredStep();
+      if (unanswered >= 0) {
+        toast("warn", `Step ${unanswered + 1}, ${NEW_SET_STEPS[unanswered].label}, still needs an answer.`);
+        E.step = unanswered;
+        renderSetWizard();
+        return;
+      }
+      if (!(await wizardStepClear())) return;
+      if (!E || E.step !== at) return;
+      await applySetUpsert(payloadFromDraft());
+    });
   },
 
   "sec-cancel"() {
@@ -5267,6 +5527,7 @@ function boot() {
       if (event.target.checked) E.destinations.add(name);
       else { E.destinations.delete(name); delete E.overrides[name]; }
       rerenderDestChoices();
+      validateDraftSoon(); // where the set would be durable, and whether the save would refuse the choice
     }
     if (event.target.matches("[data-ovr-check]")) {
       const name = event.target.dataset.ovrCheck;
