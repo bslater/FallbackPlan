@@ -183,9 +183,10 @@ internal static class Wire
         new(id ?? SetId, name, "/src", null, [], [], ["vault"]);
 
     public static SnapshotDescriptor Snapshot(
-        ulong capturedAt, string id = "snap-1", long? observedClockSkewMs = null, string? setId = null) =>
+        ulong capturedAt, string id = "snap-1", long? observedClockSkewMs = null, string? setId = null,
+        string? implausibleCaptureTime = null) =>
         new(id, setId ?? SetId, capturedAt, CaptureStatus: 1, Files: 3, ConsistencyMethod: 1,
-            ObservedClockSkewMs: observedClockSkewMs);
+            ObservedClockSkewMs: observedClockSkewMs, ImplausibleCaptureTime: implausibleCaptureTime);
 }
 
 /// <summary>

@@ -44,9 +44,18 @@ Needed: a corpus that actually represents the target workloads — documents, ph
 
 ## Q6 — Segment hash function
 
-**Owner:** engineering · **Blocks:** format v1 freeze · **ADR:** [0004](adr/0004-segment-hash-function.md)
+**Closed (2026-09): SHA-256 is kept.** See [ADR-0004 Amendment 1](adr/0004-segment-hash-function.md#amendment-1-2026-09--sha-256-is-kept-and-there-is-no-profile-field-to-change-it-through) and the [benchmark](segment-hash-benchmark.md).
 
-SHA-256 in-box versus a BLAKE3 native binding. The trade is throughput against NFR-PORT-001 — a native binding adds a platform-specific dependency to the one component that must run everywhere, including the standalone recovery tool. Recommendation is SHA-256 as the default with the profile field allowing another later; confirm against benchmark.
+The question was SHA-256 in-box against a BLAKE3 native binding, to be confirmed against a benchmark. Two things moved before it was answered:
+
+- **A managed BLAKE3 now exists**, so the portability objection is gone.
+- **Hashing binds only in one case.** The benchmark found it to be the binding constraint only on processors without the SHA extensions, and only on incompressible data. There SHA-256 runs at 359–435 MiB/s on one thread, about the 400 MB/s target.
+
+The owner kept SHA-256, for three reasons:
+
+- Changing it would be a format change, because no field records the content hash. The "profile field allowing another later" that the recommendation leaned on never existed.
+- The faster candidate would be a third-party implementation of the function deduplication decides on.
+- The case that pays is narrow, and shrinking.
 
 ---
 
@@ -178,6 +187,7 @@ Until this is settled, a v2 set's replica is registered only if the passphrase h
 | Question | Resolution |
 |----------|-----------|
 | Do manifests carry physical locations? | No — logical object identifiers only ([ADR-0007](adr/0007-logical-object-identifiers-in-manifests.md)) |
+| Q6 — which function computes the content id? | SHA-256, kept by the owner with the [benchmark](segment-hash-benchmark.md) in hand. It runs at about 1.5 GiB/s on one thread with the processor's SHA extensions, and at 359–435 MiB/s without them, where on incompressible data it sits at about NFR-PERF-007's target. A managed BLAKE3 removes the old portability objection. But no durable object records a content-hash profile, so switching would be a format change, not the profile switch the specification had claimed ([ADR-0004 Amendment 1](adr/0004-segment-hash-function.md#amendment-1-2026-09--sha-256-is-kept-and-there-is-no-profile-field-to-change-it-through), [02 §2.1](../specifications/repository-format/02-identifiers.md#21-profile-choice)) |
 | Q21 — the source-identity hint grew with the repository, not with the change | Resolved by keying it on the **source key** rather than the snapshot: `/hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>`, one small object per file version created, found by listing one prefix whose entries are chronological. The per-snapshot map it replaced described the whole tree every run, at a measured ~52 bytes per file; a one-file change to a 1 024-file tree now adds 7 386 bytes to the store against ~57 200 before. The accepted price is object count — one store object, and on a metered store one request, per changed file — which is the per-object overhead blobs exist to amortise, and it is the cheaper side from the second capture onward ([ADR-0007 Amendment 2](adr/0007-logical-object-identifiers-in-manifests.md), [06 §11](../specifications/repository-format/06-manifests.md#11-source-identity)) |
 | Q12 — should `xchacha20-poly1305-v1` ship while unverified? | No — the profile is **withdrawn** and `0x0002` is reserved, never to be assigned to another suite. Cross-verification against a second independent implementation is the condition on which a third-party primitive is admitted here, and none existed for XChaCha20-Poly1305. An unverified AEAD is a different order of risk from an unverified KDF, and it would be discovered inside bytes the user had already stored; a format version can add a profile but cannot un-admit one that written repositories depend on. The cost — slower on hardware without AES acceleration — is accepted ([ADR-0005 Amendment 4](adr/0005-aead-suite-and-nonce-construction.md), [03 §6.1](../specifications/repository-format/03-keys.md#61-where-each-primitive-comes-from)) |
 | Q16 — where does the blob digest live? | On the index delta, as `covered_blob_digests` — an optional array parallel to `covered_blob_ids`, inside the signature ([07 §2.2](../specifications/repository-format/07-index.md#22-covered-blob-digests)). A replication receipt has to be checkable by the participant receiving the blob, and the catalogue is device-local, so it stays as a cache and this is the durable copy. Optional because the format's integrity rests on per-record AEAD tags; a **present** digest that does not match is a damage finding, and absence is not |

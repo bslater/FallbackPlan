@@ -250,7 +250,8 @@ public sealed partial class ServiceCommandHandler(
     /// One retention pass per configured set with an archive on disk —
     /// staging, or a direct-ship metadata store (architecture 07, ADR-0046): report always, tombstone and sweep only on apply.
     /// A gate hold past its deferral bound raises the FR-GC-009 warning as a
-    /// durable notice.
+    /// durable notice, and a snapshot kept because its capture time is
+    /// implausible raises FR-GC-012's.
     /// </summary>
     private async ValueTask<ServiceResult> RetentionAsync(RetentionCommand command, CancellationToken cancellationToken)
     {
@@ -384,6 +385,8 @@ public sealed partial class ServiceCommandHandler(
                         now);
                 }
             }
+
+            ImplausibleCaptureNotice.Report(runtime.Notices, set, report.Implausible, now);
         }
 
         return new RetentionResult(lines);
@@ -2279,6 +2282,24 @@ public sealed partial class ServiceCommandHandler(
             var sequences = await SnapshotSequencesAsync(archive, cancellationToken).ConfigureAwait(false);
 
             using var catalogue = archive.OpenReadCatalogue();
+            var rows = catalogue.EnumerateSnapshots().ToList();
+
+            // Whether each capture time fits its writer's publication order
+            // (FR-GC-012): the question retention asks before it expires
+            // anything, asked of the same facts, so the listing and the report
+            // cannot disagree about which snapshots are flagged.
+            var implausible = Retention.RetentionPlanner.FindImplausible(
+                    [
+                        .. rows.Select(row => new Retention.SnapshotFact(
+                            Convert.ToHexStringLower(row.SnapshotId.Span),
+                            row.CapturedAt,
+                            sequences.TryGetValue(row.ObjectId, out var place) ? place.Sequence : 0,
+                            row.CaptureStatus,
+                            place.Writer)),
+                    ],
+                    DateTimeOffset.UtcNow,
+                    runtime.Configuration.EffectiveClockSkewMargin)
+                .ToDictionary(finding => finding.Snapshot.SnapshotId, finding => finding.Direction, StringComparer.Ordinal);
 
             // What each destination's outstanding damage reaches, traced once
             // per destination and now rather than when it was found, so a
@@ -2293,11 +2314,12 @@ public sealed partial class ServiceCommandHandler(
                 }
             }
 
-            foreach (var row in catalogue.EnumerateSnapshots())
+            foreach (var row in rows)
             {
                 List<string>? destinations = null;
-                if (sequences.TryGetValue(row.ObjectId, out var sequence))
+                if (sequences.TryGetValue(row.ObjectId, out var published))
                 {
+                    var sequence = published.Sequence;
                     var snapshotHex = Convert.ToHexStringLower(row.SnapshotId.Span);
                     destinations = [.. set.Destinations.Select(reference => string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
@@ -2317,7 +2339,10 @@ public sealed partial class ServiceCommandHandler(
                     catalogue.CountFiles(row.SnapshotId.Span),
                     destinations,
                     row.ConsistencyMethod,
-                    row.ObservedClockSkewMs));
+                    row.ObservedClockSkewMs,
+                    implausible.TryGetValue(Convert.ToHexStringLower(row.SnapshotId.Span), out var direction)
+                        ? direction == Retention.ImplausibleCaptureTime.Behind ? "behind" : "ahead"
+                        : null));
             }
         }
 
@@ -2343,15 +2368,16 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>
-    /// Each snapshot object's publication sequence, keyed by its record
-    /// object id — read from the standalone framing's cleartext counter, the
-    /// per-publication monotonic the replication ledger also speaks
-    /// (FR-GC-009). An unparseable object simply claims nothing here.
+    /// Each snapshot object's publication sequence and the writer it belongs
+    /// to, keyed by its record object id — read from the standalone framing's
+    /// cleartext, the per-publication monotonic the replication ledger also
+    /// speaks (FR-GC-009) and one writer's own (FR-GC-012). An unparseable
+    /// object simply claims nothing here.
     /// </summary>
-    private static async ValueTask<Dictionary<Domain.Identifiers.ObjectId, ulong>> SnapshotSequencesAsync(
+    private static async ValueTask<Dictionary<Domain.Identifiers.ObjectId, (ulong Sequence, string Writer)>> SnapshotSequencesAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
     {
-        var sequences = new Dictionary<Domain.Identifiers.ObjectId, ulong>();
+        var sequences = new Dictionary<Domain.Identifiers.ObjectId, (ulong Sequence, string Writer)>();
         await foreach (var entry in archive.Store.ListAsync(
             Storage.Abstractions.ObjectPrefix.Parse("snapshots/"),
             Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -2368,7 +2394,7 @@ public sealed partial class ServiceCommandHandler(
             try
             {
                 var record = Repository.Format.Records.StandaloneRecordFraming.Parse(memory.ToArray());
-                sequences[record.Header.ObjectId] = record.Counter;
+                sequences[record.Header.ObjectId] = (record.Counter, record.WriterId.ToString());
             }
             catch (FormatException)
             {

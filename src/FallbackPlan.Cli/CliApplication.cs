@@ -2893,8 +2893,16 @@ public static class CliApplication
             ? $"  {ConsistencyName(method)}"
             : string.Empty;
         var clock = DescribeClock(snapshot.ObservedClockSkewMs) is { } token ? $"  {token}" : string.Empty;
+
+        // A time retention keeps the snapshot on account of (FR-GC-012,
+        // contract 1.48), shouted as every alarm token is. A direction this
+        // build has never heard of is printed as sent: dropping it would print
+        // the line of a snapshot that fits.
+        var implausible = snapshot.ImplausibleCaptureTime is { } direction
+            ? $"  time:implausible-{direction.ToUpperInvariant()}"
+            : string.Empty;
         return string.Create(CultureInfo.InvariantCulture,
-            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{clock}{destinations}");
+            $"{snapshot.SnapshotId}  {capturedAt}  {captureStatus,-8}  {snapshot.Files} file(s){consistency}{clock}{implausible}{destinations}");
     }
 
     /// <summary>

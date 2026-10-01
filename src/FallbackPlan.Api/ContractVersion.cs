@@ -451,8 +451,20 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// pre-1.47 service both send none, which a client reads as nothing to
     /// report, never as a clock in step.
     /// </para>
+    /// <para>
+    /// 1.48 adds `implausible_capture_time` to each snapshot descriptor of
+    /// `list_snapshots` (ADR-0078, FR-GC-012). It says whether the snapshot's
+    /// capture time is out of step with the order its writer published it in,
+    /// by more than the configured clock skew margin, and which way: `behind`
+    /// is dated before snapshots published ahead of it, and `ahead` is dated
+    /// after snapshots published after it. Retention keeps such a snapshot and
+    /// never expires it, and the retention report says so on its keep line.
+    /// Additive with a null default: a capture that fits, a restore source
+    /// (which does not judge) and a pre-1.48 service all send none, which a
+    /// client reads as nothing to report.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 47);
+    public static ContractVersion Current { get; } = new(1, 48);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -36,6 +36,20 @@ The content identifier MAY be held in the local catalogue, which is inside the t
 
 SHA-256 is the v1 profile. It is in-box on every platform the recovery tool must run on, hardware-accelerated on current hardware, and universally available to an independent implementer — which outranks throughput here, since the recovery tool must build with no native dependency. The profile field exists so a faster function can be added later without a format break. → [ADR-0004](../../docs/adr/0004-segment-hash-function.md), [Q6](../../docs/open-questions.md#q6--segment-hash-function)
 
+> **Erratum (freeze gate).** There is no profile field. No durable object
+> records a content-hash profile, so "the repository's content-hash
+> profile" in §2 is not a per-repository setting. `sha-256-v1` is the only
+> value, and every repository of this format version uses it. That covers
+> the content identifier here and the whole-file hash of
+> [06 §4.2](06-manifests.md#42-the-whole-file-hash). A reader has nothing
+> to consult and MUST NOT guess another function. Adding one is therefore
+> a format change, not a new profile beside this one: it would need a
+> field or a format version saying which function a repository uses.
+> Pending a normative edit,
+> [ADR-0004 Amendment 1](../../docs/adr/0004-segment-hash-function.md#amendment-1-2026-09--sha-256-is-kept-and-there-is-no-profile-field-to-change-it-through)
+> records this, and the [benchmark](../../docs/segment-hash-benchmark.md)
+> behind keeping SHA-256.
+
 The full 32 bytes are used. Truncation would save catalogue space at the cost of second-preimage resistance, and deduplication decisions are made on this value — a collision is a data-corruption path, not a performance detail.
 
 ## 3 Object identifier

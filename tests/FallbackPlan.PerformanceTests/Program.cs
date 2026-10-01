@@ -52,5 +52,12 @@ if (args.Length > 0 && string.Equals(args[0], "metadata-size", StringComparison.
     return MetadataEncodingBenchmark.Run();
 }
 
+if (args.Length > 0 && string.Equals(args[0], "hash-throughput", StringComparison.OrdinalIgnoreCase))
+{
+    // Q6: the content hash against the alternative ADR-0004 deferred, and
+    // against the stages that share its core.
+    return HashThroughputBenchmark.Run();
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(MemoryBoundProof).Assembly).Run(args);
 return 0;

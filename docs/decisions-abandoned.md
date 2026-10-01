@@ -54,7 +54,7 @@ Grouped by what they would have changed. One line each; the reasoning is at the 
 | Protocol Buffers for repository objects | proto3 is explicitly not canonical: identical logical input can produce different bytes, and identifiers are derived from bytes | [0003](adr/0003-canonical-metadata-encoding.md#alternatives-considered) |
 | A bespoke binary format | Every independent implementer would reimplement it from prose with no library, against NFR-COMP-004 | [0003](adr/0003-canonical-metadata-encoding.md#alternatives-considered) |
 | JSON with JCS canonicalisation | Number handling disagrees across languages, and the size cost at scale is unacceptable for metadata | [0003](adr/0003-canonical-metadata-encoding.md#alternatives-considered) |
-| BLAKE3 as the segment hash | Deferred, not rejected — revisit if hashing proves the binding constraint and a trimmable implementation removes the portability objection | [0004](adr/0004-segment-hash-function.md#alternatives-considered) |
+| BLAKE3 as the segment hash | Declined in 2026-09, having been deferred. A managed implementation removed the portability objection, but hashing binds only without the SHA extensions and on incompressible data, and switching would be a format change, since no field records the content hash | [0004 Amendment 1](adr/0004-segment-hash-function.md#amendment-1-2026-09--sha-256-is-kept-and-there-is-no-profile-field-to-change-it-through) |
 | SHA-512/256 | Less universally available in other languages, and the machines it helps are the ones least likely to be the reference case | [0004](adr/0004-segment-hash-function.md#alternatives-considered) |
 | A non-cryptographic hash, verified elsewhere | Dedup decisions are made on this identifier, so a collision is a data-corruption path | [0004](adr/0004-segment-hash-function.md#alternatives-considered) |
 | A gear-hash / FastCDC function | A different algorithm family from the one the specification names — a spec change, not a parameter pin | [0023](adr/0023-cdc-v1-rabin-parameters.md#alternatives-considered) |
@@ -179,7 +179,6 @@ Worth separating, because a deferred option is a decision someone still has to m
 
 | Option | Waiting on |
 |--------|-----------|
-| BLAKE3 as the segment hash | Evidence that hashing is the binding constraint, plus a trimmable implementation | 
 | CDC as the segmentation default | The benchmark at the [format freeze gate](adr/0002-segmentation-strategy.md) |
 | Shamir-split recovery kits | A kit format version, if high-value repositories justify it |
 | Per-device signing keys | [Q13](open-questions.md#q13--device-level-signature-attribution) — whether device-level attribution should exist at all |

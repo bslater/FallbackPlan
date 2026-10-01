@@ -619,6 +619,15 @@ public sealed record JobFailuresResult(
 /// no reading to record, and from a service older than 1.47 — never 0, which
 /// is a clock in step.
 /// </param>
+/// <param name="ImplausibleCaptureTime">
+/// Whether <paramref name="CapturedAt"/> is out of step with the order the
+/// snapshot's writer published it in, and which way (FR-GC-012, contract
+/// 1.48). <c>behind</c> means dated before snapshots published ahead of it,
+/// and <c>ahead</c> means dated after snapshots published after it.
+/// Retention keeps such a snapshot and never expires it. Null for a capture
+/// that fits, and from a service older than 1.48 or a listing that cannot
+/// judge (a restore source's), which a client reads as nothing to report.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
@@ -627,7 +636,8 @@ public sealed record SnapshotDescriptor(
     long Files,
     IReadOnlyList<string>? Destinations = null,
     byte? ConsistencyMethod = null,
-    long? ObservedClockSkewMs = null);
+    long? ObservedClockSkewMs = null,
+    string? ImplausibleCaptureTime = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">

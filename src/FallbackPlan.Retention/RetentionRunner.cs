@@ -27,7 +27,15 @@ public sealed record RetentionReport(
     IReadOnlyList<HeldSnapshot> Held,
     int TombstonesWritten,
     SweepOutcome? Swept,
-    IReadOnlyList<CompactableBlob> CompactionCandidates);
+    IReadOnlyList<CompactableBlob> CompactionCandidates)
+{
+    /// <summary>
+    /// The snapshots this pass kept because their capture time is implausible
+    /// (FR-GC-012), for the caller to raise a notice from as it does from
+    /// <see cref="Held"/>.
+    /// </summary>
+    public IReadOnlyList<ImplausibleCapture> Implausible { get; init; } = [];
+}
 
 /// <summary>
 /// One set's retention pass, whole (architecture 07): survey the store,
@@ -61,8 +69,10 @@ public static class RetentionRunner
     /// <param name="compactionPolicy">Which of the compaction backlog a pass would rewrite; <see cref="CompactionPolicy.Default"/> when omitted.</param>
     /// <param name="clockSkewMargin">
     /// The installation's clock skew margin, added to a write intent's declared
-    /// duration before it may expire (specification 08 §7); a day when omitted,
-    /// as a configuration that states none means.
+    /// duration before it may expire (specification 08 §7), and how far a
+    /// capture time may stray from its writer's publication order before it is
+    /// implausible (FR-GC-012); a day when omitted, as a configuration that
+    /// states none means.
     /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
@@ -101,7 +111,8 @@ public static class RetentionRunner
         var selection = RetentionPlanner.Select(
             [.. survey.Snapshots.Select(snapshot => snapshot.Fact)],
             policy ?? new RetentionConfiguration(),
-            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds));
+            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds),
+            margin);
 
         // Per-destination keep-awareness (FR-GC-010): a destination whose own
         // policy drops a snapshot never holds it, so it never holds up its
@@ -110,7 +121,7 @@ public static class RetentionRunner
         // shared helper, so the gate and the converge spare cannot disagree.
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
         var keptByDestination = DestinationConvergence.KeepSetsByDestination(
-            facts, destinations, policy, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds));
+            facts, destinations, policy, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), margin);
 
         var gate = ReplicationGate.Apply(
             selection.Expire,
@@ -181,13 +192,16 @@ public static class RetentionRunner
         // (FR-GC-005) — and deletes only under apply, after the sweep.
         var trim = await StagingTrim.PlanAsync(
             store, reader, survey, policy, destinations, trimVerificationFor, syncRecordFor, intents,
-            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken)
+            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken, margin)
             .ConfigureAwait(false);
         lines.AddRange(trim.Lines);
 
         if (!apply)
         {
-            return new RetentionReport(lines, gate.Held, 0, null, compaction.Candidates);
+            return new RetentionReport(lines, gate.Held, 0, null, compaction.Candidates)
+            {
+                Implausible = selection.Implausible,
+            };
         }
 
         // The grace clock: the single writer's highest published sequence.
@@ -233,6 +247,9 @@ public static class RetentionRunner
         Log.CollectionComplete(
             log, swept.Deleted, swept.NotYetEligible, swept.TombstonesCleared, trimmedBlobs, trimmedBytes);
 
-        return new RetentionReport(lines, gate.Held, written, swept, compaction.Candidates);
+        return new RetentionReport(lines, gate.Held, written, swept, compaction.Candidates)
+        {
+            Implausible = selection.Implausible,
+        };
     }
 }

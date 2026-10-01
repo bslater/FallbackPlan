@@ -34,6 +34,13 @@ Several behaviours are selected by a **profile** — a small integer naming a fi
 | Encryption | `aes-256-gcm-v1` (`0x0002` reserved, withdrawn — [03 §6.1](03-keys.md#61-where-each-primitive-comes-from)) | [04](04-record.md) |
 | Content hash | `sha-256-v1` | [02](02-identifiers.md) |
 
+> **Erratum (freeze gate).** The content-hash row is a profile in name
+> only. No object records it, so it cannot vary between objects in a
+> repository, and another value cannot be added without a format change
+> ([02 §2.1](02-identifiers.md#21-profile-choice)). What this section
+> says of profiles holds for the other three families, which are recorded
+> where they apply.
+
 A profile identifier is a `u16`. Values `0x0000`–`0x7FFF` are reserved for this specification; `0x8000`–`0xFFFF` are available for private use and MUST NOT appear in a repository intended to be portable.
 
 A reader encountering an unknown profile in an object it must interpret **MUST refuse the object** and report the unknown profile value. It MUST NOT guess.

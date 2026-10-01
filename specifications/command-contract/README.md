@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.47
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.48
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.47 — 60 commands. One line each; parameters, results
+The register as of 1.48 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -102,6 +102,10 @@ over was damaged or would not read, says how many (`read_around`) and which
 Since 1.47, each snapshot of `list_snapshots` and `open_restore_source` says
 how far the capturing machine's clock stood from a peer's
 (`observed_clock_skew_ms`, [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)).
+Since 1.48, each snapshot of `list_snapshots` says whether its capture time
+fits the order its writer published it in (`implausible_capture_time`,
+`behind` or `ahead`, [ADR-0078](../../docs/adr/0078-implausible-capture-times.md)).
+Retention keeps such a snapshot, and `open_restore_source` does not judge.
 The two answer in opposite orders. `list_snapshots` gives each set's snapshots
 newest first, the sets in configuration order. `open_restore_source` gives a
 source's oldest first, because the guided restore reads it as a timeline.
@@ -176,3 +180,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.45 | `read_around` and `read_around_sample` on `restore` ([ADR-0075](../../docs/adr/0075-a-restore-reads-around-damage.md), FR-RST-007): a restore of a set's own archive reads a record its own store will not serve from the set's other copies, and the answer counts the files that came from another copy because a copy passed over was damaged or would not read, with up to twenty lines naming the copy each came from and what was wrong with those passed over. A file read from a destination only because staging no longer holds it is not counted. Additive with defaults: a pre-1.45 service sends neither, which reads as nothing read around |
 | 1.46 | `deep_sweep` on each destination row of `status` ([ADR-0035 Amendment 3](../../docs/adr/0035-destination-fitness.md#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is), FR-VER-003): the destination's deep sweep as the ledger holds it. `circuit_closed_at` is when a circuit last closed — every stored blob read back and matched to its seal, the one fact that supports that claim; `read_this_circuit` and `last_read_at` describe the circuit under way, a count of blobs and never a share of the replica; `stalls` and `stalled_on` say a circuit stopped at a blob that will not read, or at a replica that could not be read; `interval_days` is the cadence the scheduler keeps, **null** for a peer read in full only when a person asks. The object is null where no sweep exists — a reserved kind nothing reads back, a destination no longer declared — which is not a sweep that has not run. Additive with a null default: a pre-1.46 service sends none, which reads as no sweep reported |
 | 1.47 | `observed_clock_skew_ms` on each snapshot of `list_snapshots` and `open_restore_source` ([ADR-0077](../../docs/adr/0077-observed-clock-skew.md), NFR-TIME-002): how far the capturing machine's clock stood from a peer's when the snapshot was taken, as its manifest records it — the peer's clock minus the capturing one's, in milliseconds, so positive is a clock that was behind. Null where the capture had no reading, which is not a clock in step. Additive with a null default: a pre-1.47 service sends none, which reads as nothing to report |
+| 1.48 | `implausible_capture_time` on each snapshot of `list_snapshots` ([ADR-0078](../../docs/adr/0078-implausible-capture-times.md), FR-GC-012): whether the snapshot's capture time is out of step with the order its writer published it in, by more than the configured clock skew margin, and which way — `behind` is dated before snapshots published ahead of it, `ahead` after snapshots published after it. Retention keeps such a snapshot and never expires it, and its keep line in the `retention` report says why. Additive with a null default: a capture that fits, a restore source (which does not judge) and a pre-1.48 service send none, which reads as nothing to report |
