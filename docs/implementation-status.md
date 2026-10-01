@@ -1916,17 +1916,18 @@ written zeroes, and that is how the gap went unseen. The oracle now
 is allocation: `TestSupport/AllocatedSize`, which asks each platform how much
 of a file it holds and shares no code with the product's own stat interop.
 
-A file that will have a hole is given its whole length while it is still
-empty, and its data is written inside that length, so every hole is a range
-nothing was written to. Every platform reads such a range as zeroes. Only
-allocation differs.
+Skipping a range is correct everywhere, because every platform reads zeroes
+from what an extending write skipped. Only allocation differs.
 
-- **Linux and APFS** leave it unallocated. The order matters on APFS: a range
-  that a write skips past the end of a file, or that a length change extends
-  past written data, is zero-filled and allocated once APFS writes the file
-  back. The first macOS CI run found it. Every file the restore wrote there
-  was fully allocated, and the tests that passed had measured before
-  writeback. The oracle now writes a file back before it measures.
+- **Linux** leaves the skipped range unallocated wherever the filesystem
+  holds holes, with nothing asked.
+- **APFS** leaves it unallocated if it is 16 MiB or longer. A shorter one it
+  fills with zeroes and allocates once it writes the file back, however the
+  file was written. The first macOS CI run found it: the tests' holes were
+  4, 15 and 11 MiB, every one was filled, and the tests that passed had
+  measured before write-back. So the oracle now writes a file back before
+  it measures, the suites' holes are 32 MiB, and a macOS-only test pins the
+  16 MiB.
 - **NTFS** allocates and zero-fills it unless the file was marked sparse
   first. So `Domain/SparseFile` marks a file that will have a hole, and only
   such a file, because a dense file carrying the sparse attribute is not the
@@ -1945,6 +1946,7 @@ Each piece was removed in turn and its test went red: the spool's skip, the
 emission's skip, its guard against existing bytes, each of the three length
 changes, the recovery tool's skip and the capture fix. What remains is recorded rather
 than done. Windows capture still reads holes as data, so only a manifest
-from POSIX restores sparse there. The engine's spool still defaults to the
+from POSIX restores sparse there. On APFS a hole shorter than 16 MiB is
+still allocated, by the filesystem's own choice. The engine's spool still defaults to the
 system temporary directory, which caps the largest dense file a restore can
 produce where that directory is small or RAM-backed.

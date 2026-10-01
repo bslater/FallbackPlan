@@ -104,12 +104,13 @@ Alternate data streams are captured (`SnapshotPublication.CaptureAlternateStream
 
 > **Open question, not a unilateral fix.** This needs a maintainer decision — implement platform sparse write-out, or amend FR-ARCH-013's acceptance to say v1 restores holes as zeroes — so it is filed as [Q22](../open-questions.md#q22--sparse-restore-materialises-zeroes) and the misdirected citation is corrected. What is not acceptable is the silent disagreement, and it no longer is silent.
 >
-> **Resolved (2026-10), on option (a).** The maintainer chose sparse write-out ([ADR-0079](../adr/0079-sparse-restore.md)). A restore now hashes each hole as the zeroes it reads as and skips it rather than writing it. It does this in the engine's spool, in what the engine emits and in the recovery tool, and on Windows a file that will have a hole is marked sparse first. The test this finding found missing is `Repository.Tests/SparseRestoreTests`. It holds allocation, not bytes, under half the length on all three CI platforms, through each of the engine, the executor and the recovery tool.
+> **Resolved (2026-10), on option (a).** The maintainer chose sparse write-out ([ADR-0079](../adr/0079-sparse-restore.md)). A restore now hashes each hole as the zeroes it reads as and skips it rather than writing it. It does this in the engine's spool, in what the engine emits and in the recovery tool, and on Windows a file that will have a hole is marked sparse first. The test this finding found missing is `Repository.Tests/SparseRestoreTests`. It holds allocation, not bytes, to the file's data and half a hole on all three CI platforms, through each of the engine, the executor and the recovery tool.
 >
-> Two things turned up on the way:
+> Three things turned up on the way:
 >
 > - **Fixed: a file that is one hole could not be captured.** Capture recorded extents only for a file that also had data, so the manifest covered none of its length, and the codec refused it.
 > - **Recorded, not fixed: the engine's spool lives in the system temporary directory.** It still needs a dense file's full length free there. That caps the largest file a restore can produce where the directory is small or RAM-backed, as `/tmp` is by default on several current Linux distributions. Sparse files no longer pay it. Moving the spool, or writing the reassembly straight into the executor's own spool, is a change of its own, because the engine promises a caller's stream nothing unverified.
+> - **Recorded, not changed: APFS fills a hole shorter than 16 MiB.** It fills the hole with zeroes and allocates them when it writes the file back, however the file was written. The restore writes none of them; the filesystem does. The first macOS run found it, because the test file's holes were all shorter than that. The suites' holes are now 32 MiB, and a macOS-only test pins the 16 MiB.
 
 ---
 

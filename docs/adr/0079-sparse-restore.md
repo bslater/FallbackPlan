@@ -23,17 +23,17 @@ FR-ARCH-013 asks that sparse extents "restore without materialising zero payload
 
 The cost of the old behaviour was not only disk. A restore of a 100 GiB sparse disk image holding 10 GiB of data wrote 90 GiB of zeroes twice, once into the spool and once into the destination. It also needed 100 GiB free in the temporary directory as well as at the destination, so it could fail on a machine that held the original comfortably.
 
-Every platform this product supports reads zeroes from a range inside a file's length that nothing was written to. Whether the range is allocated differs:
+Every platform this product supports reads zeroes from a range a write skipped. Whether the range is allocated differs:
 
 - **Linux.** `lseek` past the end followed by a write, and `ftruncate` extending a file, leave a gap that reads as zeroes. Wherever the filesystem supports holes (ext4, XFS, Btrfs, tmpfs), the gap is left unallocated.
-- **macOS.** APFS supports holes, but not every gap becomes one. It zero-fills and allocates a range that a write skips past the end of a file, or that a length change extends past data already written, once the file is written back. A range inside a length the file was given while it was still empty stays a hole. The first macOS run of these tests found this: every file the restore wrote there was fully allocated. The tests that passed had measured before the file was written back.
+- **macOS.** APFS reads such a gap as zeroes too, and leaves it unallocated if it is 16 MiB or longer. A shorter gap it fills with zeroes and allocates when it writes the file back. Its rule goes by the gap's length alone. It held whatever the file's size, wherever the gap lay, whatever size the writes were, and whether the file was given its length before its data or after. The first macOS run of these tests found this. Every hole in their file was shorter than 16 MiB and every one was filled, and the tests that passed there had measured before the file was written back. Two diagnostic runs then measured nineteen layouts after write-back, from 32 MiB to 1 GiB, to find the rule.
 - **Windows.** An extending write or `SetEndOfFile` leaves a gap that reads as zeroes too. But NTFS allocates and zero-fills it, unless the file was marked sparse with `FSCTL_SET_SPARSE` first.
 
 ## Decision
 
 ### 1. A hole is hashed and skipped, never written
 
-The whole-file hash still covers the zeroes a hole reads as (06 §4.2), so the hash is unchanged and a file restored onto a filesystem without holes still verifies. A file that will have a hole is given its whole length first, while it is still empty, and the writer then moves past each hole instead of writing it. So every hole is a range inside a length the file already had, which is the one form APFS leaves unallocated. Once the last piece is placed the length is set again, to where the hash stopped, so the file is exactly the bytes hashed.
+The whole-file hash still covers the zeroes a hole reads as (06 §4.2), so the hash is unchanged and a file restored onto a filesystem without holes still verifies. The writer then moves past the hole instead of writing it, and sets the file's length once the last piece is placed, so a file that ends in a hole has its full length.
 
 ### 2. On Windows, a file that will have a hole is marked sparse before anything is written
 
@@ -45,7 +45,7 @@ The mark is a synchronous ioctl. It is not attempted on an overlapped handle, be
 
 **The spool.** The spool the engine reassembles into is created through `SparseFile` and skips each hole. The hash is verified over the reassembly before anything leaves it (FR-RST-005), as before. Where the spool lives is the caller's to name, the system temporary directory by default; the tests name one so that they can measure it.
 
-**The emission.** After the hash verifies, the engine gives the destination the file's length and then copies only the spool's data into it, each run at its offset from where the destination stands. It does this only when the destination can seek and holds nothing past its position, because a skipped range keeps whatever it already held. A destination that cannot seek, such as a pipe, or one that already holds bytes where the file will go, is given the whole file with its zeroes written out. Its bytes are the same either way.
+**The emission.** After the hash verifies, the engine copies only the spool's data into the destination, each run at its offset from where the destination stands, and then sets the length. It does this only when the destination can seek and holds nothing past its position, because a skipped range keeps whatever it already held. A destination that cannot seek, such as a pipe, or one that already holds bytes where the file will go, is given the whole file with its zeroes written out. Its bytes are the same either way.
 
 A destination that is a file is marked sparse before the copy, on Windows. The executor's spool and the CLI's output are both created with `File.Create`, whose handle is synchronous.
 
@@ -61,13 +61,14 @@ Capture recorded a file's sparse extents only when the file also had data. A fil
 
 **Positive**
 
-- A restored sparse file occupies roughly what its data does, at the destination and in the spool, on Linux, macOS and Windows.
+- A restored sparse file occupies roughly what its data does, at the destination and in the spool, on Linux and Windows, and on macOS for every hole of 16 MiB or more.
 - A restore no longer writes a sparse file's zeroes at all, so it spends neither the disk time nor the temporary space they took.
 - A disk image that is one hole backs up and restores.
 
 **Negative**
 
 - The emission seeks once per data run rather than streaming the spool. The runs are the file's own data, so this costs a seek per run and nothing per byte.
+- On APFS a hole shorter than 16 MiB is allocated all the same, because the filesystem fills it with zeroes when it writes the file back. A file whose holes are all that short gains nothing there.
 
 **Neutral**
 
@@ -77,6 +78,7 @@ Capture recorded a file's sparse extents only when the file also had data. A fil
 
 - **It does not capture holes on Windows.** The scanner still reads an NTFS sparse file densely (`Filesystem.Local/SparseProbe`), so a file captured there restores dense. Its zero runs are stored, deduplicated, as zero segments. Only a manifest that records extents restores sparse.
 - **It does not make holes out of zero data.** A run of zeroes captured as data is restored as data.
+- **It does not keep a hole APFS will not.** APFS fills a hole shorter than 16 MiB with zeroes when it writes the file back, however the file was written. The restore leaves that choice to the filesystem. `Domain.Tests/SparseFileTests` pins the 16 MiB on macOS, so this record goes stale loudly if APFS changes.
 - **It does not report a target that cannot hold holes.** Specification 09 §4 makes zeroes the expected materialisation there. The file is correct and fully allocated, and nothing is lost.
 - **It does not move the engine's spool.** The spool still lives in the system temporary directory unless a caller names another. A dense file larger than that directory's free space still fails to restore. That matters most where the temporary directory is RAM-backed, and it is recorded as a finding (restore review RR-7) rather than changed here.
 
@@ -84,7 +86,7 @@ Capture recorded a file's sparse extents only when the file also had data. A fil
 
 **Amending FR-ARCH-013 to say holes restore as zeroes** (Q22's option (b)). Declined by the owner. It would have made the requirement true by lowering it, and left the temporary-space failure in place.
 
-**Punching holes after a dense write** (`fallocate(FALLOC_FL_PUNCH_HOLE)`, `FSCTL_SET_ZERO_DATA`). Rejected. It writes the zeroes and then pays again to release them, and it needs a different call on every platform. Skipping needs no call at all on POSIX.
+**Punching holes after a dense write** (`fallocate(FALLOC_FL_PUNCH_HOLE)`, `FSCTL_SET_ZERO_DATA`). Rejected. It writes the zeroes and then pays again to release them, and it needs a different call on every platform. Skipping needs no call at all on POSIX. On macOS a punch (`F_PUNCHHOLE`) is the one call that might keep a hole shorter than 16 MiB, but it would undo a choice APFS makes for itself.
 
 **Writing the reassembly straight into the destination.** Deferred. It would save the spool's copy for every file, sparse or not. But it changes when unverified bytes reach a caller's stream, which this engine's contract forbids (FR-RST-005), so it belongs to a change of its own.
 
