@@ -118,8 +118,13 @@ public sealed class ObservedClockSkewTests
         store.RecordClockObservation(SetId, "friend", new ClockObservation(10_800_000, Now, 12));
         store.RecordClockObservation(SetId, "friend", new ClockObservation(10_799_000, Now + 5_000, 8));
 
+        // Written at a schema that carries the reading: eight, or a later one.
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 8", text, StringComparison.Ordinal);
+        using (var written = System.Text.Json.JsonDocument.Parse(text))
+        {
+            Assert.IsGreaterThanOrEqualTo(8, written.RootElement.GetProperty("schema_version").GetInt32());
+        }
+
         Assert.Contains("\"clock_skew_ms\": 10799000", text, StringComparison.Ordinal);
 
         var row = DestinationSyncStore.Open(_state).Find(SetId, "friend")!;

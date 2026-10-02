@@ -64,7 +64,7 @@ tombstone = {
     1: u16       schema version, 1
     2: u8        object_type    the type of the object being deleted
     3: bytes[32] object_id      or bytes[16] for a blob (§3.1)
-    4: u16       reason         1 unreferenced, 2 retired delta, 3 compacted, 4 superseded
+    4: u16       reason         1 unreferenced, 2 retired delta, 3 compacted, 4 superseded, 5 requested
     5: bytes[16] writer_id      who marked it
     6: u64       tombstoned_at  informational; see below
     7: u64       eligible_generation
@@ -73,17 +73,20 @@ tombstone = {
 ```
 
 Key 4 is a **closed** vocabulary and a writer produces what it can honestly
-tell apart. Two of its values are produced today: *unreferenced*, when no
-protected snapshot reaches the object, and *compacted*, when the object is
+tell apart. Three of its values are produced today: *unreferenced*, when no
+protected snapshot reaches the object; *compacted*, when the object is
 still reached and the index resolves it into a different blob that is
 present — a relocation, which is what a rewrite leaves behind
-([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)). *Retired delta* is
+([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)); and *requested*,
+when a person has asked for a snapshot to be deleted (§3.3). *Retired delta* is
 defined and unreachable in this implementation: nothing tombstones an index
 delta, a checkpoint retiring one deletes nothing. *Superseded* describes a
 newer object replacing an older, which is not what an expiring snapshot
 manifest is; a manifest retention no longer keeps is *unreferenced*. A reader
-MUST accept all four — the vocabulary is the format's, not one writer's — and
-MUST refuse a value outside it.
+MUST accept all five — the vocabulary is the format's, not one writer's — and
+MUST refuse a value outside it. A reader written before *requested* was
+assigned therefore refuses one and deletes nothing for it, which is the closed
+vocabulary doing its job: the failure is a deletion not made.
 
 The reason is inside the signed bytes, so it is an attested claim about why
 data was destroyed rather than an annotation. A writer that cannot tell two
@@ -113,6 +116,16 @@ Step 3 is not redundant. A tombstone records a decision taken at some earlier mo
 A reader that finds a tombstone for an object that is still referenced MUST report a damage finding and MUST NOT delete. That is the signal that a collector's liveness analysis and the object graph disagree, and it is not the reader's to resolve.
 
 After a successful delete, the tombstone itself becomes eligible for deletion one generation later. It is retained that long so a concurrent reader that saw the object disappear can tell a completed collection from a missing object.
+
+### 3.3 A person's request
+
+A tombstone with reason 5, *requested*, records that a person asked for a snapshot to be deleted ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). It is the request itself, not a note about one: it is the only durable record that the snapshot is to go, so a collector reads it on every pass rather than deciding once.
+
+- It MUST name a snapshot manifest, `object_type` 4. A reader MUST refuse a *requested* tombstone of any other type. What only the snapshot held is condemned afterwards, by the ordinary analysis, as *unreferenced*: a request that named content directly would let whoever wrote it remove a file from a snapshot that is still kept.
+- It is signed as every tombstone of the repository is (§3), and a reader MUST verify it before honouring it. A request that does not verify is the same security finding as any other unverifiable tombstone, and it MUST NOT change what a collector keeps.
+- A collector that honours it treats the snapshot as expired whatever its retention rules keep. It is not a keep decision the next pass may revisit, so §3.2 step 3's revalidation finds a requested snapshot still condemned for as long as the request stands.
+- A request replaces any other tombstone already at the snapshot's key. Its `eligible_generation` counts the grace exactly as §3.1 says.
+- A collector MAY hold a requested snapshot in its archive past its eligibility while a copy elsewhere has not been brought in line. Deleting the manifest first would leave that copy holding objects the collector no longer lists, which nothing would ever remove.
 
 ## 4 Audit-period record
 

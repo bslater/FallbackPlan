@@ -341,7 +341,7 @@ public sealed class SnapshotDeletionCycleTests : IDisposable
     /// key the write credential derives, and signed by a key that is not the
     /// reclaim key.
     /// </summary>
-    private async Task ForgeRequestAsync(IObjectStore store, OpenedRepository repository, SurveyedSnapshot snapshot)
+    private async Task ForgeRequestAsync(LocalFileSystemObjectStore store, OpenedRepository repository, SurveyedSnapshot snapshot)
     {
         var tombstone = new Tombstone(
             (byte)ObjectType.SnapshotManifest, snapshot.ManifestObjectId.ToArray(), TombstoneReason.Requested,
@@ -368,7 +368,7 @@ public sealed class SnapshotDeletionCycleTests : IDisposable
         Assert.AreEqual(PutOutcome.Created, put.Outcome);
     }
 
-    private static async Task<List<string>> ListAsync(IObjectStore store, string prefix)
+    private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)
     {
         var keys = new List<string>();
         await foreach (var entry in store.ListAsync(

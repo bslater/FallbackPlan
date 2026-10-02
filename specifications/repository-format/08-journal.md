@@ -98,6 +98,8 @@ Retirement is an **event**, not the absence of a heartbeat. That distinction is 
 Audit records make destructive actions attributable. They do not make them preventable.
 
 > **Erratum (phase 0).** Key 1's values and key 3's shape are not assigned here. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 6 pins them: `action` = 1 retention-reduction, 2 bulk-snapshot-deletion, 3 gc-pass, 4 force-expiry; `parameters` is a uint-keyed map, per-action, empty in phase 0.
+>
+> **Amended 2026-10 ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)).** Action 2's parameter 1 is an array of `bytes[16]`, the snapshot ids ([06 §6](06-manifests.md#6-snapshot-manifest) key 1) the deletion was asked for, and `objects_affected` is their count. `actor` is the account signed in when the request was made, or `cli` where none was. No other action carries a parameter, and a writer MUST NOT give one parameter 1. A reader MUST skip a parameter it has no meaning for, as it did when every parameter map was empty, so a record carrying parameter 1 reads correctly in a build that predates it.
 
 ## 7 Expiry
 

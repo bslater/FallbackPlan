@@ -605,7 +605,7 @@ public sealed class DestinationSyncStoreTests
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 9, "destinations": [
+            { "schema_version": 10, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -635,13 +635,30 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordSuccess_AConvergeWhileADeletionIsPending_KeepsWhereItBegan_AndNeverMovesItBack()
+    {
+        // FR-GC-013: the replication gate releases a requested snapshot only
+        // once each copy has converged since the request, so the sequence a
+        // converge began at may only rise. A copy that converged nothing says
+        // nothing about it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 1_000, syncedSequence: 10, convergedSequence: 12);
+        store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 2_000, syncedSequence: 11);
+        store.RecordSuccess(SetId, "vault", objects: 1, nowUnixMilliseconds: 3_000, syncedSequence: 11, convergedSequence: 9);
+
+        var row = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(12UL, row.ConvergedSequence);
+        Assert.Contains("\"converged_sequence\": 12", File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void SaveThenOpen_RoundTripsThroughTheVersionedShape()
     {
         DestinationSyncStore.Open(_state)
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 8", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 9", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

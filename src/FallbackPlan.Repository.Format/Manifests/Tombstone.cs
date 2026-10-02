@@ -18,6 +18,14 @@ public enum TombstoneReason : ushort
 
     /// <summary>A newer object superseded it.</summary>
     Superseded = 4,
+
+    /// <summary>
+    /// A person asked for the snapshot to be deleted (FR-GC-013). Names only a
+    /// snapshot manifest: every later plan expires that snapshot whatever its
+    /// rules keep, and what only it held is condemned afterwards as
+    /// <see cref="Unreferenced"/>.
+    /// </summary>
+    Requested = 5,
 }
 
 /// <summary>
@@ -212,6 +220,17 @@ public static class TombstoneCodec
         if (tombstone.WriterId.Length != 16)
         {
             throw new ManifestValidationException(Strings.FormatTombstoneCodec_RequiredKeyMissing(5));
+        }
+
+        // A request is for a snapshot a person named. A request naming a
+        // record or a blob was never made by anyone, and a reader that acted
+        // on one would let whoever wrote it pick content out of a snapshot
+        // still kept.
+        if (tombstone.Reason == TombstoneReason.Requested
+            && tombstone.ObjectTypeCode != (byte)Domain.ObjectType.SnapshotManifest)
+        {
+            throw new ManifestValidationException(
+                Strings.FormatTombstoneCodec_RequestedNamesOnlyASnapshot(tombstone.ObjectTypeCode));
         }
     }
 

@@ -325,7 +325,7 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
-    private static async Task<List<string>> ListAsync(IObjectStore store, string prefix)
+    private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)
     {
         var keys = new List<string>();
         await foreach (var entry in store.ListAsync(

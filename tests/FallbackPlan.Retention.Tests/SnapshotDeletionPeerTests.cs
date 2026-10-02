@@ -200,7 +200,7 @@ public sealed class SnapshotDeletionPeerTests : IDisposable
         return destinationKeypair.Identity.Fingerprint;
     }
 
-    private static async Task<List<string>> ListAsync(IObjectStore store, string prefix)
+    private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)
     {
         var keys = new List<string>();
         await foreach (var entry in store.ListAsync(

@@ -67,7 +67,7 @@ public sealed class JournalTests
         // needs, and the count alone cannot say (08 §6; FR-GC-013, ADR-0080).
         using var credential = TestAuthority.Shared.Credential.Clone();
         using var signer = RepositorySigner.Create(credential, new KeyGeneration(0));
-        ReadOnlyMemory<byte>[] snapshots = [Filled(0x41, 32), Filled(0x42, 32)];
+        ReadOnlyMemory<byte>[] snapshots = [Filled(0x41, 16), Filled(0x42, 16)];
         var record = new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
             new JournalPayload.Audit(AuditAction.BulkSnapshotDeletion, "ben", 2) { Snapshots = snapshots });
 
@@ -88,7 +88,7 @@ public sealed class JournalTests
         // The parameter is the deletion's alone: a GC pass that named
         // snapshots would be claiming a decision it did not make.
         var record = new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
-            new JournalPayload.Audit(AuditAction.GcPass, "agent", 1) { Snapshots = [Filled(0x41, 32)] });
+            new JournalPayload.Audit(AuditAction.GcPass, "agent", 1) { Snapshots = [Filled(0x41, 16)] });
 
         Assert.ThrowsExactly<IndexFormatException>(() => JournalRecordCodec.EncodeForSigning(record));
     }
