@@ -27,7 +27,14 @@ namespace FallbackPlan.Retention;
 /// nothing if a failed delete can produce one.
 /// </remarks>
 public sealed record SweepOutcome(
-    int Deleted, int NotYetEligible, int TombstonesCleared, IReadOnlyList<string> Findings);
+    int Deleted, int NotYetEligible, int TombstonesCleared, IReadOnlyList<string> Findings)
+{
+    /// <summary>
+    /// The snapshots this pass deleted, as the survey knew them, so a caller
+    /// can forget a requested one from what it caches (FR-GC-013).
+    /// </summary>
+    public IReadOnlyList<SnapshotFact> DeletedSnapshots { get; init; } = [];
+}
 
 /// <summary>
 /// The destructive half (architecture 07 §3 steps 10–13, deletion-only):
@@ -176,6 +183,7 @@ public static class StagingSweep
         var notYet = 0;
         var cleared = 0;
         var findings = new List<string>();
+        var deletedSnapshots = new List<SnapshotFact>();
 
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -290,6 +298,7 @@ public static class StagingSweep
                     .ConfigureAwait(false))
                 {
                     deleted++;
+                    deletedSnapshots.Add(snapshot.Fact);
                 }
 
                 continue;
@@ -298,7 +307,7 @@ public static class StagingSweep
             findings.Add($"damage: tombstone {entry.Key} names an object type this pass does not collect");
         }
 
-        return new SweepOutcome(deleted, notYet, cleared, findings);
+        return new SweepOutcome(deleted, notYet, cleared, findings) { DeletedSnapshots = deletedSnapshots };
     }
 
     /// <summary>

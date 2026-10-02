@@ -144,6 +144,15 @@ public sealed class AuthenticatingService : IFallbackPlanService
             {
                 return NotTheOwner("acknowledge a claim on a replica stored here");
             }
+
+            // A deletion's audit record names who asked (FR-GC-013), and only
+            // this connection knows who that is: the name is the session's,
+            // whatever the command carried in process.
+            if (command is DeleteSnapshotsCommand deletion)
+            {
+                return await _inner.ExecuteAsync(deletion with { Actor = session.User }, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
         else if (command is ListUsersCommand or CreateUserCommand or DeleteUserCommand or ChangePasswordCommand)
         {

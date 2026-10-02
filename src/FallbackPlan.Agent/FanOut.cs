@@ -183,6 +183,7 @@ public static class FanOut
     /// <param name="nowMs">The clock.</param>
     /// <param name="limiter">The destination's transfer limit for a background sync, or null.</param>
     /// <param name="cancellationToken">Cancels the read-back.</param>
+    /// <param name="convergedAt">Where the push converged the peer while a deletion was pending, or null (FR-GC-013).</param>
     /// <returns>Whether this recorded the pair's outcome.</returns>
     private static async ValueTask<bool> ReadBackAsync(
         ServiceRuntime runtime,
@@ -192,7 +193,8 @@ public static class FanOut
         ReplicationInitiator.PushOutcome outcome,
         ulong nowMs,
         Application.ByteRateLimiter? limiter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ulong? convergedAt = null)
     {
         if (outcome.HeldKeys is not { Count: > 0 } held)
         {
@@ -276,9 +278,19 @@ public static class FanOut
             .ConfigureAwait(false);
         ledger.RecordSuccess(
             set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence,
-            verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
+            verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
+            convergedSequence: Converged(outcome, convergedAt));
         return true;
     }
+
+    /// <summary>
+    /// The journal head a peer's push converged it at, for the ledger
+    /// (FR-GC-013): none when the push was a whole copy, which it is when the
+    /// peer's inventory showed this archive rolled back and the keep-set was
+    /// set aside for the session.
+    /// </summary>
+    private static ulong? Converged(ReplicationInitiator.PushOutcome outcome, ulong? convergedAt) =>
+        outcome.ConvergenceWithheld ? null : convergedAt;
 
     /// <summary>
     /// The wire half of the chunk tier: one challenge, one proof, over the
@@ -473,23 +485,46 @@ public static class FanOut
             var reclaimSigner = grantedSigner;
             var awaitsGrantKey = $"convergence-awaits-grant:{set.Id}:{destination.Name}";
 
+            // A person's deletion converges a peer with no rules too, under the
+            // grant (FR-GC-013). The journal head is read before the keep-set,
+            // as the local-path pass reads it.
+            var deletion = await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false);
+
             Func<string, bool>? keeps = null;
-            if (Retention.DestinationConvergence.HasRules(effective)
+            var pushOnly = false;
+            if ((Retention.DestinationConvergence.HasRules(effective) || deletion is not null)
                 && session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature))
             {
                 if (reclaimSigner is null)
                 {
-                    runtime.Notices.Raise(
-                        awaitsGrantKey,
-                        $"destination '{destination.Name}' of set '{set.Name}' received a whole copy instead of its "
-                        + "retention keep-set: a deletion instruction needs the reclaim grant a retention run "
-                        + "carries (ADR-0055 §6). It converges on the next `retention --apply`.",
-                        nowMs);
+                    if (Retention.DestinationConvergence.HasRules(effective))
+                    {
+                        runtime.Notices.Raise(
+                            awaitsGrantKey,
+                            $"destination '{destination.Name}' of set '{set.Name}' received a whole copy instead of its "
+                            + "retention keep-set: a deletion instruction needs the reclaim grant a retention run "
+                            + "carries (ADR-0055 §6). It converges on the next `retention --apply`.",
+                            nowMs);
+                    }
+
+                    // No authority to delete, so no drop is instructed. But a
+                    // whole copy must not carry what a person asked to delete
+                    // to a peer that lacks it: the push leaves out what only
+                    // the requested snapshots hold, and keeps everything else.
+                    if (deletion is not null)
+                    {
+                        var withheld = await Retention.DestinationConvergence.ComputeKeepsAsync(
+                            archive.Store, archive.Repository, new RetentionConfiguration(),
+                            DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
+                            runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
+                        keeps = withheld.Keeps;
+                        pushOnly = true;
+                    }
                 }
                 else
                 {
                     var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
-                        archive.Store, archive.Repository, effective!,
+                        archive.Store, archive.Repository, effective ?? new RetentionConfiguration(),
                         DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
                         runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                     keeps = convergence.Keeps;
@@ -498,6 +533,8 @@ public static class FanOut
                     runtime.Notices.Resolve(awaitsGrantKey, nowMs);
                 }
             }
+
+            var convergedAt = keeps is not null && !pushOnly ? deletion : null;
 
             // Samples are drawn from the pre-push listing under the set gate:
             // every key listed here is carried by the push that follows, so a
@@ -598,7 +635,8 @@ public static class FanOut
                 claimPublicKey,
                 OnInventory,
                 new ReplicationInitiator.ReceiptExpectation(
-                    grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()))
+                    grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()),
+                pushOnly)
                 .ConfigureAwait(false);
 
             // The receipt is dealt with before anything else is judged: the
@@ -682,7 +720,8 @@ public static class FanOut
                 // until one does.
                 ledger.RecordSuccess(
                     set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence,
-                    verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
+                    verified: ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
+                    convergedSequence: Converged(outcome, convergedAt));
                 return;
             }
 
@@ -695,7 +734,8 @@ public static class FanOut
             if (!contentSampleable)
             {
                 if (session.Supports(Protocol.PeerSessionNegotiation.RetrievalFeature)
-                    && await ReadBackAsync(runtime, set, destination, archive, outcome, nowMs, limiter, cancellationToken)
+                    && await ReadBackAsync(
+                            runtime, set, destination, archive, outcome, nowMs, limiter, cancellationToken, convergedAt)
                         .ConfigureAwait(false))
                 {
                     return;
@@ -717,7 +757,9 @@ public static class FanOut
 
             // Excused from proving (04 §1's acknowledged opt-out), or nothing
             // eligible to sample: the sync stands, unproven, and says so.
-            ledger.RecordSuccess(set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence);
+            ledger.RecordSuccess(
+                set.Id, destination.Name, outcome.Committed, nowMs, syncedSequence,
+                convergedSequence: Converged(outcome, convergedAt));
         }
         catch (Protocol.PeerProtocolException refusal)
             when (refusal.Reason == Protocol.PeerRefusalReason.StorageExhausted)
@@ -802,6 +844,23 @@ public static class FanOut
     /// to be able to say so.
     /// </remarks>
     private const string KeepsEverything = "keeps-all";
+
+    /// <summary>
+    /// Whether a person's deletion is pending in the set's archive
+    /// (FR-GC-013), and if so the archive's journal head now: the point a
+    /// converge that starts after this began at, which the ledger records so
+    /// the replication gate can tell a copy brought in line since the request
+    /// from one that was not. Null when nothing is requested.
+    /// </summary>
+    private static async ValueTask<ulong?> PendingDeletionAsync(ArchiveHandle archive, CancellationToken cancellationToken)
+    {
+        var requests = await Retention.SnapshotDeletion.ReadRequestsAsync(archive.Store, archive.Repository, cancellationToken)
+            .ConfigureAwait(false);
+        return requests.Count == 0
+            ? null
+            : await Retention.SnapshotDeletion.PublicationSequenceAsync(archive.Store, archive.Repository, cancellationToken)
+                .ConfigureAwait(false);
+    }
 
     private static async ValueTask<(ulong Sequence, string? NewestSnapshotKey)> StagingPublicationSequenceAsync(
         ArchiveHandle archive, CancellationToken cancellationToken)
@@ -1016,10 +1075,18 @@ public static class FanOut
             // deletes, only ConvergeAsync does, and no keeps means no
             // converge (and no spares, which only a keep-set needs).
             var keepFingerprint = KeepsEverything;
-            if (!rolledBack && Retention.DestinationConvergence.HasRules(effective))
+
+            // A person's deletion converges a destination with no rules too
+            // (FR-GC-013): its whole copy would otherwise keep the snapshot,
+            // and staging holds the snapshot until every copy has let it go.
+            // With no rule the keep-set is everything but what was requested.
+            // The journal head is read before the keep-set, so the converge
+            // recorded below began after every request it was computed from.
+            var deletion = rolledBack ? null : await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false);
+            if (!rolledBack && (Retention.DestinationConvergence.HasRules(effective) || deletion is not null))
             {
                 var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
-                    archive.Store, archive.Repository, effective!,
+                    archive.Store, archive.Repository, effective ?? new RetentionConfiguration(),
                     DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
                     runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                 keeps = convergence.Keeps;
@@ -1027,6 +1094,8 @@ public static class FanOut
                 ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
                 ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
             }
+
+            var convergedAt = keeps is not null ? deletion : null;
 
             // What this pass has to do, decided before it reads anything
             // (ADR-0056). A pair the last pass left level, with nothing
@@ -1218,13 +1287,14 @@ public static class FanOut
                 ledger.RecordSuccess(
                     set.Id, destination.Name, copied, nowMs, syncedSequence,
                     keepFingerprint, reconciled, newestSnapshot,
-                    ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor));
+                    ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
+                    convergedAt);
                 return;
             }
 
             ledger.RecordSuccess(
                 set.Id, destination.Name, copied, nowMs, syncedSequence,
-                keepFingerprint, reconciled, newestSnapshot);
+                keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -1667,6 +1737,96 @@ public static class FanOut
         ThrowHelper.ThrowIfNull(archive);
         ThrowHelper.ThrowIfNull(reclaim);
 
+        // A peer with no rules converges too while a person's deletion is
+        // pending, or its whole copy keeps the snapshot (FR-GC-013).
+        var deletionPending = await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false) is not null;
+
+        var lines = new List<string>();
+        foreach (var reference in set.Destinations)
+        {
+            var destination = runtime.Configuration.FindDestination(reference.Ref);
+            if (destination is not { Kind: DestinationKind.Peer })
+            {
+                continue;
+            }
+
+            if (!deletionPending && !Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
+            {
+                continue;
+            }
+
+            lines.Add(await ConvergePeerAsync(runtime, set, destination, archive, reclaim, nowMs, cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// Brings every destination of a set in line with a person's deletion
+    /// (FR-GC-013), under the grant of the run that asked: a local path by the
+    /// converging copy a sync makes, a peer by an instruction signed under the
+    /// grant and answered with a deletion receipt. The caller holds the set
+    /// gate, as a retention run does. Returns one line per destination.
+    /// </summary>
+    /// <remarks>
+    /// A destination that cannot be reached is recorded so in the ledger, as
+    /// a sync would record it, and the deletion stays held for it. Nothing
+    /// else is needed to finish it later: the next sync that reaches it
+    /// converges it, and the next pass that finds every copy converged lets
+    /// the snapshot go.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose destinations converge.</param>
+    /// <param name="archive">The set's open archive.</param>
+    /// <param name="reclaim">The run's reclaim authority.</param>
+    /// <param name="nowMs">The clock, in Unix milliseconds.</param>
+    /// <param name="cancellationToken">Cancels the convergence.</param>
+    /// <returns>What happened at each destination, from the sync ledger.</returns>
+    public static async ValueTask<IReadOnlyList<string>> ConvergeForDeletionAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive,
+        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(runtime);
+        ThrowHelper.ThrowIfNull(set);
+        ThrowHelper.ThrowIfNull(archive);
+        ThrowHelper.ThrowIfNull(reclaim);
+
+        var lines = new List<string>();
+        foreach (var reference in set.Destinations)
+        {
+            switch (runtime.Configuration.FindDestination(reference.Ref))
+            {
+                case { Kind: DestinationKind.LocalPath } local:
+                    // A person is waiting, so the copy is not paced.
+                    await CopyToLocalPathAsync(
+                            runtime, set, local, archive, nowMs, limiter: null, userInitiated: true, cancellationToken)
+                        .ConfigureAwait(false);
+                    var row = runtime.DestinationSync.Find(set.Id, local.Name);
+                    lines.Add(row is { State: DestinationSyncState.InSync }
+                        ? $"destination '{local.Name}' converged"
+                        : $"destination '{local.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}");
+                    break;
+
+                case { Kind: DestinationKind.Peer } peer:
+                    lines.Add(await ConvergePeerAsync(runtime, set, peer, archive, reclaim, nowMs, cancellationToken)
+                        .ConfigureAwait(false));
+                    break;
+
+                default:
+                    // Undeclared, or a kind this build does not serve: nothing
+                    // was ever written there to remove.
+                    break;
+            }
+        }
+
+        return lines;
+    }
+
+    private static async ValueTask<string> ConvergePeerAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination, ArchiveHandle archive,
+        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken)
+    {
         byte[] Sign(byte[] signed)
         {
             var generation = archive.Repository.CurrentMetadataGeneration;
@@ -1682,31 +1842,14 @@ public static class FanOut
             }
         }
 
-        var lines = new List<string>();
-        foreach (var reference in set.Destinations)
-        {
-            var destination = runtime.Configuration.FindDestination(reference.Ref);
-            if (destination is not { Kind: DestinationKind.Peer })
-            {
-                continue;
-            }
+        var receipt = new ReceiptFate();
+        await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt)
+            .ConfigureAwait(false);
 
-            if (!Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
-            {
-                continue;
-            }
-
-            var receipt = new ReceiptFate();
-            await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt)
-                .ConfigureAwait(false);
-
-            var row = runtime.DestinationSync.Find(set.Id, destination.Name);
-            lines.Add(row is { State: DestinationSyncState.InSync }
-                ? $"peer '{destination.Name}' converged under the grant: {receipt}"
-                : $"peer '{destination.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}");
-        }
-
-        return lines;
+        var row = runtime.DestinationSync.Find(set.Id, destination.Name);
+        return row is { State: DestinationSyncState.InSync }
+            ? $"peer '{destination.Name}' converged under the grant: {receipt}"
+            : $"peer '{destination.Name}' did not converge: {row?.LastError ?? row?.State.ToString() ?? "no ledger row"}";
     }
 
     private static void ReportConvergence(

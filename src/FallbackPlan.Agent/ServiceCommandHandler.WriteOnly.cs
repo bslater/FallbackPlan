@@ -143,31 +143,50 @@ public sealed partial class ServiceCommandHandler
     /// dangerous half's credential.
     /// </para>
     /// </remarks>
-    private async ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, bool Unnamed, ServiceError? Refusal)>
+    private ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, bool Unnamed, ServiceError? Refusal)>
         OpenReclaimGrantAsync(
             Application.BackupSetConfiguration set,
             ArchiveHandle archive,
             RetentionCommand command,
+            CancellationToken cancellationToken) =>
+        OpenReclaimGrantAsync(
+            set, archive, command.Apply, command.ReclaimGrant, command.ReclaimGrants, "applying retention",
+            cancellationToken);
+
+    /// <summary>
+    /// <see cref="OpenReclaimGrantAsync(Application.BackupSetConfiguration, ArchiveHandle, RetentionCommand, CancellationToken)"/>
+    /// for any command that authors deletions: the grant in the map for the
+    /// set, else the single one, proved before it authors anything. The
+    /// refusal for want of one names what the command was doing.
+    /// </summary>
+    private async ValueTask<(Repository.Crypto.ReclaimAuthority? Grant, bool Unnamed, ServiceError? Refusal)>
+        OpenReclaimGrantAsync(
+            Application.BackupSetConfiguration set,
+            ArchiveHandle archive,
+            bool apply,
+            string? reclaimGrant,
+            IReadOnlyDictionary<string, string>? reclaimGrants,
+            string what,
             CancellationToken cancellationToken)
     {
         var declares = archive.Repository.Descriptor.RequiredFeatures.Contains(
             Repository.Format.Descriptor.RepositoryDescriptorCodec.FeatureReclaimAuthority);
 
-        if (!declares || !command.Apply)
+        if (!declares || !apply)
         {
             return (null, false, null);
         }
 
-        var envelopeHex = command.ReclaimGrants?.GetValueOrDefault(set.Id) is { Length: > 0 } own
+        var envelopeHex = reclaimGrants?.GetValueOrDefault(set.Id) is { Length: > 0 } own
             ? own
-            : command.ReclaimGrant;
+            : reclaimGrant;
         if (envelopeHex is null or { Length: 0 })
         {
-            return command.ReclaimGrants is not null
+            return reclaimGrants is not null
                 ? (null, true, null)
                 : (null, false, new ServiceError(
                     ServiceErrorReason.Refused,
-                    $"Set '{set.Name}': applying retention needs a reclaim grant: this service "
+                    $"Set '{set.Name}': {what} needs a reclaim grant: this service "
                     + "holds the key that publishes and not the key that authorises a deletion (ADR-0055). "
                     + "Derive the grant from the passphrase, seal it to this service's recipient key, and send it "
                     + "with the command."));
