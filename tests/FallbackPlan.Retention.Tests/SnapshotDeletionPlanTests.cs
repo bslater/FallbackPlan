@@ -260,6 +260,52 @@ public sealed class SnapshotDeletionPlanTests
         Assert.IsFalse(Assert.ContainsSingle(result.Held).DeletionPending);
     }
 
+    [TestMethod]
+    public void WouldLeaveNothing_TheLastCompleteSnapshot_IsGuardedWhilePartialOnesRemain()
+    {
+        // A partial capture is a real backup but cannot stand in for a whole
+        // one, as the floor says (architecture 07 §2).
+        var complete = Published(1, Now.AddDays(-3));
+        var partial = Published(2, Now.AddDays(-2)) with { CaptureStatus = 2 };
+
+        Assert.IsTrue(SnapshotDeletion.WouldLeaveNothing([complete, partial], [complete.SnapshotId]));
+        Assert.IsFalse(SnapshotDeletion.WouldLeaveNothing([complete, partial], [partial.SnapshotId]));
+    }
+
+    [TestMethod]
+    public void WouldLeaveNothing_ASetWithNoCompleteSnapshot_KeepsItsLastOne()
+    {
+        // A source that always has a file it cannot read makes every capture
+        // partial. Counting only complete snapshots would guard none of them.
+        var first = Published(1, Now.AddDays(-3)) with { CaptureStatus = 2 };
+        var second = Published(2, Now.AddDays(-2)) with { CaptureStatus = 2 };
+
+        Assert.IsTrue(SnapshotDeletion.WouldLeaveNothing([first, second], [first.SnapshotId, second.SnapshotId]));
+        Assert.IsFalse(SnapshotDeletion.WouldLeaveNothing([first, second], [first.SnapshotId]));
+    }
+
+    [TestMethod]
+    public void WouldLeaveNothing_ASnapshotAlreadyRequested_CountsAsGone()
+    {
+        var first = Published(1, Now.AddDays(-3));
+        var second = Published(2, Now.AddDays(-2));
+        var partial = Published(3, Now.AddDays(-1)) with { CaptureStatus = 2, DeletionRequest = 12 };
+
+        Assert.IsTrue(SnapshotDeletion.WouldLeaveNothing(
+            [first with { DeletionRequest = 12 }, second, partial], [second.SnapshotId]));
+        Assert.IsFalse(SnapshotDeletion.WouldLeaveNothing([first, second, partial], [second.SnapshotId]));
+    }
+
+    [TestMethod]
+    public void WouldLeaveNothing_IdsAreMatchedWhateverTheirCase()
+    {
+        // The command matches the ids a person typed without regard to case,
+        // so the guard must too, or an upper-case id would slip past it.
+        var only = Published(1, Now.AddDays(-1)) with { SnapshotId = "5ac0ffee" };
+
+        Assert.IsTrue(SnapshotDeletion.WouldLeaveNothing([only], ["5AC0FFEE"]));
+    }
+
     private static DestinationSyncRecord Converged(ulong convergedSequence) => new()
     {
         SetId = new string('a', 32),

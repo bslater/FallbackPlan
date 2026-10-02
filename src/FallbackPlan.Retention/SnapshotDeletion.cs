@@ -54,6 +54,34 @@ public sealed record SnapshotDeletionRequest(ulong Generation, ulong AuditSequen
 public static class SnapshotDeletion
 {
     /// <summary>
+    /// Whether deleting <paramref name="named"/> would leave the set nothing
+    /// to restore from: no complete snapshot, when it has one, or no snapshot
+    /// at all, when none of its snapshots is complete. A snapshot whose
+    /// deletion is already requested counts as gone.
+    /// </summary>
+    /// <remarks>
+    /// The one rule a person's deletion does not override (ADR-0080 §1). A
+    /// partial capture cannot stand in for a complete one, as the floor's rule
+    /// says, so a set that has a complete snapshot keeps one. A set whose every
+    /// capture is partial, from a source that always holds a file it cannot
+    /// read, has none to keep, and keeps its last snapshot of any kind instead.
+    /// </remarks>
+    /// <param name="snapshots">Every snapshot the set's archive holds, as the survey found them.</param>
+    /// <param name="named">The ids asked for, in any case.</param>
+    /// <returns>True when the request must be refused.</returns>
+    public static bool WouldLeaveNothing(IReadOnlyList<SnapshotFact> snapshots, IReadOnlyCollection<string> named)
+    {
+        ThrowHelper.ThrowIfNull(snapshots);
+        ThrowHelper.ThrowIfNull(named);
+
+        var asked = new HashSet<string>(named, StringComparer.OrdinalIgnoreCase);
+        var standing = snapshots.Where(snapshot => snapshot.DeletionRequest is null).ToList();
+        var complete = standing.Where(snapshot => snapshot.IsComplete).ToList();
+        var guarded = complete.Count > 0 ? complete : standing;
+        return guarded.Count > 0 && guarded.All(snapshot => asked.Contains(snapshot.SnapshotId));
+    }
+
+    /// <summary>
     /// Requests the deletion of <paramref name="snapshots"/>: one
     /// <c>requested</c> tombstone each, replacing any tombstone already at the
     /// snapshot's key, then the audit record. Writes nothing for a snapshot

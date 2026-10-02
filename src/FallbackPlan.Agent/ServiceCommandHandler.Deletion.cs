@@ -80,16 +80,15 @@ public sealed partial class ServiceCommandHandler
                 $"Set '{set.Name}' holds no snapshot {string.Join(", ", unknown)}, so nothing was requested.");
         }
 
-        // The one rule a person cannot override: a set keeps a complete
-        // snapshot to restore from. A request already standing counts as gone.
-        var standing = survey.Snapshots
-            .Where(snapshot => snapshot.Fact.IsComplete && snapshot.Fact.DeletionRequest is null)
-            .ToList();
-        if (standing.Count > 0 && standing.All(named.Contains))
+        // The one rule a person cannot override: a set keeps something to
+        // restore from. A request already standing counts as gone.
+        var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
+        if (SnapshotDeletion.WouldLeaveNothing(facts, [.. named.Select(snapshot => snapshot.Fact.SnapshotId)]))
         {
+            var kind = facts.Any(fact => fact.IsComplete && fact.DeletionRequest is null) ? "complete snapshot" : "snapshot";
             return new ServiceError(
                 ServiceErrorReason.Refused,
-                $"Set '{set.Name}': that would leave the set no complete snapshot to restore from, so nothing was "
+                $"Set '{set.Name}': that would leave the set no {kind} to restore from, so nothing was "
                 + "requested. A set keeps at least one; delete the others, or take a new backup first.");
         }
 
