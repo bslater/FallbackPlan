@@ -2445,8 +2445,8 @@ public sealed partial class ServiceCommandHandler(
                     requests.TryGetValue(row.ObjectId, out var requested)
                         ? [.. set.Destinations
                             .Select(reference => reference.Ref)
-                            .Where(name => runtime.DestinationSync.Find(set.Id, name) is { } ledgerRow
-                                && ledgerRow.ConvergedSequence < requested)]
+                            .Where(name =>
+                                (runtime.DestinationSync.Find(set.Id, name)?.ConvergedSequence ?? 0) < requested)]
                         : null));
             }
         }

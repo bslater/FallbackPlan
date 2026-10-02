@@ -254,15 +254,14 @@ public sealed partial class ServiceCommandHandler
 
     /// <summary>
     /// The destinations a deletion of <paramref name="snapshot"/> waits on:
-    /// every one with a ledger row that has not converged since the request,
-    /// or, with no request yet, every one with a ledger row at all, because
-    /// each has been written to and may hold it.
+    /// every declared one that has not converged since the request, or, with
+    /// no request yet, every declared one, as the replication gate holds it.
     /// </summary>
     private List<string> HoldersOf(Application.BackupSetConfiguration set, SnapshotFact snapshot) =>
         [.. set.Destinations
             .Select(reference => reference.Ref)
-            .Where(name => runtime.DestinationSync.Find(set.Id, name) is { } row
-                && (snapshot.DeletionRequest is not { } requested || row.ConvergedSequence < requested))];
+            .Where(name => snapshot.DeletionRequest is not { } requested
+                || (runtime.DestinationSync.Find(set.Id, name)?.ConvergedSequence ?? 0) < requested)];
 
     private static string Short(SurveyedSnapshot snapshot) => $"{snapshot.Fact.SnapshotId[..12]}…";
 }

@@ -646,6 +646,11 @@ public sealed class ClientModeTests : IDisposable
         await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
 
+        // The set's vault is plugged in. One that no copy has reached would
+        // hold the deletion until it is (ADR-0080), which is the service's
+        // concern and pinned there; this test is about the route.
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
         await using var runtime = await StartServiceAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);

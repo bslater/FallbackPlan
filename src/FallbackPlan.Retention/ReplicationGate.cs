@@ -67,13 +67,15 @@ public static class ReplicationGate
     /// <remarks>
     /// A snapshot a person asked to delete (FR-GC-013) is held on a different
     /// question: not whether a destination has it, but whether one could
-    /// still. Every destination with a ledger row has been written to, and
-    /// one whose last converge began before the request may hold the
-    /// snapshot, or part of it from a pass that was cut short. Only a
-    /// converge that runs while staging still lists those keys removes them
-    /// (ADR-0034 §6), so staging keeps the snapshot until each has run one.
-    /// A destination's own policy does not excuse it, and there is no
-    /// deferral bound: a copy left behind would be kept for ever.
+    /// still. Any declared destination whose last converge began before the
+    /// request may hold the snapshot, or part of it from a pass that was cut
+    /// short, and so may one the ledger has no row for: a renamed destination
+    /// starts a new row, and a ledger that could not be read starts empty,
+    /// while the copy itself is untouched. Only a converge that runs while
+    /// staging still lists those keys removes them (ADR-0034 §6), so staging
+    /// keeps the snapshot until each has run one. A destination's own policy
+    /// does not excuse it, and there is no deferral bound: a copy left behind
+    /// would be kept for ever.
     /// </remarks>
     /// <param name="expire">What the set's policy no longer protects.</param>
     /// <param name="destinations">The set's declared destination names.</param>
@@ -105,7 +107,7 @@ public static class ReplicationGate
             if (snapshot.DeletionRequest is { } requested)
             {
                 var unconverged = destinations
-                    .Where(name => records[name] is { } record && record.ConvergedSequence < requested)
+                    .Where(name => (records[name]?.ConvergedSequence ?? 0) < requested)
                     .ToList();
                 if (unconverged.Count == 0)
                 {

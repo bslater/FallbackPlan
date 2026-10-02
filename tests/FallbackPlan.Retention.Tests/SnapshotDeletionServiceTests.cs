@@ -33,6 +33,7 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
     private string StateDirectory => Path.Combine(_root, "state");
     private string SourceRoot => Path.Combine(_root, "source");
     private string VaultPath => Path.Combine(_root, "vault");
+    private string SparePath => Path.Combine(_root, "spare");
 
     public SnapshotDeletionServiceTests()
     {
@@ -143,6 +144,35 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
         Assert.HasCount(2, await ListAsync(Vault, "snapshots/"));
         Assert.ContainsSingle((await JournalAsync()).Where(record =>
             record.Payload is JournalPayload.Audit { Action: AuditAction.BulkSnapshotDeletion }));
+    }
+
+    [TestMethod]
+    public async Task Apply_ADestinationNoCopyHasReached_HoldsTheDeletionLikeAnyOther()
+    {
+        // A drive declared and never once plugged in. Its ledger row says only
+        // that it was tried, and the ledger cannot vouch for what a drive
+        // holds: a renamed destination starts a new row, and a ledger that
+        // could not be read starts empty. So it holds the deletion, named, while
+        // the copy that was reached lets the snapshot go.
+        var snapshots = await BackUpThreeAsync();
+        WriteConfiguration(retention: null, withSpare: true);
+
+        var held = await DeleteAsync([snapshots[1]], apply: true);
+
+        var outcome = Assert.ContainsSingle(held.Snapshots);
+        Assert.AreEqual("pending", outcome.State);
+        Assert.AreEqual("spare", Assert.ContainsSingle(outcome.Awaiting));
+        Assert.HasCount(3, await ListAsync(Staging, "snapshots/"));
+        Assert.HasCount(2, await ListAsync(Vault, "snapshots/"));
+
+        // Plugged in at last, it converges, and asking again finishes it.
+        Directory.CreateDirectory(SparePath);
+        var finished = await DeleteAsync([snapshots[1]], apply: true);
+
+        Assert.AreEqual("deleted", Assert.ContainsSingle(finished.Snapshots).State);
+        Assert.HasCount(2, await ListAsync(Staging, "snapshots/"));
+        Assert.DoesNotContain(
+            snapshots[1], (await ListSnapshotsAsync()).Select(snapshot => snapshot.SnapshotId).ToList());
     }
 
     [TestMethod]
@@ -284,7 +314,7 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
         return records;
     }
 
-    private void WriteConfiguration(RetentionConfiguration? retention) => new ClientConfiguration
+    private void WriteConfiguration(RetentionConfiguration? retention, bool withSpare = false) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -292,6 +322,10 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
             new DestinationConfiguration
             {
                 Id = new string('1', 32), Name = "vault", Kind = DestinationKind.LocalPath, Path = VaultPath,
+            },
+            new DestinationConfiguration
+            {
+                Id = new string('2', 32), Name = "spare", Kind = DestinationKind.LocalPath, Path = SparePath,
             },
         ],
         BackupSets =
@@ -303,7 +337,9 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
                 Roots = [new BackupRootConfiguration { Path = SourceRoot }],
                 Schedule = "every 4h",
                 Retention = retention,
-                Destinations = [new SetDestinationReference { Ref = "vault" }],
+                Destinations = withSpare
+                    ? [new SetDestinationReference { Ref = "vault" }, new SetDestinationReference { Ref = "spare" }]
+                    : [new SetDestinationReference { Ref = "vault" }],
             },
         ],
     }.Save(Path.Combine(StateDirectory, "config.json"));

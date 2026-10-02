@@ -17,13 +17,14 @@ namespace FallbackPlan.Retention.Tests;
 /// place and represents no bucket, because it is going.
 /// </para>
 /// <para>
-/// The gate holds a requested snapshot while any destination of the set that
-/// has ever been synced, or tried, has not converged since the request. That
-/// includes one that never received it: a pass cut short may have left part of
-/// it there, and only a converge that runs while staging still lists those
-/// keys can remove them (ADR-0034 §6, "unknown is kept"). A destination's own
-/// policy does not excuse it, and the hold has no deferral bound, because
-/// letting go early would leave a copy nothing will ever remove.
+/// The gate holds a requested snapshot while any declared destination of the
+/// set has not converged since the request. That includes one that never
+/// received it, since a pass cut short may have left part of it there, and one
+/// the ledger has no row for, since a missing row is not a missing copy. Only a
+/// converge that runs while staging still lists those keys can remove them
+/// (ADR-0034 §6, "unknown is kept"). A destination's own policy does not excuse
+/// it, and the hold has no deferral bound, because letting go early would
+/// leave a copy nothing will ever remove.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -175,18 +176,23 @@ public sealed class SnapshotDeletionPlanTests
     }
 
     [TestMethod]
-    public void Apply_ARequestedSnapshot_IsNotHeldForADestinationNeverAttempted()
+    public void Apply_ARequestedSnapshot_IsHeldForADestinationTheLedgerHasNoRowFor()
     {
-        // A destination with no ledger row has never been written to, so it
-        // holds nothing of the snapshot to remove.
+        // No row is not proof of no copy. A destination renamed starts a new
+        // row under its new name, and a ledger that could not be read starts
+        // empty, while the drive itself still holds what it was given. Only a
+        // converge since the request says it has let the snapshot go.
         var requested = Published(5, Now.AddDays(-2)) with { DeletionRequest = 12 };
 
         var result = ReplicationGate.Apply(
-            [requested], ["vault", "new-drive"],
+            [requested], ["vault", "renamed-drive"],
             name => name == "vault" ? Converged(12) : null,
             deferralDays: null, NowMs);
 
-        Assert.AreEqual(requested, Assert.ContainsSingle(result.Expirable));
+        Assert.IsEmpty(result.Expirable);
+        var held = Assert.ContainsSingle(result.Held);
+        Assert.IsTrue(held.DeletionPending);
+        Assert.AreEqual("renamed-drive", Assert.ContainsSingle(held.AwaitingDestinations));
     }
 
     [TestMethod]
