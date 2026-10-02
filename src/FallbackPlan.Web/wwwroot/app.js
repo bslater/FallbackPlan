@@ -969,6 +969,22 @@ function implausibleCaptureTime(direction) {
   return `<div class="detail"><b class="warn">${esc(text)}</b></div>`;
 }
 
+// Each deletion dialog's own number, so a dry run that answers late can tell
+// whether the dialog it was asked for is still the one showing.
+let deletionDialogs = 0;
+
+// A deletion a person asked for that is still waiting on copies (FR-GC-013,
+// contract 1.51): the snapshot stays in staging until every copy has let it
+// go, so the row says which it is waiting on. Nothing is drawn for a snapshot
+// nobody asked to delete, or from a service older than 1.51.
+function deletionPending(awaiting) {
+  if (awaiting == null) return "";
+  const text = awaiting.length
+    ? `deletion pending — waiting on ${awaiting.join(", ")}`
+    : "deletion pending — every copy has let it go; delete it again to finish";
+  return `<div class="detail"><b class="warn">${esc(text)}</b></div>`;
+}
+
 function renderSnapshots() {
   const el = document.getElementById("view-snapshots");
   // One timeline, newest first across every set. list_snapshots gives each
@@ -995,7 +1011,8 @@ function renderSnapshots() {
           <tbody>${snapshots.map(s => `
             <tr>
               <td><b>${esc(fmtWhen(s.capturedAt))}</b><div class="detail mono">${esc(s.snapshotId.slice(0, 16))}…</div>
-                  ${implausibleCaptureTime(s.implausibleCaptureTime)}</td>
+                  ${implausibleCaptureTime(s.implausibleCaptureTime)}
+                  ${deletionPending(s.deletionPending)}</td>
               <td>${esc(setName(s.backupSetId))}</td>
               <td class="num">${fmtCount(s.files)}</td>
               <td>${s.captureStatus === 1 ? badge({ cls: "ok", icon: "✔" }, "complete") : badge({ cls: "warn", icon: "◐" }, "partial")}
@@ -1005,6 +1022,7 @@ function renderSnapshots() {
               <td>
                 <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}">Browse</button>
                 <button type="button" class="btn small" data-action="restore" data-snapshot="${esc(s.snapshotId)}" data-path="">Restore…</button>
+                <button type="button" class="btn small danger" data-action="delete-snapshot" data-snapshot="${esc(s.snapshotId)}" data-set="${esc(s.backupSetId)}">Delete…</button>
               </td>
             </tr>`).join("")}</tbody>
         </table></div></div>`}`;
@@ -2444,6 +2462,106 @@ const actions = {
       // typed again without opening the dialog afresh.
       const said = document.getElementById("retention-said");
       if (said) said.innerHTML = `<ul class="warnings"><li>${esc(body?.detail ?? "Retention refused.")}</li></ul>`;
+    });
+  },
+
+  // A person deletes one snapshot (FR-GC-013, ADR-0080). The dialog opens on
+  // the dry run, which needs no passphrase and says which copies hold the
+  // snapshot, or why it cannot go; only then does it ask for the word and
+  // the passphrase. The passphrase goes to this console's own endpoint, which
+  // derives the set's grant and sends the service only the sealed envelope.
+  async "delete-snapshot"(el) {
+    const snapshotId = el.dataset.snapshot;
+    const setId = el.dataset.set;
+    const snapshot = S.snapshots.find(s => s.snapshotId === snapshotId);
+    const which = `${snapshot ? esc(fmtWhen(snapshot.capturedAt)) + " of " : ""}<b>${esc(setName(setId))}</b>`;
+    const asking = `delete-asking-${++deletionDialogs}`;
+    openDialog(`
+      <h3>Delete snapshot</h3>
+      <p class="dlg-sub" id="${asking}">Asking the service what deleting the snapshot ${which} would do…</p>
+      <div class="dlg-actions"><button type="button" class="btn" data-action="close-dialog">Cancel</button></div>`);
+
+    let preview = null;
+    let refusal = null;
+    try {
+      const result = await api({ command: "delete_snapshots", setId, snapshotIds: [snapshotId], apply: false });
+      if (result.result === "snapshots_deleted") preview = result;
+      else refusal = result.message ?? "the service answered unexpectedly";
+    } catch (error) {
+      refusal = error.message;
+    }
+
+    // The answer belongs to this dialog only while it is still the one open:
+    // not after Cancel, and not over a dialog opened since for something else.
+    if (!document.getElementById(asking)) return;
+    if (refusal !== null) {
+      openDialog(`
+        <h3>Delete snapshot</h3>
+        <p class="dlg-sub">The snapshot ${which} cannot be deleted.</p>
+        <ul class="warnings"><li>${esc(refusal)}</li></ul>
+        <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`);
+      return;
+    }
+
+    openDialog(`
+      <h3>Delete snapshot</h3>
+      <p class="dlg-sub">This deletes the snapshot ${which} from staging and from every copy that holds it, and
+      cannot be undone. Files another snapshot also holds stay. A copy that cannot be reached holds the deletion
+      until it can, and deleting the snapshot again then finishes it.</p>
+      <pre class="report">${esc((preview.lines ?? []).join("\n") || "(nothing to report)")}</pre>
+      <p class="dlg-sub">The service can add to your backups but cannot delete from them on its own.
+      The passphrase gives it that authority for this deletion. It is used in this console and is never
+      sent to the service.</p>
+      <label class="field" for="delete-passphrase">Passphrase</label>
+      <input type="password" id="delete-passphrase" autocomplete="current-password" data-arms="confirm-word">
+      <div id="delete-said"></div>
+      <label class="field" for="confirm-word">Type <b>delete</b> to confirm</label>
+      <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
+             data-action-input="confirm-word" data-word="delete" data-enables="delete-snapshot-go"
+             data-needs="delete-passphrase">
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn danger" id="delete-snapshot-go" data-action="delete-snapshot-go"
+                data-snapshot="${esc(snapshotId)}" data-set="${esc(setId)}" disabled>Delete snapshot</button>
+      </div>`);
+    document.getElementById("delete-passphrase").focus();
+  },
+
+  async "delete-snapshot-go"(el) {
+    const passphrase = document.getElementById("delete-passphrase")?.value ?? "";
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
+    await withBusy(el, async () => {
+      let response;
+      try {
+        response = await fetch("/api/delete-snapshots", {
+          method: "POST",
+          headers: session
+            ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+            : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ setId: el.dataset.set, snapshotIds: [el.dataset.snapshot], passphrase }),
+        });
+      } catch {
+        toast("warn", "The console process stopped answering.");
+        return;
+      }
+      const body = await safeJson(response);
+      if (!response.ok) { toast("bad", body?.message ?? "The deletion was refused."); return; }
+      if (body?.outcome === "applied") {
+        const outcome = body.snapshots?.[0];
+        const awaiting = outcome?.awaiting ?? [];
+        if (outcome?.state === "deleted") {
+          reportDialog("Snapshot deleted", body.lines ?? [], "Gone from staging and from every copy.");
+        } else {
+          reportDialog("Deletion pending", body.lines ?? [], awaiting.length
+            ? `Requested, and waiting on ${awaiting.join(", ")}: the snapshot stays in staging until each has let it go. Delete it again once they can be reached to finish.`
+            : "Requested. Delete it again to finish.");
+        }
+        refreshStatus(); refreshSnapshots();
+        return;
+      }
+      // Beside the field it is about, as retention's is.
+      const said = document.getElementById("delete-said");
+      if (said) said.innerHTML = `<ul class="warnings"><li>${esc(body?.detail ?? "The deletion was refused.")}</li></ul>`;
     });
   },
 

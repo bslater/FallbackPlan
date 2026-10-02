@@ -207,6 +207,8 @@ public static class WebConsoleHost
             TimedAsync(context, log, "/api/adopt-archive", () => AdoptArchiveAsync(context, clients, auth)));
         app.MapPost("/api/retention-apply", (HttpContext context) =>
             TimedAsync(context, log, "/api/retention-apply", () => RetentionApplyAsync(context, clients, auth)));
+        app.MapPost("/api/delete-snapshots", (HttpContext context) =>
+            TimedAsync(context, log, "/api/delete-snapshots", () => DeleteSnapshotsAsync(context, clients, auth)));
         app.MapPost("/api/setup", (HttpContext context) =>
             TimedAsync(context, log, "/api/setup", () => SetupAsync(context, clients, auth, log)));
         app.MapPost("/api/passphrase-strength", (HttpContext context) =>
@@ -815,6 +817,142 @@ public static class WebConsoleHost
                 RetentionResult report => new RetentionApplyResponse("applied", Lines: report.Lines),
                 ServiceError refusal => new RetentionApplyResponse("refused", refusal.Message),
                 _ => new RetentionApplyResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What the snapshot-deletion endpoint reads from the page.</summary>
+    /// <param name="SetId">The set the snapshots belong to.</param>
+    /// <param name="SnapshotIds">The snapshots to delete, as the listing names them.</param>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0055 §6).</param>
+    private sealed record DeleteSnapshotsRequest(string? SetId, IReadOnlyList<string>? SnapshotIds, string? Passphrase);
+
+    /// <summary>The snapshot-deletion endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>applied</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not applied.</param>
+    /// <param name="Snapshots">Where each snapshot's deletion stands, when applied.</param>
+    /// <param name="Lines">The service's report, when applied.</param>
+    private sealed record DeleteSnapshotsResponse(
+        string Outcome,
+        string? Detail = null,
+        IReadOnlyList<SnapshotDeletionOutcome>? Snapshots = null,
+        IReadOnlyList<string>? Lines = null);
+
+    /// <summary>
+    /// Deletes snapshots a person confirmed
+    /// ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)):
+    /// as with an applied retention pass, the grant is derived here, where the
+    /// passphrase was typed, and only the sealed envelope for the one set
+    /// reaches the service. A passphrase that does not open that set is
+    /// answered here and the service is sent nothing.
+    /// </summary>
+    /// <remarks>
+    /// The browser's session is resumed first, so the journal records the
+    /// deletion as the person's who confirmed it (ADR-0045). The dry run the
+    /// dialog shows first needs no passphrase and goes through the command
+    /// relay, so this endpoint only ever applies.
+    /// </remarks>
+    private static async Task DeleteSnapshotsAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        DeleteSnapshotsRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<DeleteSnapshotsRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { SetId.Length: > 0, SnapshotIds.Count: > 0, Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a set, at least one snapshot and the passphrase are required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(DeleteSnapshotsResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                && await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false) is ServiceError { Reason: ServiceErrorReason.Refused } dead)
+            {
+                await AnswerAsync(new DeleteSnapshotsResponse("refused", dead.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult description)
+            {
+                await AnswerAsync(new DeleteSnapshotsResponse(
+                    "unavailable", "The service did not describe itself.")).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not BackupSetsResult sets)
+            {
+                await AnswerAsync(new DeleteSnapshotsResponse(
+                    "unavailable", "The service did not list its backup sets.")).ConfigureAwait(false);
+                return;
+            }
+
+            if (sets.Sets.FirstOrDefault(set =>
+                    string.Equals(set.Id, request.SetId, StringComparison.OrdinalIgnoreCase)) is not { } target)
+            {
+                await AnswerAsync(new DeleteSnapshotsResponse(
+                    "unavailable", $"No backup set '{request.SetId}' is configured.")).ConfigureAwait(false);
+                return;
+            }
+
+            // Only the one set's derivation runs: a deletion needs that set's
+            // grant and no other, and each further salt is another Argon2id run.
+            var minted = ConsoleRestoreGate.BuildReclaimGrants(description, [target], request.Passphrase);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified
+                || minted.Grants?.GetValueOrDefault(target.Id) is not { } grant)
+            {
+                await AnswerAsync(new DeleteSnapshotsResponse(
+                    minted.Outcome == ConsoleRestoreGate.GateOutcome.Unavailable ? "unavailable" : "wrong",
+                    minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new DeleteSnapshotsCommand(target.Id, request.SnapshotIds, Apply: true, ReclaimGrant: grant),
+                context.RequestAborted).ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                DeleteSnapshotsResult report => new DeleteSnapshotsResponse(
+                    "applied", Snapshots: report.Snapshots, Lines: report.Lines),
+                ServiceError refusal => new DeleteSnapshotsResponse("refused", refusal.Message),
+                _ => new DeleteSnapshotsResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
             }).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)

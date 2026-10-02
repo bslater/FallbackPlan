@@ -47,7 +47,7 @@ public sealed class SnapshotDeletionCeremonyTests
             using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             Assert.AreEqual("applied", body.RootElement.GetProperty("outcome").GetString());
             var outcome = body.RootElement.GetProperty("snapshots")[0];
-            Assert.AreEqual(Snapshot, outcome.GetProperty("snapshot_id").GetString());
+            Assert.AreEqual(Snapshot, outcome.GetProperty("snapshotId").GetString());
             Assert.AreEqual("pending", outcome.GetProperty("state").GetString());
             Assert.AreEqual("usb", outcome.GetProperty("awaiting")[0].GetString());
         }
@@ -171,8 +171,8 @@ public sealed class SnapshotDeletionCeremonyTests
             Content = new StringContent(
                 JsonSerializer.Serialize(new Dictionary<string, object>
                 {
-                    ["set_id"] = setId,
-                    ["snapshot_ids"] = new[] { Snapshot },
+                    ["setId"] = setId,
+                    ["snapshotIds"] = new[] { Snapshot },
                     ["passphrase"] = passphrase,
                 }),
                 System.Text.Encoding.UTF8,
