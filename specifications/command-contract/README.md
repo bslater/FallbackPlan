@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.49
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.50
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.49 — 60 commands. One line each; parameters, results
+The register as of 1.50 — 60 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
