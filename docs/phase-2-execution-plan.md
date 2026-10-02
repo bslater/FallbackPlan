@@ -424,9 +424,14 @@ reports rotted citations). What both reviews deliberately left is below.
     `Replace` and `Fail` pinned, the receipt JSON pinned byte-for-byte by a
     golden fixture (schema v3), and NFR-PERF-009 measured honestly — which
     produced item 13 below rather than a pass.
-12. **Sparse restore** — [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes):
-    a maintainer decision between implementing sparse write-out and amending
-    FR-ARCH-013. Blocks nothing; the disagreement is recorded, not silent.
+12. ✅ **Sparse restore** — done on [Q22](open-questions.md#q22--sparse-restore-materialises-zeroes)'s
+    option (a) ([ADR-0079](adr/0079-sparse-restore.md),
+    `Repository.Tests/SparseRestoreTests`). A hole is hashed and skipped
+    rather than written, in the engine's spool, in what it emits and in the
+    recovery tool, and FR-ARCH-013 is met. On the way, capture learned to
+    describe a file that is one hole. Left open: the engine's spool still
+    needs a dense file's full length free in the system temporary directory
+    ([RR-7 resolution note](review/2026-08-restore-pipeline-review.md#rr-7--the-restore-materialises-sparse-holes-as-written-zeroes)).
 13. ✅ **The restore GET budget** (NFR-PERF-009) — done
     ([ADR-0068](adr/0068-the-catalogue-directed-restore-read.md)), and it took
     all three terms the item named plus one it did not. The load became

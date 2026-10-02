@@ -3,6 +3,11 @@
   <PropertyGroup>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Required by the source-generated LibraryImport marshalling behind
+         SparseFile, whose one platform call marks an NTFS file sparse before
+         a restore leaves holes in it (FSCTL_SET_SPARSE). The unsafe surface
+         is that ioctl. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -37,6 +37,7 @@ This document is **normative for terminology**. Where any other document, code i
 | **Object identifier** | The keyed, repository-scoped identifier under which a record or manifest is referenced. See [`03-crypto.md` §4](03-crypto.md#4-object-identifiers). |
 | **Content identifier** | The plaintext cryptographic hash of a segment. Used for deduplication and verification inside the trust boundary; never exposed to a store. |
 | **File-version manifest** | An immutable object describing one version of one file: metadata, logical length, ordered segment references, whole-file hash. |
+| **Sparse extent** | A range of a file recorded as a hole: an offset and a length that read as zeroes, stored as nothing ([specification 09 §4](../../specifications/repository-format/09-segmentation.md#4-sparse-extents)). The whole-file hash covers its zeroes. A restore skips it rather than writing it, so it stays a hole wherever the target filesystem can hold one and reads as zeroes everywhere ([ADR-0079](../adr/0079-sparse-restore.md)). Capture records extents on POSIX, where the filesystem reports its holes; an NTFS sparse file is read as data. |
 | **Tree** | An immutable directory object referencing child trees and file-version manifests. |
 | **Snapshot manifest** | The immutable root descriptor of a snapshot: source, backup set, capture details, root tree, policy, publication generation. |
 | **Index delta** | An immutable, writer-authored mapping from object identifiers to physical locations, published after the blobs it covers are durable. |

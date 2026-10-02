@@ -4,7 +4,7 @@
 
 ---
 
-Seventy-eight decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Seventy-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -103,6 +103,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0076](adr/0076-damage-is-traced-to-what-needs-it.md) | Damage is traced to what needs it: catalogue schema 8 indexes what each file version and snapshot is made of, the per-snapshot status degrades only what the damage reaches, and the words name the files and snapshots; ledger schema 7 | **Built** | `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository/DamageScope` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Application/SnapshotReplication` · `Application/DestinationSyncStore` · `Agent/DamageReachText` · `Agent/ReplicaSweepJob` · `Agent/FanOut` · `Agent/ServiceCommandHandler` · `Repository.Tests/CatalogueReachTests`, `Repository.Tests/DamageReachTests`, `Application.Tests/SnapshotReplicationTests`, `Hosts.Tests/DamageScopeTests` · [notes](#0076--a-scope-a-person-can-act-on) |
 | [0077](adr/0077-observed-clock-skew.md) | Observed clock skew: a peer's verified replication receipt, bracketed by this machine's clock, is a reading of how far the two clocks stood apart. It waits on the ledger (schema 8), and the set's next capture signs it into its manifest as key 14, read back per snapshot through catalogue schema v9 and contract 1.47 | **Built** | `Application/ClockObservation` · `Application/DestinationSyncStore` · `Agent/ReplicationInitiator` · `Agent/PeerShipStore` · `Agent/ReplicationResponder` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Domain/Status/ObservedClockSkewText` · `Recovery/RecoveryHost` · `Application.Tests/ObservedClockSkewTests`, `Repository.Tests/ObservedClockSkewTests`, `Hosts.Tests/ObservedClockSkewServiceTests`, `Cli.Tests/SnapshotClockTokenTests`, `Web.Tests/ConsoleSnapshotClockScriptTests` · [notes](#0077--a-clock-can-only-be-compared) |
 | [0078](adr/0078-implausible-capture-times.md) | Implausible capture times: a snapshot whose recorded time does not fit the order its writer published it in, by more than the configured skew margin, is flagged and kept. It is never expired on that time, fills no min-generations place and represents no bucket, at the hub and in every destination's keep-set. The report, contract 1.48's listing and a notice say so | **Built** | `Retention/RetentionPlanner` · `Retention/StagingMark` · `Retention/RetentionRunner` · `Retention/DestinationConvergence` · `Retention/StagingTrim` · `Application/NoticeStore` · `Agent/ImplausibleCaptureNotice` · `Agent/ServiceCommandHandler` · `Agent/FanOut` · `Agent/BackupRunner` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Retention.Tests/ImplausibleCaptureTimeTests`, `Retention.Tests/ImplausibleCaptureRetentionTests`, `Hosts.Tests/ImplausibleCaptureServiceTests`, `Application.Tests/NoticeStoreTests`, `Cli.Tests/SnapshotImplausibleTimeTokenTests`, `Web.Tests/ConsoleSnapshotImplausibleTimeScriptTests` · [notes](#0078--the-order-a-writer-published-in-is-the-one-a-clock-cannot-move) |
+| [0079](adr/0079-sparse-restore.md) | Sparse restore: a hole is hashed as the zeroes it reads as and skipped rather than written, in the engine's spool, in what the engine emits and in the recovery tool, with the length set once the last piece is placed. On Windows a file that will have a hole is marked sparse first. A destination that cannot seek, or already holds bytes where the file goes, is given the zeroes written out. Capture now describes a file that is one hole | **Built** | `Domain/SparseFile` · `Repository/RestoreEngine` · `Repository/SnapshotPublication` · `Recovery/RecoverySession` · `Restore/RestoreExecutor` · `Cli/CliApplication` · `Repository.Tests/SparseRestoreTests`, `Domain.Tests/SparseFileTests`, `TestSupport/AllocatedSize` · [notes](#0079--a-hole-and-a-written-zero-read-the-same) |
 
 ---
 
@@ -1902,3 +1903,50 @@ A misdated snapshot stays misdated once the clock is put right, so its
 notice is not raised again after a person acknowledges it unchanged
 (`RaiseUnlessAcknowledged`). A flagged snapshot is kept indefinitely. There
 is no snapshot deletion verb, so for now it stays until one exists.
+
+### 0079 — a hole and a written zero read the same
+
+FR-ARCH-013 said sparse extents restore "without materialising zero
+payload", and specification 09 §4 said holes restore as holes. The engine
+wrote every hole into its spool as zeroes and copied the spool out, and the
+recovery tool did the same. So a restored sparse file was fully allocated,
+and a 100 GiB image holding 10 GiB of data needed 100 GiB of temporary space
+besides. Every restore test compared bytes, which cannot tell a hole from
+written zeroes, and that is how the gap went unseen. The oracle now
+is allocation: `TestSupport/AllocatedSize`, which asks each platform how much
+of a file it holds and shares no code with the product's own stat interop.
+
+Skipping a range is correct everywhere, because every platform reads zeroes
+from what an extending write skipped. Only allocation differs.
+
+- **Linux** leaves the skipped range unallocated wherever the filesystem
+  holds holes, with nothing asked.
+- **APFS** leaves it unallocated if it is 16 MiB or longer. A shorter one it
+  fills with zeroes and allocates once it writes the file back, however the
+  file was written. The first macOS CI run found it: the tests' holes were
+  4, 15 and 11 MiB, every one was filled, and the tests that passed had
+  measured before write-back. So the oracle now writes a file back before
+  it measures, the suites' holes are 32 MiB, and a macOS-only test pins the
+  16 MiB.
+- **NTFS** allocates and zero-fills it unless the file was marked sparse
+  first. So `Domain/SparseFile` marks a file that will have a hole, and only
+  such a file, because a dense file carrying the sparse attribute is not the
+  file that was captured.
+
+The engine leaves holes in its spool and in what it emits. It emits that way
+only into a destination that can seek and holds nothing past its position,
+because a skipped range keeps what it held. Anything else gets the zeroes
+written out, as before.
+
+The suite found a capture bug on the way. A file that is one hole from end
+to end was described by no segment and no extent, which the codec refuses.
+Capture had recorded extents only for a file that also had data.
+
+Each piece was removed in turn and its test went red: the spool's skip, the
+emission's skip, its guard against existing bytes, each of the three length
+changes, the recovery tool's skip and the capture fix. What remains is recorded rather
+than done. Windows capture still reads holes as data, so only a manifest
+from POSIX restores sparse there. On APFS a hole shorter than 16 MiB is
+still allocated, by the filesystem's own choice. The engine's spool still defaults to the
+system temporary directory, which caps the largest dense file a restore can
+produce where that directory is small or RAM-backed.
