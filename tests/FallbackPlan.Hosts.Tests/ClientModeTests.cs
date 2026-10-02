@@ -13,8 +13,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
 /// Establishes FR-SVC-008, the CLI half of FR-SVC-021, the CLI half of
-/// FR-VER-003's report of a circuit, and the CLI half of FR-GC-008's granted
-/// collection run.
+/// FR-VER-003's report of a circuit, the CLI half of FR-GC-008's granted
+/// collection run, and the CLI half of FR-GC-013's snapshot deletion.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -632,6 +632,68 @@ public sealed class ClientModeTests : IDisposable
         {
             Environment.SetEnvironmentVariable(variable, null);
         }
+    }
+
+    [TestMethod]
+    public async Task DeleteSnapshots_RoutedThroughTheService_DerivesTheSetsGrantHere_AndTheSnapshotGoes()
+    {
+        // FR-GC-013: as with retention, the grant is derived where the
+        // passphrase was typed. The dry run needs none and changes nothing.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteSourceFile("notes.txt", "hello again");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var oldest = (await SnapshotIdsAsync(handler))[0];
+
+        var dry = await RunAgainstServiceAsync(
+            "delete-snapshots", "--set", "docs", oldest, "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, dry.ExitCode, dry.All);
+        Assert.Contains("would delete", dry.Output, StringComparison.Ordinal);
+        Assert.Contains(oldest, await SnapshotIdsAsync(handler));
+
+        var applied = await RunAgainstServiceAsync(
+            "delete-snapshots", "--set", "docs", oldest, "--apply",
+            "--passphrase-env", _harness.PassphraseVariable, "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, applied.ExitCode, applied.All);
+        Assert.Contains("deleted", applied.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(oldest, await SnapshotIdsAsync(handler));
+    }
+
+    [TestMethod]
+    public async Task DeleteSnapshots_RoutedWithoutAPassphrase_SaysToNameOne()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteSourceFile("notes.txt", "hello again");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        var oldest = (await SnapshotIdsAsync(handler))[0];
+
+        var refused = await RunAgainstServiceAsync(
+            "delete-snapshots", "--set", "docs", oldest, "--apply", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--passphrase-env", refused.All, StringComparison.Ordinal);
+        Assert.Contains(oldest, await SnapshotIdsAsync(handler));
+    }
+
+    /// <summary>The snapshots the service lists, oldest first.</summary>
+    private async Task<IReadOnlyList<string>> SnapshotIdsAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var listed);
+        return [.. listed.Snapshots.OrderBy(snapshot => snapshot.CapturedAt).Select(snapshot => snapshot.SnapshotId)];
     }
 
     [TestMethod]

@@ -8,7 +8,8 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The per-connection gate (FR-USR-001, FR-USR-003, FR-USR-004, FR-USR-006;
-/// ADR-0045 §5): who may speak which verb, and what a session is.
+/// ADR-0045 §5): who may speak which verb, and what a session is. A snapshot
+/// deletion reaches the service naming the person signed in (FR-GC-013).
 /// </summary>
 /// <remarks>
 /// Driven against the decorator over a stub rather than through a live socket.
@@ -37,9 +38,13 @@ public sealed class AuthenticationGateTests : IDisposable
         /// <summary>What the inner handler reports, so the decorator's override can be tested against it.</summary>
         public string? SetupState { get; set; }
 
+        /// <summary>The last command that reached the inner handler, as it reached it.</summary>
+        public ServiceCommand? LastCommand { get; private set; }
+
         public ValueTask<ServiceResult> ExecuteAsync(ServiceCommand command, CancellationToken cancellationToken)
         {
             Executed++;
+            LastCommand = command;
             return ValueTask.FromResult<ServiceResult>(command is DescribeServiceCommand
                 ? new ServiceDescriptionResult("1.16", "test", "machine", "/state", false, 0, SetupState: SetupState)
                 : new AcknowledgedResult());
@@ -428,6 +433,28 @@ public sealed class AuthenticationGateTests : IDisposable
         var before = _inner.Executed;
         Assert.IsInstanceOfType<AcknowledgedResult>(await owner.ExecuteAsync(command, CancellationToken.None));
         Assert.AreEqual(before + 1, _inner.Executed, "the owner's acknowledgement must reach the inner handler");
+    }
+
+    [TestMethod]
+    public async Task DeleteSnapshots_ReachesTheServiceNamingWhoIsSignedIn()
+    {
+        // The audit record a deletion writes names the person (FR-GC-013). The
+        // connection knows who that is; the client does not get to say.
+        GiveTheInstallationAnOwner();
+        var owner = Connect();
+        await owner.ExecuteAsync(new LoginCommand("ben", "A-good-passw0rd9"), CancellationToken.None);
+        await owner.ExecuteAsync(new CreateUserCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        var operatorConnection = Connect();
+        await operatorConnection.ExecuteAsync(
+            new LoginCommand("sam", "Another-passw0rd9"), CancellationToken.None);
+
+        await operatorConnection.ExecuteAsync(
+            new DeleteSnapshotsCommand(new string('b', 32), [new string('5', 64)]) { Actor = "ben" },
+            CancellationToken.None);
+
+        Assert.IsInstanceOfType<DeleteSnapshotsCommand>(_inner.LastCommand, out var reached);
+        Assert.AreEqual("sam", reached.Actor);
     }
 
     [TestMethod]
