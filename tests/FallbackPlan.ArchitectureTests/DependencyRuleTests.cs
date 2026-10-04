@@ -824,6 +824,27 @@ public sealed class DependencyRuleTests
     }
 
     /// <summary>
+    /// The recovery tool's diagnostic bundle renders through the rule the
+    /// service's log does (ADR-0082, NFR-PRIV-003). The tool may not reference
+    /// the project that renders the log, so the rule lives in Domain beside
+    /// the types it reads; this canary fails if the tool ever grows a second
+    /// copy of it, which would be free to drift from the first.
+    /// </summary>
+    [TestMethod]
+    public void RecoveryTool_RendersItsBundleThroughTheSharedRule()
+    {
+        var rendering = Types.InAssembly(Recovery)
+            .That()
+            .HaveDependencyOn("FallbackPlan.Domain.Diagnostics.RedactedRendering")
+            .GetTypes()
+            .ToList();
+
+        Assert.IsNotEmpty(
+            rendering,
+            "The recovery tool's bundle must render through Domain's RedactedRendering, not a copy of it.");
+    }
+
+    /// <summary>
     /// 11 §2: <c>Recovery</c> speaks to no service in any topology
     /// (NFR-OPS-005). A recovery tool that needed a running service would not
     /// be a recovery tool.
