@@ -10,7 +10,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// Contract 1.15's diagnostics verbs (ADR-0043 §6, FR-SVC-010): the ring the
 /// engine has been filling becomes readable, and a level becomes changeable
-/// without a restart.
+/// without a restart. A paired reader gets nothing no type declares safe
+/// (NFR-PRIV-003, ADR-0081).
 /// </summary>
 /// <remarks>
 /// The local/remote split is what most of this suite is about, and it is two
@@ -256,6 +257,43 @@ public sealed class DiagnosticsCommandTests : IDisposable
             out var local);
 
         StringAssert.Contains(local.Records[0].Message, "a-telling-folder-name");
+    }
+
+    [TestMethod]
+    public async Task ReadLog_FromAPairedRemoteConsole_WithholdsTextNoTypeDeclares()
+    {
+        await _harness.CreateRepositoryAsync();
+        await using var runtime = await StartAsync();
+
+        // How an unreadable folder reaches the log on a real filesystem: the
+        // path is wrapped, and then the platform's own message repeats it in
+        // full — as the reason, and as the exception's text (ADR-0081).
+        var secret = Path.Combine(_harness.StateDirectory, "a-telling-folder-name");
+        var denied = $"Access to the path '{secret}' is denied.";
+#pragma warning disable CA1848, CA2254
+        _logging!.Factory.CreateLogger("FallbackPlan.Test").Log(
+            LogLevel.Warning, new EventId(4242), new UnauthorizedAccessException(denied),
+            "could not list {Directory} ({Reason})", new LogPath(secret), denied);
+#pragma warning restore CA1848, CA2254
+
+        Assert.IsInstanceOfType<LogRecordsResult>(
+            await Handler(runtime, CallerScope.Remote)
+                .ExecuteAsync(new ReadLogCommand(0, 50), _timeout.Token),
+            out var remote);
+
+        var record = Assert.ContainsSingle(remote.Records);
+        Assert.DoesNotContain("a-telling-folder-name", record.Message, StringComparison.Ordinal);
+        Assert.AreEqual("System.UnauthorizedAccessException", record.ExceptionType);
+        Assert.AreEqual(LogRecordRenderer.Withheld, record.ExceptionMessage);
+
+        // Locally the same record is whole: the rule is about crossing.
+        Assert.IsInstanceOfType<LogRecordsResult>(
+            await Handler(runtime, CallerScope.Local)
+                .ExecuteAsync(new ReadLogCommand(0, 50), _timeout.Token),
+            out var local);
+
+        Assert.Contains(denied, local.Records[0].Message, StringComparison.Ordinal);
+        Assert.AreEqual(denied, local.Records[0].ExceptionMessage);
     }
 
     [TestMethod]

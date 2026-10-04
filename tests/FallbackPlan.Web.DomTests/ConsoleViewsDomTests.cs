@@ -323,6 +323,53 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Diagnostics_DownloadABundle_SavesTheFileAndPathsAreAnOptInWithItsConsequence()
+    {
+        // Contract 1.52 (ADR-0081, NFR-PRIV-003): the bundle downloads as the
+        // file the service built, and paths go in only when a person ticks for
+        // them, having been told what that means.
+        byte[] content = [0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x2a];
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetDiagnosticsCommand => new DiagnosticsResult(
+                "information", new Dictionary<string, string>(),
+                DurableSink: true, RetainFiles: 5, MaximumFileBytes: 8 * 1024 * 1024,
+                RingCapacity: 2048, OldestSequence: 0, NextSequence: 0),
+            ReadLogCommand => new LogRecordsResult([], NextSequence: 0, Dropped: false),
+            ExportDiagnosticsCommand export => new DiagnosticBundleResult(
+                "fallbackplan-diagnostics-20261004-120000Z.zip", content, export.IncludePaths,
+                ["README.txt", "log.txt"], LogRecords: 3, LogRecordsLeftOut: 0),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#diagnostics");
+
+        await Expect(page.Locator("[data-action=\"export-diagnostics\"]")).ToBeVisibleAsync();
+        await Expect(page.Locator("#diag-bundle-warning")).ToBeHiddenAsync();
+
+        var download = await page.RunAndWaitForDownloadAsync(
+            () => page.ClickAsync("[data-action=\"export-diagnostics\"]"));
+        var plain = await harness.ReceivedAsync<ExportDiagnosticsCommand>();
+        Assert.IsFalse(plain.IncludePaths);
+        Assert.AreEqual("fallbackplan-diagnostics-20261004-120000Z.zip", download.SuggestedFilename);
+        CollectionAssert.AreEqual(content, await File.ReadAllBytesAsync((await download.PathAsync())!));
+
+        // Ticking says what the tick costs, before anything is sent.
+        await page.CheckAsync("#diag-bundle-paths");
+        await Expect(page.Locator("#diag-bundle-warning")).ToBeVisibleAsync();
+        await Expect(page.Locator("#diag-bundle-warning")).ToContainTextAsync("paths");
+
+        await page.RunAndWaitForDownloadAsync(
+            () => page.ClickAsync("[data-action=\"export-diagnostics\"]"));
+        var opted = await harness.ReceivedAsync<ExportDiagnosticsCommand>(command => command.IncludePaths);
+        Assert.IsTrue(opted.IncludePaths);
+    }
+
+    [TestMethod]
     public async Task JobsMeter_MovesOnProgressEvents()
     {
         var now = NowMs;

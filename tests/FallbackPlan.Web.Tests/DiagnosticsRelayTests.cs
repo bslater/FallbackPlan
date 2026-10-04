@@ -6,7 +6,8 @@ namespace FallbackPlan.Web.Tests;
 
 /// <summary>
 /// Contract 1.15's diagnostics verbs reaching the console's Diagnostics view
-/// (ADR-0043 §6).
+/// (ADR-0043 §6), and contract 1.52's diagnostic bundle with them (ADR-0081,
+/// the console half of NFR-PRIV-003).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -132,6 +133,38 @@ public sealed class DiagnosticsRelayTests
         Assert.AreEqual("a blob was skipped", record.GetProperty("message").GetString());
         Assert.AreEqual("System.IO.IOException", record.GetProperty("exceptionType").GetString());
         Assert.AreEqual("the device is full", record.GetProperty("exceptionMessage").GetString());
+    }
+
+    [TestMethod]
+    public async Task ExportDiagnostics_OverTheRelay_CarriesTheOptInAndEveryNameTheDownloadReads()
+    {
+        // Contract 1.52 (ADR-0081, NFR-PRIV-003): the download reads the
+        // bundle's bytes, its suggested name and whether paths are in it from
+        // camelCase names nothing declares, so each is asserted on the wire.
+        await using var harness = await ConsoleHarness.StartAsync();
+        byte[] content = [0x50, 0x4b, 0x05, 0x06, 0x00, 0x7f];
+        harness.Clients.Client.Respond = _ => new DiagnosticBundleResult(
+            "fallbackplan-diagnostics-20261004-120000Z.zip", content, IncludesPaths: true,
+            ["README.txt", "log.txt"], LogRecords: 12, LogRecordsLeftOut: 0);
+
+        using var request = harness.Command("""{"command":"export_diagnostics","includePaths":true}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        Assert.IsInstanceOfType<ExportDiagnosticsCommand>(
+            Assert.ContainsSingle(harness.Clients.Client.Received), out var command);
+        Assert.IsTrue(command.IncludePaths);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = body.RootElement;
+
+        Assert.AreEqual("diagnostic_bundle", root.GetProperty("result").GetString());
+        Assert.AreEqual("fallbackplan-diagnostics-20261004-120000Z.zip", root.GetProperty("fileName").GetString());
+        CollectionAssert.AreEqual(content, root.GetProperty("content").GetBytesFromBase64());
+        Assert.IsTrue(root.GetProperty("includesPaths").GetBoolean());
+        Assert.AreEqual(12, root.GetProperty("logRecords").GetInt32());
+        Assert.AreEqual(0, root.GetProperty("logRecordsLeftOut").GetInt32());
+        Assert.HasCount(2, root.GetProperty("entries").EnumerateArray().ToArray());
     }
 
     [TestMethod]

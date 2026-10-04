@@ -3,7 +3,7 @@ using FallbackPlan.Domain.Diagnostics;
 namespace FallbackPlan.Domain.Tests;
 
 /// <summary>
-/// What the two redaction wrappers actually render (ADR-0043 §4,
+/// What the redaction wrappers actually render (ADR-0043 §4, ADR-0081,
 /// NFR-PRIV-002, NFR-PRIV-003).
 /// </summary>
 /// <remarks>
@@ -82,6 +82,63 @@ public sealed class LogRedactionTests
 
         Assert.AreEqual("(none)", absent.ToString());
         Assert.AreEqual("(none)", absent.ToRedactedString());
+    }
+
+    [TestMethod]
+    public void LogId_FromText_ShortensTheSameWayAsFromBytes()
+    {
+        // Most of the service holds a set's id, a repository's or a peer's
+        // fingerprint as text already. Wrapping the text must classify it
+        // exactly as wrapping the bytes would, or the two call sites disagree
+        // about the one identifier (ADR-0081).
+        var bytes = Bytes(1);
+        var hex = Convert.ToHexStringLower(bytes);
+
+        Assert.AreEqual(hex, LogId.BackupSet(hex).ToString());
+        Assert.AreEqual(LogId.BackupSet(bytes).ToRedactedString(), LogId.BackupSet(hex).ToRedactedString());
+        Assert.AreEqual(LogId.BackupSet(bytes), LogId.BackupSet(hex));
+    }
+
+    [TestMethod]
+    public void LogId_EachTextKind_SaysWhichKindItIs()
+    {
+        const string Fingerprint = "N7DO2WYKYWPZLJFJG3EPZYAURA";
+        var hex = new string('e', 32);
+
+        Assert.AreEqual("peer#N7DO2WYK", LogId.Fingerprint(Fingerprint).ToRedactedString());
+        Assert.AreEqual("repo#eeeeeeee", LogId.Repository(hex).ToRedactedString());
+        Assert.AreEqual("writer#eeeeeeee", LogId.Writer(hex).ToRedactedString());
+        Assert.AreEqual("snap#eeeeeeee", LogId.Snapshot(hex).ToRedactedString());
+        Assert.AreEqual("dest#eeeeeeee", LogId.Destination(hex).ToRedactedString());
+    }
+
+    [TestMethod]
+    public void LogId_FromNoText_RendersNoneOnBothSides()
+    {
+        var absent = LogId.Fingerprint(null);
+
+        Assert.AreEqual("(none)", absent.ToString());
+        Assert.AreEqual("(none)", absent.ToRedactedString());
+    }
+
+    [TestMethod]
+    public void LogLabel_RendersAsWritten_AndAbsentAsNone()
+    {
+        // A label is the declaration that a string is safe in every rendering:
+        // a word from the code's own vocabulary or a name somebody gave a set.
+        // It has no redacted form because it needs none.
+        Assert.AreEqual("docs", LogLabel.Of("docs").ToString());
+        Assert.AreEqual("(none)", LogLabel.Of(null).ToString());
+        Assert.AreEqual(LogLabel.Of("docs"), new LogLabel("docs"));
+        Assert.AreNotEqual(LogLabel.Of("docs"), LogLabel.Of("Docs"));
+    }
+
+    [TestMethod]
+    public void LogLabel_IsNotARedactedValue()
+    {
+        // Were it one, the redacted rendering would ask it to redact itself and
+        // a reader of IRedactedValue would believe it hid something.
+        Assert.IsFalse(typeof(IRedactedValue).IsAssignableFrom(typeof(LogLabel)));
     }
 
     [TestMethod]
