@@ -30,7 +30,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// folder whose name says more about its owner than its files do — in the
 /// configuration, in a real backup's own records, in an unreadable-folder
 /// record whose platform message repeats the path, and in a notice. Every
-/// entry is then read back whole.
+/// entry is then read back whole, a JSON entry as the strings it decodes to as
+/// well as its text.
 /// </para>
 /// <para>
 /// The scratch directory's random name is in every path the harness makes, so
@@ -209,13 +210,38 @@ public sealed class DiagnosticBundleTests : IDisposable
             StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// An entry as a recipient reads it: its text and, for a JSON entry, every
+    /// string the text decodes to. JSON escapes each separator of a Windows
+    /// path, so a search of the raw text alone never finds the path it holds.
+    /// </summary>
+    private static string Readable(Dictionary<string, string> entries, string name)
+    {
+        var text = entries[name];
+        if (!name.EndsWith(".json", StringComparison.Ordinal))
+        {
+            return text;
+        }
+
+        using var document = JsonDocument.Parse(text);
+        return string.Join('\n', [text, .. Decoded(document.RootElement)]);
+    }
+
+    private static IEnumerable<string> Decoded(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.String => [element.GetString()!],
+        JsonValueKind.Array => element.EnumerateArray().SelectMany(Decoded),
+        JsonValueKind.Object => element.EnumerateObject().SelectMany(property => Decoded(property.Value).Prepend(property.Name)),
+        _ => [],
+    };
+
     private static void AssertNowhere(string what, string value, DiagnosticBundleResult bundle, Dictionary<string, string> entries)
     {
         Assert.DoesNotContain(value, bundle.FileName, StringComparison.Ordinal, $"The file name carries the {what}.");
-        foreach (var (name, text) in entries)
+        foreach (var name in entries.Keys)
         {
             Assert.DoesNotContain(value, name, StringComparison.Ordinal, $"An entry's name carries the {what}.");
-            Assert.DoesNotContain(value, text, StringComparison.Ordinal, $"{name} carries the {what}.");
+            Assert.DoesNotContain(value, Readable(entries, name), StringComparison.Ordinal, $"{name} carries the {what}.");
         }
     }
 
@@ -279,10 +305,10 @@ public sealed class DiagnosticBundleTests : IDisposable
 
         // The positive control for the default test's absences: these are the
         // same planted paths, and once asked for they are there.
-        Assert.Contains(SourceFolder, entries["configuration.json"], StringComparison.Ordinal);
+        Assert.Contains(SourceFolder, Readable(entries, "configuration.json"), StringComparison.Ordinal);
         Assert.Contains(SourceFolder, entries["log.txt"], StringComparison.Ordinal);
         Assert.Contains(DeniedMessage, entries["log.txt"], StringComparison.Ordinal);
-        Assert.Contains(SourceFolder, entries["notices.json"], StringComparison.Ordinal);
+        Assert.Contains(SourceFolder, Readable(entries, "notices.json"), StringComparison.Ordinal);
 
         // The opt-in is to paths. Secrets never depended on it, and
         // identifiers still shorten because correlation was never offered.
