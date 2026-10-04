@@ -74,6 +74,14 @@ public static class RetentionRunner
     /// implausible (FR-GC-012); a day when omitted, as a configuration that
     /// states none means.
     /// </param>
+    /// <param name="requestsOnly">
+    /// Carry out a person's deletion and nothing else (FR-GC-013): every
+    /// snapshot is kept but the requested ones, whatever the policy says, the
+    /// trim and compaction are not planned, and a tombstone this narrower plan
+    /// cannot judge is left for an ordinary pass. What only the requested
+    /// snapshots held is still condemned, because it is garbage under any
+    /// policy once they have gone.
+    /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -91,7 +99,8 @@ public static class RetentionRunner
         ReclaimAuthority? reclaim = null,
         Func<ObjectId, BlobId?>? resolveLocation = null,
         CompactionPolicy? compactionPolicy = null,
-        TimeSpan? clockSkewMargin = null)
+        TimeSpan? clockSkewMargin = null,
+        bool requestsOnly = false)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -108,9 +117,11 @@ public static class RetentionRunner
 
         Log.PlanningRetention(log, set, survey.Snapshots.Count);
 
+        // A policy with no rule keeps everything, so under it the requests are
+        // all that expires.
         var selection = RetentionPlanner.Select(
             [.. survey.Snapshots.Select(snapshot => snapshot.Fact)],
-            policy ?? new RetentionConfiguration(),
+            requestsOnly ? new RetentionConfiguration() : policy ?? new RetentionConfiguration(),
             DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds),
             margin);
 
@@ -182,7 +193,7 @@ public static class RetentionRunner
         // Compaction is planned either way and never done here: a vetoed
         // plan selects nothing, because a collector that cannot say what is
         // garbage cannot say what is worth rewriting either.
-        var compaction = plan.Deletable
+        var compaction = plan.Deletable && !requestsOnly
             ? (compactionPolicy ?? CompactionPolicy.Default).Select(
                 repository.EffectiveFormatVersion, plan.PartlyLiveBlobs)
             : new CompactionSelection([], []);
@@ -190,10 +201,12 @@ public static class RetentionRunner
 
         // The trim decides either way — the dry run must say what would go
         // (FR-GC-005) — and deletes only under apply, after the sweep.
-        var trim = await StagingTrim.PlanAsync(
-            store, reader, survey, policy, destinations, trimVerificationFor, syncRecordFor, intents,
-            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken, margin)
-            .ConfigureAwait(false);
+        var trim = requestsOnly
+            ? new TrimPlan([], 0, 0, [])
+            : await StagingTrim.PlanAsync(
+                store, reader, survey, policy, destinations, trimVerificationFor, syncRecordFor, intents,
+                DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken, margin)
+                .ConfigureAwait(false);
         lines.AddRange(trim.Lines);
 
         if (!apply)
@@ -221,7 +234,7 @@ public static class RetentionRunner
         // pass's own tombstones never qualify, and earlier passes' are
         // revalidated against the world just computed (11 §3.2 step 3).
         var swept = await StagingSweep.SweepAsync(
-            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim)
+            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim, requestsOnly)
             .ConfigureAwait(false);
         lines.Add(
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "

@@ -245,9 +245,11 @@ public static class CollectionPlanner
 
         foreach (var holding in held)
         {
-            lines.Add(
-                $"  held {holding.Snapshot.SnapshotId[..12]}… — awaiting {string.Join(", ", holding.AwaitingDestinations)}"
-                + (holding.DeferralExceeded ? " (deferral bound exceeded — needs action)" : string.Empty));
+            lines.Add(holding.DeletionPending
+                ? $"  held {holding.Snapshot.SnapshotId[..12]}… — deletion requested, awaiting "
+                    + $"{string.Join(", ", holding.AwaitingDestinations)} to converge"
+                : $"  held {holding.Snapshot.SnapshotId[..12]}… — awaiting {string.Join(", ", holding.AwaitingDestinations)}"
+                    + (holding.DeferralExceeded ? " (deferral bound exceeded — needs action)" : string.Empty));
         }
 
         lines.Add($"would delete: {plan.ExpiredSnapshotKeys.Count} snapshot object(s), {plan.DeletableBlobs.Count} blob(s)");

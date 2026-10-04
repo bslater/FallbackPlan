@@ -137,6 +137,8 @@ The following maps and enums have no key assignments in the specification. Phase
 
 **Audit record payload** (08 §6): key 1 `action` enumerates `1` retention-reduction, `2` bulk-snapshot-deletion, `3` gc-pass, `4` force-expiry; key 3 `parameters` is a uint-keyed map whose shape is per-action and which phase 0 emits empty.
 
+> **Amended 2026-10 ([ADR-0080](0080-a-person-deletes-a-snapshot.md) §6).** Action 2 is now written, and its `parameters` carries key 1, an array of `bytes[16]` snapshot ids ([08 §6](../../specifications/repository-format/08-journal.md#6-audit-record)). Every other action's map stays empty, and a reader skips a key it has no meaning for.
+
 **Checkpoint key 5 `shard_hashes`** (07 §5): `shard_hashes[i]` is **SHA-256 over the deterministic CBOR encoding of the array of shard `shard_set[i]`'s post-precedence entries, each in §2.1 six-element form, sorted by `object_id` bytes ascending**. Deterministic and reader-recomputable from the checkpoint's own `entries`, which is what makes it usable as a cross-replica comparison.
 
 **Out of phase-0 scope entirely:** the lease record format (08 §9), `/tombstones/…`, and `/audit/<period>/…` object formats. Recorded in [open questions Q17](../open-questions.md#closed).
@@ -197,3 +199,4 @@ One engine-side property is recorded here so it is not rediscovered as a surpris
 | 2026-08 | Accepted | Phase-0 resolutions for the specification gaps blocking 06/07/08 implementation |
 | 2026-09 | Amended | Decision 3 is moot and Decision 5 loses its key-bundle terms: format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
 | 2026-09 | Amended | The policy manifest gains optional keys 10 `roots`, 11 `set_name` and 12 `schedule` ([ADR-0061](0061-adopt-a-destinations-archives.md)); key 10's inner map is assigned in [06 §7](../../specifications/repository-format/06-manifests.md#7-policy-manifest) directly rather than pinned here as Decision 6 pins keys 2 and 6 |
+| 2026-10 | Amended | The audit record's action 2 carries parameter 1, the snapshot ids a person's deletion named ([ADR-0080](0080-a-person-deletes-a-snapshot.md) §6, [08 §6](../../specifications/repository-format/08-journal.md#6-audit-record)) |

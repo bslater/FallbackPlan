@@ -230,6 +230,27 @@ internal static class Strings
     internal static string JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned => Get(nameof(JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned));
 
     /// <summary>
+    /// An audit record's actor is at most {0} UTF-8 bytes (specification 08 §6).
+    /// </summary>
+    private static string JournalRecordCodec_AuditActorTooLong => Get(nameof(JournalRecordCodec_AuditActorTooLong));
+
+    /// <summary>
+    /// An audit record's actor is at most {0} UTF-8 bytes (specification 08 §6).
+    /// </summary>
+    internal static string FormatJournalRecordCodec_AuditActorTooLong(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, JournalRecordCodec_AuditActorTooLong, arg0);
+
+    /// <summary>
+    /// Only a bulk snapshot deletion's audit record names snapshots (specification 08 §6).
+    /// </summary>
+    internal static string JournalRecordCodec_AuditSnapshotsBelongToADeletion => Get(nameof(JournalRecordCodec_AuditSnapshotsBelongToADeletion));
+
+    /// <summary>
+    /// A snapshot an audit record names is exactly 16 bytes (specification 08 §6).
+    /// </summary>
+    internal static string JournalRecordCodec_AuditSnapshotIdExactlyBytes => Get(nameof(JournalRecordCodec_AuditSnapshotIdExactlyBytes));
+
+    /// <summary>
     /// backup_set_id is exactly 16 bytes (specification 08 §3).
     /// </summary>
     internal static string JournalRecordCodec_BackupSetIdExactlyBytes => Get(nameof(JournalRecordCodec_BackupSetIdExactlyBytes));

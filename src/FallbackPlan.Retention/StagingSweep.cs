@@ -27,7 +27,14 @@ namespace FallbackPlan.Retention;
 /// nothing if a failed delete can produce one.
 /// </remarks>
 public sealed record SweepOutcome(
-    int Deleted, int NotYetEligible, int TombstonesCleared, IReadOnlyList<string> Findings);
+    int Deleted, int NotYetEligible, int TombstonesCleared, IReadOnlyList<string> Findings)
+{
+    /// <summary>
+    /// The snapshots this pass deleted, as the survey knew them, so a caller
+    /// can forget a requested one from what it caches (FR-GC-013).
+    /// </summary>
+    public IReadOnlyList<SnapshotFact> DeletedSnapshots { get; init; } = [];
+}
 
 /// <summary>
 /// The destructive half (architecture 07 §3 steps 10–13, deletion-only):
@@ -142,6 +149,13 @@ public static class StagingSweep
     /// publishes with. Null only for a repository written before the feature,
     /// whose tombstones still sign under the signing key.
     /// </param>
+    /// <param name="requestsOnly">
+    /// Whether the fresh plan was made to carry out a person's deletion and
+    /// nothing else (FR-GC-013): every snapshot kept but the requested ones.
+    /// A tombstone such a plan does not condemn is left for the next ordinary
+    /// pass to revalidate under the set's own policy, rather than reported as
+    /// damage the narrower plan cannot judge.
+    /// </param>
     /// <returns>What was deleted, deferred, cleared and found.</returns>
     public static async ValueTask<SweepOutcome> SweepAsync(
         IObjectStore store,
@@ -150,7 +164,8 @@ public static class StagingSweep
         SnapshotSurvey freshSurvey,
         ulong currentPublicationSequence,
         CancellationToken cancellationToken,
-        ReclaimAuthority? reclaim = null)
+        ReclaimAuthority? reclaim = null,
+        bool requestsOnly = false)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -168,6 +183,7 @@ public static class StagingSweep
         var notYet = 0;
         var cleared = 0;
         var findings = new List<string>();
+        var deletedSnapshots = new List<SnapshotFact>();
 
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -215,6 +231,13 @@ public static class StagingSweep
 
                 if (!freshPlan.Deletable || !condemnedBlobs.Contains(blobId))
                 {
+                    if (requestsOnly)
+                    {
+                        // Condemned by a pass under the set's own policy, and
+                        // reached by a snapshot only that policy expires.
+                        continue;
+                    }
+
                     // Revalidation disagrees with the tombstone: a snapshot
                     // published since the decision reaches this blob, or the
                     // fresh world is vetoed. Damage finding; never delete
@@ -250,6 +273,21 @@ public static class StagingSweep
 
                 if (!freshPlan.Deletable || !condemnedSnapshots.Contains(snapshot.StoreKey))
                 {
+                    // A person's request is never protected again: the planner
+                    // expires it every pass, so one the plan does not condemn
+                    // is one the gate holds for a copy not yet converged, and
+                    // the plan's held line names it (FR-GC-013).
+                    if (freshPlan.Deletable && tombstone.Value.Reason == TombstoneReason.Requested)
+                    {
+                        continue;
+                    }
+
+                    if (requestsOnly)
+                    {
+                        // An expiry's tombstone: the next ordinary pass judges it.
+                        continue;
+                    }
+
                     findings.Add(
                         $"damage: tombstoned snapshot {snapshot.Fact.SnapshotId[..12]}… is protected again — not deleted");
                     continue;
@@ -260,6 +298,7 @@ public static class StagingSweep
                     .ConfigureAwait(false))
                 {
                     deleted++;
+                    deletedSnapshots.Add(snapshot.Fact);
                 }
 
                 continue;
@@ -268,7 +307,7 @@ public static class StagingSweep
             findings.Add($"damage: tombstone {entry.Key} names an object type this pass does not collect");
         }
 
-        return new SweepOutcome(deleted, notYet, cleared, findings);
+        return new SweepOutcome(deleted, notYet, cleared, findings) { DeletedSnapshots = deletedSnapshots };
     }
 
     /// <summary>
@@ -459,7 +498,12 @@ public static class StagingSweep
         }
     }
 
-    private static async ValueTask<int> WriteAsync(
+    /// <summary>
+    /// Signs, seals and writes one tombstone at its key, unless one is there
+    /// already. Returns 1 when one is there now, written or found, and 0 when
+    /// the store refused it.
+    /// </summary>
+    internal static async ValueTask<int> WriteAsync(
         IObjectStore store,
         OpenedRepository repository,
         WriterId writerId,
@@ -495,8 +539,7 @@ public static class StagingSweep
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(metadataKey);
         }
 
-        var key = ObjectKey.Parse(
-            $"tombstones/{tombstone.ObjectTypeCode:x2}/{Base32.Encode(tombstone.ObjectId.ToArray())}");
+        var key = KeyOf(tombstone.ObjectTypeCode, tombstone.ObjectId.Span);
         var put = await store.PutAsync(
             key,
             _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
@@ -511,6 +554,42 @@ public static class StagingSweep
     private static async ValueTask<DecodedTombstone?> OpenTombstoneAsync(
         IObjectStore store, OpenedRepository repository, ObjectKey key, CancellationToken cancellationToken,
         ReclaimAuthority? reclaim = null, bool verify = true)
+    {
+        if (await ReadTombstoneAsync(store, repository, key, cancellationToken).ConfigureAwait(false)
+            is not { } read)
+        {
+            return null;
+        }
+
+        // The signature is the authorisation (11 §3): verified against the
+        // signing key for the generation the record was sealed under, and a
+        // failure is a security finding the caller reports — an unsigned
+        // tombstone is an attempt to have someone else delete data.
+        if (!verify)
+        {
+            // The grant proof reads a tombstone to check the grant AGAINST
+            // it, so it must not first ask the grant to authorise the read —
+            // that would answer its own question.
+            return read.Tombstone;
+        }
+
+        using var signer = TombstoneSigner(repository, read.Generation, reclaim);
+        return signer.Verify(read.Tombstone.SignedBytes.Span, read.Tombstone.Signature.Span) ? read.Tombstone : null;
+    }
+
+    /// <summary>Where the tombstone for an object lives (11 §3).</summary>
+    /// <param name="objectTypeCode">The object's type, or the blob domain.</param>
+    /// <param name="objectId">The object's identifier.</param>
+    internal static ObjectKey KeyOf(byte objectTypeCode, ReadOnlySpan<byte> objectId) =>
+        ObjectKey.Parse($"tombstones/{objectTypeCode:x2}/{Base32.Encode(objectId.ToArray())}");
+
+    /// <summary>
+    /// Reads and decodes the tombstone at <paramref name="key"/>, signature
+    /// unchecked, with the key generation its record was sealed under; null
+    /// when it is absent or will not open or decode.
+    /// </summary>
+    internal static async ValueTask<(DecodedTombstone Tombstone, KeyGeneration Generation)?> ReadTombstoneAsync(
+        IObjectStore store, OpenedRepository repository, ObjectKey key, CancellationToken cancellationToken)
     {
         byte[] bytes;
         using (var read = await store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false))
@@ -531,28 +610,9 @@ public static class StagingSweep
             var metadataKey = repository.Credential.DeriveMetadataKey(record.KeyGeneration);
             try
             {
-                if (!StandaloneRecordCipher.TryOpen(record, repository.RepositoryId, metadataKey, out var plaintext))
-                {
-                    return null;
-                }
-
-                var decoded = TombstoneCodec.Decode(plaintext);
-
-                // The signature is the authorisation (11 §3): verified against
-                // the signing key for the generation the record was sealed
-                // under, and a failure is a security finding the caller
-                // reports — an unsigned tombstone is an attempt to have
-                // someone else delete data.
-                if (!verify)
-                {
-                    // The grant proof reads a tombstone to check the grant
-                    // AGAINST it, so it must not first ask the grant to
-                    // authorise the read — that would answer its own question.
-                    return decoded;
-                }
-
-                using var signer = TombstoneSigner(repository, record.KeyGeneration, reclaim);
-                return signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span) ? decoded : null;
+                return StandaloneRecordCipher.TryOpen(record, repository.RepositoryId, metadataKey, out var plaintext)
+                    ? (TombstoneCodec.Decode(plaintext), record.KeyGeneration)
+                    : null;
             }
             finally
             {

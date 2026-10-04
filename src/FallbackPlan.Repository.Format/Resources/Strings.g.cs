@@ -942,6 +942,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequiredKeyMissing, arg0);
 
     /// <summary>
+    /// A tombstone with reason 5 (requested) names object type {0}; a person's request names only a snapshot manifest, type 4 (11 §3).
+    /// </summary>
+    private static string TombstoneCodec_RequestedNamesOnlyASnapshot => Get(nameof(TombstoneCodec_RequestedNamesOnlyASnapshot));
+
+    /// <summary>
+    /// A tombstone with reason 5 (requested) names object type {0}; a person's request names only a snapshot manifest, type 4 (11 §3).
+    /// </summary>
+    internal static string FormatTombstoneCodec_RequestedNamesOnlyASnapshot(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, TombstoneCodec_RequestedNamesOnlyASnapshot, arg0);
+
+    /// <summary>
     /// A format-upgrade signature is exactly 64 bytes.
     /// </summary>
     internal static string FormatUpgradeRecordCodec_SignatureExactlyBytes => Get(nameof(FormatUpgradeRecordCodec_SignatureExactlyBytes));

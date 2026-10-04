@@ -133,6 +133,20 @@ public interface IOperationGateway : IAsyncDisposable
     ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Deletes snapshots of one set from staging and every copy (FR-GC-013),
+    /// or says what it would delete and where each is held. Only a service can
+    /// serve this: a deletion has to reach every copy the hub replicates to,
+    /// and only the hub knows them.
+    /// </summary>
+    /// <param name="setName">The set, by name or id.</param>
+    /// <param name="snapshotIds">The snapshots, as hex ids.</param>
+    /// <param name="apply">False reports only; true requests and carries out the deletion.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns>Each snapshot's state, then the pass's report.</returns>
+    ValueTask<OperationReport> DeleteSnapshotsAsync(
+        string setName, IReadOnlyList<string> snapshotIds, bool apply, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Re-reads a destination's stored objects and confirms they still match
     /// what was sealed (FR-VER-002, FR-VER-004).
     /// </summary>
@@ -742,6 +756,51 @@ internal sealed class ServiceGateway(
         return new OperationReport(true, result.Lines);
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> DeleteSnapshotsAsync(
+        string setName, IReadOnlyList<string> snapshotIds, bool apply, CancellationToken cancellationToken)
+    {
+        var sets = await SendAsync<BackupSetsResult>(
+            new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+        var set = sets.Sets.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, setName, StringComparison.Ordinal)
+                || string.Equals(candidate.Id, setName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new CliFailureException($"no backup set '{setName}' is configured here.");
+
+        // The grant is derived here, where the passphrase is, as an applied
+        // retention pass derives its own (ADR-0055 §6).
+        string? grant = null;
+        if (apply && await ReclaimGrantsAsync(cancellationToken).ConfigureAwait(false) is { } grants)
+        {
+            grant = grants.GetValueOrDefault(set.Id)
+                ?? throw new CliFailureException(
+                    $"the passphrase does not open set '{set.Name}' — it was made under another one; nothing was sent.");
+        }
+
+        var result = await SendAsync<DeleteSnapshotsResult>(
+            new DeleteSnapshotsCommand(set.Id, snapshotIds, apply, grant), "a snapshot deletion", cancellationToken)
+            .ConfigureAwait(false);
+
+        var lines = new List<string>();
+        foreach (var outcome in result.Snapshots)
+        {
+            var held = outcome.Awaiting.Count > 0 ? string.Join(", ", outcome.Awaiting) : null;
+            lines.Add(outcome.State switch
+            {
+                "deleted" => $"{outcome.SnapshotId}: deleted",
+                "would-delete" => held is null
+                    ? $"{outcome.SnapshotId}: would delete from staging"
+                    : $"{outcome.SnapshotId}: would delete from staging and from {held}",
+                _ => held is null
+                    ? $"{outcome.SnapshotId}: deletion pending"
+                    : $"{outcome.SnapshotId}: deletion pending, waiting on {held}",
+            });
+        }
+
+        lines.AddRange(result.Lines);
+        return new OperationReport(true, lines);
+    }
+
     /// <summary>
     /// The reclaim grants an applied pass carries (ADR-0055 §6, Amendment 3):
     /// the service holds the key that publishes and not the key that
@@ -1251,6 +1310,13 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // the sync ledger, the plan reads every set's configuration, and the
         // pass runs on the writer lane a console cannot hold.
         throw new CliFailureException(Strings.DirectGateway_RetentionNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> DeleteSnapshotsAsync(
+        string setName, IReadOnlyList<string> snapshotIds, bool apply, CancellationToken cancellationToken) =>
+        // A deletion that stopped at the archive on this disk would leave
+        // every copy holding the snapshot, and only the hub knows the copies.
+        throw new CliFailureException(Strings.DirectGateway_DeleteSnapshotsNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()

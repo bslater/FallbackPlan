@@ -1,6 +1,7 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.TestSupport;
 
@@ -11,7 +12,8 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// kind round-trips through the two-pass signature, verification descends
 /// generations because the record carries none, expiry demands BOTH
 /// conditions, and the collector's survey treats unparseable intents as
-/// live.
+/// live. A bulk snapshot deletion's audit record names the snapshots it
+/// deleted (FR-GC-013).
 /// </summary>
 [TestClass]
 public sealed class JournalTests
@@ -56,6 +58,60 @@ public sealed class JournalTests
                 left is not null && right is not null &&
                 JournalRecordCodec.EncodeForSigning(record with { Payload = left })
                     .SequenceEqual(JournalRecordCodec.EncodeForSigning(record with { Payload = right }))));
+    }
+
+    [TestMethod]
+    public void AuditRecord_ABulkSnapshotDeletion_CarriesTheSnapshotsItNamesAsItsFirstParameter()
+    {
+        // Which snapshots went is the part of the record whoever reads it later
+        // needs, and the count alone cannot say (08 §6; FR-GC-013, ADR-0080).
+        using var credential = TestAuthority.Shared.Credential.Clone();
+        using var signer = RepositorySigner.Create(credential, new KeyGeneration(0));
+        ReadOnlyMemory<byte>[] snapshots = [Filled(0x41, 16), Filled(0x42, 16)];
+        var record = new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
+            new JournalPayload.Audit(AuditAction.BulkSnapshotDeletion, "ben", 2) { Snapshots = snapshots });
+
+        var decoded = JournalRecordCodec.Decode(
+            JournalRecordCodec.Encode(record, signer.Sign(JournalRecordCodec.EncodeForSigning(record))));
+
+        Assert.IsInstanceOfType<JournalPayload.Audit>(decoded.Record.Payload, out var audit);
+        Assert.AreEqual("ben", audit.Actor);
+        Assert.AreEqual(2UL, audit.ObjectsAffected);
+        Assert.HasCount(2, audit.Snapshots);
+        SequenceAssert.AreEqual(snapshots[0].ToArray(), audit.Snapshots[0].ToArray());
+        SequenceAssert.AreEqual(snapshots[1].ToArray(), audit.Snapshots[1].ToArray());
+    }
+
+    [TestMethod]
+    public void AuditRecord_SnapshotsOnAnyOtherAction_AreRefused()
+    {
+        // The parameter is the deletion's alone: a GC pass that named
+        // snapshots would be claiming a decision it did not make.
+        var record = new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
+            new JournalPayload.Audit(AuditAction.GcPass, "agent", 1) { Snapshots = [Filled(0x41, 16)] });
+
+        Assert.ThrowsExactly<IndexFormatException>(() => JournalRecordCodec.EncodeForSigning(record));
+    }
+
+    [TestMethod]
+    public void AuditRecord_WithNoSnapshots_EncodesItsParametersEmptyAsBefore()
+    {
+        // Every audit record written before the parameter existed reads the
+        // same, and one written now with none is byte-identical to it.
+        var record = new JournalRecord(JournalRecordKind.Audit, Writer, 4, 2500,
+            new JournalPayload.Audit(AuditAction.GcPass, "operator@example", 42));
+
+        var encoded = Convert.ToHexStringLower(JournalRecordCodec.EncodeForSigning(record));
+
+        // Key 3, then an empty map.
+        Assert.Contains("03a0", encoded, StringComparison.Ordinal);
+    }
+
+    private static ReadOnlyMemory<byte> Filled(byte value, int length)
+    {
+        var bytes = new byte[length];
+        Array.Fill(bytes, value);
+        return bytes;
     }
 
     [TestMethod]

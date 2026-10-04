@@ -41,6 +41,14 @@ public sealed record SnapshotFact(
     /// floor is the same data loss the partial rule exists to prevent.
     /// </summary>
     public bool IsComplete => CaptureStatus == 1;
+
+    /// <summary>
+    /// The sequence a person's request that this snapshot be deleted counts
+    /// from (FR-GC-013): its <c>requested</c> tombstone's eligible
+    /// generation, which a copy has to have converged at or past before it
+    /// can no longer hold the snapshot. Null when nobody has asked.
+    /// </summary>
+    public ulong? DeletionRequest { get; init; }
 }
 
 /// <summary>A kept snapshot and every rule that keeps it — the dry-run report's vocabulary (FR-GC-005).</summary>
@@ -59,6 +67,12 @@ public sealed record RetentionSelection(IReadOnlyList<SnapshotKeep> Keep, IReadO
     /// <see cref="Keep"/>, and none is in <see cref="Expire"/>.
     /// </summary>
     public IReadOnlyList<ImplausibleCapture> Implausible { get; init; } = [];
+
+    /// <summary>
+    /// The snapshots a person asked to delete (FR-GC-013), newest first. Every
+    /// one is also in <see cref="Expire"/>, whatever the rules would have kept.
+    /// </summary>
+    public IReadOnlyList<SnapshotFact> Requested { get; init; } = [];
 }
 
 /// <summary>Which way an implausible capture time is out of step with its writer's publication order.</summary>
@@ -106,7 +120,10 @@ public static class RetentionPlanner
     /// default is never the destructive reading. A snapshot whose capture time
     /// is implausible is kept whatever the rules say, and neither fills a
     /// min-generations place nor represents a bucket, because its time is
-    /// exactly what cannot be relied on.
+    /// exactly what cannot be relied on. A snapshot a person asked to delete
+    /// is expired whatever the rules say, and takes no part in anything that
+    /// decides what else is kept, its time included: the others are judged as
+    /// they will be once it has gone.
     /// </returns>
     public static RetentionSelection Select(
         IReadOnlyList<SnapshotFact> snapshots,
@@ -117,7 +134,11 @@ public static class RetentionPlanner
         ThrowHelper.ThrowIfNull(snapshots);
         ThrowHelper.ThrowIfNull(policy);
 
-        var implausible = FindImplausible(snapshots, now, clockSkewMargin ?? DefaultMargin);
+        // A person's request outranks every rule, the implausible-time flag
+        // included (ADR-0078's deletion verb), so a requested snapshot is set
+        // aside before anything reads its time.
+        var standing = snapshots.Where(snapshot => snapshot.DeletionRequest is null).ToList();
+        var implausible = FindImplausible(standing, now, clockSkewMargin ?? DefaultMargin);
         var doubted = implausible.ToDictionary(finding => finding.Snapshot, finding => finding.Direction);
 
         // Newest first; ties broken by identity so input order never decides
@@ -134,8 +155,11 @@ public static class RetentionPlanner
         }
 
         // The rules below read capture times, so they read only the times that
-        // can be relied on. A flagged snapshot is already kept by its flag.
-        var ordered = everything.Where(snapshot => !doubted.ContainsKey(snapshot)).ToList();
+        // can be relied on. A flagged snapshot is already kept by its flag, and
+        // a requested one is going whatever they say.
+        var ordered = everything
+            .Where(snapshot => !doubted.ContainsKey(snapshot) && snapshot.DeletionRequest is null)
+            .ToList();
 
         if (policy.KeepDaily is null && policy.KeepWeekly is null
             && policy.KeepMonthly is null && policy.MinGenerations is null)
@@ -212,6 +236,7 @@ public static class RetentionPlanner
         return new RetentionSelection(keep, expire)
         {
             Implausible = [.. everything.Where(doubted.ContainsKey).Select(snapshot => new ImplausibleCapture(snapshot, doubted[snapshot]))],
+            Requested = [.. expire.Where(snapshot => snapshot.DeletionRequest is not null)],
         };
     }
 

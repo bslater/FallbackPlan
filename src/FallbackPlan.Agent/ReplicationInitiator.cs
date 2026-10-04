@@ -224,6 +224,11 @@ internal static class ReplicationInitiator
     /// this caller cannot check one: a receipt then goes unverified and is
     /// reported as such rather than believed.
     /// </param>
+    /// <param name="pushOnly">
+    /// The filter narrows the push and no drop is instructed: for a pass that
+    /// holds no authority to delete and must still not send what a person has
+    /// asked to delete (FR-GC-013).
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -235,7 +240,8 @@ internal static class ReplicationInitiator
         ReadOnlyMemory<byte> sessionBinding = default,
         ReadOnlyMemory<byte> claimPublicKey = default,
         Func<IReadOnlyCollection<string>, bool>? onInventory = null,
-        ReceiptExpectation? expectReceipt = null)
+        ReceiptExpectation? expectReceipt = null,
+        bool pushOnly = false)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -348,7 +354,10 @@ internal static class ReplicationInitiator
                     exchangeSent, exchangeReceived, verified.Receipt.IssuedAtUnixMilliseconds)
                 : null;
 
-            if (keeps is null)
+            // A push-only filter narrows what is sent and instructs nothing:
+            // the pass holds no authority to delete (ADR-0055 §6), and what it
+            // leaves out is only what a person has asked to delete (FR-GC-013).
+            if (keeps is null || pushOnly)
             {
                 return new PushOutcome(
                     (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld)

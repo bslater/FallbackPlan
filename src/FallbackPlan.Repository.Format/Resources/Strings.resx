@@ -412,6 +412,9 @@
   <data name="TombstoneCodec_RequiredKeyMissing" xml:space="preserve">
     <value>A tombstone omits required key {0} (11 §3).</value>
   </data>
+  <data name="TombstoneCodec_RequestedNamesOnlyASnapshot" xml:space="preserve">
+    <value>A tombstone with reason 5 (requested) names object type {0}; a person's request names only a snapshot manifest, type 4 (11 §3).</value>
+  </data>
   <data name="FormatUpgradeRecordCodec_SignatureExactlyBytes" xml:space="preserve">
     <value>A format-upgrade signature is exactly 64 bytes.</value>
   </data>

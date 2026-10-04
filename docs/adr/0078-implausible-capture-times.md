@@ -124,7 +124,10 @@ A stamp past what the calendar can hold is read as the calendar's last instant: 
 
 **Negative**
 
-- **A flagged snapshot is kept indefinitely.** Retention never expires one, and there is no snapshot deletion verb, so its unique content stays until a person has a way to remove it. The cost is bounded by how long the clock was wrong. It is usually a handful of captures, sharing most of their content with their neighbours.
+- **A flagged snapshot is kept indefinitely.** Retention never expires one, and there is no snapshot deletion verb, so its unique content stays until a person has a way to remove it.
+
+  > **2026-10 ([ADR-0080](0080-a-person-deletes-a-snapshot.md)).** A person now has one. A deletion overrides the flag, as it overrides the windows and the floor, and takes the snapshot from staging and from every copy.
+ The cost is bounded by how long the clock was wrong. It is usually a handful of captures, sharing most of their content with their neighbours.
 - **Where a misdated run is longer than the history it contradicts, the longer run is taken as the truth.** One example is a new machine whose clock was wrong for its first weeks. The correct captures are then flagged and kept, and the misdated ones are judged by their wrong times. The notice still fires, naming the snapshots on the other side, and a person reading the listing sees both sets of dates.
 
 **Neutral**
@@ -158,3 +161,4 @@ A stamp past what the calendar can hold is read as the calendar's last instant: 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built in one slice: the rule, the treatment in every selection, the notice, contract 1.48, the CLI and console surfaces, and the tests above. The clock-only rule it rejected was measured first, and changed 25 of the retention suite's 108 tests. |
+| 2026-10 | Accepted (related) | [ADR-0080](0080-a-person-deletes-a-snapshot.md) gives a flagged snapshot the way out this record's consequences waited on: a person's deletion overrides the flag, and the yardstick is drawn from the snapshots that stand. `Retention/RetentionPlanner` |

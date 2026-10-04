@@ -104,6 +104,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0077](adr/0077-observed-clock-skew.md) | Observed clock skew: a peer's verified replication receipt, bracketed by this machine's clock, is a reading of how far the two clocks stood apart. It waits on the ledger (schema 8), and the set's next capture signs it into its manifest as key 14, read back per snapshot through catalogue schema v9 and contract 1.47 | **Built** | `Application/ClockObservation` · `Application/DestinationSyncStore` · `Agent/ReplicationInitiator` · `Agent/PeerShipStore` · `Agent/ReplicationResponder` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/BackupRunner` · `Repository/SnapshotPublication` · `Repository/CatalogueProjector` · `Repository.Catalogue/Catalogue` · `Repository.Catalogue/CatalogueSchema` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Domain/Status/ObservedClockSkewText` · `Recovery/RecoveryHost` · `Application.Tests/ObservedClockSkewTests`, `Repository.Tests/ObservedClockSkewTests`, `Hosts.Tests/ObservedClockSkewServiceTests`, `Cli.Tests/SnapshotClockTokenTests`, `Web.Tests/ConsoleSnapshotClockScriptTests` · [notes](#0077--a-clock-can-only-be-compared) |
 | [0078](adr/0078-implausible-capture-times.md) | Implausible capture times: a snapshot whose recorded time does not fit the order its writer published it in, by more than the configured skew margin, is flagged and kept. It is never expired on that time, fills no min-generations place and represents no bucket, at the hub and in every destination's keep-set. The report, contract 1.48's listing and a notice say so | **Built** | `Retention/RetentionPlanner` · `Retention/StagingMark` · `Retention/RetentionRunner` · `Retention/DestinationConvergence` · `Retention/StagingTrim` · `Application/NoticeStore` · `Agent/ImplausibleCaptureNotice` · `Agent/ServiceCommandHandler` · `Agent/FanOut` · `Agent/BackupRunner` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Retention.Tests/ImplausibleCaptureTimeTests`, `Retention.Tests/ImplausibleCaptureRetentionTests`, `Hosts.Tests/ImplausibleCaptureServiceTests`, `Application.Tests/NoticeStoreTests`, `Cli.Tests/SnapshotImplausibleTimeTokenTests`, `Web.Tests/ConsoleSnapshotImplausibleTimeScriptTests` · [notes](#0078--the-order-a-writer-published-in-is-the-one-a-clock-cannot-move) |
 | [0079](adr/0079-sparse-restore.md) | Sparse restore: a hole is hashed as the zeroes it reads as and skipped rather than written, in the engine's spool, in what the engine emits and in the recovery tool, with the length set once the last piece is placed. On Windows a file that will have a hole is marked sparse first. A destination that cannot seek, or already holds bytes where the file goes, is given the zeroes written out. Capture now describes a file that is one hole | **Built** | `Domain/SparseFile` · `Repository/RestoreEngine` · `Repository/SnapshotPublication` · `Recovery/RecoverySession` · `Restore/RestoreExecutor` · `Cli/CliApplication` · `Repository.Tests/SparseRestoreTests`, `Domain.Tests/SparseFileTests`, `TestSupport/AllocatedSize` · [notes](#0079--a-hole-and-a-written-zero-read-the-same) |
+| [0080](adr/0080-a-person-deletes-a-snapshot.md) | A person deletes a snapshot, from staging and every copy: `delete_snapshots` (contract 1.51) under the set's reclaim grant. The request is a tombstone of reason *requested* that every survey reads and every plan expires. Staging keeps the snapshot until every declared destination has converged since the request, one with no rules included, and one command converges every copy, carries the deletion through in two passes and records who asked. A set keeps something to restore from | **Built** | `Retention/SnapshotDeletion` · `Retention/StagingMark` · `Retention/RetentionPlanner` · `Retention/ReplicationGate` · `Retention/StagingSweep` · `Retention/RetentionRunner` · `Repository.Format/Manifests/Tombstone` · `Repository.Index/Journal/JournalRecordCodec` · `Repository.Catalogue/Catalogue` · `Application/DestinationSyncStore` · `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceCommandHandler.Deletion` · `Agent/AuthenticatingService` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Web/WebConsoleHost` · `Retention.Tests/SnapshotDeletionPlanTests`, `Retention.Tests/SnapshotDeletionCycleTests`, `Retention.Tests/SnapshotDeletionFanOutTests`, `Retention.Tests/SnapshotDeletionPeerTests`, `Retention.Tests/SnapshotDeletionServiceTests`, `Repository.ConformanceTests/TombstoneConformanceTests`, `Web.Tests/SnapshotDeletionCeremonyTests`, `Web.DomTests/SnapshotDeletionDomTests` · [notes](#0080--the-request-is-a-tombstone-and-a-missing-row-is-not-a-missing-copy) |
 
 ---
 
@@ -1907,8 +1908,9 @@ Two things surfaced on the way:
 
 A misdated snapshot stays misdated once the clock is put right, so its
 notice is not raised again after a person acknowledges it unchanged
-(`RaiseUnlessAcknowledged`). A flagged snapshot is kept indefinitely. There
-is no snapshot deletion verb, so for now it stays until one exists.
+(`RaiseUnlessAcknowledged`). Retention keeps a flagged snapshot
+indefinitely. Since [ADR-0080](adr/0080-a-person-deletes-a-snapshot.md) a
+person can delete one.
 
 ### 0079 — a hole and a written zero read the same
 
@@ -1956,3 +1958,58 @@ from POSIX restores sparse there. On APFS a hole shorter than 16 MiB is
 still allocated, by the filesystem's own choice. The engine's spool still defaults to the
 system temporary directory, which caps the largest dense file a restore can
 produce where that directory is small or RAM-backed.
+
+### 0080 — the request is a tombstone, and a missing row is not a missing copy
+
+A person could not delete a snapshot. Retention keeps what its rules keep,
+and since ADR-0078 it keeps a misdated snapshot whatever they say. The verb
+had three facts of the collector to work around:
+
+- a tombstone is revalidated against a fresh plan, so one pass's decision is
+  undone by the next;
+- a copy drops only the keys staging still lists;
+- a copy with no rules never drops anything.
+
+So the request is a tombstone of the snapshot's manifest, reason 5
+*requested*, and every survey reads it. It is verified against the reclaim
+public key the write credential carries, so a scheduled sync honours it
+without the passphrase. While a request stands every destination converges,
+one with no rules included, and records `converged_sequence` in the ledger
+(schema 9). Staging holds the snapshot until every declared destination has
+converged since the request.
+
+Three things were found on the way, and each has its own commit.
+
+- **A missing ledger row had been read as a destination never written to.**
+  Rows are keyed by the destination's name. A rename carries the sets'
+  references to the new name but not the row, so a renamed drive holding
+  everything had no row, and a ledger that cannot be read is set aside and
+  starts empty. Either way, a retention pass could have let staging go of a
+  requested snapshot that a copy still held. Every declared destination now
+  holds it until it has converged, and a missing row counts as never
+  converged. The routed CLI test, which declared a vault it never created,
+  now plugs its vault in, and a service test pins that a drive no copy has
+  reached holds the deletion and is named.
+- **The last-snapshot guard counted only complete snapshots.** A set whose
+  every capture is partial had none for it to keep. Such a set now keeps its
+  last snapshot of any kind.
+- **The console's ceremony test spoke snake_case**, where every ceremony
+  endpoint speaks camelCase. It now posts what the page posts.
+
+The command runs two passes, with a gc-pass audit record between them. The
+first pass condemns what only the deleted snapshots held, and that content's
+grace waits for a publication. Without the second pass it would wait for a
+retention run nobody may ever start. Both passes carry out requests alone:
+the set's policy is set aside, so asking to delete one snapshot never
+expires another.
+
+A scheduled push to a peer holds no grant. While a request stands it now
+sends everything but the requested snapshots and instructs no drop. Before,
+a peer with no rules would have been sent a requested snapshot it lacked,
+and kept it.
+
+What remains is recorded rather than done. A request cannot be withdrawn,
+and the agent has no verb. Requests are verified against generation zero's
+reclaim public key, which holds while nothing rotates reclaim keys. A
+destination that never returns holds the deletion until it is removed from
+the set.

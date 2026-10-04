@@ -70,6 +70,17 @@ public sealed record DestinationSyncRecord
     public ulong SyncedSequence { get; init; }
 
     /// <summary>
+    /// The staging archive's journal head when the last sync that converged
+    /// this pair while a deletion was pending <b>began</b> (FR-GC-013): every
+    /// request made before it reached the destination. The replication gate
+    /// holds a requested snapshot while this is below the request's
+    /// generation. Monotonic, like <see cref="SyncedSequence"/>, and zero
+    /// until a converge has run with a request pending.
+    /// </summary>
+    [JsonPropertyName("converged_sequence")]
+    public ulong ConvergedSequence { get; init; }
+
+    /// <summary>
     /// When a verification pass last proved sampled bytes at this destination,
     /// Unix milliseconds; null when never verified. Status reports coverage
     /// and age, never a bare boolean (FR-VER-003).
@@ -497,7 +508,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 8;
+    private const int CurrentSchemaVersion = 9;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -629,7 +640,10 @@ public sealed class DestinationSyncStore
         // whether a failure is that damage alone — false, the whole copy's,
         // being the reading of an older row that cannot understate damage.
         // Schema 8 added a reading of the peer's clock, absent from an older
-        // row because nothing had read one. Only 1 → 2 changes a row, below.
+        // row because nothing had read one. Schema 9 added the sequence the
+        // last converge with a deletion pending began at, zero on an older row
+        // because none had run: a pending deletion then waits for one, which is
+        // the cautious reading. Only 1 → 2 changes a row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -688,6 +702,11 @@ public sealed class DestinationSyncStore
     /// and a reader there would report a snapshot this pass did prove as
     /// merely durable (FR-SNP-003).
     /// </param>
+    /// <param name="convergedSequence">
+    /// The staging journal head when this pass began, for a pass that
+    /// converged the pair while a deletion was pending (FR-GC-013); null for
+    /// any other pass, which leaves the last one's standing.
+    /// </param>
     public DestinationSyncRecord RecordSuccess(
         string setId,
         string destination,
@@ -697,7 +716,8 @@ public sealed class DestinationSyncStore
         string? keepFingerprint = null,
         bool reconciled = false,
         string? baselineSnapshotId = null,
-        VerificationStamp? verified = null)
+        VerificationStamp? verified = null,
+        ulong? convergedSequence = null)
     {
         // Everything not named here is carried forward by `with` — including,
         // on a pass that proved nothing, the verification stamps, which
@@ -725,6 +745,9 @@ public sealed class DestinationSyncStore
                 LastError = damaged is null ? null : DamageStatement(damaged),
                 // A later sync never un-holds what an earlier one delivered.
                 SyncedSequence = Math.Max(syncedSequence, previous?.SyncedSequence ?? 0),
+                // Nor un-converges what an earlier one removed: a pass that
+                // converged nothing, or began earlier, leaves it standing.
+                ConvergedSequence = Math.Max(convergedSequence ?? 0, previous?.ConvergedSequence ?? 0),
                 // The first success is the full copy that establishes the
                 // baseline (a staging-model sync converges the whole archive);
                 // later successes never move it — it records the first full.

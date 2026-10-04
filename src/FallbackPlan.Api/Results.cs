@@ -52,6 +52,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
 [JsonDerivedType(typeof(RetentionResult), "retention")]
+[JsonDerivedType(typeof(DeleteSnapshotsResult), "snapshots_deleted")]
 [JsonDerivedType(typeof(SyncResult), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationResult), "verify_destination")]
 [JsonDerivedType(typeof(StatusResult), "status")]
@@ -628,6 +629,12 @@ public sealed record JobFailuresResult(
 /// that fits, and from a service older than 1.48 or a listing that cannot
 /// judge (a restore source's), which a client reads as nothing to report.
 /// </param>
+/// <param name="DeletionPending">
+/// A person has asked for this snapshot to be deleted, and it waits on the
+/// destinations named: the copies not yet brought in line since the request
+/// (FR-GC-013, contract 1.51). Empty when nothing holds it and it goes at the
+/// next pass. Null when nobody asked, and from a service older than 1.51.
+/// </param>
 public sealed record SnapshotDescriptor(
     string SnapshotId,
     string BackupSetId,
@@ -637,7 +644,8 @@ public sealed record SnapshotDescriptor(
     IReadOnlyList<string>? Destinations = null,
     byte? ConsistencyMethod = null,
     long? ObservedClockSkewMs = null,
-    string? ImplausibleCaptureTime = null);
+    string? ImplausibleCaptureTime = null,
+    IReadOnlyList<string>? DeletionPending = null);
 
 /// <summary>The committed snapshots.</summary>
 /// <param name="Snapshots">
@@ -800,6 +808,30 @@ public sealed record CheckResult(IReadOnlyList<string> Findings) : ServiceResult
 /// <summary>A retention pass's report, per set in configuration order (FR-GC-005).</summary>
 /// <param name="Lines">The report — what is protected and why, what is held for a laggard, what went.</param>
 public sealed record RetentionResult(IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>What a deletion did, or would do, snapshot by snapshot (FR-GC-013, contract 1.51).</summary>
+/// <param name="SetId">The set.</param>
+/// <param name="Applied">Whether this was an apply; false for a dry run.</param>
+/// <param name="Snapshots">Each snapshot named, in the order named.</param>
+/// <param name="Lines">The pass's report, the convergence of each copy included.</param>
+public sealed record DeleteSnapshotsResult(
+    string SetId,
+    bool Applied,
+    IReadOnlyList<SnapshotDeletionOutcome> Snapshots,
+    IReadOnlyList<string> Lines) : ServiceResult;
+
+/// <summary>Where one snapshot's deletion stands.</summary>
+/// <param name="SnapshotId">The snapshot.</param>
+/// <param name="State">
+/// <c>deleted</c>, gone from staging and every copy reached; <c>pending</c>,
+/// requested and held for the copies in <paramref name="Awaiting"/>; or
+/// <c>would-delete</c>, a dry run's answer.
+/// </param>
+/// <param name="Awaiting">
+/// The destinations that have not been brought in line since the request,
+/// or, for a dry run, the ones that would have to be. Empty when none.
+/// </param>
+public sealed record SnapshotDeletionOutcome(string SnapshotId, string State, IReadOnlyList<string> Awaiting);
 
 /// <summary>An on-demand sync's report, one line per (set, destination) pair (FR-DEST-002/004).</summary>
 /// <param name="Lines">Where each pair stands after its sync ran — read from the refreshed ledger.</param>

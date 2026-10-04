@@ -442,6 +442,14 @@ def signing_seed(generation: int) -> bytes:
     return hkdf_expand(write_only_tree()["signing_root"], b"fbp/signing-generation/v2" + u32(generation), 32)
 
 
+def reclaim_seed(generation: int) -> bytes:
+    """The Ed25519 seed a tombstone signs under on a repository declaring
+    reclaim-authority (ADR-0055 section 1): its own sub-root beside the
+    sealing scalar, expanded per generation as the signing key is."""
+    reclaim_root = hkdf_expand(ROOT, b"fbp/reclaim/v2", 32)
+    return hkdf_expand(reclaim_root, b"fbp/reclaim-generation/v2" + u32(generation), 32)
+
+
 # --------------------------------------------------------------------------
 # Vector groups
 # --------------------------------------------------------------------------
@@ -1765,6 +1773,121 @@ def path_rules_vectors() -> dict:
 
 
 
+def _cbor_head(major: int, value: int) -> bytes:
+    """A deterministic CBOR item head (00 section 4.1): the shortest form."""
+    if value < 24:
+        return bytes([(major << 5) | value])
+    for size, info in ((1, 24), (2, 25), (4, 26), (8, 27)):
+        if value < 1 << (8 * size):
+            return bytes([(major << 5) | info]) + value.to_bytes(size, "big")
+    raise ValueError("value too large for a CBOR head")
+
+
+def _cbor_uint(value: int) -> bytes:
+    return _cbor_head(0, value)
+
+
+def _cbor_bytes(value: bytes) -> bytes:
+    return _cbor_head(2, len(value)) + value
+
+
+def _tombstone(object_type: int, object_id: bytes, reason: int, writer_id: bytes,
+               tombstoned_at: int, eligible_generation: int, signature: bytes | None) -> bytes:
+    """Specification 11 section 3: a map of uint keys in ascending order,
+    1 schema_version, 2 object_type, 3 object_id, 4 reason, 5 writer_id,
+    6 tombstoned_at, 7 eligible_generation, and the signature at 8 in the
+    stored form only."""
+    entries = [
+        (1, _cbor_uint(1)),
+        (2, _cbor_uint(object_type)),
+        (3, _cbor_bytes(object_id)),
+        (4, _cbor_uint(reason)),
+        (5, _cbor_bytes(writer_id)),
+        (6, _cbor_uint(tombstoned_at)),
+        (7, _cbor_uint(eligible_generation)),
+    ]
+    if signature is not None:
+        entries.append((8, _cbor_bytes(signature)))
+    body = b"".join(_cbor_uint(key) + value for key, value in entries)
+    return _cbor_head(5, len(entries)) + body
+
+
+def tombstone_vectors() -> dict:
+    """Specification 11 section 3 -- the tombstone: the canonical bytes its
+    signature covers, the signature, and the stored encoding, for every
+    reason in the closed vocabulary, and the encodings a reader refuses."""
+    seed = reclaim_seed(0)
+    tombstoned_at = 1_727_400_000_000
+
+    cases = []
+    for name, object_type, object_id, reason, eligible in [
+        ("unreferenced_segment", 0x01, bytes(range(0x20, 0x40)), 1, 42),
+        ("retired_delta", 0x08, bytes(range(0x40, 0x60)), 2, 43),
+        ("compacted_blob", 0x07, bytes(range(0x60, 0x70)), 3, 44),
+        ("superseded_checkpoint", 0x09, bytes(range(0x70, 0x90)), 4, 45),
+        ("requested_snapshot", 0x04, bytes(range(0x90, 0xB0)), 5, 46),
+    ]:
+        prefix = _tombstone(object_type, object_id, reason, WRITER_ID, tombstoned_at, eligible, None)
+        signature = ed25519_sign(seed, prefix)
+        cases.append(
+            {
+                "name": name,
+                "object_type": object_type,
+                "object_id": object_id.hex(),
+                "reason": reason,
+                "writer_id": WRITER_ID.hex(),
+                "tombstoned_at": tombstoned_at,
+                "eligible_generation": eligible,
+                "signed_prefix": prefix.hex(),
+                "signature": signature.hex(),
+                "encoded": _tombstone(
+                    object_type, object_id, reason, WRITER_ID, tombstoned_at, eligible, signature).hex(),
+            }
+        )
+
+    placeholder = bytes(64)
+    refused = [
+        {
+            "name": "reason_outside_the_vocabulary",
+            "encoded": _tombstone(
+                0x04, bytes(range(0x90, 0xB0)), 6, WRITER_ID, tombstoned_at, 46, placeholder).hex(),
+            "why": "reason 6 is not assigned; the vocabulary is closed and a reader MUST refuse it",
+        },
+        {
+            "name": "requested_names_a_segment",
+            "encoded": _tombstone(
+                0x01, bytes(range(0x20, 0x40)), 5, WRITER_ID, tombstoned_at, 42, placeholder).hex(),
+            "why": "reason 5 (requested) names only a snapshot manifest, type 4",
+        },
+        {
+            "name": "identifier_width_disagrees_with_type",
+            "encoded": _tombstone(
+                0x01, bytes(range(0x20, 0x30)), 1, WRITER_ID, tombstoned_at, 42, placeholder).hex(),
+            "why": "type 1 takes a 32-byte identifier; a 16-byte one is damage or an attempt to alias (11 section 3.1)",
+        },
+    ]
+
+    return {
+        "description": "Tombstones (specification 11 section 3) under the generation-0 reclaim key.",
+        "independently_derived": True,
+        "comment": (
+            "Signed under the reclaim key of the conformance root, as a repository declaring "
+            "reclaim-authority signs them (ADR-0055). A refused encoding carries a placeholder "
+            "signature: it is refused before any signature is checked."
+        ),
+        "signing": {
+            "seed_derivation": (
+                "HKDF-Expand(reclaim_root, 'fbp/reclaim-generation/v2' || u32(0), 32), "
+                "reclaim_root = HKDF-Expand(root, 'fbp/reclaim/v2', 32)"
+            ),
+            "seed": seed.hex(),
+            "public_key": ed25519_public_key(seed).hex(),
+        },
+        "cases": cases,
+        "refused": refused,
+    }
+
+
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
@@ -1781,6 +1904,7 @@ GROUPS = {
     "argon2id.json": argon2id_vectors,
     "ed25519.json": ed25519_vectors,
     "path-rules.json": path_rules_vectors,
+    "tombstones.json": tombstone_vectors,
 }
 
 
