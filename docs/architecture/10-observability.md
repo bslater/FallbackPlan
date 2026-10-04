@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §17 · **Relates to:** [H5](../review/2026-08-architecture-review.md#h5--there-are-no-quantitative-performance-targets-anywhere)
 
-**Built:** Partly — the status model, job states and instrumentation are implemented; §5's silence is held by test rather than by nobody having broken it; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view) with call-site coverage still partial, and §4's diagnostic bundle is not built — see [implementation status](../implementation-status.md).
+**Built:** Partly — the status model, job states and instrumentation are implemented; §5's silence is held by test rather than by nobody having broken it; §6's logging is built end to end (abstraction in every library, sinks and ring in `FallbackPlan.Diagnostics`, a level from flag, environment or `config.json`, and contract 1.15's read/level verbs reaching a CLI verb and a console view); and §4's diagnostic bundle is built, from the CLI and the console's Diagnostics view, on a redacted rendering that withholds whatever no type declares ([ADR-0081](../adr/0081-diagnostic-bundle.md)) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -206,7 +206,11 @@ Redaction is **by type**, not by string pattern. A field is marked secret at the
 
 Including plaintext paths requires explicit per-bundle opt-in, with the consequence stated plainly — path names frequently reveal more about a person than file contents do.
 
-The boundary that decides this is the one the record **crosses**, not the one it was written at ([ADR-0043](../adr/0043-structured-logging-and-diagnostics.md) §4). The service's own log file sits inside the trust boundary — in a state directory only the service account may read, on the machine that already holds the files themselves — and records plaintext paths, because a support log that cannot name the file that failed answers almost none of the questions it exists to answer. Everything that leaves — the client diagnostics feed, an exported bundle — is rendered redacted, and a bundle that includes plaintext paths is the per-bundle opt-in above.
+The boundary that decides this is the one the record **crosses**, not the one it was written at ([ADR-0043](../adr/0043-structured-logging-and-diagnostics.md) §4). The service's own log file sits inside the trust boundary — in a state directory only the service account may read, on the machine that already holds the files themselves — and records plaintext paths, because a support log that cannot name the file that failed answers almost none of the questions it exists to answer. Everything that leaves — a paired console's diagnostics feed, an exported bundle — is rendered redacted, and a bundle that includes plaintext paths is the per-bundle opt-in above.
+
+A redacted rendering is **fail-closed** ([ADR-0081](../adr/0081-diagnostic-bundle.md)): a value crosses only when its declared type says how. A path renders as a short digest, an identifier as a short prefix, a label (words a call site vouches for: the code's own vocabulary, or a name a person gave something) as written, and anything else — a bare string, an exception's message — is withheld. The exception's message matters most here, because the platform's words for an unreadable folder repeat its full path.
+
+The bundle is one zip, asked of the running service and saved by the client: its log in the line format of the service's own file, its versions and environment, its configuration, its status, its open notices and its recent jobs, with a README saying in words what it carries and what it leaves out. It never holds a passphrase, password, key, session or pairing secret, nor the installation's salt and public keys or the machine's name. The opt-in to paths also releases the text no type classifies, chiefly errors, and every surface says so before the bundle is built. A paired console may ask for a bundle, redacted, and never for one with paths.
 
 ## 5. Telemetry
 
