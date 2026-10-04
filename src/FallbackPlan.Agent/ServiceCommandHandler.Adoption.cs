@@ -1165,7 +1165,15 @@ public sealed partial class ServiceCommandHandler
     /// the file and never by opening the archive; null when the set has no
     /// archive yet or the file does not parse.
     /// </summary>
-    private RepositoryDescriptor? LocalDescriptorOf(BackupSetConfiguration set)
+    private RepositoryDescriptor? LocalDescriptorOf(BackupSetConfiguration set) => LocalDescriptorOf(runtime, set);
+
+    /// <inheritdoc cref="LocalDescriptorOf(BackupSetConfiguration)"/>
+    /// <remarks>
+    /// Also what the agent's own <c>retention --apply</c> derives each set's
+    /// reclaim grant under, so the verb and <c>list_backup_sets</c> read one
+    /// set's facts the same way.
+    /// </remarks>
+    internal static RepositoryDescriptor? LocalDescriptorOf(ServiceRuntime runtime, BackupSetConfiguration set)
     {
         foreach (var path in new[] { runtime.SetMetadataPath(set.Id), runtime.ArchivePath(set.Id) })
         {

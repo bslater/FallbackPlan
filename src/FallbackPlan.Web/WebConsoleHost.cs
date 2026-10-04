@@ -205,6 +205,8 @@ public static class WebConsoleHost
             TimedAsync(context, log, "/api/provision-write-only", () => ProvisionWriteOnlyAsync(context, clients, auth)));
         app.MapPost("/api/adopt-archive", (HttpContext context) =>
             TimedAsync(context, log, "/api/adopt-archive", () => AdoptArchiveAsync(context, clients, auth)));
+        app.MapPost("/api/retention-apply", (HttpContext context) =>
+            TimedAsync(context, log, "/api/retention-apply", () => RetentionApplyAsync(context, clients, auth)));
         app.MapPost("/api/setup", (HttpContext context) =>
             TimedAsync(context, log, "/api/setup", () => SetupAsync(context, clients, auth, log)));
         app.MapPost("/api/passphrase-strength", (HttpContext context) =>
@@ -696,6 +698,123 @@ public static class WebConsoleHost
                 ConfigurationChangeResult change => new ProvisionResponse("provisioned", Lines: change.Lines),
                 ServiceError refusal => new ProvisionResponse("refused", refusal.Message),
                 _ => new ProvisionResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What the retention-apply endpoint reads from the page.</summary>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0055 §6).</param>
+    private sealed record RetentionApplyRequest(string? Passphrase);
+
+    /// <summary>The retention-apply endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>applied</c>, <c>wrong</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not applied.</param>
+    /// <param name="Lines">The pass's report, when applied.</param>
+    private sealed record RetentionApplyResponse(
+        string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
+
+    /// <summary>
+    /// Applies retention on a set-up installation
+    /// ([ADR-0055](../../docs/adr/0055-reclaim-authority.md) §6, Amendment 3):
+    /// the service holds the key that publishes and not the key that
+    /// authorises a deletion, so the grant is derived here, where the person
+    /// typed, and only sealed envelopes reach the service. A passphrase that
+    /// opens no set is answered here and the service is sent nothing.
+    /// </summary>
+    /// <remarks>
+    /// The browser's session is resumed first, as the command relay resumes
+    /// it, so the deletion is attributed to the person who confirmed it and
+    /// not to whoever the console last relayed for (ADR-0045).
+    /// </remarks>
+    private static async Task RetentionApplyAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        RetentionApplyRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<RetentionApplyRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { Passphrase.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand("a passphrase is required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(RetentionApplyResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                && await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false) is ServiceError { Reason: ServiceErrorReason.Refused } dead)
+            {
+                await AnswerAsync(new RetentionApplyResponse("refused", dead.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult description)
+            {
+                await AnswerAsync(new RetentionApplyResponse(
+                    "unavailable", "The service did not describe itself.")).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not BackupSetsResult sets)
+            {
+                await AnswerAsync(new RetentionApplyResponse(
+                    "unavailable", "The service did not list its backup sets.")).ConfigureAwait(false);
+                return;
+            }
+
+            var minted = ConsoleRestoreGate.BuildReclaimGrants(description, sets.Sets, request.Passphrase);
+            if (minted.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new RetentionApplyResponse(
+                    minted.Outcome == ConsoleRestoreGate.GateOutcome.Wrong ? "wrong" : "unavailable",
+                    minted.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new RetentionCommand(Apply: true, ReclaimGrants: minted.Grants), context.RequestAborted)
+                .ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                RetentionResult report => new RetentionApplyResponse("applied", Lines: report.Lines),
+                ServiceError refusal => new RetentionApplyResponse("refused", refusal.Message),
+                _ => new RetentionApplyResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
             }).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)

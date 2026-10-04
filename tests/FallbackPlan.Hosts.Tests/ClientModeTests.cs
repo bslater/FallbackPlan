@@ -1,8 +1,10 @@
 using System.CommandLine;
+using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -10,8 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What the CLI becomes (ADR-0028 §3): a client, with an explicit direct mode
 /// when no service is running.
-/// Establishes FR-SVC-008, the CLI half of FR-SVC-021, and the CLI half of
-/// FR-VER-003's report of a circuit.
+/// Establishes FR-SVC-008, the CLI half of FR-SVC-021, the CLI half of
+/// FR-VER-003's report of a circuit, and the CLI half of FR-GC-008's granted
+/// collection run.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -517,6 +520,121 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RetentionApply_RoutedThroughTheService_DerivesTheReclaimGrantHere()
+    {
+        // FR-GC-008: the service holds the key that publishes and not the key
+        // that authorises a deletion (ADR-0055 §6), so the CLI derives the
+        // reclaim grant from the passphrase it was given, as a routed restore
+        // derives its restore grant, and the service applies under it. Before
+        // this the apply went bare, and every set refused it.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var result = await RunAgainstServiceAsync(
+            "retention", "--apply", "--passphrase-env", _harness.PassphraseVariable, "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("mode: service", result.All, StringComparison.Ordinal);
+        Assert.Contains("docs: ", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("reclaim grant", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_RoutedWithASetUnderASaltOfItsOwn_DerivesThatSetsGrantUnderIt()
+    {
+        // A set provisioned under a salt of its own, as a set adopted from a
+        // destination keeps the salt it was born under (ADR-0061): the
+        // installation's grant is not its authority, so the CLI derives one
+        // per set, under the facts the service publishes for each.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "extra",
+                    SealProvision(
+                        description.RestoreGrantRecipient!,
+                        Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!,
+                        RandomNumberGenerator.GetBytes(KekDerivation.SaltLength))),
+                _timeout.Token));
+
+        var result = await RunAgainstServiceAsync(
+            "retention", "--apply", "--passphrase-env", _harness.PassphraseVariable, "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        Assert.Contains("extra: ", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("no reclaim grant", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_RoutedWithoutAPassphrase_SaysToNameOne_WhileADryRunNeedsNone()
+    {
+        // The refusal is the CLI's own, naming the flag, rather than the
+        // service's, which is written for a console and names none.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        var dry = await RunAgainstServiceAsync("retention", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, dry.ExitCode, dry.All);
+
+        var refused = await RunAgainstServiceAsync("retention", "--apply", "--state", _harness.StateDirectory);
+        Assert.AreEqual(1, refused.ExitCode, refused.All);
+        Assert.Contains("--passphrase-env", refused.All, StringComparison.Ordinal);
+        Assert.Contains("authorises a deletion", refused.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task RetentionApply_RoutedWithAnotherPassphrase_IsRefusedHere_AndNothingIsSent()
+    {
+        // The passphrase is checked against the sealing key the service
+        // publishes before anything is sealed, as a routed restore checks it.
+        var variable = "FBP_CLIENT_RETENTION_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, "not this installation's passphrase at all");
+        try
+        {
+            await _harness.CreateRepositoryAsync();
+            _harness.WriteSourceFile("notes.txt", "hello");
+            await _harness.BackUpAsync();
+            _harness.WriteConfiguration("every 1h");
+
+            await using var runtime = await StartServiceAsync();
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+            var result = await RunAgainstServiceAsync(
+                "retention", "--apply", "--passphrase-env", variable, "--state", _harness.StateDirectory);
+
+            Assert.AreEqual(1, result.ExitCode, result.All);
+            Assert.Contains("does not reproduce this installation's credential", result.All, StringComparison.Ordinal);
+            Assert.Contains("nothing was sent", result.All, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    [TestMethod]
     public async Task Verify_OneFileVersion_StaysDirectAndSaysWhy()
     {
         await _harness.CreateRepositoryAsync();
@@ -695,6 +813,19 @@ public sealed class ClientModeTests : IDisposable
 
         Assert.AreNotEqual(0, result.ExitCode, result.All);
         Assert.Contains("nowhere", result.All, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The client half of the provisioning ceremony, under a salt the caller
+    /// chooses: the write bundle sealed to the service's recipient key, as hex.
+    /// </summary>
+    private static string SealProvision(string recipientHex, string passphraseText, byte[] salt)
+    {
+        var parameters = RepositoryCreationSettings.Default.KdfParameters;
+        using var passphrase = Passphrase.Create(passphraseText);
+        using var authority = WriteOnlyDerivation.Derive(passphrase, parameters, salt, KdfValidationMode.OpenRepository);
+        return Convert.ToHexStringLower(
+            WriteOnlyProvisioning.SealProvision(Convert.FromHexString(recipientHex), authority, salt, parameters));
     }
 
     /// <summary>Runs a CLI verb against the service this harness started, with no direct-mode flags.</summary>

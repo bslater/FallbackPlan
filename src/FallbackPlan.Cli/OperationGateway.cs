@@ -315,7 +315,8 @@ public static class OperationGateway
     /// <param name="cancellationToken">Cancels the open.</param>
     /// <param name="passphraseEnvironmentVariable">
     /// The variable naming the passphrase, when one was given: what a restore
-    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// on a set-up installation derives its grant from (ADR-0042 §5), and an
+    /// applied retention pass its reclaim grants (ADR-0055 §6).
     /// </param>
     /// <returns>The gateway; dispose to close the connection.</returns>
     public static async ValueTask<IOperationGateway> OpenServiceOnlyAsync(
@@ -360,7 +361,8 @@ public static class OperationGateway
     /// <param name="cancellationToken">Cancels the open.</param>
     /// <param name="passphraseEnvironmentVariable">
     /// The variable naming the passphrase, when one was given: what a restore
-    /// on a set-up installation derives its grant from (ADR-0042 §5).
+    /// on a set-up installation derives its grant from (ADR-0042 §5), and an
+    /// applied retention pass its reclaim grants (ADR-0055 §6).
     /// </param>
     /// <returns>The gateway; dispose to close the session and release the device key.</returns>
     /// <remarks>
@@ -401,7 +403,8 @@ public static class OperationGateway
 /// binding it is the connection holder that also releases the device key.
 /// <paramref name="passphraseEnvironmentVariable"/> names the passphrase when
 /// the verb was given one: a restore on a set-up installation derives its
-/// grant from it here, where the person typed (ADR-0042 §5).
+/// grant from it here, where the person typed (ADR-0042 §5), and an applied
+/// retention pass its reclaim grants (ADR-0055 §6).
 /// </remarks>
 internal sealed class ServiceGateway(
     IFallbackPlanClient client, string mode, IAsyncDisposable owned, string? passphraseEnvironmentVariable = null)
@@ -731,10 +734,109 @@ internal sealed class ServiceGateway(
     /// <inheritdoc/>
     public async ValueTask<OperationReport> RetentionAsync(bool apply, CancellationToken cancellationToken)
     {
+        var grants = apply ? await ReclaimGrantsAsync(cancellationToken).ConfigureAwait(false) : null;
         var result = await SendAsync<RetentionResult>(
-            new RetentionCommand(apply), "a retention pass", cancellationToken).ConfigureAwait(false);
+            new RetentionCommand(apply, ReclaimGrants: grants), "a retention pass", cancellationToken)
+            .ConfigureAwait(false);
 
         return new OperationReport(true, result.Lines);
+    }
+
+    /// <summary>
+    /// The reclaim grants an applied pass carries (ADR-0055 §6, Amendment 3):
+    /// the service holds the key that publishes and not the key that
+    /// authorises a deletion, so each set's grant is derived here, where the
+    /// person typed, under the facts the service publishes for that set. Null
+    /// when no set publishes any, which leaves nothing for a grant to
+    /// authorise.
+    /// </summary>
+    /// <remarks>
+    /// One derivation per distinct salt and parameters, each proved against
+    /// the sealing key published beside it before anything is sealed, as a
+    /// routed restore proves its grant. A set the passphrase does not open is
+    /// left out, and the service reports it as not applied.
+    /// </remarks>
+    private async ValueTask<IReadOnlyDictionary<string, string>?> ReclaimGrantsAsync(
+        CancellationToken cancellationToken)
+    {
+        var description = await SendAsync<ServiceDescriptionResult>(
+            new DescribeServiceCommand(), "a description of the service", cancellationToken).ConfigureAwait(false);
+        var sets = await SendAsync<BackupSetsResult>(
+            new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+
+        (string Salt, Argon2Parameters Parameters, string SealingPublicKey)? installation = description is
+            {
+                KdfSalt.Length: > 0,
+                KdfMemoryKib: { } memoryKib,
+                KdfIterations: { } iterations,
+                KdfParallelism: { } parallelism,
+                SealingPublicKey.Length: > 0,
+            }
+            ? (description.KdfSalt,
+                new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
+                description.SealingPublicKey)
+            : null;
+        var judged = new List<(string SetId, string Salt, Argon2Parameters Parameters, string SealingPublicKey)>();
+        foreach (var set in sets.Sets)
+        {
+            var facts = set is
+                {
+                    KdfSalt.Length: > 0,
+                    KdfMemoryKib: { } setMemory,
+                    KdfIterations: { } setIterations,
+                    KdfParallelism: { } setLanes,
+                    SealingPublicKey.Length: > 0,
+                }
+                ? (set.KdfSalt,
+                    new Argon2Parameters { MemoryKiB = setMemory, Iterations = setIterations, Parallelism = setLanes },
+                    set.SealingPublicKey)
+                : installation;
+            if (facts is { } chosen)
+            {
+                judged.Add((set.Id, chosen.Salt, chosen.Parameters, chosen.SealingPublicKey));
+            }
+        }
+
+        if (judged.Count == 0 || description.RestoreGrantRecipient is not { Length: > 0 } recipientHex)
+        {
+            return null;
+        }
+
+        if (passphraseEnvironmentVariable is null)
+        {
+            throw new CliFailureException(
+                "applying retention authorises a deletion, and this service holds the key that publishes and "
+                + "not the key that deletes: name --passphrase-env <VAR> so the reclaim grant can be derived "
+                + "here (ADR-0055).");
+        }
+
+        var recipient = Convert.FromHexString(recipientHex);
+        using var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable);
+        var derived = new Dictionary<string, (byte[] SealingPublicKey, string Grant)>(StringComparer.Ordinal);
+        var grants = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (setId, saltHex, parameters, sealingHex) in judged)
+        {
+            var key = $"{saltHex.ToUpperInvariant()}/{parameters.MemoryKiB}/{parameters.Iterations}/{parameters.Parallelism}";
+            if (!derived.TryGetValue(key, out var known))
+            {
+                using var authority = WriteOnlyDerivation.Derive(
+                    passphrase, parameters, Convert.FromHexString(saltHex), KdfValidationMode.OpenRepository);
+                known = (
+                    authority.Credential.SealingPublicKey.ToArray(),
+                    Convert.ToHexStringLower(WriteOnlyProvisioning.SealReclaimGrant(recipient, authority.ReclaimKeySeed)));
+                derived[key] = known;
+            }
+
+            if (known.SealingPublicKey.AsSpan().SequenceEqual(Convert.FromHexString(sealingHex)))
+            {
+                grants[setId] = known.Grant;
+            }
+        }
+
+        return grants.Count > 0
+            ? grants
+            : throw new CliFailureException(
+                "the passphrase does not reproduce this installation's credential — nothing was sent.");
     }
 
     /// <inheritdoc/>

@@ -474,8 +474,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// draft is not judged for placement, because a standing binding the save
     /// would leave alone cannot be told from a new one.
     /// </para>
+    /// <para>
+    /// 1.50 adds `reclaim_grants` to `retention` (ADR-0055 Amendment 3,
+    /// FR-GC-008): a reclaim grant per set, keyed by set id, because a set
+    /// adopted from a destination keeps the salt it was born under and the
+    /// installation's grant is not its authority. A set the map leaves out
+    /// falls back to `reclaim_grant`; with neither, it is reported and not
+    /// applied, and the report says why. A command with no map is refused for
+    /// want of a grant exactly as before. Every grant is proved against the
+    /// reclaim public key its archive's credential carries before the run
+    /// authors anything, so a wrong one is refused even on an archive with no
+    /// tombstone yet. Additive with a null default: a pre-1.50 client sends
+    /// one grant or none, and is answered as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 49);
+    public static ContractVersion Current { get; } = new(1, 50);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

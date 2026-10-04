@@ -509,25 +509,29 @@ public static class AgentHost
             }
         }
 
-        // On a set-up installation the service holds the key that publishes
-        // and not the key that authorises a deletion (ADR-0055 §6), so
-        // `retention --apply` needs a grant the way a console sends one: the
-        // reclaim sub-root, re-derived from the passphrase under the
-        // installation's own salt and sealed to this service's recipient key.
-        // The passphrase is proved against the stored credential BEFORE the
-        // grant is built — a wrong one would otherwise author tombstones
-        // nothing can verify on an archive that has none yet to disagree
-        // with. A dry run authors nothing and needs nothing; an installation
-        // without a stored credential derives the key it already holds.
-        (string? Grant, bool Refused) ReclaimGrantFor(ServiceRuntime verbRuntime, bool apply)
+        // The service holds the key that publishes and not the key that
+        // authorises a deletion (ADR-0055 §6), so `retention --apply` needs a
+        // grant per set the way a console sends them: the reclaim sub-root,
+        // re-derived from the passphrase under the salt the set's archive
+        // records and sealed to this service's recipient key (Amendment 3). A
+        // set adopted from a destination keeps the salt it was born under, and
+        // an installation provisioned set by set has no installation salt at
+        // all. Each derivation is proved against the sealing key the archive
+        // records BEFORE a grant is built. A dry run authors nothing and needs
+        // nothing, and neither does a run with no archive yet.
+        (IReadOnlyDictionary<string, string>? Grants, bool Refused) ReclaimGrantsFor(
+            ServiceRuntime verbRuntime, bool apply)
         {
             if (!apply)
             {
                 return (null, false);
             }
 
-            using var provisioning = new InstallationCredentialStore(stateDirectory).TryLoad();
-            if (provisioning is null)
+            var archives = verbRuntime.Configuration.BackupSets
+                .Select(set => (set.Id, Descriptor: ServiceCommandHandler.LocalDescriptorOf(verbRuntime, set)))
+                .Where(entry => entry.Descriptor is not null)
+                .ToList();
+            if (archives.Count == 0)
             {
                 return (null, false);
             }
@@ -543,11 +547,34 @@ public static class AgentHost
             }
 
             using var passphrase = Passphrase.Create(passphraseValue);
-            using var authority = WriteOnlyDerivation.Derive(
-                passphrase, provisioning.KdfParameters, provisioning.KdfSalt,
-                Domain.Configuration.KdfValidationMode.OpenRepository);
+            var derived = new Dictionary<string, (byte[] SealingPublicKey, string Grant)>(StringComparer.Ordinal);
+            var grants = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (setId, descriptor) in archives)
+            {
+                var parameters = descriptor!.KdfParameters;
+                var key = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{Convert.ToHexString(descriptor.KdfSalt.Span)}/{parameters.MemoryKiB}/{parameters.Iterations}/{parameters.Parallelism}");
+                if (!derived.TryGetValue(key, out var known))
+                {
+                    using var authority = WriteOnlyDerivation.Derive(
+                        passphrase, parameters, descriptor.KdfSalt.Span,
+                        Domain.Configuration.KdfValidationMode.OpenRepository);
+                    known = (
+                        authority.Credential.SealingPublicKey.ToArray(),
+                        Convert.ToHexStringLower(
+                            WriteOnlyProvisioning.SealReclaimGrant(
+                                [.. verbRuntime.GrantRecipient.PublicKey], authority.ReclaimKeySeed)));
+                    derived[key] = known;
+                }
 
-            if (!authority.Credential.SealingPublicKey.SequenceEqual(provisioning.Credential.SealingPublicKey))
+                if (known.SealingPublicKey.AsSpan().SequenceEqual(descriptor.SealingPublicKey.Span))
+                {
+                    grants[setId] = known.Grant;
+                }
+            }
+
+            if (grants.Count == 0)
             {
                 error.WriteLine(
                     "error: the passphrase does not reproduce this installation's credential, so it cannot "
@@ -555,9 +582,7 @@ public static class AgentHost
                 return (null, true);
             }
 
-            return (Convert.ToHexStringLower(
-                WriteOnlyProvisioning.SealReclaimGrant(
-                    [.. verbRuntime.GrantRecipient.PublicKey], authority.ReclaimKeySeed)), false);
+            return (grants, false);
         }
 
         // Setup speaks the same one-shot shape as the other verbs here: its
@@ -763,8 +788,8 @@ public static class AgentHost
         {
             var apply = args.Contains("--apply");
             return await ServiceVerbAsync(
-                verbRuntime => ReclaimGrantFor(verbRuntime, apply) is var (grant, refused) && !refused
-                    ? new Api.RetentionCommand(apply, grant)
+                verbRuntime => ReclaimGrantsFor(verbRuntime, apply) is var (grants, refused) && !refused
+                    ? new Api.RetentionCommand(apply, ReclaimGrants: grants)
                     : null,
                 result => (result as Api.RetentionResult)?.Lines).ConfigureAwait(false);
         }

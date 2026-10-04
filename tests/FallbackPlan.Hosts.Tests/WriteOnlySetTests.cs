@@ -698,13 +698,211 @@ public sealed class WriteOnlySetTests : IDisposable
                     description.RestoreGrantRecipient!, "emphatically not this set's passphrase", salt)),
             _timeout.Token);
 
-        // With no tombstone yet on disk there is nothing to disagree with, so
-        // the run proceeds — the first tombstone it writes is what every
-        // later grant is measured against. What must NOT happen is the run
-        // falling back to the publication key.
-        Assert.IsNotInstanceOfType<ServiceError>(
-            wrong,
-            "a grant that cannot yet be contradicted is accepted; the tombstone it writes defines the key");
+        // No tombstone is on disk yet, and the archive's own credential
+        // carries the reclaim public key (ADR-0055 §5), so the grant is
+        // measured against that. A wrong grant would otherwise write the
+        // first tombstone, and every later true grant would be refused for
+        // disagreeing with it.
+        Assert.IsInstanceOfType<ServiceError>(wrong, out var refusal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason);
+        Assert.Contains("'docs'", refusal.Message, StringComparison.Ordinal);
+        Assert.IsFalse(
+            Directory.EnumerateFiles(_harness.ArchivesRoot, "*", SearchOption.AllDirectories)
+                .Any(path => path.Contains("tombstones", StringComparison.Ordinal)),
+            "a refused grant authors nothing");
+    }
+
+    [TestMethod]
+    public async Task Retention_TwoSetsUnderSaltsOfTheirOwn_ApplyWithAGrantEach()
+    {
+        // A set adopted from a destination keeps the salt it was born under
+        // (ADR-0061), so one grant cannot authorise every set. The map carries
+        // one per set, keyed by its id.
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var (recipient, docsSalt, extraSalt) = await ProvisionBothSetsAsync(handler);
+
+        var applied = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrants: new Dictionary<string, string>
+                {
+                    [_harness.DocsSetId] = SealReclaimGrant(recipient, PassphraseText, docsSalt),
+                    [ExtraSetId] = SealReclaimGrant(recipient, PassphraseText, extraSalt),
+                }),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            applied, applied is ServiceError error ? error.Message : applied.GetType().Name);
+        var result = (RetentionResult)applied;
+        Assert.IsFalse(
+            result.Lines.Any(line => line.Contains("no reclaim grant", StringComparison.Ordinal)),
+            string.Join(Environment.NewLine, result.Lines));
+    }
+
+    [TestMethod]
+    public async Task Retention_ASetTheGrantsDoNotName_IsReportedAndLeftAlone_WhileTheOthersApply()
+    {
+        // A passphrase that opens some sets and not others (an archive adopted
+        // under another one) still lets those it opens be collected; the rest
+        // are said, not silently skipped and not a reason to refuse the run.
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var (recipient, docsSalt, _) = await ProvisionBothSetsAsync(handler);
+
+        var applied = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrants: new Dictionary<string, string>
+                {
+                    [_harness.DocsSetId] = SealReclaimGrant(recipient, PassphraseText, docsSalt),
+                }),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<RetentionResult>(
+            applied, applied is ServiceError error ? error.Message : applied.GetType().Name);
+        var result = (RetentionResult)applied;
+        var extra = Assert.ContainsSingle(result.Lines.Where(line =>
+            line.StartsWith("extra:", StringComparison.Ordinal)
+            && line.Contains("no reclaim grant", StringComparison.Ordinal)));
+        Assert.Contains("not applied", extra, StringComparison.Ordinal);
+        Assert.IsFalse(
+            result.Lines.Any(line =>
+                line.StartsWith("docs:", StringComparison.Ordinal)
+                && line.Contains("no reclaim grant", StringComparison.Ordinal)),
+            "the set the grants name is collected");
+    }
+
+    [TestMethod]
+    public async Task Retention_AGrantSentUnderAnotherSetsId_IsRefusedBeforeItAuthorsAnything()
+    {
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var (recipient, docsSalt, extraSalt) = await ProvisionBothSetsAsync(handler);
+
+        // The right passphrase, each grant under the other set's salt.
+        var crossed = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrants: new Dictionary<string, string>
+                {
+                    [_harness.DocsSetId] = SealReclaimGrant(recipient, PassphraseText, extraSalt),
+                    [ExtraSetId] = SealReclaimGrant(recipient, PassphraseText, docsSalt),
+                }),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(crossed, out var refusal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason);
+        Assert.IsFalse(
+            Directory.EnumerateFiles(_harness.ArchivesRoot, "*", SearchOption.AllDirectories)
+                .Any(path => path.Contains("tombstones", StringComparison.Ordinal)),
+            "a refused grant authors nothing");
+    }
+
+    [TestMethod]
+    public async Task Retention_ARestoreGrantSentAsTheReclaimGrant_IsRefusedBeforeItAuthorsAnything()
+    {
+        // The two grants are sealed to the same recipient key in the same
+        // shape, so a restore grant opens where a reclaim grant should. What
+        // it carries is the sealing scalar, and the credential's reclaim
+        // public key tells the two apart before any tombstone exists.
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+
+        var salt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(
+                new ProvisionWriteOnlySetCommand(
+                    "docs", SealProvision(description.RestoreGrantRecipient!, PassphraseText, salt)),
+                _timeout.Token));
+
+        var sent = await handler.ExecuteAsync(
+            new RetentionCommand(
+                Apply: true,
+                ReclaimGrants: new Dictionary<string, string>
+                {
+                    [_harness.DocsSetId] = await SealGrantAsync(description.RestoreGrantRecipient!, PassphraseText),
+                }),
+            _timeout.Token);
+
+        Assert.IsInstanceOfType<ServiceError>(sent, out var refusal);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refusal.Reason);
+        Assert.Contains("'docs'", refusal.Message, StringComparison.Ordinal);
+        Assert.IsFalse(
+            Directory.EnumerateFiles(_harness.ArchivesRoot, "*", SearchOption.AllDirectories)
+                .Any(path => path.Contains("tombstones", StringComparison.Ordinal)),
+            "a refused grant authors nothing");
+    }
+
+    [TestMethod]
+    public async Task RetentionVerb_TwoSetsUnderSaltsOfTheirOwn_DeriveAGrantEach()
+    {
+        // The agent's own verb on an installation provisioned set by set:
+        // there is no installation credential to derive under, and each
+        // archive was born under a salt of its own, so the verb derives a
+        // grant per set from what each archive's descriptor records.
+        _harness.WriteConfiguration("every 1h", withSecondSet: true);
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+        await using (var runtime = await StartWithoutPassphraseAsync(_harness.StateDirectory))
+        {
+            await ProvisionBothSetsAsync(new ServiceCommandHandler(runtime, RemoteBindingState.Off));
+        }
+
+        var variable = "FBP_WRITE_ONLY_VERB_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(variable, PassphraseText);
+        try
+        {
+            var result = await HostHarness.RunAsync(
+                AgentHost.RunAsync,
+                "retention", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+                "--passphrase-env", variable, "--apply");
+
+            Assert.AreEqual(0, result.ExitCode, result.All);
+            Assert.DoesNotContain("no reclaim grant", result.All, StringComparison.Ordinal);
+            Assert.Contains("extra: ", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+        }
+    }
+
+    /// <summary>The harness's second set, which <c>WriteConfiguration(…, withSecondSet: true)</c> declares.</summary>
+    private static readonly string ExtraSetId = new('b', 32);
+
+    /// <summary>
+    /// Provisions the harness's two sets write-only, each under a salt of its
+    /// own, and answers the service's recipient key and the two salts.
+    /// </summary>
+    private async Task<(string Recipient, byte[] DocsSalt, byte[] ExtraSalt)> ProvisionBothSetsAsync(
+        ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<ServiceDescriptionResult>(
+            await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+        var recipient = description.RestoreGrantRecipient!;
+
+        var docsSalt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        var extraSalt = RandomNumberGenerator.GetBytes(KekDerivation.SaltLength);
+        foreach (var (name, salt) in new[] { ("docs", docsSalt), ("extra", extraSalt) })
+        {
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(
+                await handler.ExecuteAsync(
+                    new ProvisionWriteOnlySetCommand(name, SealProvision(recipient, PassphraseText, salt)),
+                    _timeout.Token));
+        }
+
+        return (recipient, docsSalt, extraSalt);
     }
 
     private static string SealReclaimGrant(string recipientHex, string passphraseText, byte[] salt)
