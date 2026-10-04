@@ -1540,6 +1540,41 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // ----------------------------------------------------- delete-snapshots
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "The backup set the snapshots belong to, by name or id.",
+                Required = true,
+            };
+            var snapshotsArgument = new Argument<string[]>("snapshot")
+            {
+                Description = "The snapshots to delete, as the hex ids `snapshots` lists.",
+                Arity = ArgumentArity.OneOrMore,
+            };
+            var applyOption = new Option<bool>("--apply")
+            {
+                Description = "Delete them. Without it, say what would go and where each is held. Against a running "
+                    + "service it needs --passphrase-env: the service cannot delete on its own, so the set's reclaim "
+                    + "grant is derived here from the passphrase (ADR-0055).",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "delete-snapshots",
+                "Delete snapshots from staging and every copy (ADR-0080): the set's other snapshots, and anything "
+                + "they still need, stay. A set keeps at least one complete snapshot."));
+            command.Options.Add(setOption);
+            command.Options.Add(applyOption);
+            command.Options.Add(directOption);
+            command.Arguments.Add(snapshotsArgument);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.DeleteSnapshotsAsync(
+                    parse.GetValue(setOption)!, parse.GetValue(snapshotsArgument) ?? [], parse.GetValue(applyOption), token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------- config-export
 
         {

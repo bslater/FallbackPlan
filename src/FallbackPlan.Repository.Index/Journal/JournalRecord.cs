@@ -89,11 +89,20 @@ public abstract record JournalPayload
         ulong RetiresSequence,
         IntentOutcome Outcome) : JournalPayload;
 
-    /// <summary>An audit record's payload (08 §6, keys 1–4); parameters are per-action and empty in phase 0.</summary>
+    /// <summary>An audit record's payload (08 §6, keys 1–4); parameters are per-action.</summary>
     public sealed record Audit(
         AuditAction Action,
         string Actor,
-        ulong ObjectsAffected) : JournalPayload;
+        ulong ObjectsAffected) : JournalPayload
+    {
+        /// <summary>
+        /// The snapshots a <see cref="AuditAction.BulkSnapshotDeletion"/> was
+        /// asked for, each a 16-byte snapshot id: its parameter 1 (08 §6,
+        /// FR-GC-013). Empty for every other action, whose parameters stay
+        /// empty, so a record without snapshots encodes as it always has.
+        /// </summary>
+        public IReadOnlyList<ReadOnlyMemory<byte>> Snapshots { get; init; } = [];
+    }
 }
 
 /// <summary>One journal record (specification 08 §2, keys 1–5; the signature rides at key 6).</summary>

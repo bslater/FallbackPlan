@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.50
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.51
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.50 — 60 commands. One line each; parameters, results
+The register as of 1.51 — 61 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -113,6 +113,12 @@ Retention keeps such a snapshot, and `open_restore_source` does not judge.
 The two answer in opposite orders. `list_snapshots` gives each set's snapshots
 newest first, the sets in configuration order. `open_restore_source` gives a
 source's oldest first, because the guided restore reads it as a timeline.
+Since 1.51, `delete_snapshots` deletes named snapshots of one set from staging
+and every copy, under that set's reclaim grant, and answers
+`snapshots_deleted` with each one's state; a dry run needs no grant
+([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). Each
+snapshot of `list_snapshots` a person asked to delete carries
+`deletion_pending`, the destinations the deletion still waits on.
 
 **Destinations at work** — `sync`, `verify_destination`, `verify`, `check`,
 `retention`, `retire_staging` (1.20, ADR-0046), `upgrade_set_format`
@@ -187,3 +193,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.48 | `implausible_capture_time` on each snapshot of `list_snapshots` ([ADR-0078](../../docs/adr/0078-implausible-capture-times.md), FR-GC-012): whether the snapshot's capture time is out of step with the order its writer published it in, by more than the configured clock skew margin, and which way — `behind` is dated before snapshots published ahead of it, `ahead` after snapshots published after it. Retention keeps such a snapshot and never expires it, and its keep line in the `retention` report says why. Additive with a null default: a capture that fits, a restore source (which does not judge) and a pre-1.48 service send none, which reads as nothing to report |
 | 1.49 | `set_id` on `validate_set_draft` ([ADR-0037 Amendment 2](../../docs/adr/0037-configuration-over-the-command-contract.md#amendment-2-2026-10--a-new-set-is-made-in-steps-and-its-draft-is-judged-for-placement), FR-DEST-017, FR-SVC-022): the set the draft edits, or the id a new one will be created under. With it, the answer names each placement refusal ([ADR-0051](../../docs/adr/0051-local-destination-placement.md)) the save would give, in the save's words, judged as the save judges it: every local destination of a set the configuration does not hold, and for one it does, the destinations newly referenced, or all of them when its roots change. Additive with a null default: a pre-1.49 client names no set, and its draft is not judged for placement, because a standing binding the save would leave alone cannot be told from a new one |
 | 1.50 | `reclaim_grants` on `retention` ([ADR-0055 Amendment 3](../../docs/adr/0055-reclaim-authority.md#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key), FR-GC-008): a reclaim grant per set, keyed by set id, each in `reclaim_grant`'s sealed shape, because a set adopted from a destination keeps the salt it was born under and the installation's grant is not its authority. A set the map names is collected under its own entry, and one it leaves out falls back to `reclaim_grant`. With neither, the set is reported and not applied, and the report says so. A command with no map is refused for want of a grant exactly as before. Every grant is now proved against the reclaim public key its archive's credential carries, before any set runs, so a wrong one is refused by name even on an archive with no tombstone yet. Additive with a null default: a pre-1.50 client sends one grant or none, and is answered as before |
+| 1.51 | `delete_snapshots`, answered by `snapshots_deleted` ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md), FR-GC-013): a person deletes named snapshots of one set from staging and every copy. Without `apply` it is a dry run that needs no grant and says where each snapshot is held. With it, under the set's `reclaim_grant`, the service requests the deletion, converges every copy it can reach and takes the snapshots, and what only they held, out of staging, answering each snapshot `deleted` or `pending` with the destinations it awaits. An id the set does not hold, and a request that would leave the set nothing to restore from, are refused before anything is written. Who asked is not on the wire: the connection's gate supplies it from the session. `list_snapshots` gains `deletion_pending` on each snapshot a person asked to delete. Additive: a pre-1.51 client never sends the command, and reads the listing as before |

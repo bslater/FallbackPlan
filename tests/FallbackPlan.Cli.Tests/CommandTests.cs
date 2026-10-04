@@ -163,6 +163,19 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DeleteSnapshots_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // A deletion has to reach every copy the hub replicates to, and only
+        // the hub knows them and holds their ledger (FR-GC-013).
+        var deletion = await _cli.RunAsync("delete-snapshots", "--set", "docs", new string('5', 64));
+
+        Assert.AreEqual(1, deletion.ExitCode);
+        Assert.Contains("runs on the hub", deletion.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task RebuildIndex_AfterTheCatalogueIsDeleted_RestoresItFromTheRepository()
     {
         await _cli.InitAsync();

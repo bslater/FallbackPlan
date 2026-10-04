@@ -34,11 +34,74 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ARetentionRunsGrantsPerSet_IsRecordedAtOneFifty()
+    public void ContractVersion_ASnapshotDeletionCommand_IsRecordedAtOneFiftyOne()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.50", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.51", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void DeleteSnapshotsCommand_CrossesUnderItsWireNames_AndNeverCarriesWhoAsked()
+    {
+        // FR-GC-013: who asked is the connection's to say, from the session it
+        // presented, and never the client's. The field exists only in process.
+        var setId = new string('b', 32);
+        var snapshot = new string('5', 64);
+        var command = JsonSerializer.Serialize<ServiceCommand>(
+            new DeleteSnapshotsCommand(setId, [snapshot], Apply: true, ReclaimGrant: "c0ffee") { Actor = "mallory" },
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"delete_snapshots\"", command, StringComparison.Ordinal);
+        Assert.Contains($"\"set_id\":\"{setId}\"", command, StringComparison.Ordinal);
+        Assert.Contains($"\"snapshot_ids\":[\"{snapshot}\"]", command, StringComparison.Ordinal);
+        Assert.Contains("\"reclaim_grant\":\"c0ffee\"", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("mallory", command, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<DeleteSnapshotsCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                command.Replace("\"apply\":true", "\"apply\":true,\"actor\":\"mallory\"", StringComparison.Ordinal),
+                FrameCodec.SerializerOptions),
+            out var read);
+        Assert.IsNull(read.Actor);
+        Assert.IsTrue(read.Apply);
+        Assert.AreEqual(snapshot, Assert.ContainsSingle(read.SnapshotIds));
+    }
+
+    [TestMethod]
+    public void DeleteSnapshotsResult_EachSnapshotsOutcome_CrossesUnderItsWireNames()
+    {
+        var setId = new string('b', 32);
+        var snapshot = new string('5', 64);
+        var result = JsonSerializer.Serialize<ServiceResult>(
+            new DeleteSnapshotsResult(
+                setId, Applied: true, [new SnapshotDeletionOutcome(snapshot, "pending", ["usb"])], ["a line"]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"state\":\"pending\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"awaiting\":[\"usb\"]", result, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<DeleteSnapshotsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(result, FrameCodec.SerializerOptions), out var read);
+        Assert.IsTrue(read.Applied);
+        Assert.AreEqual("usb", Assert.ContainsSingle(Assert.ContainsSingle(read.Snapshots).Awaiting));
+    }
+
+    [TestMethod]
+    public void SnapshotDescriptor_ADeletionStillPending_CrossesUnderItsWireName()
+    {
+        // FR-GC-013: a requested snapshot stays listed until every copy has
+        // let it go, and says which copies it is waiting on.
+        var listed = JsonSerializer.Serialize<ServiceResult>(
+            new SnapshotsResult([new SnapshotDescriptor(new string('5', 64), new string('b', 32), 1, 1, 3)
+            {
+                DeletionPending = ["usb"],
+            }]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"deletion_pending\":[\"usb\"]", listed, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<SnapshotsResult>(
+            JsonSerializer.Deserialize<ServiceResult>(listed, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual("usb", Assert.ContainsSingle(Assert.ContainsSingle(read.Snapshots).DeletionPending!));
     }
 
     [TestMethod]

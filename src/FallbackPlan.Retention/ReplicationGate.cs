@@ -12,7 +12,16 @@ namespace FallbackPlan.Retention;
 /// raised as a warning requiring action (FR-GC-009).
 /// </param>
 public sealed record HeldSnapshot(
-    SnapshotFact Snapshot, IReadOnlyList<string> AwaitingDestinations, bool DeferralExceeded);
+    SnapshotFact Snapshot, IReadOnlyList<string> AwaitingDestinations, bool DeferralExceeded)
+{
+    /// <summary>
+    /// Whether this is a person's deletion waiting on its copies (FR-GC-013)
+    /// rather than expired history a destination has not received. The
+    /// destinations named are the ones that have not converged since the
+    /// request, and the hold has no deferral bound.
+    /// </summary>
+    public bool DeletionPending { get; init; }
+}
 
 /// <summary>The gate's verdict over a policy's expire-set.</summary>
 /// <param name="Expirable">Snapshots every configured destination holds — safe to expire from staging.</param>
@@ -55,6 +64,19 @@ public static class ReplicationGate
     /// it must never hold up that snapshot's expiry from staging either —
     /// otherwise one narrow destination pins staging forever.
     /// </summary>
+    /// <remarks>
+    /// A snapshot a person asked to delete (FR-GC-013) is held on a different
+    /// question: not whether a destination has it, but whether one could
+    /// still. Any declared destination whose last converge began before the
+    /// request may hold the snapshot, or part of it from a pass that was cut
+    /// short, and so may one the ledger has no row for: a renamed destination
+    /// starts a new row, and a ledger that could not be read starts empty,
+    /// while the copy itself is untouched. Only a converge that runs while
+    /// staging still lists those keys removes them (ADR-0034 §6), so staging
+    /// keeps the snapshot until each has run one. A destination's own policy
+    /// does not excuse it, and there is no deferral bound: a copy left behind
+    /// would be kept for ever.
+    /// </remarks>
     /// <param name="expire">What the set's policy no longer protects.</param>
     /// <param name="destinations">The set's declared destination names.</param>
     /// <param name="recordFor">The sync ledger row for a destination.</param>
@@ -82,6 +104,23 @@ public static class ReplicationGate
         var held = new List<HeldSnapshot>();
         foreach (var snapshot in expire)
         {
+            if (snapshot.DeletionRequest is { } requested)
+            {
+                var unconverged = destinations
+                    .Where(name => (records[name]?.ConvergedSequence ?? 0) < requested)
+                    .ToList();
+                if (unconverged.Count == 0)
+                {
+                    expirable.Add(snapshot);
+                }
+                else
+                {
+                    held.Add(new HeldSnapshot(snapshot, unconverged, DeferralExceeded: false) { DeletionPending = true });
+                }
+
+                continue;
+            }
+
             var awaiting = destinations
                 .Where(name => keptBy(name, snapshot)
                     && (records[name]?.SyncedSequence ?? 0) < snapshot.PublicationSequence)

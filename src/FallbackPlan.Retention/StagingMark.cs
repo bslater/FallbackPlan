@@ -38,7 +38,11 @@ public sealed record SnapshotSurvey(
 /// </summary>
 public static class StagingMark
 {
-    /// <summary>Enumerates and decodes every standalone snapshot object in the store.</summary>
+    /// <summary>
+    /// Enumerates and decodes every standalone snapshot object in the store,
+    /// each marked with a person's request that it be deleted, where one
+    /// stands and verifies (FR-GC-013).
+    /// </summary>
     /// <param name="store">The staging archive's object store.</param>
     /// <param name="repository">The opened archive, for keys and identity.</param>
     /// <param name="cancellationToken">Cancels the survey.</param>
@@ -53,6 +57,11 @@ public static class StagingMark
         var undecodable = new List<string>();
         var contentIdKey = repository.Credential.ContentIdKey.ToArray();
         var deriver = new FallbackPlan.Repository.Crypto.ObjectIdDeriver(contentIdKey);
+
+        // Read first, so a request made while the snapshots are being read
+        // is one this survey does not claim to have seen.
+        var requests = await SnapshotDeletion.ReadRequestsAsync(store, repository, cancellationToken)
+            .ConfigureAwait(false);
 
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("snapshots/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
@@ -84,19 +93,23 @@ public static class StagingMark
                     }
 
                     var decoded = SnapshotManifestCodec.Decode(plaintext);
+                    var manifestObjectId = deriver.Derive(
+                        FallbackPlan.Domain.ObjectType.SnapshotManifest,
+                        FallbackPlan.Repository.Crypto.ContentHasher.Hash(
+                            SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span)));
                     snapshots.Add(new SurveyedSnapshot(
                         new SnapshotFact(
                             Convert.ToHexStringLower(decoded.Manifest.SnapshotId.Span),
                             decoded.Manifest.CaptureCompletedAt,
                             publicationSequence,
                             decoded.Manifest.CaptureStatus,
-                            record.WriterId.ToString()),
+                            record.WriterId.ToString())
+                        {
+                            DeletionRequest = requests.TryGetValue(manifestObjectId, out var requested) ? requested : null,
+                        },
                         decoded.Manifest,
                         entry.Key,
-                        deriver.Derive(
-                            FallbackPlan.Domain.ObjectType.SnapshotManifest,
-                            FallbackPlan.Repository.Crypto.ContentHasher.Hash(
-                                SnapshotManifestCodec.Encode(decoded.Manifest, decoded.Signature.Span)))));
+                        manifestObjectId));
                 }
                 finally
                 {

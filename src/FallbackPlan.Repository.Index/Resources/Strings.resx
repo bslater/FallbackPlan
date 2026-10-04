@@ -136,6 +136,15 @@
   <data name="JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned" xml:space="preserve">
     <value>The audit payload is incomplete or carries an unassigned action (specification 08 §6; ADR-0022 §Decision 6).</value>
   </data>
+  <data name="JournalRecordCodec_AuditActorTooLong" xml:space="preserve">
+    <value>An audit record's actor is at most {0} UTF-8 bytes (specification 08 §6).</value>
+  </data>
+  <data name="JournalRecordCodec_AuditSnapshotsBelongToADeletion" xml:space="preserve">
+    <value>Only a bulk snapshot deletion's audit record names snapshots (specification 08 §6).</value>
+  </data>
+  <data name="JournalRecordCodec_AuditSnapshotIdExactlyBytes" xml:space="preserve">
+    <value>A snapshot an audit record names is exactly 16 bytes (specification 08 §6).</value>
+  </data>
   <data name="JournalRecordCodec_BackupSetIdExactlyBytes" xml:space="preserve">
     <value>backup_set_id is exactly 16 bytes (specification 08 §3).</value>
   </data>

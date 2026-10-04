@@ -236,6 +236,13 @@ delete:
   instruction: it pushes the whole copy, records the pair `InSync`, and
   raises a notice naming the grant it is waiting on. An unsigned page is
   never sent to be refused.
+
+  > **2026-10 ([ADR-0080](0080-a-person-deletes-a-snapshot.md) §4).** While
+  > a person's deletion is pending, the scheduled sync pushes everything but
+  > the requested snapshots. It still sends no instruction, and it does not
+  > record the pair as converged. The deletion command converges the peer
+  > under its grant, and so does a granted retention run, a peer with no
+  > rules included.
 - The retention command's apply path, grant in hand, runs the peer
   convergence for every peer destination of the set with rules —
   `FanOut.ConvergePeersAsync`, pages signed by a signer closed over the
@@ -388,3 +395,4 @@ nothing about cloud IAM.
 | 2026-09 | Amended (audit record on the peer plane) | [ADR-0063](0063-deletion-receipts.md) gives FR-GC-008's audit half its peer-plane artefact: the destination's deletion receipt under its own device key, verified by the commander against the instruction §5 signs and filed by both parties. `Hosts.Tests/PeerRetentionReplayTests`, `Retention.Tests/PeerRetentionTests` |
 | 2026-09 | Amended (the peer instruction rides the grant) | [Amendment 2](#amendment-2-2026-09--a-write-only-sets-peers-converge-under-the-grant): a write-only set's scheduled sync sent its peer instruction unsigned and was refused whole on every pass. The instruction now rides the granted retention run, and the scheduled sync pushes whole copies and names the grant it waits on. `Retention.Tests/PeerRetentionTests` |
 | 2026-10 | Amended (a grant per set, proved against the archive's key) | [Amendment 3](#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key): the console and the CLI never sent a grant, so neither could apply, and the agent's verb sent one grant for every set. Grants now travel per set (contract 1.50), each derived by the client under its set's own salt, and each is proved against the reclaim public key the archive's credential carries before any set runs. `Retention/StagingSweep`, `Web/ConsoleRestoreGate`, `Cli/OperationGateway`, `Agent/AgentHost`, `Hosts.Tests/WriteOnlySetTests`, `Hosts.Tests/ClientModeTests`, `Web.Tests/RetentionApplyCeremonyTests` |
+| 2026-10 | Amended (a person's deletion) | [ADR-0080](0080-a-person-deletes-a-snapshot.md) takes the grant for one set, for `delete_snapshots`. While a request stands, a scheduled push leaves the requested snapshots out and instructs no drop, and the command converges every peer under the grant, one with no rules included. `Agent/FanOut`, `Agent/ReplicationInitiator`, `Agent/ServiceCommandHandler.Deletion` |

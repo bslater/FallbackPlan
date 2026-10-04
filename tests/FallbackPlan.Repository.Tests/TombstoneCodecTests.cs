@@ -1,3 +1,4 @@
+using FallbackPlan.Domain;
 using FallbackPlan.Repository.Format.Manifests;
 
 namespace FallbackPlan.Repository.Tests;
@@ -5,7 +6,9 @@ namespace FallbackPlan.Repository.Tests;
 /// <summary>
 /// The tombstone codec (specification 11 §3): the one lifecycle object that
 /// authorises, so its encoding, its signature coverage, and its width rule
-/// are pinned before any collector writes one.
+/// are pinned before any collector writes one. The <c>requested</c> reason
+/// a person's deletion is recorded under (FR-GC-013) names only a snapshot
+/// manifest.
 /// </summary>
 [TestClass]
 public sealed class TombstoneCodecTests
@@ -45,6 +48,33 @@ public sealed class TombstoneCodecTests
 
         Assert.AreEqual(Tombstone.BlobTypeCode, decoded.Value.ObjectTypeCode);
         Assert.HasCount(16, decoded.Value.ObjectId.ToArray());
+    }
+
+    [TestMethod]
+    public void RoundTrip_ARequestedSnapshotTombstone_PreservesTheReason()
+    {
+        // A person's deletion is recorded as the snapshot manifest's
+        // tombstone, and the reason is what every later plan reads it by.
+        var tombstone = new Tombstone(
+            (byte)ObjectType.SnapshotManifest, new byte[32], TombstoneReason.Requested, WriterId, 0, 12);
+
+        var decoded = TombstoneCodec.Decode(TombstoneCodec.Encode(tombstone, Signature));
+
+        Assert.AreEqual(TombstoneReason.Requested, decoded.Value.Reason);
+        Assert.AreEqual((byte)ObjectType.SnapshotManifest, decoded.Value.ObjectTypeCode);
+    }
+
+    [TestMethod]
+    public void Encode_ARequestedReasonOnAnythingButASnapshotManifest_IsRefused()
+    {
+        // A person asks for a snapshot to go; what only it referenced goes as
+        // unreferenced. A request naming a record or a blob was never made,
+        // so it is refused at encode as it is at read.
+        var onARecord = new Tombstone(0x01, new byte[32], TombstoneReason.Requested, WriterId, 0, 1);
+        var onABlob = new Tombstone(Tombstone.BlobTypeCode, new byte[16], TombstoneReason.Requested, WriterId, 0, 1);
+
+        Assert.ThrowsExactly<ManifestValidationException>(() => TombstoneCodec.Encode(onARecord, Signature));
+        Assert.ThrowsExactly<ManifestValidationException>(() => TombstoneCodec.Encode(onABlob, Signature));
     }
 
     [TestMethod]

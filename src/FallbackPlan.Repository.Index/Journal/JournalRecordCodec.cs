@@ -14,6 +14,9 @@ namespace FallbackPlan.Repository.Index.Journal;
 /// </summary>
 public static class JournalRecordCodec
 {
+    /// <summary>The longest <c>actor</c> an audit record may carry, in UTF-8 bytes (08 §6).</summary>
+    public const int MaximumActorBytes = 256;
+
     /// <summary>Encodes keys 1–5 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(JournalRecord record)
     {
@@ -103,7 +106,36 @@ public static class JournalRecordCodec
         {
             throw new IndexFormatException(Strings.JournalRecordCodec_BackupSetIdExactlyBytes);
         }
+
+        // Refused at encode as it would be at read: a record nobody can read
+        // back is one the collector must treat as damage.
+        if (record.Payload is JournalPayload.Audit named
+            && System.Text.Encoding.UTF8.GetByteCount(named.Actor) > MaximumActorBytes)
+        {
+            throw new IndexFormatException(Strings.FormatJournalRecordCodec_AuditActorTooLong(MaximumActorBytes));
+        }
+
+        if (record.Payload is JournalPayload.Audit { Snapshots.Count: > 0 } audit)
+        {
+            // The parameter is the deletion's alone: any other action naming
+            // snapshots would be claiming a decision it did not make.
+            if (audit.Action != AuditAction.BulkSnapshotDeletion)
+            {
+                throw new IndexFormatException(Strings.JournalRecordCodec_AuditSnapshotsBelongToADeletion);
+            }
+
+            if (audit.Snapshots.Any(snapshot => snapshot.Length != SnapshotIdLength))
+            {
+                throw new IndexFormatException(Strings.JournalRecordCodec_AuditSnapshotIdExactlyBytes);
+            }
+        }
     }
+
+    /// <summary>A snapshot id's width (06 §6 key 1).</summary>
+    private const int SnapshotIdLength = 16;
+
+    /// <summary>How many snapshots one deletion's audit record may name: a bound for the reader, far past any set.</summary>
+    private const int MaximumAuditedSnapshots = 100_000;
 
     private static void WriteBody(CanonicalCborWriter writer, JournalRecord record, byte[]? signature)
     {
@@ -186,7 +218,25 @@ public static class JournalRecordCodec
                 writer.WriteKey(2);
                 writer.WriteTextString(audit.Actor);
                 writer.WriteKey(3);
-                writer.WriteStartMap(0); // per-action parameters, empty in phase 0 (ADR-0022 §Decision 6)
+                if (audit.Snapshots.Count == 0)
+                {
+                    // Per-action parameters, empty for every action but a
+                    // deletion that names its snapshots (ADR-0022 §Decision 6).
+                    writer.WriteStartMap(0);
+                }
+                else
+                {
+                    writer.WriteStartMap(1);
+                    writer.WriteKey(1);
+                    writer.WriteStartArray(audit.Snapshots.Count);
+                    foreach (var snapshot in audit.Snapshots)
+                    {
+                        writer.WriteByteString(snapshot.Span);
+                    }
+
+                    writer.WriteEndArray();
+                }
+
                 writer.WriteEndMap();
                 writer.WriteKey(4);
                 writer.WriteUnsignedInteger(audit.ObjectsAffected);
@@ -390,6 +440,7 @@ public static class JournalRecordCodec
                 ushort? action = null;
                 string? actor = null;
                 ulong? affected = null;
+                List<ReadOnlyMemory<byte>> snapshots = [];
 
                 for (var i = 0; i < count; i++)
                 {
@@ -399,13 +450,29 @@ public static class JournalRecordCodec
                             action = reader.ReadUInt16();
                             break;
                         case 2:
-                            actor = reader.ReadTextString(maxUtf8Length: 256);
+                            actor = reader.ReadTextString(maxUtf8Length: MaximumActorBytes);
                             break;
                         case 3:
+                            // Keys are canonical and ascending, so the action
+                            // is known by the time its parameters are read. A
+                            // parameter this build has no meaning for is
+                            // skipped, as every parameter was before any had
+                            // one.
                             var parameterCount = reader.ReadStartMap();
                             for (var j = 0; j < parameterCount; j++)
                             {
-                                reader.ReadKey();
+                                if (reader.ReadKey() == 1 && action == (ushort)AuditAction.BulkSnapshotDeletion)
+                                {
+                                    var named = reader.ReadStartArray(MaximumAuditedSnapshots);
+                                    for (var k = 0; k < named; k++)
+                                    {
+                                        snapshots.Add(reader.ReadFixedByteString(SnapshotIdLength));
+                                    }
+
+                                    reader.ReadEndArray();
+                                    continue;
+                                }
+
                                 reader.SkipValue();
                             }
 
@@ -426,7 +493,10 @@ public static class JournalRecordCodec
                     throw new IndexFormatException(Strings.JournalRecordCodec_AuditPayloadIncompleteCarriesUnassigned);
                 }
 
-                return new JournalPayload.Audit((AuditAction)action.Value, actor, affected.Value);
+                return new JournalPayload.Audit((AuditAction)action.Value, actor, affected.Value)
+                {
+                    Snapshots = snapshots,
+                };
             }
 
             default:

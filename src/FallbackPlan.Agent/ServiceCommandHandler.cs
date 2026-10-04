@@ -123,6 +123,10 @@ public sealed partial class ServiceCommandHandler(
                     retention.Apply ? "retention apply" : "retention plan",
                     token => RetentionAsync(retention, token),
                     cancellationToken).ConfigureAwait(false),
+                DeleteSnapshotsCommand deletion => await OnWriterLaneAsync(
+                    deletion.Apply ? "delete snapshots" : "plan snapshot deletion",
+                    token => DeleteSnapshotsAsync(deletion, token),
+                    cancellationToken).ConfigureAwait(false),
                 _ => await DispatchAsync(command, cancellationToken).ConfigureAwait(false),
             };
         }
@@ -417,6 +421,15 @@ public sealed partial class ServiceCommandHandler(
             }
 
             lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
+
+            // A person's deletion this pass finished is one nothing should
+            // list any more (FR-GC-013). An expiry's snapshot keeps its row,
+            // as it always has.
+            foreach (var gone in report.Swept?.DeletedSnapshots.Where(fact => fact.DeletionRequest is not null) ?? [])
+            {
+                archive.Catalogue.ForgetSnapshot(Convert.FromHexString(gone.SnapshotId));
+            }
+
             if (ungranted.Contains(set.Id))
             {
                 lines.Add(
@@ -2362,6 +2375,11 @@ public sealed partial class ServiceCommandHandler(
             // sequence, parsed from the standalone records' cleartext.
             var sequences = await SnapshotSequencesAsync(archive, cancellationToken).ConfigureAwait(false);
 
+            // A snapshot a person asked to delete stays listed until every copy
+            // has let it go, and says which copies it waits on (FR-GC-013).
+            var requests = await Retention.SnapshotDeletion.ReadRequestsAsync(
+                archive.Store, archive.Repository, cancellationToken).ConfigureAwait(false);
+
             using var catalogue = archive.OpenReadCatalogue();
             var rows = catalogue.EnumerateSnapshots().ToList();
 
@@ -2423,6 +2441,12 @@ public sealed partial class ServiceCommandHandler(
                     row.ObservedClockSkewMs,
                     implausible.TryGetValue(Convert.ToHexStringLower(row.SnapshotId.Span), out var direction)
                         ? direction == Retention.ImplausibleCaptureTime.Behind ? "behind" : "ahead"
+                        : null,
+                    requests.TryGetValue(row.ObjectId, out var requested)
+                        ? [.. set.Destinations
+                            .Select(reference => reference.Ref)
+                            .Where(name =>
+                                (runtime.DestinationSync.Find(set.Id, name)?.ConvergedSequence ?? 0) < requested)]
                         : null));
             }
         }

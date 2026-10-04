@@ -11,7 +11,8 @@ using Catalogue = FallbackPlan.Repository.Catalogue.Catalogue;
 /// specification 04 §7): the objects a read would take from them, the file
 /// versions that need those objects, and so the snapshots and paths a restore
 /// of which would meet the damage. The reverse of what the manifests say,
-/// kept beside them because the manifests are sealed.
+/// kept beside them because the manifests are sealed. A snapshot a person
+/// deleted is forgotten, and nothing else with it (FR-GC-013).
 /// </summary>
 /// <remarks>
 /// Rows written by hand, so each rule is seen alone: a version is reached
@@ -70,6 +71,22 @@ public sealed class CatalogueReachTests : IDisposable
             captureStatus: 1, signatureState: 1);
         catalogue.RecordSnapshotStructure(snapshotId, manifest);
         catalogue.RecordSnapshotStructure(snapshotId, rootTree);
+    }
+
+    [TestMethod]
+    public void ForgetSnapshot_TakesThatSnapshotOutOfTheListing_AndNoOther()
+    {
+        using var catalogue = Open();
+        Snapshot(catalogue, SnapshotA, Object(0x41), Object(0x51));
+        Snapshot(catalogue, SnapshotB, Object(0x42), Object(0x52));
+
+        catalogue.ForgetSnapshot(SnapshotA);
+
+        // Forgetting what is not there is not a fault: a pass that deleted the
+        // snapshot and a later one that finds it gone ask the same thing.
+        catalogue.ForgetSnapshot([.. Enumerable.Repeat((byte)0xC3, 16)]);
+
+        Assert.AreEqual(Hex(SnapshotB), Hex(Assert.ContainsSingle(catalogue.EnumerateSnapshots()).SnapshotId.ToArray()));
     }
 
     [TestMethod]

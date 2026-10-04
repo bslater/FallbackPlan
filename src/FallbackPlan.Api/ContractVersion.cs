@@ -487,8 +487,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// tombstone yet. Additive with a null default: a pre-1.50 client sends
     /// one grant or none, and is answered as before.
     /// </para>
+    /// <para>
+    /// 1.51 adds `delete_snapshots` (FR-GC-013, ADR-0080): a person deletes
+    /// snapshots of one set from staging and every copy. A dry run says what
+    /// would go and where it is held; an apply, under the set's reclaim grant,
+    /// requests the deletion, converges every copy it can reach, and takes the
+    /// snapshots and what only they held out of staging, answering
+    /// `snapshots_deleted` with each snapshot's state. It refuses an id the set
+    /// does not hold and a request that would leave the set no complete
+    /// snapshot. Who asked is not on the wire: the connection's gate supplies
+    /// it from the session. `list_snapshots` gains `deletion_pending`, the
+    /// copies a requested snapshot still waits on. Additive: a pre-1.51 client
+    /// never sends the command and reads the listing as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 50);
+    public static ContractVersion Current { get; } = new(1, 51);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

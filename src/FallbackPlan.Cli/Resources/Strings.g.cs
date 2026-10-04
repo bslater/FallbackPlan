@@ -213,6 +213,11 @@ internal static class Strings
     internal static string DirectGateway_PassRootDirectorySetName => Get(nameof(DirectGateway_PassRootDirectorySetName));
 
     /// <summary>
+    /// Deleting snapshots runs on the hub — a deletion has to reach every copy the hub replicates to, and only the hub knows them and holds their ledger. Connect to it with --connect.
+    /// </summary>
+    internal static string DirectGateway_DeleteSnapshotsNeedsTheService => Get(nameof(DirectGateway_DeleteSnapshotsNeedsTheService));
+
+    /// <summary>
     /// Retention runs on the hub — the pass needs the service's configuration, sync ledger and writer role. Connect to it with --connect, or run `fallbackplan-agent retention [--apply]` there.
     /// </summary>
     internal static string DirectGateway_RetentionNeedsTheService => Get(nameof(DirectGateway_RetentionNeedsTheService));

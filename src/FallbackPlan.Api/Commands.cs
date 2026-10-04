@@ -54,6 +54,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
 [JsonDerivedType(typeof(RetentionCommand), "retention")]
+[JsonDerivedType(typeof(DeleteSnapshotsCommand), "delete_snapshots")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
 [JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
@@ -796,6 +797,39 @@ public sealed record RetentionCommand(
     bool Apply,
     string? ReclaimGrant = null,
     IReadOnlyDictionary<string, string>? ReclaimGrants = null) : ServiceCommand;
+
+/// <summary>
+/// Deletes snapshots a person names, from the set's staging archive and from
+/// every copy of it (FR-GC-013, contract 1.51,
+/// [ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). A dry run
+/// says what would go and where it is held, and writes nothing. An apply
+/// records the request, brings every copy that can be reached in line, and
+/// takes the snapshots, and what only they held, out of staging. A copy that
+/// cannot be reached holds the deletion until it can, and asking again
+/// finishes it.
+/// </summary>
+/// <param name="SetId">The set the snapshots belong to.</param>
+/// <param name="SnapshotIds">The snapshots, as lowercase hex ids.</param>
+/// <param name="Apply">False reports only; true requests and carries out the deletion.</param>
+/// <param name="ReclaimGrant">
+/// The set's reclaim grant, in <see cref="RetentionCommand.ReclaimGrant"/>'s
+/// shape (ADR-0055 §6). Needed to apply on a set declaring
+/// <c>reclaim-authority</c>, and not for a dry run.
+/// </param>
+public sealed record DeleteSnapshotsCommand(
+    string SetId,
+    IReadOnlyList<string> SnapshotIds,
+    bool Apply = false,
+    string? ReclaimGrant = null) : ServiceCommand
+{
+    /// <summary>
+    /// Who asked, as the connection's gate knows it: the account signed in.
+    /// Never on the wire, so a client cannot name somebody else, and the audit
+    /// record says <c>cli</c> where no session put a name here.
+    /// </summary>
+    [JsonIgnore]
+    public string? Actor { get; init; }
+}
 
 /// <summary>
 /// Converges destinations now, outside the schedule (ADR-0034 §3,

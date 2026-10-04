@@ -799,6 +799,29 @@ public sealed class Catalogue : IDisposable
         return held;
     }
 
+    /// <summary>
+    /// Forgets a snapshot the store no longer holds: its row, its tree, and the
+    /// records it was made of (FR-GC-013). The catalogue is a cache of the
+    /// store, and a snapshot a person deleted is one nothing should list, offer
+    /// to restore, or trace damage to. What its files shared with other
+    /// snapshots stays, because those snapshots still hold it.
+    /// </summary>
+    /// <param name="snapshotId">The snapshot's 16-byte id.</param>
+    public void ForgetSnapshot(ReadOnlySpan<byte> snapshotId)
+    {
+        using var transaction = _connection.BeginTransaction();
+        foreach (var table in (string[])["tree_entries", "snapshot_structure", "snapshots"])
+        {
+            using var command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"DELETE FROM {table} WHERE snapshot_id = $snapshot;";
+            command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     /// <summary>Every known snapshot, newest capture first.</summary>
     public IReadOnlyList<CatalogueSnapshot> EnumerateSnapshots()
     {
