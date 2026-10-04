@@ -5,54 +5,19 @@ using FallbackPlan.Domain.Diagnostics;
 
 namespace FallbackPlan.Diagnostics;
 
-/// <summary>How much of a record the destination is allowed to see.</summary>
-public enum RenderMode
-{
-    /// <summary>
-    /// Everything, as logged. For a sink inside the trust boundary: the
-    /// service's own log file, on the machine that already holds the files.
-    /// </summary>
-    Full = 0,
-
-    /// <summary>
-    /// Only what a declared type clears (ADR-0081): values whose type
-    /// implements <see cref="IRedactedValue"/> render through it, a
-    /// <see cref="LogLabel"/>, numbers, enums and times render as written,
-    /// and anything else — a bare string, an exception's message — is
-    /// withheld. For anything crossing the boundary: a paired console's
-    /// feed, a diagnostic bundle (NFR-PRIV-003).
-    /// </summary>
-    Redacted = 1,
-
-    /// <summary>
-    /// <see cref="Redacted"/>, except that paths and the text no type
-    /// classifies render as written. For a diagnostic bundle whose person
-    /// opted in to paths for that bundle (architecture 10 §4, ADR-0081):
-    /// identifiers still shorten, because the opt-in is to paths and not
-    /// to correlation.
-    /// </summary>
-    RedactedWithPaths = 2,
-}
-
 /// <summary>
 /// Turns a <see cref="LogRecord"/> back into a line, applying the destination's
 /// rule (ADR-0043 §4 as amended by ADR-0081).
 /// </summary>
 /// <remarks>
-/// This is the single place the redaction decision is taken. It is deliberately
-/// not a filter over finished text: it substitutes into the template from
-/// typed values, so a value is redacted because of what it <em>is</em>, never
-/// because of what it looks like.
+/// The redaction decision is <see cref="RedactedRendering"/>'s, in Domain
+/// beside the types it reads, so that the recovery tool's bundle applies the
+/// same rule (ADR-0082). This applies it to records: it substitutes into the
+/// template from typed values, so a value is redacted because of what it
+/// <em>is</em>, never because of what it looks like.
 /// </remarks>
 public static class LogRecordRenderer
 {
-    /// <summary>
-    /// What a redacted rendering writes in place of a value no type cleared to
-    /// cross: a bare string, a value of an unclassified type, an exception's
-    /// message.
-    /// </summary>
-    public const string Withheld = "(withheld)";
-
     /// <summary>Renders one record for a destination.</summary>
     /// <param name="record">The captured record.</param>
     /// <param name="mode">What the destination may see.</param>
@@ -116,45 +81,8 @@ public static class LogRecordRenderer
             return null;
         }
 
-        return mode == RenderMode.Redacted ? Withheld : record.ExceptionMessage;
+        return mode == RenderMode.Redacted ? RedactedRendering.Withheld : record.ExceptionMessage;
     }
-
-    /// <summary>
-    /// Renders one value under the destination's rule. Public because the
-    /// wire projection and the diagnostic bundle render values individually
-    /// rather than as a line.
-    /// </summary>
-    /// <param name="value">The value as logged.</param>
-    /// <param name="mode">What the destination may see.</param>
-    /// <remarks>
-    /// Fail-closed (ADR-0081): across the boundary a value renders only when
-    /// its declared type says how. A secret is not handled here at all: its
-    /// own ToString already redacts, at the point it was declared, so it is
-    /// safe in every mode without this method knowing it exists.
-    /// </remarks>
-    public static string RenderValue(object? value, RenderMode mode) => value switch
-    {
-        null => "(null)",
-        _ when mode == RenderMode.Full => AsWritten(value),
-
-        // Redaction by DECLARED TYPE.
-        LogPath path when mode == RenderMode.RedactedWithPaths => path.ToString(),
-        IRedactedValue redactable => redactable.ToRedactedString(),
-        LogLabel label => label.ToString(),
-        bool or Enum or byte or sbyte or short or ushort or int or uint or long or ulong
-            or float or double or decimal or TimeSpan or DateTime or DateTimeOffset => AsWritten(value),
-
-        // A string declares nothing, and neither does a type nobody
-        // classified; only a person's opt-in to paths lets them through.
-        _ when mode == RenderMode.RedactedWithPaths => AsWritten(value),
-        _ => Withheld,
-    };
-
-    private static string AsWritten(object value) => value switch
-    {
-        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-        _ => value.ToString() ?? "(null)",
-    };
 
     private static string? FindTemplate(IReadOnlyList<KeyValuePair<string, object?>> values)
     {
@@ -207,7 +135,7 @@ public static class LogRecordRenderer
 
             if (TryFind(values, name, out var value))
             {
-                builder.Append(RenderValue(value, mode));
+                builder.Append(RedactedRendering.Render(value, mode));
             }
             else
             {
@@ -257,7 +185,7 @@ public static class LogRecordRenderer
                 builder.Append(", ");
             }
 
-            builder.Append(values[index].Key).Append('=').Append(RenderValue(values[index].Value, mode));
+            builder.Append(values[index].Key).Append('=').Append(RedactedRendering.Render(values[index].Value, mode));
         }
 
         return builder.ToString();

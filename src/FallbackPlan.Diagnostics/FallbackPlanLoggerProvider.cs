@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Diagnostics;
@@ -11,8 +12,9 @@ namespace FallbackPlan.Diagnostics;
 /// One provider rather than three is deliberate. A record is captured as
 /// structured state exactly once, and each sink then decides how to render it —
 /// which is what keeps "plaintext locally, redacted on the wire" a single
-/// decision taken in <see cref="LogRecordRenderer"/> rather than a rule each
-/// sink might implement slightly differently.
+/// decision, <see cref="RedactedRendering"/>'s, applied by
+/// <see cref="LogRecordRenderer"/>, rather than a rule each sink might
+/// implement slightly differently.
 /// </remarks>
 public sealed class FallbackPlanLoggerProvider : ILoggerProvider
 {

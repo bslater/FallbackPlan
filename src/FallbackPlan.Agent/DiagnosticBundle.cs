@@ -19,7 +19,7 @@ namespace FallbackPlan.Agent;
 /// <remarks>
 /// <para>
 /// Every field is classified where it is declared here, by the same types the
-/// log uses, and rendered by the same rule (<see cref="LogRecordRenderer.RenderValue"/>):
+/// log uses, and rendered by the same rule (<see cref="RedactedRendering.Render"/>):
 /// a path is a <see cref="LogPath"/>, an identifier a <see cref="LogId"/>, a
 /// name a person chose or a word the code chose a <see cref="LogLabel"/>, and
 /// text nobody can vouch for — an error, a notice's message — stays a string,
@@ -161,7 +161,7 @@ internal static class DiagnosticBundle
     }
 
     private static string? Render(object? value, RenderMode mode) =>
-        value is null ? null : LogRecordRenderer.RenderValue(value, mode);
+        value is null ? null : RedactedRendering.Render(value, mode);
 
     /// <summary>
     /// A path the configuration may not have, as null when it has none. Not a
@@ -169,7 +169,7 @@ internal static class DiagnosticBundle
     /// string makes the null branch a path that renders as "(none)".
     /// </summary>
     private static string? RenderPath(string? path, RenderMode mode) =>
-        string.IsNullOrEmpty(path) ? null : LogRecordRenderer.RenderValue(new LogPath(path), mode);
+        string.IsNullOrEmpty(path) ? null : RedactedRendering.Render(new LogPath(path), mode);
 
     private static string? Instant(ulong? unixMilliseconds) =>
         unixMilliseconds is { } ms
