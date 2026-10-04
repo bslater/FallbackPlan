@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §12 · **Resolves:** [H4](../review/2026-08-architecture-review.md#h4--the-recovery-kit-is-load-bearing-but-never-specified), [H3](../review/2026-08-architecture-review.md#h3--disposable-conflates-three-stores-with-incompatible-durability-requirements)
 
-**Built:** §§1–6 yes, and that includes §3.2's reading around damage ([ADR-0075](../adr/0075-a-restore-reads-around-damage.md)) and the disaster-recovery ceremony in §6: the peer claim and its hold, and adoption shown and confirmed before it takes effect. There is no §7; the disaster-recovery claim this line once gave a §7 is §6's, and built. See [implementation status](../implementation-status.md).
+**Built:** §§1–6 yes, and that includes §3.2's reading around damage ([ADR-0075](../adr/0075-a-restore-reads-around-damage.md)), §5's diagnostic bundle from the recovery tool ([ADR-0082](../adr/0082-the-recovery-tools-diagnostic-bundle.md)), and the disaster-recovery ceremony in §6: the peer claim and its hold, and adoption shown and confirmed before it takes effect. There is no §7; the disaster-recovery claim this line once gave a §7 is §6's, and built. See [implementation status](../implementation-status.md).
 
 ---
 
@@ -122,7 +122,7 @@ A standalone recovery executable, independent of the Agent and UI, that can:
 - restore without the service, the catalogue, or any local state;
 - rebuild a local index — including forensic rebuild ([`02-repository-format.md` §8.2](02-repository-format.md#82-forensic-rebuild));
 - operate from offline media;
-- produce a diagnostic bundle containing no secrets.
+- produce a diagnostic bundle containing no secrets: a report of one run, asked for on that run, rendered through the rule the service's log uses ([ADR-0082](../adr/0082-the-recovery-tools-diagnostic-bundle.md)).
 
 Source and reproducible release artifacts are published for every major format version, and remain downloadable and buildable for as long as that format version is supported. A recovery tool that cannot be obtained when needed is not a recovery tool.
 

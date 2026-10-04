@@ -34,6 +34,11 @@ A bundle built on that rendering would have failed its own requirement on the fi
 
 ### 1. A redacted rendering lets through only what a declared type clears
 
+> **Amended (2026-10) by [ADR-0082](0082-the-recovery-tools-diagnostic-bundle.md):**
+> the rule below moved, unchanged, from `Diagnostics/LogRecordRenderer` to
+> `Domain/Diagnostics/RedactedRendering`, so the standalone recovery tool can
+> render its own bundle through it. See [the amendment](#amendment-2026-10-the-recovery-tools-bundle-and-the-rules-new-home).
+
 The rule is now default-deny. A value crosses the boundary only when its declared type says how:
 
 | Declared type | Full: own file, local caller | Redacted: paired caller, default bundle | Redacted with paths: bundle, opted in |
@@ -130,6 +135,10 @@ The console's Diagnostics view has a Diagnostic bundle card with an unticked "In
 - It does not include acknowledged notices or the whole job journal: fifty jobs and the open notices answer "what is wrong now".
 - It does not give the standalone recovery tool a bundle. [Architecture 08 §5](../architecture/08-restore-and-recovery.md#5-emergency-recovery) asks the tool for one too, and a tool with no service and no ring needs its own design. That remains owed.
 
+  > **Built (2026-10) by [ADR-0082](0082-the-recovery-tools-diagnostic-bundle.md):**
+  > the recovery tool's bundle is a report of one run, asked for on that run,
+  > and rendered through this record's rule.
+
 ## Alternatives considered
 
 **Scrubbing paths out of strings by pattern.** Rejected. NFR-SEC-006 forbids it, and the string it misses is the one that matters.
@@ -144,8 +153,24 @@ The console's Diagnostics view has a Diagnostic bundle card with an unticked "In
 
 **A data-classification package's redaction attributes.** Rejected. It would be a new dependency judged at ADR-0019's bar, for what two small types and the existing renderer already do.
 
+## Amendment (2026-10): the recovery tool's bundle, and the rule's new home
+
+"What this does not do" left the standalone recovery tool's bundle owed, because a
+tool with no service and no ring needed its own design. [ADR-0082](0082-the-recovery-tools-diagnostic-bundle.md)
+is that design, and it changes one thing about this record.
+
+The rule in §1 lived in `Diagnostics/LogRecordRenderer`, and the recovery tool may not
+reference that project: it carries the concrete logging package and the ring's
+collection library, and the tool's project references are an exact whitelist. Copying
+the rule into the tool would have made two rules. So the rule moved, unchanged, to
+`Domain/Diagnostics/RedactedRendering`, beside the types it reads. The renderer applies
+it to records, the service's bundle renders its fields through it as before, and the
+recovery tool's bundle renders through it too. An architecture canary fails if the
+tool ever grows a copy. The Built line above names where the rule was first built.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first: the fail-closed rendering and its third mode, `LogLabel`, identifiers held as text, `ObjectKey` redaction, every product log hole classified, a paired caller's `read_log` withholding an exception's message, `export_diagnostics` (contract 1.52), the CLI verb and the console's card. |
+| 2026-10 | Amended | [ADR-0082](0082-the-recovery-tools-diagnostic-bundle.md): the owed recovery tool's bundle is built, and the rule of §1 moved, unchanged, to Domain so the tool can render through it |
