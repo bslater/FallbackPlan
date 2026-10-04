@@ -80,6 +80,7 @@ const S = {
   logCursor: 0,             // the sequence to ask from next
   logDropped: false,        // whether this reader has fallen behind the ring
   logLevelFilter: "",       // the minimum level asked for, "" for everything
+  bundlePaths: false,       // whether the next diagnostic bundle asks for paths — off until ticked, every time the page loads
   lastContact: null,        // ms epoch of last successful exchange
   desc: null,               // ServiceDescriptionResult
   status: null,             // StatusResult
@@ -1252,6 +1253,16 @@ function renderDiagnostics() {
         : `<p class="sub">Waiting for the service.</p>`}
       </div>
 
+      <div class="card">
+        <h3>🧰 Diagnostic bundle</h3>
+        <p class="sub">One file to send to whoever is helping you: the log, versions, configuration, status, open notices and recent jobs. It never holds passphrases, passwords or keys, and identifiers that could link your stores to each other are shortened.</p>
+        <label class="check-row"><input type="checkbox" id="diag-bundle-paths"${S.bundlePaths ? " checked" : ""}> Include file and folder paths</label>
+        <ul class="warnings" id="diag-bundle-warning"${S.bundlePaths ? "" : " hidden"}>
+          <li>The bundle will include plaintext paths: the folders you back up, where your destinations are, the names of files in the log, and the text of errors and notices, which often names them. Path names can say more about a person than the files' contents do: send it only to someone you would show those names to.</li>
+        </ul>
+        <div class="actions-row"><button type="button" class="btn" data-action="export-diagnostics">Download diagnostic bundle</button></div>
+      </div>
+
       <div class="card records">
         <h3>📜 Records</h3>
         <div class="actions-row">
@@ -1280,6 +1291,13 @@ function renderDiagnostics() {
       </div>
 
     </div>`;
+
+  document.getElementById("diag-bundle-paths").addEventListener("change", event => {
+    // The consequence is shown the moment the box is ticked, before anything
+    // is asked of the service (architecture 10 §4).
+    S.bundlePaths = event.target.checked;
+    document.getElementById("diag-bundle-warning").hidden = !S.bundlePaths;
+  });
 
   document.getElementById("diag-filter").addEventListener("change", event => {
     // A different filter is a different question, so the answer starts over
@@ -2296,6 +2314,31 @@ const actions = {
         toast("ok", result.lines[0]);
         refreshDiagnostics();
       }
+    });
+  },
+
+  async "export-diagnostics"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "export_diagnostics", includePaths: S.bundlePaths },
+        { errToast: "The diagnostic bundle was not built" });
+      if (result?.result !== "diagnostic_bundle") return;
+
+      // The service sends the bytes and writes no file (T-16): the browser
+      // saves them where its person chooses, under the name the service
+      // suggested, which names the moment and not the machine.
+      const bytes = Uint8Array.from(atob(result.contentBase64), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      const leftOut = result.logRecordsLeftOut > 0 ? `, ${result.logRecordsLeftOut} older left out` : "";
+      toast("ok", `Diagnostic bundle saved: ${result.logRecords} log record(s)${leftOut}, paths ${result.includesPaths ? "included" : "left out"}.`);
     });
   },
 
