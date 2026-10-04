@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -27,38 +28,38 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3764, Level = LogLevel.Warning,
         Message = "Set {SetId}: writer sequence adopted the repository's observed head, {From} -> {To} — local allocation state was behind its own published history")]
-    internal static partial void ObservedHeadAdopted(ILogger logger, string setId, ulong from, ulong to);
+    internal static partial void ObservedHeadAdopted(ILogger logger, LogId setId, ulong from, ulong to);
 
     [LoggerMessage(
         EventId = 3765, Level = LogLevel.Warning,
         Message = "Set {SetId}: the repository's observed head could not be read ({Reason}); the sequence keeps local state and the colliding-put refusal stands behind it")]
-    internal static partial void ObservedHeadUnavailable(ILogger logger, string setId, string reason);
+    internal static partial void ObservedHeadUnavailable(ILogger logger, LogId setId, string reason);
 
     [LoggerMessage(
         EventId = 3771, Level = LogLevel.Information,
         Message = "Set {SetId} adopted repository {RepositoryId} from destination {Destination}: {SnapshotCount} snapshot(s), writer identity resumed: {WriterIdentityResumed}")]
     internal static partial void ArchiveAdopted(
-        ILogger logger, string setId, string repositoryId, string destination, int snapshotCount, bool writerIdentityResumed);
+        ILogger logger, LogId setId, LogId repositoryId, LogLabel destination, int snapshotCount, bool writerIdentityResumed);
 
     [LoggerMessage(
         EventId = 3772, Level = LogLevel.Warning,
         Message = "This installation now writes under the adopted archive's writer identity {WriterId}; its own never published")]
-    internal static partial void WriterIdentityResumed(ILogger logger, string writerId);
+    internal static partial void WriterIdentityResumed(ILogger logger, LogId writerId);
 
     [LoggerMessage(
         EventId = 3700, Level = LogLevel.Error,
         Message = "Job {JobId} ({Description}) failed past its own handler")]
-    internal static partial void JobFaulted(ILogger logger, string jobId, string description, Exception exception);
+    internal static partial void JobFaulted(ILogger logger, LogId jobId, LogLabel description, Exception exception);
 
     [LoggerMessage(
         EventId = 3710, Level = LogLevel.Information,
         Message = "Remote peer authenticated: {Fingerprint}")]
-    internal static partial void PeerAuthenticated(ILogger logger, string fingerprint);
+    internal static partial void PeerAuthenticated(ILogger logger, LogId fingerprint);
 
     [LoggerMessage(
         EventId = 3711, Level = LogLevel.Warning,
         Message = "Remote connection refused: {Reason} — {Detail}")]
-    internal static partial void RemoteRefused(ILogger logger, string reason, string detail);
+    internal static partial void RemoteRefused(ILogger logger, LogLabel reason, string detail);
 
     [LoggerMessage(
         EventId = 3712, Level = LogLevel.Debug,
@@ -73,22 +74,22 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3714, Level = LogLevel.Information,
         Message = "Peer paired by invite: '{Label}' ({Fingerprint})")]
-    internal static partial void PeerPaired(ILogger logger, string label, string fingerprint);
+    internal static partial void PeerPaired(ILogger logger, LogLabel label, LogId fingerprint);
 
     [LoggerMessage(
         EventId = 3715, Level = LogLevel.Warning,
         Message = "Invite pairing refused: {Reason} — {Detail}")]
-    internal static partial void PairingRefused(ILogger logger, string reason, string detail);
+    internal static partial void PairingRefused(ILogger logger, LogLabel reason, string detail);
 
     [LoggerMessage(
         EventId = 3720, Level = LogLevel.Warning,
         Message = "Replication offered by {Fingerprint} but this service holds no replicas; closing")]
-    internal static partial void ReplicationWithoutReplicas(ILogger logger, string fingerprint);
+    internal static partial void ReplicationWithoutReplicas(ILogger logger, LogId fingerprint);
 
     [LoggerMessage(
         EventId = 3721, Level = LogLevel.Information,
         Message = "Retrieval session served for {Fingerprint}")]
-    internal static partial void RetrievalServed(ILogger logger, string fingerprint);
+    internal static partial void RetrievalServed(ILogger logger, LogId fingerprint);
 
 
 
@@ -96,7 +97,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3722, Level = LogLevel.Information,
         Message = "Peering terminated by {Fingerprint}")]
-    internal static partial void PeeringTerminated(ILogger logger, string fingerprint);
+    internal static partial void PeeringTerminated(ILogger logger, LogId fingerprint);
 
     /// <remarks>
     /// The repository is deliberately not named. At this call site its id is
@@ -108,35 +109,35 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3723, Level = LogLevel.Information,
         Message = "Replicated {Committed} object(s) for {Fingerprint}")]
-    internal static partial void Replicated(ILogger logger, long committed, string fingerprint);
+    internal static partial void Replicated(ILogger logger, long committed, LogId fingerprint);
 
     [LoggerMessage(
         EventId = 3725, Level = LogLevel.Warning,
         Message = "A receipt for {Fingerprint} was sent but could not be filed here: {Detail}")]
-    internal static partial void DeletionReceiptNotFiled(ILogger logger, string fingerprint, string detail);
+    internal static partial void DeletionReceiptNotFiled(ILogger logger, LogId fingerprint, string detail);
 
     [LoggerMessage(
         EventId = 3726, Level = LogLevel.Warning,
         Message = "Deletion receipt from peer {Destination} for set {Set} rejected: {Detail}")]
-    internal static partial void DeletionReceiptRejected(ILogger logger, string destination, string set, string detail);
+    internal static partial void DeletionReceiptRejected(ILogger logger, LogLabel destination, LogLabel set, string detail);
 
     [LoggerMessage(
         EventId = 3727, Level = LogLevel.Warning,
         Message = "Deletion receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
     internal static partial void DeletionReceiptNotFiledByCommander(
-        ILogger logger, string destination, string set, string detail);
+        ILogger logger, LogLabel destination, LogLabel set, string detail);
 
     [LoggerMessage(
         EventId = 3778, Level = LogLevel.Warning,
         Message = "Replication receipt from peer {Destination} for set {Set} rejected: {Detail}")]
     internal static partial void ReplicationReceiptRejected(
-        ILogger logger, string destination, string set, string detail);
+        ILogger logger, LogLabel destination, LogLabel set, string detail);
 
     [LoggerMessage(
         EventId = 3779, Level = LogLevel.Warning,
         Message = "Replication receipt from peer {Destination} for set {Set} verified but could not be filed: {Detail}")]
     internal static partial void ReplicationReceiptNotFiledByCommander(
-        ILogger logger, string destination, string set, string detail);
+        ILogger logger, LogLabel destination, LogLabel set, string detail);
 
     [LoggerMessage(
         EventId = 3780, Level = LogLevel.Information,
@@ -146,23 +147,23 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3781, Level = LogLevel.Warning,
         Message = "Compaction did not run for set {Set}; the retention this pass did stands and the next pass retries")]
-    internal static partial void CompactionFailed(ILogger logger, string set, Exception exception);
+    internal static partial void CompactionFailed(ILogger logger, LogLabel set, Exception exception);
 
     [LoggerMessage(
         EventId = 3724, Level = LogLevel.Information,
         Message = "Log level for {Category} changed to {Level} for the life of this service")]
-    internal static partial void LogLevelChanged(ILogger logger, string category, string level);
+    internal static partial void LogLevelChanged(ILogger logger, LogLabel category, LogLabel level);
 
     [LoggerMessage(
         EventId = 3740, Level = LogLevel.Debug,
         Message = "Set {SetName} is due: last completed {LastCompleted}, next run {NextRun}")]
     internal static partial void SetDue(
-        ILogger logger, string setName, string lastCompleted, string nextRun);
+        ILogger logger, LogLabel setName, LogLabel lastCompleted, LogLabel nextRun);
 
     [LoggerMessage(
         EventId = 3741, Level = LogLevel.Debug,
         Message = "Set {SetName} is not due yet; next run {NextRun}")]
-    internal static partial void SetNotDue(ILogger logger, string setName, string nextRun);
+    internal static partial void SetNotDue(ILogger logger, LogLabel setName, LogLabel nextRun);
 
     // Information rather than Debug: a window is a setting an operator chose,
     // and "nothing ran last night" is the question it creates. A pass that
@@ -170,7 +171,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3782, Level = LogLevel.Information,
         Message = "Background window {Window} is shut; nothing scheduled runs until {NextOpen}")]
-    internal static partial void BackgroundWindowShut(ILogger logger, string window, string nextOpen);
+    internal static partial void BackgroundWindowShut(ILogger logger, LogLabel window, LogLabel nextOpen);
 
     // The other half of the same question: not "nothing started" but
     // "something that was already running stopped". A capture parking at ten
@@ -179,7 +180,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3783, Level = LogLevel.Information,
         Message = "Background window {Window} shut over {Runs} running capture(s); each parks at its next file boundary")]
-    internal static partial void BackgroundWindowParked(ILogger logger, string window, int runs);
+    internal static partial void BackgroundWindowParked(ILogger logger, LogLabel window, int runs);
 
     // Trace: one line per command at the seam every verb crosses, so a
     // service log read end to end is a conversation. Type names only, never
@@ -188,7 +189,7 @@ internal static partial class Log
         EventId = 3784, Level = LogLevel.Trace,
         Message = "{Command} answered {Result} in {ElapsedMilliseconds} ms")]
     internal static partial void CommandExecuted(
-        ILogger logger, string command, string result, long elapsedMilliseconds);
+        ILogger logger, LogLabel command, LogLabel result, long elapsedMilliseconds);
 
     // Debug: how the setup verb classified a ceremony. A console stuck on its
     // setup screen shows a toast and nothing else says why; this does, and it
@@ -196,7 +197,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3785, Level = LogLevel.Debug,
         Message = "Setup provisioning answered '{Outcome}'")]
-    internal static partial void ProvisionOutcome(ILogger logger, string outcome);
+    internal static partial void ProvisionOutcome(ILogger logger, LogLabel outcome);
 
     [LoggerMessage(
         EventId = 3786, Level = LogLevel.Warning,
@@ -215,17 +216,17 @@ internal static partial class Log
         Message = "Set {SetId}: catalogue rebuilt from the repository at open — {Snapshots} snapshot(s), "
             + "{FileVersions} file version(s), {Missing} record(s) not seen; a rebuild that did not see every record runs again at the next open")]
     internal static partial void CatalogueRebuiltAtOpen(
-        ILogger logger, string setId, int snapshots, int fileVersions, int missing);
+        ILogger logger, LogId setId, int snapshots, int fileVersions, int missing);
 
     [LoggerMessage(
         EventId = 3789, Level = LogLevel.Warning,
         Message = "Set {SetId}: the catalogue could not be rebuilt from the repository at open ({Reason}); the set opens, and the next open tries again")]
-    internal static partial void CatalogueRebuildAtOpenFailed(ILogger logger, string setId, string reason);
+    internal static partial void CatalogueRebuildAtOpenFailed(ILogger logger, LogId setId, string reason);
 
     [LoggerMessage(
         EventId = 3790, Level = LogLevel.Information,
         Message = "Set {SetId}: catalogue rebuild at open reported {Finding}")]
-    internal static partial void CatalogueRebuildAtOpenFinding(ILogger logger, string setId, string finding);
+    internal static partial void CatalogueRebuildAtOpenFinding(ILogger logger, LogId setId, string finding);
 
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
@@ -252,7 +253,7 @@ internal static partial class Log
         EventId = 3760, Level = LogLevel.Information,
         Message = "Operating against state {StateDirectory} ({StateProvenance}) and archives {ArchivesRoot} ({ArchivesProvenance})")]
     internal static partial void StartupLocations(
-        ILogger logger, string stateDirectory, string stateProvenance, string archivesRoot, string archivesProvenance);
+        ILogger logger, LogPath stateDirectory, LogLabel stateProvenance, LogPath archivesRoot, LogLabel archivesProvenance);
 
     [LoggerMessage(
         EventId = 3761, Level = LogLevel.Information,
@@ -264,18 +265,18 @@ internal static partial class Log
         EventId = 3762, Level = LogLevel.Information,
         Message = "Set '{Set}': {Roots} root(s), schedule {Schedule}, {Destinations} destination(s), direct-ship {DirectShip}, priority {Priority}")]
     internal static partial void StartupSet(
-        ILogger logger, string set, int roots, string schedule, int destinations, bool directShip, string priority);
+        ILogger logger, LogLabel set, int roots, LogLabel schedule, int destinations, bool directShip, LogLabel priority);
 
     [LoggerMessage(
         EventId = 3763, Level = LogLevel.Information,
         Message = "Destination '{Destination}': kind {Kind}, failure domain {Domain}")]
     internal static partial void StartupDestination(
-        ILogger logger, string destination, string kind, string domain);
+        ILogger logger, LogLabel destination, LogLabel kind, LogLabel domain);
 
     [LoggerMessage(
         EventId = 3731, Level = LogLevel.Information,
         Message = "Remote binding listening on {Endpoint} as {Fingerprint}")]
-    internal static partial void RemoteBindingUp(ILogger logger, string endpoint, string fingerprint);
+    internal static partial void RemoteBindingUp(ILogger logger, string endpoint, LogId fingerprint);
     // Authentication (ADR-0045). The account is named and the password never
     // is — not redacted, not hashed, not truncated: there is no parameter one
     // could be passed through, which is the surest way to honour "no secrets
@@ -284,7 +285,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3750, Level = LogLevel.Information,
         Message = "{User} signed in as {Role}")]
-    internal static partial void SignedIn(ILogger logger, string user, string role);
+    internal static partial void SignedIn(ILogger logger, LogLabel user, LogLabel role);
 
     [LoggerMessage(
         EventId = 3751, Level = LogLevel.Information,
@@ -299,12 +300,12 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3753, Level = LogLevel.Information,
         Message = "Account {User} created as {Role}")]
-    internal static partial void AccountCreated(ILogger logger, string user, string role);
+    internal static partial void AccountCreated(ILogger logger, LogLabel user, LogLabel role);
 
     [LoggerMessage(
         EventId = 3754, Level = LogLevel.Information,
         Message = "Account {User} removed; {Sessions} live session(s) ended with it")]
-    internal static partial void AccountDeleted(ILogger logger, string user, int sessions);
+    internal static partial void AccountDeleted(ILogger logger, LogLabel user, int sessions);
 
     // The refusals the gate answers were, for a long stretch of one real
     // incident, invisible: a client with a lapsed session failed every
@@ -320,12 +321,12 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3756, Level = LogLevel.Trace,
         Message = "Session resumed for {User}")]
-    internal static partial void SessionResumed(ILogger logger, string user);
+    internal static partial void SessionResumed(ILogger logger, LogLabel user);
 
     [LoggerMessage(
         EventId = 3757, Level = LogLevel.Trace,
         Message = "{Command} refused: this connection has not signed in")]
-    internal static partial void CommandRefusedUnauthenticated(ILogger logger, string command);
+    internal static partial void CommandRefusedUnauthenticated(ILogger logger, LogLabel command);
 
     // Warning: a destination leaving mid-run means this backup commits with
     // one copy fewer than the configuration promises, and the catch-up that
@@ -333,7 +334,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3758, Level = LogLevel.Warning,
         Message = "Destination {Destination} dropped from this backup run: {Reason}. Its replica lags until the next catch-up")]
-    internal static partial void ShipDestinationDropped(ILogger logger, string destination, string reason);
+    internal static partial void ShipDestinationDropped(ILogger logger, LogLabel destination, string reason);
 
     // Warning: a queued job with no tracked cancellation cannot be run and is
     // discarded — unreachable while identities stay fresh, and the silent
@@ -341,7 +342,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3759, Level = LogLevel.Warning,
         Message = "Job {JobId} ({Description}) was dequeued with no tracked cancellation and was discarded")]
-    internal static partial void QueuedJobUntracked(ILogger logger, string jobId, string description);
+    internal static partial void QueuedJobUntracked(ILogger logger, LogId jobId, LogLabel description);
 
     // Debug rather than Information: on a busy install this is the commonest
     // thing a pass does, and it is the absence of work. It is here at all
@@ -353,7 +354,7 @@ internal static partial class Log
         Message = "Set {Set} is level with {Destination} at publication sequence {Sequence}; "
             + "nothing published since it was last read through, so this pass carried nothing")]
     internal static partial void SyncSkipped(
-        ILogger logger, string set, string destination, ulong sequence);
+        ILogger logger, LogLabel set, LogLabel destination, ulong sequence);
 
     // Information, not Debug: this is the saving the work exists for, and an
     // operator watching a slow uplink finish a transfer it started yesterday
@@ -370,7 +371,7 @@ internal static partial class Log
         EventId = 3769, Level = LogLevel.Information,
         Message = "Destination {Destination} could not be read back for proof: {Reason}. "
             + "This pass records the sync without a verification")]
-    internal static partial void ReadBackUnavailable(ILogger logger, string destination, string reason);
+    internal static partial void ReadBackUnavailable(ILogger logger, LogLabel destination, string reason);
 
     // Information and not Warning, though it is a change of ownership: the
     // claim is the recovery working, and an operator who sees this expected to
@@ -379,7 +380,7 @@ internal static partial class Log
         EventId = 3770, Level = LogLevel.Information,
         Message = "Peer {Fingerprint} claimed {Count} replica(s) here under its installation's claim key; "
             + "the attribution now points at that device")]
-    internal static partial void ReplicaClaimed(ILogger logger, string fingerprint, int count);
+    internal static partial void ReplicaClaimed(ILogger logger, LogId fingerprint, int count);
 
     // Warning: the bytes were staged by this pair and no longer match, so
     // something between the two sessions damaged them. Re-sending is the right
@@ -395,28 +396,28 @@ internal static partial class Log
         Message = "Set {SetName}: destination {Destination} attests writer sequence {Attested} but local state said {Local} — "
             + "the state directory was rolled back; the writer moved past the destination's head and this pass deletes nothing there")]
     internal static partial void DestinationAhead(
-        ILogger logger, string setName, string destination, ulong attested, ulong local);
+        ILogger logger, LogLabel setName, LogLabel destination, ulong attested, ulong local);
 
     [LoggerMessage(
         EventId = 3774, Level = LogLevel.Warning,
         Message = "Set {SetName}: metadata copied back from destination {Destination} and the catalogue rebuilt in place — "
             + "the set's local state had fallen behind what it published")]
-    internal static partial void MetadataHealedFromDestination(ILogger logger, string setName, string destination);
+    internal static partial void MetadataHealedFromDestination(ILogger logger, LogLabel setName, LogLabel destination);
 
     [LoggerMessage(
         EventId = 3775, Level = LogLevel.Warning,
         Message = "Set {SetName}: the heal from a destination could not copy the metadata back ({Reason}); the next pass retries")]
-    internal static partial void MetadataHealFailed(ILogger logger, string setName, string reason);
+    internal static partial void MetadataHealFailed(ILogger logger, LogLabel setName, string reason);
 
     [LoggerMessage(
         EventId = 3776, Level = LogLevel.Information,
         Message = "Set {SetId}: catalogue rebuild during the heal reported {Finding}")]
-    internal static partial void HealRebuildFinding(ILogger logger, string setId, string finding);
+    internal static partial void HealRebuildFinding(ILogger logger, LogId setId, string finding);
 
     [LoggerMessage(
         EventId = 3777, Level = LogLevel.Warning,
         Message = "Set {SetName}: {Objects} object(s), {Bytes} bytes of destination {Destination}'s newer history copied back "
             + "into the staging archive and the catalogue rebuilt — the archive had fallen behind what it published")]
     internal static partial void ContentHealedFromDestination(
-        ILogger logger, string setName, string destination, long objects, long bytes);
+        ILogger logger, LogLabel setName, LogLabel destination, long objects, long bytes);
 }

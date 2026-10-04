@@ -94,7 +94,7 @@ public sealed partial class ServiceCommandHandler
         if (command.Category is not { Length: > 0 } category)
         {
             logging.Levels.Set(current with { Default = level });
-            Log.LogLevelChanged(log, "(default)", levelName);
+            Log.LogLevelChanged(log, new LogLabel("(default)"), new LogLabel(levelName));
             return new ConfigurationChangeResult(
                 [$"The default log level is now {levelName}, until this service stops."]);
         }
@@ -105,7 +105,7 @@ public sealed partial class ServiceCommandHandler
         };
 
         logging.Levels.Set(current with { Categories = categories });
-        Log.LogLevelChanged(log, category, levelName);
+        Log.LogLevelChanged(log, new LogLabel(category), new LogLabel(levelName));
         return new ConfigurationChangeResult(
         [
             $"'{category}' and everything beneath it now log at {levelName}, "
@@ -153,7 +153,7 @@ public sealed partial class ServiceCommandHandler
                 record.Category,
                 LogRecordRenderer.Render(record, mode),
                 record.ExceptionType,
-                record.ExceptionMessage));
+                LogRecordRenderer.RenderExceptionMessage(record, mode)));
         }
 
         return new LogRecordsResult(records, page.NextSequence, page.Dropped);

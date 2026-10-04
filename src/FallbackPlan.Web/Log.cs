@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Web;
@@ -31,7 +32,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 4100, Level = LogLevel.Information,
         Message = "Console listening on loopback port {Port} for state directory {StateDirectory}")]
-    internal static partial void ConsoleBound(ILogger logger, int port, string stateDirectory);
+    internal static partial void ConsoleBound(ILogger logger, int port, LogPath stateDirectory);
 
     [LoggerMessage(
         EventId = 4101, Level = LogLevel.Warning,
@@ -51,7 +52,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 4103, Level = LogLevel.Debug,
         Message = "A relayed session was refused by the service; {Command} was not sent")]
-    internal static partial void RelayedSessionRefused(ILogger logger, string command);
+    internal static partial void RelayedSessionRefused(ILogger logger, LogLabel command);
 
     [LoggerMessage(
         EventId = 4104, Level = LogLevel.Trace,
@@ -67,12 +68,12 @@ internal static partial class Log
         EventId = 4110, Level = LogLevel.Trace,
         Message = "{Endpoint} answered {StatusCode} in {ElapsedMilliseconds} ms")]
     internal static partial void RequestHandled(
-        ILogger logger, string endpoint, int statusCode, long elapsedMilliseconds);
+        ILogger logger, LogLabel endpoint, int statusCode, long elapsedMilliseconds);
 
     [LoggerMessage(
         EventId = 4111, Level = LogLevel.Debug,
         Message = "Setup answered '{Outcome}'")]
-    internal static partial void SetupOutcome(ILogger logger, string outcome);
+    internal static partial void SetupOutcome(ILogger logger, LogLabel outcome);
 
     // 4112 was the recovery-kit rebuild's outcome. The kit went (ADR-0060),
     // and the id goes unused rather than meaning something else in a log
@@ -81,10 +82,10 @@ internal static partial class Log
         EventId = 4113, Level = LogLevel.Trace,
         Message = "Relayed {Command}; the service answered {Result} in {ElapsedMilliseconds} ms")]
     internal static partial void CommandRelayed(
-        ILogger logger, string command, string result, long elapsedMilliseconds);
+        ILogger logger, LogLabel command, LogLabel result, long elapsedMilliseconds);
 
     [LoggerMessage(
         EventId = 4114, Level = LogLevel.Trace,
         Message = "Served {Path} ({ByteCount} bytes, embedded at build time)")]
-    internal static partial void StaticAssetServed(ILogger logger, string path, int byteCount);
+    internal static partial void StaticAssetServed(ILogger logger, LogLabel path, int byteCount);
 }

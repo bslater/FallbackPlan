@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Replication;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Local;
@@ -254,7 +255,7 @@ public static class FanOut
         {
             // The replica could not be read back at all. That is this pass
             // failing to prove, not the destination failing a proof.
-            Log.ReadBackUnavailable(log, destination.Name, exception.Message);
+            Log.ReadBackUnavailable(log, new LogLabel(destination.Name), exception.Message);
             return false;
         }
 
@@ -1184,7 +1185,7 @@ public static class FanOut
                 // figures and the shortfall check both belong to a pass that
                 // counted something, and this one counted nothing.
                 var skipLog = runtime.LoggerFor(typeof(FanOut));
-                Log.SyncSkipped(skipLog, set.Name, destination.Name, syncedSequence);
+                Log.SyncSkipped(skipLog, new LogLabel(set.Name), new LogLabel(destination.Name), syncedSequence);
                 alreadyHeld = previous?.Objects ?? 0;
             }
             else
@@ -1480,15 +1481,16 @@ public static class FanOut
         var log = runtime.LoggerFor(typeof(FanOut));
         if (heal.Failure is { } failure)
         {
-            Log.MetadataHealFailed(log, set.Name, failure);
+            Log.MetadataHealFailed(log, new LogLabel(set.Name), failure);
         }
         else if (archive.ShipSink is null)
         {
-            Log.ContentHealedFromDestination(log, set.Name, destination.Name, heal.CopiedObjects, heal.CopiedBytes);
+            Log.ContentHealedFromDestination(
+                        log, new LogLabel(set.Name), new LogLabel(destination.Name), heal.CopiedObjects, heal.CopiedBytes);
         }
         else
         {
-            Log.MetadataHealedFromDestination(log, set.Name, destination.Name);
+            Log.MetadataHealedFromDestination(log, new LogLabel(set.Name), new LogLabel(destination.Name));
         }
     }
 
@@ -1545,7 +1547,7 @@ public static class FanOut
         var log = runtime.LoggerFor(typeof(FanOut));
         if (outcome.ReceiptProblem is { } problem)
         {
-            Log.DeletionReceiptRejected(log, destination.Name, set.Name, problem);
+            Log.DeletionReceiptRejected(log, new LogLabel(destination.Name), new LogLabel(set.Name), problem);
             runtime.Notices.Raise(
                 $"deletion-receipt-invalid:{set.Id}:{destination.Name}",
                 $"peer '{destination.Name}' answered set '{set.Name}'s deletion instruction with a receipt this "
@@ -1578,7 +1580,8 @@ public static class FanOut
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Log.DeletionReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+            Log.DeletionReceiptNotFiledByCommander(
+                    log, new LogLabel(destination.Name), new LogLabel(set.Name), exception.Message);
             if (fate is not null)
             {
                 fate.FilingFailure = exception.Message;
@@ -1607,7 +1610,7 @@ public static class FanOut
         var log = runtime.LoggerFor(typeof(FanOut));
         if (outcome.ReplicationReceiptProblem is { } problem)
         {
-            Log.ReplicationReceiptRejected(log, destination.Name, set.Name, problem);
+            Log.ReplicationReceiptRejected(log, new LogLabel(destination.Name), new LogLabel(set.Name), problem);
             runtime.Notices.Raise(
                 $"replication-receipt-invalid:{set.Id}:{destination.Name}",
                 $"peer '{destination.Name}' acknowledged set '{set.Name}'s push with a receipt this installation "
@@ -1632,7 +1635,8 @@ public static class FanOut
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Log.ReplicationReceiptNotFiledByCommander(log, destination.Name, set.Name, exception.Message);
+            Log.ReplicationReceiptNotFiledByCommander(
+                    log, new LogLabel(destination.Name), new LogLabel(set.Name), exception.Message);
         }
 
         // Verified is what counts, filed or not: the attestation was made and
@@ -1653,7 +1657,8 @@ public static class FanOut
         SequenceAdoption.Adopted ahead, bool staging, ServiceRuntime.HealOutcome? heal, ulong nowMs, bool peer)
     {
         var attested = ahead.To - 1;
-        Log.DestinationAhead(runtime.LoggerFor(typeof(FanOut)), set.Name, destinationName, attested, ahead.From);
+        Log.DestinationAhead(
+            runtime.LoggerFor(typeof(FanOut)), new LogLabel(set.Name), new LogLabel(destinationName), attested, ahead.From);
 
         string consequence;
         if (heal?.Failure is { } failure)

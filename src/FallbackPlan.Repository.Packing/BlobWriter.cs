@@ -2,6 +2,7 @@ using Bodu;
 using System.Security.Cryptography;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using Microsoft.Extensions.Logging;
@@ -502,7 +503,7 @@ public sealed class BlobWriter : IAsyncDisposable
             // reason has to be recorded. A restart is invisible from outside —
             // the job still completes and the snapshot is still correct — and
             // "why did the nightly get slower" is otherwise unanswerable.
-            Log.SpoolDiscarded(logger, reason);
+            Log.SpoolDiscarded(logger, new LogLabel(reason));
 
             File.Delete(checkpointPath);
             if (File.Exists(spoolPath))

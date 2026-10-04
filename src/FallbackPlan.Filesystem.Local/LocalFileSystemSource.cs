@@ -187,7 +187,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             if (!RoundTrips(name, nameBytes))
             {
                 Log.EntryFailed(
-                    _logger, new LogPath(relativePath), "the name has no faithful UTF-8 representation");
+                    _logger, new LogPath(relativePath), new LogLabel("the name has no faithful UTF-8 representation"));
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath,
                     CaptureFailureReason.NameNotRepresentable,
@@ -213,7 +213,7 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
 
             if (!stated)
             {
-                Log.EntryFailed(_logger, new LogPath(relativePath), "vanished between listing and stat");
+                Log.EntryFailed(_logger, new LogPath(relativePath), new LogLabel("vanished between listing and stat"));
                 yield return new ScanEvent.Failure(new ScanFailure(
                     relativePath, CaptureFailureReason.NotFound, "The entry vanished between listing and stat."));
                 continue;

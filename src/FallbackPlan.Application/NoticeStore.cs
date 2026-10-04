@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,22 @@ public sealed record Notice
     /// <summary>When a human acknowledged it; null while it still surfaces.</summary>
     [JsonPropertyName("acknowledged_at")]
     public ulong? AcknowledgedAt { get; init; }
+
+    /// <summary>
+    /// What kind of notice this is: the key up to its first colon, a word the
+    /// code chose (<c>terms-narrowed</c>, <c>staging-retirable</c>) and so
+    /// safe to show anywhere (ADR-0081).
+    /// </summary>
+    [JsonIgnore]
+    public string Kind => Key.IndexOf(':', StringComparison.Ordinal) is var colon and >= 0 ? Key[..colon] : Key;
+
+    /// <summary>
+    /// What the notice is about: the key after its first colon — a set's id,
+    /// a peer's fingerprint, a replica's identity — or null for a key that is
+    /// a kind alone. An identifier, so it travels shortened (ADR-0081).
+    /// </summary>
+    [JsonIgnore]
+    public string? Subject => Key.IndexOf(':', StringComparison.Ordinal) is var colon and >= 0 ? Key[(colon + 1)..] : null;
 }
 
 /// <summary>
@@ -154,7 +171,8 @@ public sealed class NoticeStore
             // same identity and the same "since when", so recording it again
             // would turn one durable condition into a stream of events and
             // make the log look like something was repeatedly going wrong.
-            Log.NoticeRaised(_log, notice.Key, notice.Message);
+            var subject = LogId.FromText("subject", notice.Subject);
+            Log.NoticeRaised(_log, new LogLabel(notice.Kind), subject, notice.Message);
             return notice;
         }
     }
@@ -242,7 +260,8 @@ public sealed class NoticeStore
 
             _notices[index] = _notices[index] with { AcknowledgedAt = nowUnixMilliseconds };
             Save();
-            Log.NoticeAcknowledged(_log, _notices[index].Key);
+            var subject = LogId.FromText("subject", _notices[index].Subject);
+            Log.NoticeAcknowledged(_log, new LogLabel(_notices[index].Kind), subject);
             return true;
         }
     }

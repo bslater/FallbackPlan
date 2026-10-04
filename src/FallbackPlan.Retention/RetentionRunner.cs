@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index.Journal;
@@ -115,7 +116,7 @@ public static class RetentionRunner
 
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
 
-        Log.PlanningRetention(log, set, survey.Snapshots.Count);
+        Log.PlanningRetention(log, new LogLabel(set), survey.Snapshots.Count);
 
         // A policy with no rule keeps everything, so under it the requests are
         // all that expires.
@@ -170,14 +171,14 @@ public static class RetentionRunner
 
         var intents = IntentSurveyor.Survey(
             records, unparseable, sealingGeneration, nowUnixMilliseconds, (ulong)margin.TotalMilliseconds);
-        Log.IntentsSurveyed(log, set, intents.LiveIntents.Count, sealingGeneration, margin);
+        Log.IntentsSurveyed(log, new LogLabel(set), intents.LiveIntents.Count, sealingGeneration, margin);
 
         var plan = CollectionPlanner.Plan(
             survey, selection, gate, reader, reachable, unwalkable, intents,
             store.Capabilities.ListingConsistency, resolveLocation);
         var lines = new List<string>(CollectionPlanner.Describe(plan, gate.Held));
 
-        Log.RetentionPlanned(log, set, selection.Keep.Count, selection.Expire.Count);
+        Log.RetentionPlanned(log, new LogLabel(set), selection.Keep.Count, selection.Expire.Count);
 
         // A veto stops the whole pass, not part of it: damage means the object
         // graph cannot be trusted to say what is garbage, and a collector that
@@ -187,7 +188,7 @@ public static class RetentionRunner
         if (!plan.Deletable)
         {
             var vetoes = string.Join("; ", plan.Vetoes);
-            Log.RetentionHeld(log, set, vetoes);
+            Log.RetentionHeld(log, new LogLabel(set), vetoes);
         }
 
         // Compaction is planned either way and never done here: a vetoed

@@ -10,7 +10,7 @@ namespace FallbackPlan.Storage.Abstractions;
 /// traversal (<c>..</c>) and hidden-file collisions are unconstructible rather
 /// than filtered (NFR-PORT-004).
 /// </summary>
-public readonly struct ObjectKey : IEquatable<ObjectKey>, IComparable<ObjectKey>
+public readonly struct ObjectKey : IEquatable<ObjectKey>, IComparable<ObjectKey>, Domain.Diagnostics.IRedactedValue
 {
     /// <summary>The maximum total key length in characters.</summary>
     public const int MaximumLength = 1024;
@@ -90,6 +90,25 @@ public readonly struct ObjectKey : IEquatable<ObjectKey>, IComparable<ObjectKey>
 
     /// <inheritdoc />
     public override string ToString() => Value;
+
+    /// <summary>
+    /// The rendering that may leave the machine (ADR-0043 §4, ADR-0081): the
+    /// key's kind and a short handle on its leaf. The leaf is a blob's or a
+    /// delta's identity, which correlates this store with every other copy
+    /// of it (NFR-PRIV-002); the components between are layout, not data.
+    /// </summary>
+    public string ToRedactedString()
+    {
+        var value = Value;
+        var first = value.IndexOf('/', StringComparison.Ordinal);
+        if (first < 0)
+        {
+            return Domain.Diagnostics.Redaction.Shorten("key", value, 8);
+        }
+
+        var leaf = value.LastIndexOf('/');
+        return Domain.Diagnostics.Redaction.Shorten(value[..first], value[(leaf + 1)..], 8);
+    }
 
     public static bool operator ==(ObjectKey left, ObjectKey right) => left.Equals(right);
 

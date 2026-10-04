@@ -1,5 +1,6 @@
 using Bodu;
 using System.Globalization;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Local;
@@ -114,7 +115,8 @@ public static class RecoveryHost
                 passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
                 .ConfigureAwait(false);
             var repositoryHex = Convert.ToHexString(session.RepositoryId.ToArray()).ToLowerInvariant();
-            Log.DescriptorRead(log, repositoryHex, session.FormatVersion);
+            var repository = LogId.Repository(repositoryHex);
+            Log.DescriptorRead(log, repository, session.FormatVersion);
             Log.KeysDerived(log);
 
             switch (command)

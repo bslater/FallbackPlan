@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Bodu;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Jobs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -622,7 +623,7 @@ public sealed class JobScheduler : IAsyncDisposable
             {
                 // A job that throws past its own handler must not take the
                 // service down with it; the next scheduled pass still runs.
-                Log.JobFaulted(_log, job!.JobId, job.Description, exception);
+                Log.JobFaulted(_log, LogId.FromText("job", job!.JobId), new LogLabel(job.Description), exception);
             }
             finally
             {
@@ -686,7 +687,7 @@ public sealed class JobScheduler : IAsyncDisposable
                 // Unreachable while queued jobs stay tracked — and exactly the
                 // silent-orphan hazard Scheduler.Enqueue guards its completion
                 // against, so it is a log line, never a quiet discard.
-                Log.QueuedJobUntracked(_log, job.JobId, job.Description);
+                Log.QueuedJobUntracked(_log, LogId.FromText("job", job.JobId), new LogLabel(job.Description));
             }
 
             work = null;
@@ -773,7 +774,7 @@ public sealed class JobScheduler : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            Log.JobFaulted(_log, job.JobId, job.Description, exception);
+            Log.JobFaulted(_log, LogId.FromText("job", job.JobId), new LogLabel(job.Description), exception);
         }
         finally
         {
@@ -944,7 +945,7 @@ public sealed class JobScheduler : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            Log.JobFaulted(_log, job.JobId, job.Description, exception);
+            Log.JobFaulted(_log, LogId.FromText("job", job.JobId), new LogLabel(job.Description), exception);
         }
     }
 

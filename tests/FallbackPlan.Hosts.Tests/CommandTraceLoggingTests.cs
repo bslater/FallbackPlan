@@ -1,6 +1,7 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Diagnostics;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Hosts.Tests;
@@ -70,8 +71,8 @@ public sealed class CommandTraceLoggingTests : IDisposable
         var executed = Record(3784);
         Assert.IsNotNull(executed, "the command seam (3784) is what makes a trace read as a conversation");
         var values = executed.Values.ToDictionary(pair => pair.Key, pair => pair.Value);
-        Assert.AreEqual(nameof(GetDiagnosticsCommand), values["Command"]);
-        Assert.AreEqual(nameof(DiagnosticsResult), values["Result"]);
+        Assert.AreEqual(LogLabel.Of(nameof(GetDiagnosticsCommand)), values["Command"]);
+        Assert.AreEqual(LogLabel.Of(nameof(DiagnosticsResult)), values["Result"]);
     }
 
     [TestMethod]
@@ -87,7 +88,7 @@ public sealed class CommandTraceLoggingTests : IDisposable
         var outcome = Record(3785);
         Assert.IsNotNull(outcome, "the provisioning verb must say how it classified the ceremony");
         Assert.AreEqual(
-            nameof(ServiceErrorReason.Refused),
+            LogLabel.Of(nameof(ServiceErrorReason.Refused)),
             outcome.Values.Single(pair => pair.Key == "Outcome").Value);
     }
 }

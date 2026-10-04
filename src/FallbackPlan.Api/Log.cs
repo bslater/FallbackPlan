@@ -19,19 +19,19 @@ internal static partial class Log
         EventId = 3600, Level = LogLevel.Debug,
         Message = "Client connected: contract {ClientVersion}, service {ServiceVersion}, accepted {Accepted}")]
     internal static partial void ClientConnected(
-        ILogger logger, string clientVersion, string serviceVersion, bool accepted);
+        ILogger logger, string clientVersion, LogLabel serviceVersion, bool accepted);
 
     [LoggerMessage(
         EventId = 3601, Level = LogLevel.Warning,
         Message = "Refused a client at contract {ClientVersion}: this service speaks {ServiceVersion}")]
     internal static partial void VersionRefused(
-        ILogger logger, string clientVersion, string serviceVersion);
+        ILogger logger, string clientVersion, LogLabel serviceVersion);
 
     [LoggerMessage(
         EventId = 3602, Level = LogLevel.Debug,
         Message = "Command {Verb} answered {Result} in {ElapsedMs} ms")]
     internal static partial void CommandHandled(
-        ILogger logger, string verb, string result, long elapsedMs);
+        ILogger logger, LogLabel verb, LogLabel result, long elapsedMs);
 
     [LoggerMessage(
         EventId = 3603, Level = LogLevel.Warning,
@@ -63,5 +63,5 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3606, Level = LogLevel.Information,
         Message = "Command {Verb} abandoned after {ElapsedMs} ms: the client disconnected, so the work was cancelled")]
-    internal static partial void CommandAbandoned(ILogger logger, string verb, long elapsedMs);
+    internal static partial void CommandAbandoned(ILogger logger, LogLabel verb, long elapsedMs);
 }

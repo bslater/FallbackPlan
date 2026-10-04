@@ -6,6 +6,7 @@ using Bodu;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Web.Resources;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -116,7 +117,7 @@ public static class WebConsoleHost
         await using var console = await StartAsync(options, clients, auth, log, cancellationToken)
             .ConfigureAwait(false);
 
-        Log.ConsoleBound(log, options.Port, options.StateDirectory);
+        Log.ConsoleBound(log, options.Port, new LogPath(options.StateDirectory));
         await output.WriteLineAsync($"state    {options.StateDirectory}").ConfigureAwait(false);
         await output.WriteLineAsync($"console  {console.TokenisedUrl}").ConfigureAwait(false);
         await output.WriteLineAsync(await ProbeServiceAsync(clients, log, cancellationToken).ConfigureAwait(false))
@@ -232,7 +233,7 @@ public static class WebConsoleHost
         if (log.IsEnabled(LogLevel.Trace))
         {
             var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Log.RequestHandled(log, endpoint, context.Response.StatusCode, elapsed);
+            Log.RequestHandled(log, new LogLabel(endpoint), context.Response.StatusCode, elapsed);
         }
     }
 
@@ -294,7 +295,7 @@ public static class WebConsoleHost
 
             if (refused is not null)
             {
-                Log.RelayedSessionRefused(log, command.GetType().Name);
+                Log.RelayedSessionRefused(log, new LogLabel(command.GetType().Name));
                 result = refused;
             }
             else
@@ -304,7 +305,7 @@ public static class WebConsoleHost
                 if (log.IsEnabled(LogLevel.Trace))
                 {
                     var elapsed = (long)Stopwatch.GetElapsedTime(relayed).TotalMilliseconds;
-                    Log.CommandRelayed(log, command.GetType().Name, result.GetType().Name, elapsed);
+                    Log.CommandRelayed(log, new LogLabel(command.GetType().Name), new LogLabel(result.GetType().Name), elapsed);
                 }
             }
         }
@@ -1153,7 +1154,7 @@ public static class WebConsoleHost
             // The outcome only, never the body. This is the server half of the
             // pair the page's own trace line forms: the two disagreeing is
             // what localises a stale page.
-            Log.SetupOutcome(log, response.Outcome);
+            Log.SetupOutcome(log, new LogLabel(response.Outcome));
             context.Response.StatusCode = StatusCodes.Status200OK;
             context.Response.ContentType = "application/json; charset=utf-8";
             context.Response.Headers.CacheControl = "no-store";
@@ -1366,7 +1367,7 @@ public static class WebConsoleHost
             // The assets are embedded at build time, so the byte count names
             // the build: a page tracing one asset version while this line
             // reports another settles a staleness question from both sides.
-            Log.StaticAssetServed(log, path, bytes.Length);
+            Log.StaticAssetServed(log, new LogLabel(path), bytes.Length);
         });
     }
 

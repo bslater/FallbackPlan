@@ -396,7 +396,7 @@ public sealed record ClientConfiguration
         }
         catch (JsonException exception)
         {
-            Log.ConfigurationRefused(log, "unreadable", exception.Message);
+            Log.ConfigurationRefused(log, new LogLabel("unreadable"), exception.Message);
             throw new ClientStateException(Strings.FormatClientConfiguration_NotValidConfigurationFile(path, exception.Message), exception);
         }
 
@@ -418,7 +418,7 @@ public sealed record ClientConfiguration
             // configuration the service is about to refuse is one of the most
             // useful things a log can hold, and it is the same refusal either
             // way — this only records it.
-            Log.ConfigurationRefused(log, "invalid", refusal.Message);
+            Log.ConfigurationRefused(log, new LogLabel("invalid"), refusal.Message);
             throw;
         }
 

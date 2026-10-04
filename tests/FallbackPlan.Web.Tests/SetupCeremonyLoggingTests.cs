@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using FallbackPlan.Api;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;
 
@@ -78,11 +79,11 @@ public sealed class SetupCeremonyLoggingTests
 
         var outcome = log.Records.SingleOrDefault(record => record.EventId == 4111);
         Assert.IsNotNull(outcome, "the setup outcome record (4111) is the point of the trace tier");
-        Assert.AreEqual("provisioned", outcome.Value("Outcome"));
+        Assert.AreEqual(LogLabel.Of("provisioned"), outcome.Value("Outcome"));
 
         Assert.IsTrue(
             log.Records.Any(record => record.EventId == 4110
-                && Equals(record.Value("Endpoint"), "/api/setup")
+                && Equals(record.Value("Endpoint"), LogLabel.Of("/api/setup"))
                 && Equals(record.Value("StatusCode"), 200)),
             "the request line (4110) must bracket the ceremony");
         AssertNoPassphraseAnywhere(log);
@@ -104,7 +105,7 @@ public sealed class SetupCeremonyLoggingTests
 
         var outcome = log.Records.SingleOrDefault(record => record.EventId == 4111);
         Assert.IsNotNull(outcome, "the setup outcome record (4111) must say how the request was classified");
-        Assert.AreEqual("unavailable", outcome.Value("Outcome"));
+        Assert.AreEqual(LogLabel.Of("unavailable"), outcome.Value("Outcome"));
         AssertNoPassphraseAnywhere(log);
     }
 
@@ -121,11 +122,11 @@ public sealed class SetupCeremonyLoggingTests
 
         var relayed = log.Records.SingleOrDefault(record => record.EventId == 4113);
         Assert.IsNotNull(relayed, "the relay record (4113) is what pairs a page action with a service answer");
-        Assert.AreEqual(nameof(DescribeServiceCommand), relayed.Value("Command"));
-        Assert.AreEqual(nameof(AcknowledgedResult), relayed.Value("Result"));
+        Assert.AreEqual(LogLabel.Of(nameof(DescribeServiceCommand)), relayed.Value("Command"));
+        Assert.AreEqual(LogLabel.Of(nameof(AcknowledgedResult)), relayed.Value("Result"));
         Assert.IsTrue(
             log.Records.Any(record => record.EventId == 4110
-                && Equals(record.Value("Endpoint"), "/api/command")));
+                && Equals(record.Value("Endpoint"), LogLabel.Of("/api/command"))));
     }
 
     [TestMethod]
@@ -141,7 +142,7 @@ public sealed class SetupCeremonyLoggingTests
 
         var served = log.Records.SingleOrDefault(record => record.EventId == 4114);
         Assert.IsNotNull(served);
-        Assert.AreEqual("/app.js", served.Value("Path"));
+        Assert.AreEqual(LogLabel.Of("/app.js"), served.Value("Path"));
         Assert.IsGreaterThan(0, (int)served.Value("ByteCount")!);
     }
 }

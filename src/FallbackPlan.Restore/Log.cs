@@ -17,7 +17,7 @@ internal static partial class Log
         EventId = 2800, Level = LogLevel.Information,
         Message = "Restore starting: {Items} items to {Destination}, overwrite {Overwrite}")]
     internal static partial void RestoreStarting(
-        ILogger logger, int items, LogPath destination, string overwrite);
+        ILogger logger, int items, LogPath destination, LogLabel overwrite);
 
     [LoggerMessage(
         EventId = 2801, Level = LogLevel.Debug,

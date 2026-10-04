@@ -169,8 +169,12 @@ public sealed class LogPrivacyTests : ArchiveTestHarness
                 }
 
                 // A string is allowed only when it is not path-shaped: reasons,
-                // outcomes and policy names are strings by nature.
-                if (value is string text &&
+                // outcomes and policy names are strings by nature. A label is
+                // held to the same test, because a label is a call site's
+                // promise that its words are safe in every rendering, and a
+                // path wrapped in one would break the promise in plain sight.
+                if (value is string or LogLabel &&
+                    value.ToString() is { } text &&
                     !text.Contains('/', StringComparison.Ordinal) &&
                     !text.Contains('\\', StringComparison.Ordinal))
                 {

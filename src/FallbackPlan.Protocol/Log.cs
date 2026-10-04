@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Protocol;
@@ -17,26 +18,26 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3200, Level = LogLevel.Information,
         Message = "Pairing accepted with {Fingerprint} in role {Role}")]
-    internal static partial void PairingAccepted(ILogger logger, string fingerprint, string role);
+    internal static partial void PairingAccepted(ILogger logger, LogId fingerprint, LogLabel role);
 
     [LoggerMessage(
         EventId = 3201, Level = LogLevel.Warning,
         Message = "Pairing refused for {Fingerprint}: {Reason}")]
-    internal static partial void PairingRefused(ILogger logger, string fingerprint, string reason);
+    internal static partial void PairingRefused(ILogger logger, LogId fingerprint, LogLabel reason);
 
     [LoggerMessage(
         EventId = 3202, Level = LogLevel.Warning,
         Message = "A peer presented an identity that is not the pinned one for {Fingerprint} — "
             + "refused, and it stays refused until somebody approves the new identity")]
-    internal static partial void IdentityChanged(ILogger logger, string fingerprint);
+    internal static partial void IdentityChanged(ILogger logger, LogId fingerprint);
 
     [LoggerMessage(
         EventId = 3203, Level = LogLevel.Debug,
         Message = "Session established with {Fingerprint}, features {Features}")]
-    internal static partial void SessionEstablished(ILogger logger, string fingerprint, string features);
+    internal static partial void SessionEstablished(ILogger logger, LogId fingerprint, LogLabel features);
 
     [LoggerMessage(
         EventId = 3204, Level = LogLevel.Warning,
         Message = "Session with {Fingerprint} failed: {Reason}")]
-    internal static partial void SessionFailed(ILogger logger, string fingerprint, string reason);
+    internal static partial void SessionFailed(ILogger logger, LogId fingerprint, string reason);
 }

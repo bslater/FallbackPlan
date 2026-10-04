@@ -3,6 +3,7 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.TestSupport;
@@ -68,7 +69,7 @@ public sealed class RemoteBindingTests : IDisposable
         // paired, which is the guarantee the exit criterion names.
         await WaitForAsync(() => log.Records.Any(record =>
             record.Values.Any(pair =>
-                string.Equals(pair.Value as string, "NotPaired", StringComparison.Ordinal))));
+                Equals(pair.Value, LogLabel.Of("NotPaired")))));
 
         // The local binding still answers: refusing a stranger at the remote
         // binding changed nothing about the service a local caller talks to.

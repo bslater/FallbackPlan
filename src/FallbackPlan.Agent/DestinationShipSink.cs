@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using Microsoft.Extensions.Logging;
@@ -286,7 +287,7 @@ public sealed class DestinationShipSink : IObjectStore
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Log.ShipDestinationDropped(_log, destination.Name, exception.Message);
+                Log.ShipDestinationDropped(_log, new LogLabel(destination.Name), exception.Message);
                 dropped[destination.Name] = exception.Message;
             }
         }
@@ -304,7 +305,7 @@ public sealed class DestinationShipSink : IObjectStore
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Log.ShipDestinationDropped(_log, shipment.Name, exception.Message);
+                Log.ShipDestinationDropped(_log, new LogLabel(shipment.Name), exception.Message);
                 dropped[shipment.Name] = exception.Message;
             }
         }
@@ -381,7 +382,7 @@ public sealed class DestinationShipSink : IObjectStore
 
         if (completed.Problem is { } problem)
         {
-            Log.ReplicationReceiptRejected(_log, destinationName, setName, problem);
+            Log.ReplicationReceiptRejected(_log, new LogLabel(destinationName), new LogLabel(setName), problem);
             _runtime.Notices.Raise(
                 $"replication-receipt-invalid:{_setId}:{destinationName}",
                 $"peer '{destinationName}' acknowledged set '{setName}'s capture with a receipt this installation "
@@ -406,7 +407,8 @@ public sealed class DestinationShipSink : IObjectStore
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Log.ReplicationReceiptNotFiledByCommander(_log, destinationName, setName, exception.Message);
+            Log.ReplicationReceiptNotFiledByCommander(
+                _log, new LogLabel(destinationName), new LogLabel(setName), exception.Message);
         }
 
         // Verified is what counts, filed or not: the attestation was made and
@@ -493,7 +495,7 @@ public sealed class DestinationShipSink : IObjectStore
             catch (Exception exception) when (
                 exception is IOException or UnauthorizedAccessException or OperationCanceledException)
             {
-                Log.ShipDestinationDropped(_log, peer.DestinationName, exception.Message);
+                Log.ShipDestinationDropped(_log, new LogLabel(peer.DestinationName), exception.Message);
                 survivors.RemoveAll(candidate =>
                     string.Equals(candidate.Name, peer.DestinationName, StringComparison.Ordinal));
                 if (!dropped.Exists(entry => string.Equals(entry.Name, peer.DestinationName, StringComparison.Ordinal)))
@@ -874,7 +876,7 @@ public sealed class DestinationShipSink : IObjectStore
                 anyLeft = _inScope.Count > 0;
             }
 
-            Log.ShipDestinationDropped(_log, target.Name, exception.Message);
+            Log.ShipDestinationDropped(_log, new LogLabel(target.Name), exception.Message);
             if (!anyLeft)
             {
                 throw new IOException(

@@ -1,5 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -260,7 +261,7 @@ public sealed class RetentionCycleTests : IDisposable
         await RunAsync(store, apply: true, now: day1.AddDays(2).AddHours(1), logger: log);
 
         var planning = log.Records.Single(record => record.EventId == PlanningRetention);
-        Assert.AreEqual("docs", planning.Values.First(value => value.Key == "SetName").Value);
+        Assert.AreEqual(LogLabel.Of("docs"), planning.Values.First(value => value.Key == "SetName").Value);
         Assert.AreEqual(3, planning.Values.First(value => value.Key == "Snapshots").Value);
 
         var planned = log.Records.Single(record => record.EventId == RetentionPlanned);

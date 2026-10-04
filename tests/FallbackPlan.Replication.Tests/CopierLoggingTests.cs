@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Replication;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
@@ -66,8 +67,8 @@ public sealed class CopierLoggingTests
         Assert.AreEqual(3L, outcome.Copied);
 
         var opening = log.Records.Single(record => record.EventId == ReplicationStarting);
-        Assert.AreEqual("off-site", opening.Values.First(value => value.Key == "Destination").Value);
-        Assert.AreEqual("copy", opening.Values.First(value => value.Key == "Pass").Value);
+        Assert.AreEqual(LogLabel.Of("off-site"), opening.Values.First(value => value.Key == "Destination").Value);
+        Assert.AreEqual(LogLabel.Of("copy"), opening.Values.First(value => value.Key == "Pass").Value);
 
         Assert.HasCount(
             3, log.Records.Where(record => record.EventId == ObjectCopied),
@@ -131,7 +132,7 @@ public sealed class CopierLoggingTests
             "every object the pass condemned and could not remove is named");
 
         var finished = log.Records.Single(record => record.EventId == ReplicationComplete);
-        Assert.AreEqual("converge", finished.Values.First(value => value.Key == "Pass").Value);
+        Assert.AreEqual(LogLabel.Of("converge"), finished.Values.First(value => value.Key == "Pass").Value);
     }
 
     private static async Task SeedAsync(LocalFileSystemObjectStore source, int count)

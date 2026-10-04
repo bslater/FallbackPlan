@@ -6,6 +6,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Diagnostics;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Protocol;
 using FallbackPlan.Repository;
@@ -1012,28 +1013,31 @@ public static class AgentHost
                         archivesWereExplicit, Api.InstallationDefaults.ArchivesVariable, archivesRoot!);
                     var poolWidth = ServiceRuntime.ConfiguredBackupPoolWidth(options);
                     var remoteBound = remoteListener is null ? "off" : remoteListener.Endpoint.ToString();
-                    Log.StartupLocations(hostLog, stateDirectory, stateProvenance, archivesRoot!, archivesProvenance);
+                    Log.StartupLocations(
+                        hostLog, new LogPath(stateDirectory), new LogLabel(stateProvenance),
+                        new LogPath(archivesRoot), new LogLabel(archivesProvenance));
                     Log.StartupPosture(hostLog, pollSeconds, poolWidth, remoteBound);
                     foreach (var set in runtime.Configuration.BackupSets)
                     {
                         var schedule = set.Schedule ?? "manual-only";
                         var priority = set.Priority?.ToString(CultureInfo.InvariantCulture) ?? "none";
                         Log.StartupSet(
-                            hostLog, set.Name, set.Roots.Count, schedule,
-                            set.Destinations.Count, set.DirectShip, priority);
+                            hostLog, new LogLabel(set.Name), set.Roots.Count, new LogLabel(schedule),
+                            set.Destinations.Count, set.DirectShip, new LogLabel(priority));
                     }
 
                     foreach (var declared in runtime.Configuration.Destinations)
                     {
                         var kind = declared.Kind.ToString();
                         var domain = declared.FailureDomain?.ToString() ?? "unstated";
-                        Log.StartupDestination(hostLog, declared.Name, kind, domain);
+                        Log.StartupDestination(hostLog, new LogLabel(declared.Name), new LogLabel(kind), new LogLabel(domain));
                     }
                 }
                 if (remoteListener is not null)
                 {
                     var boundTo = remoteListener.Endpoint.ToString();
-                    Log.RemoteBindingUp(hostLog, boundTo, peerKeypair!.Identity.Fingerprint);
+                    var ourFingerprint = LogId.Fingerprint(peerKeypair!.Identity.Fingerprint);
+                    Log.RemoteBindingUp(hostLog, boundTo, ourFingerprint);
                 }
 
                 if (!once)

@@ -1,4 +1,5 @@
 using FallbackPlan.Api;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Repository.Crypto;
 using Microsoft.Extensions.Logging;
 
@@ -30,12 +31,12 @@ public sealed partial class ServiceCommandHandler
         var log = runtime.LoggerFor<ServiceCommandHandler>();
         if (log.IsEnabled(LogLevel.Debug))
         {
-            Log.ProvisionOutcome(log, answer switch
+            Log.ProvisionOutcome(log, new LogLabel(answer switch
             {
                 ConfigurationChangeResult => "provisioned",
                 ServiceError error => error.Reason.ToString(),
                 _ => answer.GetType().Name,
-            });
+            }));
         }
 
         return answer;

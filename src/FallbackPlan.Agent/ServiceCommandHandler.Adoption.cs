@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Descriptor;
@@ -624,7 +625,10 @@ public sealed partial class ServiceCommandHandler
         lines.Add("This service can add to the archive and read its structure, but never file contents.");
 
         var logger = runtime.LoggerFor<ServiceCommandHandler>();
-        Log.ArchiveAdopted(logger, setId, repositoryIdHex, destination.Name, shape.SnapshotCount, writerResumed);
+        var adoptedSet = LogId.BackupSet(setId);
+        var adoptedRepository = LogId.Repository(repositoryIdHex);
+        Log.ArchiveAdopted(
+            logger, adoptedSet, adoptedRepository, new LogLabel(destination.Name), shape.SnapshotCount, writerResumed);
 
         return new ArchiveAdoptedResult(
             setId, name, repositoryIdHex,
@@ -1003,7 +1007,7 @@ public sealed partial class ServiceCommandHandler
         {
             runtime.State.AdoptWriterId(decoded);
             var writerHex = Convert.ToHexStringLower(decoded);
-            Log.WriterIdentityResumed(runtime.LoggerFor<ServiceCommandHandler>(), writerHex);
+            Log.WriterIdentityResumed(runtime.LoggerFor<ServiceCommandHandler>(), LogId.Writer(writerHex));
             lines.Add("This installation now writes under the archive's writer identity, so unchanged files are reused.");
             return true;
         }

@@ -129,12 +129,7 @@ public sealed class FallbackPlanLoggerProvider : ILoggerProvider
         // The sequence leads the line so a support log and a client's feed can
         // be lined up: both carry the same monotonic number, which is the only
         // thing they share once one of them is redacted.
-        var line = string.Create(
-            System.Globalization.CultureInfo.InvariantCulture,
-            $"{stored.Sequence,-8}  " +
-            $"{DateTimeOffset.FromUnixTimeMilliseconds(stored.TimestampUnixMilliseconds):u}  " +
-            $"{LoggingOptions.NameOf(stored.Level),-11}  {stored.EventId,-5}  {stored.Category}  " +
-            $"{LogRecordRenderer.Render(stored, RenderMode.Full)}");
+        var line = LogRecordRenderer.RenderLine(stored, RenderMode.Full);
 
         _file?.Write(line);
         _console?.WriteLine(line);

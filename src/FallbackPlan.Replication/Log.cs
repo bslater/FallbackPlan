@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +24,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3000, Level = LogLevel.Information,
         Message = "Replicating to {Destination}: {Pass} pass starting")]
-    internal static partial void ReplicationStarting(ILogger logger, string destination, string pass);
+    internal static partial void ReplicationStarting(ILogger logger, LogLabel destination, LogLabel pass);
 
     [LoggerMessage(
         EventId = 3001, Level = LogLevel.Trace,
@@ -41,14 +42,14 @@ internal static partial class Log
         Message = "Converging {Destination} did not delete {Key}: the store answered {Outcome}. "
             + "The replica still holds it; the next pass will try again")]
     internal static partial void ConvergeDeleteRefused(
-        ILogger logger, string destination, ObjectKey key, DeleteOutcome outcome);
+        ILogger logger, LogLabel destination, ObjectKey key, DeleteOutcome outcome);
 
     [LoggerMessage(
         EventId = 3003, Level = LogLevel.Information,
         Message = "Replication to {Destination} finished ({Pass}): {Copied} copied, "
             + "{AlreadyHeld} already present, {Deleted} deleted")]
     internal static partial void ReplicationComplete(
-        ILogger logger, string destination, string pass, long copied, long alreadyHeld, long deleted);
+        ILogger logger, LogLabel destination, LogLabel pass, long copied, long alreadyHeld, long deleted);
 
     // Information, not warning: the spare is retention working as specified
     // (FR-GC-009's direct-ship shape), and the count is how an operator sees
@@ -58,5 +59,5 @@ internal static partial class Log
         EventId = 3004, Level = LogLevel.Information,
         Message = "Converging {Destination} spared {Spared} object(s) its policy dropped: "
             + "a sibling destination has not yet received the snapshots they belong to")]
-    internal static partial void ConvergeSpared(ILogger logger, string destination, long spared);
+    internal static partial void ConvergeSpared(ILogger logger, LogLabel destination, long spared);
 }

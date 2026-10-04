@@ -1,4 +1,5 @@
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using Microsoft.Extensions.Logging;
 
@@ -26,7 +27,7 @@ internal static partial class Log
         EventId = 1601, Level = LogLevel.Warning,
         Message = "Restarting the blob rather than resuming its spool: {Reason}. "
             + "Spooled work is lost; correctness is not — the restarted blob draws a fresh salt")]
-    internal static partial void SpoolDiscarded(ILogger logger, string reason);
+    internal static partial void SpoolDiscarded(ILogger logger, LogLabel reason);
 
     // Written once, at create — see WriteCheckpoint. The declaration used to
     // carry a record count, which read as though the sidecar were refreshed

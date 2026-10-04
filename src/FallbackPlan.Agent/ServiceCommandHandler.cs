@@ -6,6 +6,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
@@ -72,7 +73,7 @@ public sealed partial class ServiceCommandHandler(
         if (log.IsEnabled(LogLevel.Trace))
         {
             var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name, elapsed);
+            Log.CommandExecuted(log, new LogLabel(command.GetType().Name), new LogLabel(answer.GetType().Name), elapsed);
         }
 
         return answer;
@@ -532,7 +533,7 @@ public sealed partial class ServiceCommandHandler(
         catch (Exception exception) when (exception is IOException or InvalidOperationException
             or Repository.Packing.BlobFormatException)
         {
-            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), set.Name, exception);
+            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), new LogLabel(set.Name), exception);
             return [$"compaction did not run: {exception.Message}"];
         }
     }

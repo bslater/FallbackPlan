@@ -1,4 +1,5 @@
 using FallbackPlan.Domain;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using Microsoft.Extensions.Logging;
 
@@ -22,7 +23,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 1800, Level = LogLevel.Debug,
         Message = "Catalogue opened for {Repository}; the cache on disk was {Disposition}")]
-    internal static partial void CatalogueOpened(ILogger logger, RepositoryId repository, string disposition);
+    internal static partial void CatalogueOpened(ILogger logger, RepositoryId repository, LogLabel disposition);
 
     // No repository id and no reason: a rebuilder holds a loader, not a
     // repository, and the reason lives with the caller that decided to

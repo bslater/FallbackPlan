@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -127,7 +128,7 @@ public sealed class PeerAuthenticator
         {
             // 01 §2.5. This is the case that matters: the operator asked to
             // reach one device and something else answered.
-            Log.IdentityChanged(_log, _expected.Fingerprint);
+            Log.IdentityChanged(_log, LogId.Fingerprint(_expected.Fingerprint));
             throw new PeerProtocolException(
                 PeerRefusalReason.IdentityChanged,
                 $"Peer {_expected.Fingerprint} was expected; {theirs.Identity.Fingerprint} answered.");
@@ -137,7 +138,8 @@ public sealed class PeerAuthenticator
         if (grant is null)
         {
             var revoked = _grants.IsRevoked(theirs.Identity);
-            Log.PairingRefused(_log, theirs.Identity.Fingerprint, revoked ? "revoked" : "not paired");
+            Log.PairingRefused(
+                _log, LogId.Fingerprint(theirs.Identity.Fingerprint), new LogLabel(revoked ? "revoked" : "not paired"));
             throw new PeerProtocolException(
                 revoked ? PeerRefusalReason.Revoked : PeerRefusalReason.NotPaired,
                 revoked
@@ -146,7 +148,8 @@ public sealed class PeerAuthenticator
         }
 
         var role = grant.Role.ToString();
-        Log.PairingAccepted(_log, theirs.Identity.Fingerprint, role);
+        var fingerprint = LogId.Fingerprint(theirs.Identity.Fingerprint);
+        Log.PairingAccepted(_log, fingerprint, new LogLabel(role));
         _theirs = theirs;
         Peer = grant;
 
@@ -202,7 +205,8 @@ public sealed class PeerAuthenticator
         if (_log.IsEnabled(LogLevel.Debug))
         {
             var agreed = features is { Count: > 0 } ? string.Join(", ", features) : "(none negotiated)";
-            Log.SessionEstablished(_log, Peer?.Identity.Fingerprint ?? "(unknown)", agreed);
+            var fingerprint = LogId.Fingerprint(Peer?.Identity.Fingerprint);
+            Log.SessionEstablished(_log, fingerprint, new LogLabel(agreed));
         }
     }
 
@@ -217,7 +221,7 @@ public sealed class PeerAuthenticator
     /// going away, which throws nothing here at all.
     /// </remarks>
     public void Failed(string reason) =>
-        Log.SessionFailed(_log, Peer?.Identity.Fingerprint ?? _expected?.Fingerprint ?? "(unknown)", reason);
+        Log.SessionFailed(_log, LogId.Fingerprint(Peer?.Identity.Fingerprint ?? _expected?.Fingerprint), reason);
 
     /// <summary>Whether a message type may be sent or received in the current state (02 §2).</summary>
     /// <param name="type">The message type.</param>

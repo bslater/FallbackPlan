@@ -1,5 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.TestSupport;
 using Microsoft.Extensions.Logging;
@@ -644,7 +645,7 @@ public sealed class AuthenticationGateTests : IDisposable
 
         var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3756));
         Assert.AreEqual(LogLevel.Trace, record.Level);
-        Assert.AreEqual("ben", record.Value("User"));
+        Assert.AreEqual(LogLabel.Of("ben"), record.Value("User"));
     }
 
     [TestMethod]
@@ -661,6 +662,6 @@ public sealed class AuthenticationGateTests : IDisposable
         Assert.IsInstanceOfType<ServiceError>(answered);
         var record = Assert.ContainsSingle(_log.Records.Where(record => record.EventId == 3757));
         Assert.AreEqual(LogLevel.Trace, record.Level);
-        Assert.AreEqual(nameof(GetStatusCommand), record.Value("Command"));
+        Assert.AreEqual(LogLabel.Of(nameof(GetStatusCommand)), record.Value("Command"));
     }
 }

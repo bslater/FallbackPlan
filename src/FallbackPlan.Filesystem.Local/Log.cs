@@ -32,7 +32,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 2603, Level = LogLevel.Warning,
         Message = "Could not read {Path} ({Reason}) — recorded as a capture failure, the scan continues")]
-    internal static partial void EntryFailed(ILogger logger, LogPath path, string reason);
+    internal static partial void EntryFailed(ILogger logger, LogPath path, LogLabel reason);
 
     [LoggerMessage(
         EventId = 2604, Level = LogLevel.Debug,

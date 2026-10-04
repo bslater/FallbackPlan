@@ -463,7 +463,7 @@ public sealed class RestoreExecutor(
         var displaced = new List<string>();
 
         var existingPolicy = options.ExistingDestination.ToString();
-        Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), existingPolicy);
+        Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), new LogLabel(existingPolicy));
 
         // Reads ahead of the loop so that a blob is fetched once rather than
         // once a file (NFR-PERF-009). Prefetching only the file being

@@ -1,5 +1,6 @@
 using Bodu;
 using System.Diagnostics;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -63,7 +64,7 @@ public static class ServiceConnectionPump
                         false,
                         ContractVersion.DescribeMismatch(clientVersion, ContractVersion.Current)),
                     cancellationToken).ConfigureAwait(false);
-                Log.VersionRefused(logger, hello.ContractVersion, serviceVersion);
+                Log.VersionRefused(logger, hello.ContractVersion, new LogLabel(serviceVersion));
                 return;
             }
 
@@ -72,7 +73,7 @@ public static class ServiceConnectionPump
                 new HelloAcknowledgementFrame(serviceVersion, true, null),
                 cancellationToken).ConfigureAwait(false);
 
-            Log.ClientConnected(logger, hello.ContractVersion, serviceVersion, accepted: true);
+            Log.ClientConnected(logger, hello.ContractVersion, new LogLabel(serviceVersion), accepted: true);
             await PumpAsync(stream, service, logger, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or InvalidDataException)
@@ -151,7 +152,7 @@ public static class ServiceConnectionPump
                             // hang-up.
                             var abandonedVerb = request.Command.GetType().Name;
                             var abandonedAfterMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
-                            Log.CommandAbandoned(logger, abandonedVerb, abandonedAfterMs);
+                            Log.CommandAbandoned(logger, new LogLabel(abandonedVerb), abandonedAfterMs);
                             return;
                         }
 
@@ -167,7 +168,7 @@ public static class ServiceConnectionPump
                             var verb = request.Command.GetType().Name;
                             var answered = result.GetType().Name;
                             var elapsedMs = (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
-                            Log.CommandHandled(logger, verb, answered, elapsedMs);
+                            Log.CommandHandled(logger, new LogLabel(verb), new LogLabel(answered), elapsedMs);
                         }
 
                         break;
