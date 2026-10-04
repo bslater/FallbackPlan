@@ -2052,4 +2052,6 @@ Paths come only by a per-bundle opt-in, refused to a paired console.
 What remains is recorded rather than done. The opt-in releases text no type
 classifies, which can quote an identifier in full, and its consent says so.
 The bundle carries the ring, not the rolled files: those were rendered in full
-when written, and redacting them now would mean matching strings.
+when written, and redacting them now would mean matching strings. The
+standalone recovery tool, which architecture 08 §5 also asks for a bundle,
+has none yet.

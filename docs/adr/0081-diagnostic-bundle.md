@@ -128,6 +128,7 @@ The console's Diagnostics view has a Diagnostic bundle card with an unticked "In
 - It does not redact the service's own log file, which stays inside the trust boundary in full, and the bundle does not include it. The rolled files were rendered in full when written, and redacting them after the fact would be string matching.
 - It does not scrub strings by pattern anywhere. A path inside a string is withheld because the string is, not because it looks like a path.
 - It does not include acknowledged notices or the whole job journal: fifty jobs and the open notices answer "what is wrong now".
+- It does not give the standalone recovery tool a bundle. [Architecture 08 §5](../architecture/08-restore-and-recovery.md#5-emergency-recovery) asks the tool for one too, and a tool with no service and no ring needs its own design. That remains owed.
 
 ## Alternatives considered
 
