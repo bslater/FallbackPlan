@@ -150,7 +150,7 @@ public sealed class DiagnosticBundleTests : IDisposable
             await Task.Delay(10, _timeout.Token);
         }
 
-#pragma warning disable CA1848, CA2254 // Planted records; the bundle is what is under test.
+#pragma warning disable CA1848, CA1873, CA2254 // Planted records; the bundle is what is under test.
         var log = _logging!.Factory.CreateLogger("FallbackPlan.Test");
         log.Log(
             LogLevel.Warning, new EventId(4242), new UnauthorizedAccessException(DeniedMessage),
@@ -158,7 +158,7 @@ public sealed class DiagnosticBundleTests : IDisposable
         log.Log(
             LogLevel.Information, new EventId(4243), "peer {Fingerprint} holds {Repository}",
             LogId.Fingerprint(PlantedFingerprint), RepositoryId.FromBytes(PlantedRepository));
-#pragma warning restore CA1848, CA2254
+#pragma warning restore CA1848, CA1873, CA2254
 
         runtime.Notices.Raise(
             $"terms-narrowed:{PlantedFingerprint}",
@@ -197,7 +197,8 @@ public sealed class DiagnosticBundleTests : IDisposable
 
     private static Dictionary<string, string> Open(DiagnosticBundleResult bundle)
     {
-        using var archive = new ZipArchive(new MemoryStream(bundle.Content), ZipArchiveMode.Read);
+        using var archive = new ZipArchive(
+            new MemoryStream(Convert.FromBase64String(bundle.ContentBase64)), ZipArchiveMode.Read);
         return archive.Entries.ToDictionary(
             entry => entry.FullName,
             entry =>
@@ -346,7 +347,7 @@ public sealed class DiagnosticBundleTests : IDisposable
         // Labels cross every rendering as written, so these lines reach the
         // bundle at full size, and random hex compresses poorly enough that
         // ten thousand of them cannot fit.
-#pragma warning disable CA1848, CA2254
+#pragma warning disable CA1848, CA1873, CA2254 // Filler records; the bundle's size is what is under test.
         var log = _logging!.Factory.CreateLogger("FallbackPlan.Test");
         for (var index = 0; index < 10_000; index++)
         {
@@ -354,12 +355,13 @@ public sealed class DiagnosticBundleTests : IDisposable
                 LogLevel.Information, new EventId(4244), "filler {Index} {Noise}",
                 index, LogLabel.Of(Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(600))));
         }
-#pragma warning restore CA1848, CA2254
+#pragma warning restore CA1848, CA1873, CA2254
 
         var bundle = await ExportAsync(runtime, includePaths: false);
         var entries = Open(bundle);
 
-        Assert.IsLessThanOrEqualTo(DiagnosticBundleResult.MaximumContentBytes, bundle.Content.Length);
+        Assert.IsLessThanOrEqualTo(
+            DiagnosticBundleResult.MaximumContentBytes, Convert.FromBase64String(bundle.ContentBase64).Length);
         Assert.IsGreaterThan(0, bundle.LogRecordsLeftOut);
         Assert.Contains("filler 9999 ", entries["log.txt"], StringComparison.Ordinal);
         Assert.DoesNotContain("filler 0 ", entries["log.txt"], StringComparison.Ordinal);

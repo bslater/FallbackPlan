@@ -228,6 +228,12 @@ internal static partial class Log
         Message = "Set {SetId}: catalogue rebuild at open reported {Finding}")]
     internal static partial void CatalogueRebuildAtOpenFinding(ILogger logger, LogId setId, string finding);
 
+    [LoggerMessage(
+        EventId = 3791, Level = LogLevel.Information,
+        Message = "Diagnostic bundle built for a {Scope} caller: {Records} log record(s), {LeftOut} left out, paths included {IncludesPaths}")]
+    internal static partial void DiagnosticBundleBuilt(
+        ILogger logger, CallerScope scope, int records, int leftOut, bool includesPaths);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

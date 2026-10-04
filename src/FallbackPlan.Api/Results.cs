@@ -76,6 +76,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
 [JsonDerivedType(typeof(DiagnosticsResult), "diagnostics")]
 [JsonDerivedType(typeof(LogRecordsResult), "log_records")]
+[JsonDerivedType(typeof(DiagnosticBundleResult), "diagnostic_bundle")]
 [JsonDerivedType(typeof(SessionResult), "session")]
 [JsonDerivedType(typeof(UserListResult), "users")]
 public abstract record ServiceResult;
@@ -1426,6 +1427,50 @@ public sealed record LogRecordsResult(
     IReadOnlyList<LogRecordDescriptor> Records,
     long NextSequence,
     bool Dropped) : ServiceResult;
+
+/// <summary>
+/// One diagnostic bundle — the answer to <see cref="ExportDiagnosticsCommand"/>
+/// (contract 1.52, ADR-0081).
+/// </summary>
+/// <remarks>
+/// The bundle is a zip whose <c>README.txt</c> says, in words, what it carries
+/// and what it leaves out, and whose <c>manifest.json</c> says the same to a
+/// tool. The fields beside the bytes are what a client prints without opening
+/// them.
+/// </remarks>
+/// <param name="FileName">
+/// The name the service suggests for the file: the product and the moment it
+/// was built, and nothing that names the machine or its owner.
+/// </param>
+/// <param name="ContentBase64">
+/// The bundle's bytes, base64. Text rather than a byte array because no
+/// contract member carries raw bytes: that is how key material would cross
+/// without being named as such.
+/// </param>
+/// <param name="IncludesPaths">Whether its person opted in to plaintext paths for this bundle.</param>
+/// <param name="Entries">The files inside, in the order they were written.</param>
+/// <param name="LogRecords">How many log records the bundle carries.</param>
+/// <param name="LogRecordsLeftOut">
+/// How many records the ring held that the bundle does not, oldest first, to
+/// keep within <see cref="MaximumContentBytes"/>. Zero when it carries all of them.
+/// </param>
+public sealed record DiagnosticBundleResult(
+    string FileName,
+    string ContentBase64,
+    bool IncludesPaths,
+    IReadOnlyList<string> Entries,
+    int LogRecords,
+    int LogRecordsLeftOut) : ServiceResult
+{
+    /// <summary>
+    /// The largest bundle the service builds, in bytes before encoding. A
+    /// frame carries 8 MiB, and the bytes travel as base64 — four characters
+    /// for every three — inside the result's envelope, so a bundle at this size
+    /// still clears the cap with room to spare. The service drops the log's
+    /// oldest records until it fits.
+    /// </summary>
+    public const int MaximumContentBytes = 5 * 1024 * 1024;
+}
 
 /// <summary>
 /// A minted or resumed session (FR-USR-003; ADR-0045 §5).

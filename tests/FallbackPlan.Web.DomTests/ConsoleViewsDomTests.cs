@@ -339,7 +339,7 @@ public sealed class ConsoleViewsDomTests
                 RingCapacity: 2048, OldestSequence: 0, NextSequence: 0),
             ReadLogCommand => new LogRecordsResult([], NextSequence: 0, Dropped: false),
             ExportDiagnosticsCommand export => new DiagnosticBundleResult(
-                "fallbackplan-diagnostics-20261004-120000Z.zip", content, export.IncludePaths,
+                "fallbackplan-diagnostics-20261004-120000Z.zip", Convert.ToBase64String(content), export.IncludePaths,
                 ["README.txt", "log.txt"], LogRecords: 3, LogRecordsLeftOut: 0),
             _ => new AcknowledgedResult(),
         };

@@ -50,6 +50,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(GetDiagnosticsCommand), "get_diagnostics")]
 [JsonDerivedType(typeof(SetLogLevelCommand), "set_log_level")]
 [JsonDerivedType(typeof(ReadLogCommand), "read_log")]
+[JsonDerivedType(typeof(ExportDiagnosticsCommand), "export_diagnostics")]
 [JsonDerivedType(typeof(CloseRestoreSourceCommand), "close_restore_source")]
 [JsonDerivedType(typeof(VerifyCommand), "verify")]
 [JsonDerivedType(typeof(CheckCommand), "check")]
@@ -745,6 +746,34 @@ public sealed record SetLogLevelCommand(string? Category, string Level) : Servic
 /// </param>
 public sealed record ReadLogCommand(long SinceSequence, int MaxRecords, string? MinimumLevel = null)
     : ServiceCommand;
+
+/// <summary>
+/// Builds one diagnostic bundle: a file a person can send to whoever is helping
+/// them (contract 1.52, ADR-0081, architecture 10 §4).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The bundle carries the service's log, its versions and environment, its
+/// configuration, its status, its open notices and its recent jobs — each
+/// rendered the way a record leaving the machine is rendered (ADR-0043 §4 as
+/// amended): credentials, keys and recovery material never, identifiers that
+/// could correlate the person across stores shortened, and paths, together
+/// with any text no type classifies, withheld.
+/// </para>
+/// <para>
+/// The bundle travels back in the result; the service writes no file. A
+/// client saves it where its own person chose, which is the only reading of
+/// T-16 — the service exposes no filesystem access to clients — that lets a
+/// paired console ask for one at all.
+/// </para>
+/// </remarks>
+/// <param name="IncludePaths">
+/// The per-bundle opt-in to plaintext paths (NFR-PRIV-003): the folders backed
+/// up, where the destinations are, the file and folder names in the log, and
+/// the text of errors, which names them more often than not. False, and absent,
+/// leaves them out. A paired remote console may not ask for it (ADR-0043 §6).
+/// </param>
+public sealed record ExportDiagnosticsCommand(bool IncludePaths = false) : ServiceCommand;
 
 /// <summary>
 /// Closes a restore source. Idempotent — closing an unknown or already-closed

@@ -601,6 +601,7 @@ public sealed partial class ServiceCommandHandler(
         GetDiagnosticsCommand => GetDiagnostics(),
         SetLogLevelCommand setLevel => SetLogLevel(setLevel),
         ReadLogCommand readLog => ReadLog(readLog),
+        ExportDiagnosticsCommand export => await ExportDiagnosticsAsync(export, cancellationToken).ConfigureAwait(false),
         BrowseFoldersCommand browse => BrowseFolders(browse),
         ValidateSetDraftCommand draft => ValidateSetDraft(draft),
         CreatePairingInviteCommand invite => CreatePairingInvite(invite),
@@ -2849,7 +2850,7 @@ public sealed partial class ServiceCommandHandler(
 
         return new ServiceDescriptionResult(
             ContractVersion.Current.ToString(),
-            "fallbackplan-agent/0.1",
+            ServiceVersion,
             Environment.MachineName,
             runtime.Options.StateDirectory,
             remoteBinding.Enabled,

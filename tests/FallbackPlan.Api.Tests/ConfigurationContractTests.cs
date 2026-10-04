@@ -64,19 +64,19 @@ public sealed class ConfigurationContractTests : IDisposable
         byte[] content = [0x50, 0x4b, 0x03, 0x04, 0x00, 0xff];
         var result = JsonSerializer.Serialize<ServiceResult>(
             new DiagnosticBundleResult(
-                "fallbackplan-diagnostics-20261004-120000Z.zip", content, IncludesPaths: false,
+                "fallbackplan-diagnostics-20261004-120000Z.zip", Convert.ToBase64String(content), IncludesPaths: false,
                 ["README.txt", "log.txt"], LogRecords: 12, LogRecordsLeftOut: 3),
             FrameCodec.SerializerOptions);
 
         Assert.Contains("\"result\":\"diagnostic_bundle\"", result, StringComparison.Ordinal);
         Assert.Contains("\"file_name\":\"fallbackplan-diagnostics-20261004-120000Z.zip\"", result, StringComparison.Ordinal);
-        Assert.Contains($"\"content\":\"{Convert.ToBase64String(content)}\"", result, StringComparison.Ordinal);
+        Assert.Contains($"\"content_base64\":\"{Convert.ToBase64String(content)}\"", result, StringComparison.Ordinal);
         Assert.Contains("\"includes_paths\":false", result, StringComparison.Ordinal);
         Assert.Contains("\"log_records_left_out\":3", result, StringComparison.Ordinal);
 
         Assert.IsInstanceOfType<DiagnosticBundleResult>(
             JsonSerializer.Deserialize<ServiceResult>(result, FrameCodec.SerializerOptions), out var read);
-        CollectionAssert.AreEqual(content, read.Content);
+        CollectionAssert.AreEqual(content, Convert.FromBase64String(read.ContentBase64));
         CollectionAssert.AreEqual(new[] { "README.txt", "log.txt" }, read.Entries.ToArray());
         Assert.AreEqual(12, read.LogRecords);
     }

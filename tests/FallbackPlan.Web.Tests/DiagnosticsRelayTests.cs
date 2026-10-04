@@ -144,7 +144,7 @@ public sealed class DiagnosticsRelayTests
         await using var harness = await ConsoleHarness.StartAsync();
         byte[] content = [0x50, 0x4b, 0x05, 0x06, 0x00, 0x7f];
         harness.Clients.Client.Respond = _ => new DiagnosticBundleResult(
-            "fallbackplan-diagnostics-20261004-120000Z.zip", content, IncludesPaths: true,
+            "fallbackplan-diagnostics-20261004-120000Z.zip", Convert.ToBase64String(content), IncludesPaths: true,
             ["README.txt", "log.txt"], LogRecords: 12, LogRecordsLeftOut: 0);
 
         using var request = harness.Command("""{"command":"export_diagnostics","includePaths":true}""");
@@ -160,7 +160,7 @@ public sealed class DiagnosticsRelayTests
 
         Assert.AreEqual("diagnostic_bundle", root.GetProperty("result").GetString());
         Assert.AreEqual("fallbackplan-diagnostics-20261004-120000Z.zip", root.GetProperty("fileName").GetString());
-        CollectionAssert.AreEqual(content, root.GetProperty("content").GetBytesFromBase64());
+        CollectionAssert.AreEqual(content, root.GetProperty("contentBase64").GetBytesFromBase64());
         Assert.IsTrue(root.GetProperty("includesPaths").GetBoolean());
         Assert.AreEqual(12, root.GetProperty("logRecords").GetInt32());
         Assert.AreEqual(0, root.GetProperty("logRecordsLeftOut").GetInt32());
