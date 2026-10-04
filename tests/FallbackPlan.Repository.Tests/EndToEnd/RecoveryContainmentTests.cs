@@ -92,8 +92,9 @@ public sealed class RecoveryContainmentTests : IDisposable
 
         // The hostile entry fails by name; the honest file still restores.
         Assert.IsTrue(report.Failed >= 1, "the '..' entry must be counted as failed");
-        Assert.Contains(note => note.Contains("refused", StringComparison.Ordinal)
-            && note.Contains("..", StringComparison.Ordinal), report.Notes);
+        Assert.Contains(note => note.Kind == RecoveryNoteKind.Refused
+            && note.Path is { } path && path.Contains("..", StringComparison.Ordinal)
+            && note.ToString().Contains("refused", StringComparison.Ordinal), report.Notes);
         SequenceAssert.AreEqual(good, File.ReadAllBytes(Path.Combine(output, "good.txt")));
 
         // Nothing landed outside the chosen output — not the file, and not

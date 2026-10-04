@@ -284,7 +284,7 @@ public sealed class DiagnosticsCommandTests : IDisposable
         var record = Assert.ContainsSingle(remote.Records);
         Assert.DoesNotContain("a-telling-folder-name", record.Message, StringComparison.Ordinal);
         Assert.AreEqual("System.UnauthorizedAccessException", record.ExceptionType);
-        Assert.AreEqual(LogRecordRenderer.Withheld, record.ExceptionMessage);
+        Assert.AreEqual(RedactedRendering.Withheld, record.ExceptionMessage);
 
         // Locally the same record is whole: the rule is about crossing.
         Assert.IsInstanceOfType<LogRecordsResult>(

@@ -1,7 +1,6 @@
 using System.CommandLine;
 using System.IO.Compression;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
@@ -196,54 +195,11 @@ public sealed class DiagnosticBundleTests : IDisposable
         return secrets;
     }
 
-    private static Dictionary<string, string> Open(DiagnosticBundleResult bundle)
-    {
-        using var archive = new ZipArchive(
-            new MemoryStream(Convert.FromBase64String(bundle.ContentBase64)), ZipArchiveMode.Read);
-        return archive.Entries.ToDictionary(
-            entry => entry.FullName,
-            entry =>
-            {
-                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
-                return reader.ReadToEnd();
-            },
-            StringComparer.Ordinal);
-    }
+    private static Dictionary<string, string> Open(DiagnosticBundleResult bundle) =>
+        BundleInspection.Open(Convert.FromBase64String(bundle.ContentBase64));
 
-    /// <summary>
-    /// An entry as a recipient reads it: its text and, for a JSON entry, every
-    /// string the text decodes to. JSON escapes each separator of a Windows
-    /// path, so a search of the raw text alone never finds the path it holds.
-    /// </summary>
-    private static string Readable(Dictionary<string, string> entries, string name)
-    {
-        var text = entries[name];
-        if (!name.EndsWith(".json", StringComparison.Ordinal))
-        {
-            return text;
-        }
-
-        using var document = JsonDocument.Parse(text);
-        return string.Join('\n', [text, .. Decoded(document.RootElement)]);
-    }
-
-    private static IEnumerable<string> Decoded(JsonElement element) => element.ValueKind switch
-    {
-        JsonValueKind.String => [element.GetString()!],
-        JsonValueKind.Array => element.EnumerateArray().SelectMany(Decoded),
-        JsonValueKind.Object => element.EnumerateObject().SelectMany(property => Decoded(property.Value).Prepend(property.Name)),
-        _ => [],
-    };
-
-    private static void AssertNowhere(string what, string value, DiagnosticBundleResult bundle, Dictionary<string, string> entries)
-    {
-        Assert.DoesNotContain(value, bundle.FileName, StringComparison.Ordinal, $"The file name carries the {what}.");
-        foreach (var name in entries.Keys)
-        {
-            Assert.DoesNotContain(value, name, StringComparison.Ordinal, $"An entry's name carries the {what}.");
-            Assert.DoesNotContain(value, Readable(entries, name), StringComparison.Ordinal, $"{name} carries the {what}.");
-        }
-    }
+    private static void AssertNowhere(string what, string value, DiagnosticBundleResult bundle, Dictionary<string, string> entries) =>
+        BundleInspection.AssertNowhere(what, value, bundle.FileName, entries);
 
     private async Task<DiagnosticBundleResult> ExportAsync(ServiceRuntime runtime, bool includePaths, CallerScope scope = CallerScope.Local)
     {
@@ -283,7 +239,7 @@ public sealed class DiagnosticBundleTests : IDisposable
         Assert.Contains("repo#40414243", entries["log.txt"], StringComparison.Ordinal);
         Assert.Contains("peer#N7DO2WYK", entries["log.txt"], StringComparison.Ordinal);
         Assert.Contains("System.UnauthorizedAccessException", entries["log.txt"], StringComparison.Ordinal);
-        Assert.Contains(LogRecordRenderer.Withheld, entries["log.txt"], StringComparison.Ordinal);
+        Assert.Contains(RedactedRendering.Withheld, entries["log.txt"], StringComparison.Ordinal);
         Assert.IsGreaterThan(0, bundle.LogRecords, "A real backup ran, so the ring holds its records.");
 
         using var manifest = JsonDocument.Parse(entries["manifest.json"]);
@@ -305,10 +261,10 @@ public sealed class DiagnosticBundleTests : IDisposable
 
         // The positive control for the default test's absences: these are the
         // same planted paths, and once asked for they are there.
-        Assert.Contains(SourceFolder, Readable(entries, "configuration.json"), StringComparison.Ordinal);
+        Assert.Contains(SourceFolder, BundleInspection.Readable(entries, "configuration.json"), StringComparison.Ordinal);
         Assert.Contains(SourceFolder, entries["log.txt"], StringComparison.Ordinal);
         Assert.Contains(DeniedMessage, entries["log.txt"], StringComparison.Ordinal);
-        Assert.Contains(SourceFolder, Readable(entries, "notices.json"), StringComparison.Ordinal);
+        Assert.Contains(SourceFolder, BundleInspection.Readable(entries, "notices.json"), StringComparison.Ordinal);
 
         // A path the configuration does not have is null, not a word that
         // reads like one: this set has its roots and no legacy root.

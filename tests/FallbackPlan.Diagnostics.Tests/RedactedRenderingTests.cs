@@ -58,7 +58,7 @@ public sealed class RedactedRenderingTests
         var redacted = LogRecordRenderer.Render(record, RenderMode.Redacted);
 
         Assert.DoesNotContain(TellingName, redacted, StringComparison.Ordinal);
-        Assert.Contains(LogRecordRenderer.Withheld, redacted, StringComparison.Ordinal);
+        Assert.Contains(RedactedRendering.Withheld, redacted, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -95,7 +95,7 @@ public sealed class RedactedRenderingTests
         var redacted = LogRecordRenderer.Render(Hole("File", new FileInfo(Secret)), RenderMode.Redacted);
 
         Assert.DoesNotContain(TellingName, redacted, StringComparison.Ordinal);
-        Assert.AreEqual($"saw {LogRecordRenderer.Withheld}", redacted);
+        Assert.AreEqual($"saw {RedactedRendering.Withheld}", redacted);
     }
 
     [TestMethod]
@@ -110,8 +110,8 @@ public sealed class RedactedRenderingTests
 
         Assert.DoesNotContain(TellingName, redacted, StringComparison.Ordinal);
         Assert.Contains("System.UnauthorizedAccessException", redacted, StringComparison.Ordinal);
-        Assert.Contains(LogRecordRenderer.Withheld, redacted, StringComparison.Ordinal);
-        Assert.AreEqual(LogRecordRenderer.Withheld, LogRecordRenderer.RenderExceptionMessage(record, RenderMode.Redacted));
+        Assert.Contains(RedactedRendering.Withheld, redacted, StringComparison.Ordinal);
+        Assert.AreEqual(RedactedRendering.Withheld, LogRecordRenderer.RenderExceptionMessage(record, RenderMode.Redacted));
     }
 
     [TestMethod]

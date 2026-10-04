@@ -61,6 +61,14 @@ public static class RecoveryHost
                 error|critical|none>, which also reads FALLBACKPLAN_LOG_LEVEL. Logs
                 go to standard error and nowhere else — this tool writes no file it
                 was not asked to write (ADR-0043 §6).
+
+                Every verb also accepts --diagnostic-bundle <file>, which writes one
+                zip describing the run, however it ended: what the archive said, how
+                far the run got and why it stopped, for whoever is helping. It holds
+                no passphrase, key or salt, shortens identifiers and turns paths into
+                short digests; add --include-paths to keep paths as they are, which
+                the tool says before it starts. It never writes over a file that is
+                already there.
                 """);
             return 0;
         }
@@ -78,41 +86,119 @@ public static class RecoveryHost
             return null;
         }
 
-        string Require(string name) => Get(name)
-            ?? throw new RecoveryFailureException(Strings.FormatRecoveryHost_MissingRequiredOption(name));
-
         if (!ConsoleLogging.TryResolveLevel(Get("--log-level"), out var logLevel, out var levelRefusal))
         {
             error.WriteLine($"error: {levelRefusal}");
             return 1;
         }
 
+        // A diagnostic bundle is asked for on the run it describes (ADR-0082),
+        // and everything that would stop it being written is refused before
+        // the archive is touched.
+        var bundle = Get("--diagnostic-bundle");
+        var includePaths = args.Contains("--include-paths", StringComparer.Ordinal);
+        if (includePaths && bundle is null)
+        {
+            error.WriteLine(
+                "error: --include-paths changes only a diagnostic bundle — name one with --diagnostic-bundle <file>.");
+            return 1;
+        }
+
+        if (args.Contains("--diagnostic-bundle", StringComparer.Ordinal)
+            && (bundle is null || bundle.StartsWith("--", StringComparison.Ordinal)))
+        {
+            error.WriteLine("error: --diagnostic-bundle needs the file to write.");
+            return 1;
+        }
+
+        if (bundle is not null)
+        {
+            if (File.Exists(bundle) || Directory.Exists(bundle))
+            {
+                error.WriteLine(
+                    $"error: '{bundle}' already exists — a diagnostic bundle is never written over a file that is already there.");
+                return 1;
+            }
+
+            if (includePaths)
+            {
+                error.WriteLine($"warning: {RecoveryBundle.PathsConsequence}");
+            }
+        }
+
         var log = ConsoleLogging.For(error, logLevel, typeof(RecoveryHost).FullName!);
+        var run = new RecoveryRun(includePaths, logLevel);
+
+        int exitCode;
+        try
+        {
+            exitCode = await ExecuteAsync(args, Get, output, error, log, run, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (bundle is not null)
+        {
+            // Nothing anticipated this one, which is when a bundle is worth
+            // most; the exception still leaves the way it always did.
+            run.Fail(exception);
+            WriteBundle(bundle, run, error);
+            throw;
+        }
+
+        run.ExitCode = exitCode;
+        if (bundle is not null && !WriteBundle(bundle, run, error) && exitCode == 0)
+        {
+            exitCode = 1;
+        }
+
+        return exitCode;
+    }
+
+    /// <summary>Runs the verb, recording into <paramref name="run"/> what it did and found.</summary>
+    private static async Task<int> ExecuteAsync(
+        string[] args,
+        Func<string, string?> get,
+        TextWriter output,
+        TextWriter error,
+        ILogger log,
+        RecoveryRun run,
+        CancellationToken cancellationToken)
+    {
+        string Require(string name) => get(name)
+            ?? throw run.Refuse(
+                RecoveryFailureReason.MissingOption, Strings.FormatRecoveryHost_MissingRequiredOption(name), name);
 
         try
         {
             var command = args[0];
+            run.Verb = command;
+            run.Repo = get("--repo");
+            run.Snapshot = get("--snapshot");
+            run.Output = get("--output");
 
             // A flag from the kit era is refused by name rather than
             // ignored: somebody following an old note must learn the
             // ceremony changed, not wonder why the file was never read.
             if (args.Contains("--kit", StringComparer.Ordinal))
             {
-                throw new RecoveryFailureException(Strings.RecoveryHost_KitWithdrawn);
+                throw run.Refuse(RecoveryFailureReason.KitWithdrawn, Strings.RecoveryHost_KitWithdrawn, "--kit");
             }
 
             var repoPath = Require("--repo");
             var passphraseVariable = Require("--passphrase-env");
+            run.PassphraseVariableNamed = true;
 
             var passphraseValue = Environment.GetEnvironmentVariable(passphraseVariable);
+            run.PassphraseVariableSet = !string.IsNullOrEmpty(passphraseValue);
             if (string.IsNullOrEmpty(passphraseValue))
             {
-                throw new RecoveryFailureException(Strings.FormatRecoveryHost_EnvironmentVariableUnset(passphraseVariable));
+                throw run.Refuse(
+                    RecoveryFailureReason.PassphraseVariableUnset,
+                    Strings.FormatRecoveryHost_EnvironmentVariableUnset(passphraseVariable),
+                    "--passphrase-env");
             }
 
             using var passphrase = Passphrase.Create(passphraseValue);
             using var session = await RecoverySession.OpenAsync(
-                passphrase, new LocalFileSystemObjectStore(repoPath), cancellationToken)
+                passphrase, new LocalFileSystemObjectStore(repoPath), run, cancellationToken)
                 .ConfigureAwait(false);
             var repositoryHex = Convert.ToHexString(session.RepositoryId.ToArray()).ToLowerInvariant();
             var repository = LogId.Repository(repositoryHex);
@@ -135,7 +221,9 @@ public static class RecoveryHost
                     output.WriteLine(
                         "derivation     reproduced — this passphrase opens this archive, and every other "
                         + "archive this installation wrote");
+                    run.Stage = RecoveryStage.Blobs;
                     var (blobs, notes) = await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Loaded(blobs, notes);
                     output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"blobs          {blobs} readable"));
                     foreach (var note in notes)
                     {
@@ -147,8 +235,12 @@ public static class RecoveryHost
 
                 case "snapshots":
                 {
-                    await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Stage = RecoveryStage.Blobs;
+                    var (blobs, notes) = await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Loaded(blobs, notes);
+                    run.Stage = RecoveryStage.Snapshots;
                     var snapshots = await session.ListSnapshotsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Snapshots = snapshots;
                     foreach (var snapshot in snapshots)
                     {
                         var when = DateTimeOffset.FromUnixTimeMilliseconds((long)snapshot.Manifest.CaptureCompletedAt)
@@ -173,18 +265,26 @@ public static class RecoveryHost
                     var destination = Require("--output");
                     var wanted = Convert.FromHexString(snapshotHex);
 
-                    await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Stage = RecoveryStage.Blobs;
+                    var (blobs, notes) = await session.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Loaded(blobs, notes);
+                    run.Stage = RecoveryStage.Snapshots;
                     var snapshots = await session.ListSnapshotsAsync(cancellationToken).ConfigureAwait(false);
+                    run.Snapshots = snapshots;
                     var snapshot = snapshots.FirstOrDefault(row => row.Manifest.SnapshotId.Span.SequenceEqual(wanted))
-                        ?? throw new RecoveryFailureException(Strings.FormatRecoveryHost_NoSnapshotDiscoverableStore(snapshotHex));
+                        ?? throw run.Refuse(
+                            RecoveryFailureReason.SnapshotNotFound,
+                            Strings.FormatRecoveryHost_NoSnapshotDiscoverableStore(snapshotHex));
 
                     if (!snapshot.SignatureVerified)
                     {
                         error.WriteLine("warning: this snapshot's signature does NOT verify — a security finding (06 §6.1); restoring anyway because recovery is the last line of defence.");
                     }
 
+                    run.Stage = RecoveryStage.Restore;
                     var report = await session.RestoreTreeAsync(snapshot.Manifest.RootTree, destination, cancellationToken)
                         .ConfigureAwait(false);
+                    run.Restore = report;
 
                     foreach (var note in report.Notes)
                     {
@@ -198,16 +298,19 @@ public static class RecoveryHost
                 }
 
                 default:
-                    throw new RecoveryFailureException(Strings.FormatRecoveryHost_UnknownCommandRunWithHelp(command));
+                    throw run.Refuse(
+                        RecoveryFailureReason.UnknownVerb, Strings.FormatRecoveryHost_UnknownCommandRunWithHelp(command));
             }
         }
         catch (RecoveryFailureException exception)
         {
+            run.Fail(exception);
             error.WriteLine($"error: {exception.Message}");
             return 1;
         }
-        catch (KeyUnwrapFailedException)
+        catch (KeyUnwrapFailedException exception)
         {
+            run.Fail(exception);
             Log.PassphraseRefused(log);
             error.WriteLine(
                 "error: the passphrase does not reproduce this archive's keys — wrong passphrase, or an archive "
@@ -216,13 +319,45 @@ public static class RecoveryHost
         }
         catch (FormatException exception)
         {
+            run.Fail(exception);
             error.WriteLine($"error: {exception.Message}");
             return 1;
         }
         catch (IOException exception)
         {
+            run.Fail(exception);
             error.WriteLine($"error: {exception.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Writes the run's bundle where the person asked, and says so on standard
+    /// error, so the verb's own output stays what a script reads.
+    /// </summary>
+    /// <returns>Whether the bundle was written.</returns>
+    private static bool WriteBundle(string path, RecoveryRun run, TextWriter error)
+    {
+        try
+        {
+            var bytes = RecoveryBundle.Build(run, DateTimeOffset.UtcNow);
+
+            // CreateNew, not Create: the check before the run is a courtesy,
+            // and this is the refusal that cannot race.
+            using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                file.Write(bytes);
+            }
+
+            error.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"wrote diagnostic bundle {path} ({bytes.Length} bytes); paths {(run.IncludePaths ? "included" : "left out")}."));
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error.WriteLine($"error: the diagnostic bundle was not written: {exception.Message}");
+            return false;
         }
     }
 }
