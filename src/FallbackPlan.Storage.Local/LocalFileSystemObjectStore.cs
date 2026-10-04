@@ -1,5 +1,6 @@
 using Bodu;
 using System.Runtime.CompilerServices;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local.Resources;
 using Microsoft.Extensions.Logging;
@@ -113,19 +114,19 @@ public sealed class LocalFileSystemObjectStore : IObjectStore
 
         if (range is not { } requested)
         {
-            Log.ObjectRead(_log, key, "whole");
+            Log.ObjectRead(_log, key, new LogLabel("whole"));
             return ValueTask.FromResult(new OpenReadResult(stream));
         }
 
         if (requested.Offset + requested.Length > stream.Length)
         {
             stream.Dispose();
-            Log.OperationFailed(_log, "get", key, "the requested range runs past the end of the object");
+            Log.OperationFailed(_log, new LogLabel("get"), key, "the requested range runs past the end of the object");
             return ValueTask.FromResult(OpenReadResult.RangeNotSatisfiable);
         }
 
         stream.Seek(requested.Offset, SeekOrigin.Begin);
-        Log.ObjectRead(_log, key, "ranged");
+        Log.ObjectRead(_log, key, new LogLabel("ranged"));
 
         return ValueTask.FromResult(new OpenReadResult(new BoundedReadStream(stream, requested.Length)));
     }

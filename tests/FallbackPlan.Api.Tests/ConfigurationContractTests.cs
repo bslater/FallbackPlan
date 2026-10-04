@@ -34,11 +34,60 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ASnapshotDeletionCommand_IsRecordedAtOneFiftyOne()
+    public void ContractVersion_ADiagnosticBundleCommand_IsRecordedAtOneFiftyTwo()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.51", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.52", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void ExportDiagnosticsCommand_CrossesUnderItsWireNames_AndAsksForNoPathsUnlessTold()
+    {
+        // NFR-PRIV-003: paths are a per-bundle opt-in, so the field's absence
+        // must read as "no" on a service that never saw it named (ADR-0081).
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new ExportDiagnosticsCommand(IncludePaths: true), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"export_diagnostics\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"include_paths\":true", asked, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<ExportDiagnosticsCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                """{"command":"export_diagnostics"}""", FrameCodec.SerializerOptions),
+            out var bare);
+        Assert.IsFalse(bare.IncludePaths);
+    }
+
+    [TestMethod]
+    public void DiagnosticBundleResult_CrossesUnderItsWireNames_WithItsBytesIntact()
+    {
+        byte[] content = [0x50, 0x4b, 0x03, 0x04, 0x00, 0xff];
+        var result = JsonSerializer.Serialize<ServiceResult>(
+            new DiagnosticBundleResult(
+                "fallbackplan-diagnostics-20261004-120000Z.zip", Convert.ToBase64String(content), IncludesPaths: false,
+                ["README.txt", "log.txt"], LogRecords: 12, LogRecordsLeftOut: 3),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"diagnostic_bundle\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"file_name\":\"fallbackplan-diagnostics-20261004-120000Z.zip\"", result, StringComparison.Ordinal);
+        Assert.Contains($"\"content_base64\":\"{Convert.ToBase64String(content)}\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"includes_paths\":false", result, StringComparison.Ordinal);
+        Assert.Contains("\"log_records_left_out\":3", result, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<DiagnosticBundleResult>(
+            JsonSerializer.Deserialize<ServiceResult>(result, FrameCodec.SerializerOptions), out var read);
+        CollectionAssert.AreEqual(content, Convert.FromBase64String(read.ContentBase64));
+        CollectionAssert.AreEqual(new[] { "README.txt", "log.txt" }, read.Entries.ToArray());
+        Assert.AreEqual(12, read.LogRecords);
+    }
+
+    [TestMethod]
+    public void DiagnosticBundleResult_TheLargestBundle_FitsAFrameOnceEncoded()
+    {
+        // The service trims the log until the bundle is under this; the
+        // ceiling is chosen so that its base64 and the envelope around it
+        // still clear the frame cap with room to spare.
+        Assert.IsLessThan(FrameCodec.MaximumFrameBytes, (DiagnosticBundleResult.MaximumContentBytes / 3 * 4) + 64 * 1024);
     }
 
     [TestMethod]

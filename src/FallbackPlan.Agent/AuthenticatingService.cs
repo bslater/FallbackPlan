@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Api;
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -108,7 +109,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
         {
             if (Current is not { } session)
             {
-                Log.CommandRefusedUnauthenticated(_log, command.GetType().Name);
+                Log.CommandRefusedUnauthenticated(_log, new LogLabel(command.GetType().Name));
                 return new ServiceError(
                     ServiceErrorReason.Refused,
                     "This connection has not signed in. Log in first — `fallbackplan login`, or the "
@@ -236,7 +237,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
         }
 
         var role = session.Role.ToString();
-        Log.SignedIn(_log, session.User, role);
+        Log.SignedIn(_log, new LogLabel(session.User), new LogLabel(role));
         return Describe(session);
     }
 
@@ -256,7 +257,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
             _token = session.Token;
         }
 
-        Log.SessionResumed(_log, session.User);
+        Log.SessionResumed(_log, new LogLabel(session.User));
         return Describe(session);
     }
 
@@ -325,7 +326,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 }
 
                 var createdRole = created.User!.Role.ToString();
-                Log.AccountCreated(_log, created.User.Name, createdRole);
+                Log.AccountCreated(_log, new LogLabel(created.User.Name), new LogLabel(createdRole));
                 return new UserListResult([Describe(created.User)]);
             }
 
@@ -346,7 +347,7 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 // would mean removing somebody took effect only once they
                 // happened to close a console.
                 var ended = _sessions.RevokeAllFor(removed.User!.Name);
-                Log.AccountDeleted(_log, removed.User.Name, ended);
+                Log.AccountDeleted(_log, new LogLabel(removed.User.Name), ended);
                 return new AcknowledgedResult();
             }
 

@@ -500,8 +500,20 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// copies a requested snapshot still waits on. Additive: a pre-1.51 client
     /// never sends the command and reads the listing as before.
     /// </para>
+    /// <para>
+    /// 1.52 adds `export_diagnostics` (NFR-PRIV-003, ADR-0081): the service
+    /// builds one diagnostic bundle — its log, versions, configuration,
+    /// status, open notices and recent jobs, as a zip — and answers
+    /// `diagnostic_bundle` with the bytes, a suggested file name, whether
+    /// paths are in it, and how many log records it carries and left out.
+    /// Paths are a per-bundle opt-in, `include_paths`, which a paired console
+    /// may not set. `read_log` withholds from a paired caller an exception's
+    /// message and every value no type declares safe, where it had passed
+    /// them as written. Additive: a pre-1.52 client never sends the command,
+    /// and a paired one reads the withheld text as `(withheld)`.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 51);
+    public static ContractVersion Current { get; } = new(1, 52);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

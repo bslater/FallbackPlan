@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -22,13 +23,13 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 2501, Level = LogLevel.Trace,
         Message = "Get {Key}{Range}")]
-    internal static partial void ObjectRead(ILogger logger, ObjectKey key, string range);
+    internal static partial void ObjectRead(ILogger logger, ObjectKey key, LogLabel range);
 
     [LoggerMessage(
         EventId = 2502, Level = LogLevel.Warning,
         Message = "Store operation {Operation} failed for {Key}: {Reason}")]
     internal static partial void OperationFailed(
-        ILogger logger, string operation, ObjectKey key, string reason);
+        ILogger logger, LogLabel operation, ObjectKey key, string reason);
 
     [LoggerMessage(
         EventId = 2503, Level = LogLevel.Debug,

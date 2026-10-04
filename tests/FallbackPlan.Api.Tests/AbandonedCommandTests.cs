@@ -1,5 +1,6 @@
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Jobs;
 using FallbackPlan.TestSupport;
 using Microsoft.Extensions.Logging;
@@ -122,7 +123,7 @@ public sealed class AbandonedCommandTests : IDisposable
 
         var abandoned = log.Records.Single(record => record.EventId == 3606);
         Assert.AreEqual(LogLevel.Information, abandoned.Level);
-        Assert.AreEqual(nameof(ListSnapshotsCommand), abandoned.Value("Verb"));
+        Assert.AreEqual(LogLabel.Of(nameof(ListSnapshotsCommand)), abandoned.Value("Verb"));
 
         try
         {

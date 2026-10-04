@@ -161,7 +161,7 @@ public sealed class Catalogue : IDisposable
             stamp.ExecuteNonQuery();
         }
 
-        Log.CatalogueOpened(logger ?? NullLogger.Instance, repositoryId, disposition);
+        Log.CatalogueOpened(logger ?? NullLogger.Instance, repositoryId, new LogLabel(disposition));
 
         return new Catalogue(connection, logger);
     }

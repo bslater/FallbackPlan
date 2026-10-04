@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.51
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.52
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.51 — 61 commands. One line each; parameters, results
+The register as of 1.52 — 62 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -139,7 +139,11 @@ delete from it).
 (ADR-0039), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043);
 `list_receipts` (1.35, ADR-0063/0064 — every deletion and replication
 receipt filed here, both roles, as facts with the service's verdict on each
-signature; any signed-in role, any caller scope).
+signature; any signed-in role, any caller scope); `export_diagnostics`
+(1.52, [ADR-0081](../../docs/adr/0081-diagnostic-bundle.md) — one diagnostic
+bundle, as base64 bytes the client saves, rendered as a record leaving the
+machine is; plaintext paths only by `include_paths`, which a paired console
+may not set).
 
 ## Version history
 
@@ -194,3 +198,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.49 | `set_id` on `validate_set_draft` ([ADR-0037 Amendment 2](../../docs/adr/0037-configuration-over-the-command-contract.md#amendment-2-2026-10--a-new-set-is-made-in-steps-and-its-draft-is-judged-for-placement), FR-DEST-017, FR-SVC-022): the set the draft edits, or the id a new one will be created under. With it, the answer names each placement refusal ([ADR-0051](../../docs/adr/0051-local-destination-placement.md)) the save would give, in the save's words, judged as the save judges it: every local destination of a set the configuration does not hold, and for one it does, the destinations newly referenced, or all of them when its roots change. Additive with a null default: a pre-1.49 client names no set, and its draft is not judged for placement, because a standing binding the save would leave alone cannot be told from a new one |
 | 1.50 | `reclaim_grants` on `retention` ([ADR-0055 Amendment 3](../../docs/adr/0055-reclaim-authority.md#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key), FR-GC-008): a reclaim grant per set, keyed by set id, each in `reclaim_grant`'s sealed shape, because a set adopted from a destination keeps the salt it was born under and the installation's grant is not its authority. A set the map names is collected under its own entry, and one it leaves out falls back to `reclaim_grant`. With neither, the set is reported and not applied, and the report says so. A command with no map is refused for want of a grant exactly as before. Every grant is now proved against the reclaim public key its archive's credential carries, before any set runs, so a wrong one is refused by name even on an archive with no tombstone yet. Additive with a null default: a pre-1.50 client sends one grant or none, and is answered as before |
 | 1.51 | `delete_snapshots`, answered by `snapshots_deleted` ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md), FR-GC-013): a person deletes named snapshots of one set from staging and every copy. Without `apply` it is a dry run that needs no grant and says where each snapshot is held. With it, under the set's `reclaim_grant`, the service requests the deletion, converges every copy it can reach and takes the snapshots, and what only they held, out of staging, answering each snapshot `deleted` or `pending` with the destinations it awaits. An id the set does not hold, and a request that would leave the set nothing to restore from, are refused before anything is written. Who asked is not on the wire: the connection's gate supplies it from the session. `list_snapshots` gains `deletion_pending` on each snapshot a person asked to delete. Additive: a pre-1.51 client never sends the command, and reads the listing as before |
+| 1.52 | `export_diagnostics`, answered by `diagnostic_bundle` ([ADR-0081](../../docs/adr/0081-diagnostic-bundle.md), NFR-PRIV-003): the service builds one diagnostic bundle — its log, versions and environment, configuration, status, open notices and recent jobs, as a zip — and answers with `content_base64`, a suggested `file_name`, `includes_paths`, the `entries` and how many log records it carries and left out (`log_records`, `log_records_left_out`; the bundle is kept under 5 MiB so its base64 clears the frame). Every field is rendered as a record leaving the machine is: credentials, keys and recovery material never, identifiers shortened, paths and text no type classifies withheld. `include_paths` is the per-bundle opt-in to plaintext paths; a paired console asking for it is refused. The service writes no file. `read_log` now withholds from a paired caller an exception's message and every value no type declares safe, as `(withheld)`, where it had passed them as written. Additive: a pre-1.52 client never sends the command |

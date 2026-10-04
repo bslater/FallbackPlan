@@ -6,6 +6,7 @@ using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Status;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
@@ -72,7 +73,7 @@ public sealed partial class ServiceCommandHandler(
         if (log.IsEnabled(LogLevel.Trace))
         {
             var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Log.CommandExecuted(log, command.GetType().Name, answer.GetType().Name, elapsed);
+            Log.CommandExecuted(log, new LogLabel(command.GetType().Name), new LogLabel(answer.GetType().Name), elapsed);
         }
 
         return answer;
@@ -532,7 +533,7 @@ public sealed partial class ServiceCommandHandler(
         catch (Exception exception) when (exception is IOException or InvalidOperationException
             or Repository.Packing.BlobFormatException)
         {
-            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), set.Name, exception);
+            Log.CompactionFailed(runtime.LoggerFor(typeof(Repository.CompactionPass)), new LogLabel(set.Name), exception);
             return [$"compaction did not run: {exception.Message}"];
         }
     }
@@ -600,6 +601,7 @@ public sealed partial class ServiceCommandHandler(
         GetDiagnosticsCommand => GetDiagnostics(),
         SetLogLevelCommand setLevel => SetLogLevel(setLevel),
         ReadLogCommand readLog => ReadLog(readLog),
+        ExportDiagnosticsCommand export => await ExportDiagnosticsAsync(export, cancellationToken).ConfigureAwait(false),
         BrowseFoldersCommand browse => BrowseFolders(browse),
         ValidateSetDraftCommand draft => ValidateSetDraft(draft),
         CreatePairingInviteCommand invite => CreatePairingInvite(invite),
@@ -2848,7 +2850,7 @@ public sealed partial class ServiceCommandHandler(
 
         return new ServiceDescriptionResult(
             ContractVersion.Current.ToString(),
-            "fallbackplan-agent/0.1",
+            ServiceVersion,
             Environment.MachineName,
             runtime.Options.StateDirectory,
             remoteBinding.Enabled,

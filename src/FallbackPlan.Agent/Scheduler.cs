@@ -1,5 +1,6 @@
 using Bodu;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Jobs;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
@@ -116,7 +117,7 @@ public static class Scheduler
             // IsEnabled, and it is right that an argument expression is
             // evaluated whether or not anybody is listening.
             var opens = window!.NextOpen(now).ToString("u", CultureInfo.InvariantCulture);
-            Log.BackgroundWindowShut(pass, window.Text, opens);
+            Log.BackgroundWindowShut(pass, new LogLabel(window.Text), new LogLabel(opens));
         }
 
         if (windowShut)
@@ -134,7 +135,7 @@ public static class Scheduler
                 .ConfigureAwait(false);
             if (held > 0 && pass.IsEnabled(LogLevel.Information))
             {
-                Log.BackgroundWindowParked(pass, configured.Text, held);
+                Log.BackgroundWindowParked(pass, new LogLabel(configured.Text), held);
             }
         }
         else
@@ -199,7 +200,7 @@ public static class Scheduler
                 if (pass.IsEnabled(LogLevel.Debug))
                 {
                     var nextRun = next.ToString("u", CultureInfo.InvariantCulture);
-                    Log.SetNotDue(pass, set.Name, nextRun);
+                    Log.SetNotDue(pass, new LogLabel(set.Name), new LogLabel(nextRun));
                 }
 
                 outcomes.Add(new AgentSetOutcome(set.Name, "not-due", $"next: {next:u}"));
@@ -215,7 +216,7 @@ public static class Scheduler
             {
                 var lastCompleted = anchor?.ToString("u", CultureInfo.InvariantCulture) ?? "never";
                 var nextRun = schedule.NextRun(anchor, now).ToString("u", CultureInfo.InvariantCulture);
-                Log.SetDue(pass, set.Name, lastCompleted, nextRun);
+                Log.SetDue(pass, new LogLabel(set.Name), new LogLabel(lastCompleted), new LogLabel(nextRun));
             }
 
             // The pass's own initiation, carried down rather than hard-coded

@@ -125,6 +125,14 @@ template in any case. Exception messages keep using resx exactly as before.
 
 ### 4 Redaction by declared type, applied where the record crosses a boundary
 
+> **Amended (2026-10) by [ADR-0081](0081-diagnostic-bundle.md):** the redacted
+> rendering below was fail-open. A value no type classified, an exception's
+> message above all, crossed as written, and on a real filesystem that message
+> repeats the path a `LogPath` hole had just hashed. It is now fail-closed: a
+> value crosses only when its declared type clears it, a `LogLabel` vouches
+> for words safe everywhere, and a diagnostic bundle opted in to paths renders
+> in a third mode. See [the amendment](#amendment-2026-10-the-redacted-rendering-withholds-what-no-type-declares).
+
 [Specification 03 §8](../../specifications/repository-format/03-keys.md) is a
 MUST: no passphrase, KEK, master key, derived key or blob key in any log, and
 redaction **by declared type rather than by string matching**, so a new
@@ -376,6 +384,33 @@ The general rule this instance pins: a message emitted on a timer belongs at
 Debug however interesting its subject, because at Information a timer does not
 report events, it manufactures them.
 
+## Amendment (2026-10): the redacted rendering withholds what no type declares
+
+§4 promised that a value is redacted when its declared type says so, and that a
+new path-bearing field is protected the moment it is declared. The renderer
+kept the first half and not the second. It rendered every value whose type did
+not implement `IRedactedValue` as written, and appended an exception's message
+in every mode. Three kinds of value were crossing to a paired console in full
+because of it: the platform's own "Access to the path '…' is denied." as an
+exception's message and as the filesystem's `{Reason}`; peer fingerprints and
+set, repository and writer identities logged as strings; and the service's
+state and archives directories at startup. `LogPrivacyTests` saw none of it,
+because its fake source throws "denied".
+
+[ADR-0081](0081-diagnostic-bundle.md) makes the redacted rendering default-deny.
+Across the boundary a value renders only when its declared type says how: an
+`IRedactedValue` through its redacted form, a `LogLabel` as written, numbers,
+enums and times as written, and anything else, a `string` and an exception's
+message included, as `(withheld)`. The exception's type still crosses. A third
+mode, `RedactedWithPaths`, is for a diagnostic bundle whose person opted in to
+paths: paths and unclassified text render as written, and identifiers still
+shorten. Every product hole was classified to match, `LogId` learned to wrap an
+identifier already held as text, `ObjectKey` became redactable, and a paired
+caller's `read_log` now withholds the exception's message it used to pass on.
+
+Nothing about the service's own log file changes: it renders in full, inside
+the trust boundary, exactly as §4 decided.
+
 ## Status history
 
 | Date | Status | Note |
@@ -386,6 +421,7 @@ report events, it manufactures them.
 | 2026-08 | Accepted | Built: every host composes a real factory, the two untyped delegates deleted, `--log-level` and `FALLBACKPLAN_LOG_LEVEL`, and the `logging` object in `config.json` schema 4 |
 | 2026-08 | Accepted | Built: contract 1.15's `get_diagnostics`, `read_log` and `set_log_level`; the `fallbackplan logs` verb and the console's Diagnostics view; the publish-and-restore call sites and `LogPrivacyTests` over them. Call-site coverage is complete: the 61-declaration register is empty, twelve by deletion and the rest wired, with drills asserting records arrive rather than only that call sites exist |
 | 2026-08 | Accepted | Corrected: a log directory that cannot be created no longer stops the process. The rolling sink was opened eagerly while composing logging, which is the first thing every agent verb does — so a state directory the current user cannot write took down `install`, the one verb whose job is to set up the account that could write it. The sink now degrades to the ring and reports why on standard error, and `get_diagnostics` reads `DurableSink` off the sink rather than off the requested directory. `install` composes no file sink at all: it prints a unit and touches nothing, and a `logs` directory created by whoever registers the service is one the service account is about to be unable to write |
+| 2026-10 | Amended | [ADR-0081](0081-diagnostic-bundle.md): the redacted rendering is fail-closed — a value crosses only when its declared type clears it, an exception's message is withheld from a paired caller, `LogLabel` vouches for words safe everywhere, identifiers held as text are `LogId`s, `ObjectKey` is redactable, every product hole is classified, and a third rendering serves a diagnostic bundle opted in to paths |
 
 The diagnostics verbs moved from the contract 1.13 this document originally
 named to **1.15**: 1.13 was taken by first-run setup

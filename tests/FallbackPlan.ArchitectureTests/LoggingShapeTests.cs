@@ -8,7 +8,8 @@ namespace FallbackPlan.ArchitectureTests;
 /// <summary>
 /// The shape ADR-0043 promises of every logged message: a stable event id, in
 /// the range its project was allocated, unique across the solution
-/// (NFR-OPS-007).
+/// (NFR-OPS-007), and a declared type for every hole that names an identifier
+/// or a path (NFR-PRIV-003).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -131,6 +132,58 @@ public sealed class LoggingShapeTests
         }
 
         Assert.IsEmpty(offenders, string.Join("; ", offenders));
+    }
+
+    /// <summary>
+    /// A hole whose name says it carries an identifier or a path is declared as
+    /// one, never as a bare <c>string</c> (ADR-0043 §4 as amended by ADR-0081;
+    /// NFR-SEC-006, NFR-PRIV-003).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The redacted rendering is fail-closed, so a bare string never leaks: it
+    /// is withheld wherever a record leaves the machine. What this rule stops
+    /// is the opposite failure — an identifier withheld from a paired console
+    /// that should have been shortened and correlated, or released in full in
+    /// a bundle whose person opted in to paths and nothing else. A path or an
+    /// identifier has a type that knows how to cross; this makes using it the
+    /// only way to declare one.
+    /// </para>
+    /// <para>
+    /// Matching names is a lint, not the redaction: the redaction is by type,
+    /// and a hole this misses is withheld rather than exposed.
+    /// </para>
+    /// </remarks>
+    [TestMethod]
+    public void LogMessages_AHoleNamedForAnIdentifierOrAPath_IsNotABareString()
+    {
+        var offenders = new List<string>();
+        var named = new Regex(
+            @"^(?:id|\w+Id|\w*[Ff]ingerprint|\w*[Pp]ath|\w*[Dd]irectory|\w*[Rr]oot)$",
+            RegexOptions.CultureInvariant);
+
+        foreach (var file in LogFiles())
+        {
+            var project = Path.GetFileName(Path.GetDirectoryName(file))!;
+            foreach (Match declaration in Regex.Matches(
+                File.ReadAllText(file), @"static partial void (\w+)\(([^)]*)\)", RegexOptions.Singleline))
+            {
+                foreach (var parameter in declaration.Groups[2].Value.Split(','))
+                {
+                    var parts = parameter.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts is [.., "string" or "string?", var name] && named.IsMatch(name))
+                    {
+                        offenders.Add($"{project}.{declaration.Groups[1].Value}({name})");
+                    }
+                }
+            }
+        }
+
+        Assert.IsEmpty(
+            offenders,
+            "These holes name an identifier or a path but are declared as a string, so a paired "
+            + "console sees them withheld rather than shortened. Declare them as LogPath or LogId: "
+            + string.Join(", ", offenders));
     }
 
     /// <summary>

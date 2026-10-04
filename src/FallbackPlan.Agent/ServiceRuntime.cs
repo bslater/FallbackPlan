@@ -2,6 +2,7 @@ using Bodu;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
@@ -1128,9 +1129,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
 
             var log = LoggerFor<ServiceRuntime>();
+            var healedSet = LogId.BackupSet(setId);
             foreach (var warning in warnings)
             {
-                Log.HealRebuildFinding(log, setId, warning);
+                Log.HealRebuildFinding(log, healedSet, warning);
             }
 
             // Over the healed sink now, so the index plane's watermarks count
@@ -1161,6 +1163,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     private async ValueTask RebuildCatalogueAsync(string setId, ArchiveHandle archive, CancellationToken cancellationToken)
     {
         var log = LoggerFor<ServiceRuntime>();
+        var rebuiltSet = LogId.BackupSet(setId);
         var warnings = new List<string>();
         try
         {
@@ -1170,7 +1173,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             var projected = await CatalogueRebuild.RebuildIntoAsync(
                 this, archive.Catalogue, archive.Store, archive.Repository, reader, warnings, cancellationToken)
                 .ConfigureAwait(false);
-            Log.CatalogueRebuiltAtOpen(log, setId, projected.Snapshots, projected.FileVersions, projected.Missing);
+            Log.CatalogueRebuiltAtOpen(log, rebuiltSet, projected.Snapshots, projected.FileVersions, projected.Missing);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException
             or FormatException or System.Security.Cryptography.CryptographicException)
@@ -1178,12 +1181,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // Damage included: a record the rebuild cannot decode must not
             // keep the set from opening at every attempt, which would deny
             // the backup and the restore that are the way out of it.
-            Log.CatalogueRebuildAtOpenFailed(log, setId, exception.Message);
+            Log.CatalogueRebuildAtOpenFailed(log, rebuiltSet, exception.Message);
         }
 
         foreach (var warning in warnings)
         {
-            Log.CatalogueRebuildAtOpenFinding(log, setId, warning);
+            Log.CatalogueRebuildAtOpenFinding(log, rebuiltSet, warning);
         }
     }
 
@@ -1283,7 +1286,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // damage surfaces name properly. Refusing the open over it would
             // deny the restore that is the way out of that state, and the
             // colliding-put refusal still stands behind this.
-            Log.ObservedHeadUnavailable(LoggerFor<ServiceRuntime>(), setId, exception.Message);
+            Log.ObservedHeadUnavailable(LoggerFor<ServiceRuntime>(), LogId.BackupSet(setId), exception.Message);
             return;
         }
 
@@ -1292,7 +1295,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             return;
         }
 
-        Log.ObservedHeadAdopted(LoggerFor<ServiceRuntime>(), setId, adopted.From, adopted.To);
+        Log.ObservedHeadAdopted(LoggerFor<ServiceRuntime>(), LogId.BackupSet(setId), adopted.From, adopted.To);
         Notices.Raise(
             $"sequence-adopted:{setId}",
             $"Set '{setId}' would have re-used writer sequence numbers its own history already holds: local "

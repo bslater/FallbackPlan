@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Application;
@@ -29,7 +30,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3401, Level = LogLevel.Warning,
         Message = "Configuration refused: {Defect} — {Message}")]
-    internal static partial void ConfigurationRefused(ILogger logger, string defect, string message);
+    internal static partial void ConfigurationRefused(ILogger logger, LogLabel defect, string message);
 
     [LoggerMessage(
         EventId = 3402, Level = LogLevel.Information,
@@ -51,11 +52,11 @@ internal static partial class Log
 
     [LoggerMessage(
         EventId = 3420, Level = LogLevel.Information,
-        Message = "Notice raised: {Key} — {Message}")]
-    internal static partial void NoticeRaised(ILogger logger, string key, string message);
+        Message = "Notice raised: {Kind} about {Subject} — {Message}")]
+    internal static partial void NoticeRaised(ILogger logger, LogLabel kind, LogId subject, string message);
 
     [LoggerMessage(
         EventId = 3421, Level = LogLevel.Debug,
-        Message = "Notice acknowledged: {Key}")]
-    internal static partial void NoticeAcknowledged(ILogger logger, string key);
+        Message = "Notice acknowledged: {Kind} about {Subject}")]
+    internal static partial void NoticeAcknowledged(ILogger logger, LogLabel kind, LogId subject);
 }

@@ -38,6 +38,9 @@ public sealed partial class ServiceCommandHandler
 
     private RenderMode RenderFor => scope == CallerScope.Remote ? RenderMode.Redacted : RenderMode.Full;
 
+    /// <summary>The service build's version, as describe_service and the diagnostic bundle report it.</summary>
+    internal const string ServiceVersion = "fallbackplan-agent/0.1";
+
     private ServiceResult GetDiagnostics()
     {
         if (runtime.Options.Logging is not { } logging)
@@ -94,7 +97,7 @@ public sealed partial class ServiceCommandHandler
         if (command.Category is not { Length: > 0 } category)
         {
             logging.Levels.Set(current with { Default = level });
-            Log.LogLevelChanged(log, "(default)", levelName);
+            Log.LogLevelChanged(log, new LogLabel("(default)"), new LogLabel(levelName));
             return new ConfigurationChangeResult(
                 [$"The default log level is now {levelName}, until this service stops."]);
         }
@@ -105,7 +108,7 @@ public sealed partial class ServiceCommandHandler
         };
 
         logging.Levels.Set(current with { Categories = categories });
-        Log.LogLevelChanged(log, category, levelName);
+        Log.LogLevelChanged(log, new LogLabel(category), new LogLabel(levelName));
         return new ConfigurationChangeResult(
         [
             $"'{category}' and everything beneath it now log at {levelName}, "
@@ -153,9 +156,93 @@ public sealed partial class ServiceCommandHandler
                 record.Category,
                 LogRecordRenderer.Render(record, mode),
                 record.ExceptionType,
-                record.ExceptionMessage));
+                LogRecordRenderer.RenderExceptionMessage(record, mode)));
         }
 
         return new LogRecordsResult(records, page.NextSequence, page.Dropped);
+    }
+
+    /// <summary>
+    /// Builds one diagnostic bundle (contract 1.52, ADR-0081, NFR-PRIV-003).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Rendered the way a record leaving the machine is rendered, whoever
+    /// asks: even a local caller's bundle is meant to be sent somewhere, which
+    /// is the whole difference between it and the log file beside it. Paths
+    /// come only with the person's opt-in, and never to a paired console —
+    /// the same line the log already draws (ADR-0043 §6).
+    /// </para>
+    /// <para>
+    /// A bundle is still built when part of what it reports cannot be read: a
+    /// configuration file that fails to load or a status that fails to derive
+    /// is said in its own entry, and the rest — above all the log, which is
+    /// usually what explains the failure — still travels.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<ServiceResult> ExportDiagnosticsAsync(
+        ExportDiagnosticsCommand command, CancellationToken cancellationToken)
+    {
+        if (command.IncludePaths && scope == CallerScope.Remote)
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "A diagnostic bundle with plaintext paths is built for the machine that holds the files, not for a "
+                + "paired console, which reads this service's log redacted (ADR-0043 §6). Ask for the bundle without "
+                + "paths, or export it with paths on this machine.");
+        }
+
+        Application.ClientConfiguration? configuration = null;
+        string? configurationProblem = null;
+        try
+        {
+            configuration = runtime.Configuration;
+        }
+        catch (Exception exception) when (exception is Domain.ClientStateException or IOException
+            or UnauthorizedAccessException)
+        {
+            configurationProblem = exception.Message;
+        }
+
+        StatusResult? status = null;
+        string? statusProblem = null;
+        try
+        {
+            switch (await GetStatusAsync(cancellationToken).ConfigureAwait(false))
+            {
+                case StatusResult answered:
+                    status = answered;
+                    break;
+                case ServiceError error:
+                    statusProblem = error.Message;
+                    break;
+            }
+        }
+        catch (Exception exception) when (exception is Domain.ClientStateException or IOException
+            or UnauthorizedAccessException or InvalidDataException)
+        {
+            statusProblem = exception.Message;
+        }
+
+        var bundle = DiagnosticBundle.Build(new DiagnosticBundle.Inputs(
+            DateTimeOffset.UtcNow,
+            command.IncludePaths,
+            ServiceVersion,
+            runtime.SetupState,
+            runtime.Queue.ActiveCount,
+            remoteBinding.Enabled,
+            runtime.Options.StateDirectory,
+            runtime.Options.ArchivesRoot,
+            configuration,
+            configurationProblem,
+            status,
+            statusProblem,
+            runtime.Notices.Unacknowledged,
+            runtime.Jobs.Jobs,
+            runtime.Options.Logging));
+
+        var log = runtime.LoggerFor<ServiceCommandHandler>();
+        Log.DiagnosticBundleBuilt(log, scope, bundle.LogRecords, bundle.LogRecordsLeftOut, bundle.IncludesPaths);
+        return bundle;
     }
 }

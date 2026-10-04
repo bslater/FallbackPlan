@@ -68,6 +68,23 @@ public sealed class ObjectKeyTests
     }
 
     [TestMethod]
+    [DataRow("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura", "blobs#n7do2wyk")]
+    [DataRow("blobs/data/abcd/n7do2wykywpzljfjg3epzyaura.footer", "blobs#n7do2wyk")]
+    [DataRow("index/delta/0000000000000001/delta-1", "index#delta-1")]
+    [DataRow("repository-format", "key#reposito")]
+    public void ToRedactedString_KeepsTheKindAndShortensTheLeaf(string value, string expected)
+    {
+        // A key's leaf is a blob or delta identity, which correlates a store
+        // with every other copy of it (NFR-PRIV-002). Logged as one, it
+        // crosses the boundary as the kind and a short handle (ADR-0081).
+        var key = ObjectKey.Parse(value);
+
+        Assert.IsInstanceOfType<FallbackPlan.Domain.Diagnostics.IRedactedValue>(key, out var redactable);
+        Assert.AreEqual(expected, redactable.ToRedactedString());
+        Assert.AreEqual(value, key.ToString());
+    }
+
+    [TestMethod]
     public void Parse_ARenderedKey_ReturnsAnEqualKey() =>
         PropertyCheck.Holds(this);
 

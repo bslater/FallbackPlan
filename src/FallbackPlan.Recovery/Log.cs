@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Recovery;
@@ -17,7 +18,7 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 3100, Level = LogLevel.Information,
         Message = "Archive descriptor read: repository {RepositoryId}, format {FormatVersion}")]
-    internal static partial void DescriptorRead(ILogger logger, string repositoryId, int formatVersion);
+    internal static partial void DescriptorRead(ILogger logger, LogId repositoryId, int formatVersion);
 
     [LoggerMessage(
         EventId = 3101, Level = LogLevel.Information,

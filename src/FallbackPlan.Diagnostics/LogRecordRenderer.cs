@@ -15,16 +15,28 @@ public enum RenderMode
     Full = 0,
 
     /// <summary>
-    /// Values whose declared type implements
-    /// <see cref="IRedactedValue"/> render through it. For anything crossing
-    /// the boundary — a client feed, an exported bundle (NFR-PRIV-003).
+    /// Only what a declared type clears (ADR-0081): values whose type
+    /// implements <see cref="IRedactedValue"/> render through it, a
+    /// <see cref="LogLabel"/>, numbers, enums and times render as written,
+    /// and anything else — a bare string, an exception's message — is
+    /// withheld. For anything crossing the boundary: a paired console's
+    /// feed, a diagnostic bundle (NFR-PRIV-003).
     /// </summary>
     Redacted = 1,
+
+    /// <summary>
+    /// <see cref="Redacted"/>, except that paths and the text no type
+    /// classifies render as written. For a diagnostic bundle whose person
+    /// opted in to paths for that bundle (architecture 10 §4, ADR-0081):
+    /// identifiers still shorten, because the opt-in is to paths and not
+    /// to correlation.
+    /// </summary>
+    RedactedWithPaths = 2,
 }
 
 /// <summary>
 /// Turns a <see cref="LogRecord"/> back into a line, applying the destination's
-/// rule (ADR-0043 §4).
+/// rule (ADR-0043 §4 as amended by ADR-0081).
 /// </summary>
 /// <remarks>
 /// This is the single place the redaction decision is taken. It is deliberately
@@ -34,6 +46,13 @@ public enum RenderMode
 /// </remarks>
 public static class LogRecordRenderer
 {
+    /// <summary>
+    /// What a redacted rendering writes in place of a value no type cleared to
+    /// cross: a bare string, a value of an unclassified type, an exception's
+    /// message.
+    /// </summary>
+    public const string Withheld = "(withheld)";
+
     /// <summary>Renders one record for a destination.</summary>
     /// <param name="record">The captured record.</param>
     /// <param name="mode">What the destination may see.</param>
@@ -53,24 +72,86 @@ public static class LogRecordRenderer
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{message} [{record.ExceptionType}: {record.ExceptionMessage}]");
+            $"{message} [{record.ExceptionType}: {RenderExceptionMessage(record, mode)}]");
+    }
+
+    /// <summary>
+    /// Renders a record as one line of the service's own log file: sequence,
+    /// time, level, event id, category, message. The diagnostic bundle's log
+    /// uses the same line, so the two line up record for record — once one of
+    /// them is redacted, the sequence leading each line is all they share.
+    /// </summary>
+    /// <param name="record">The captured record.</param>
+    /// <param name="mode">What the destination may see.</param>
+    public static string RenderLine(LogRecord record, RenderMode mode)
+    {
+        ThrowHelper.ThrowIfNull(record);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{record.Sequence,-8}  " +
+            $"{DateTimeOffset.FromUnixTimeMilliseconds(record.TimestampUnixMilliseconds):u}  " +
+            $"{LoggingOptions.NameOf(record.Level),-11}  {record.EventId,-5}  {record.Category}  " +
+            $"{Render(record, mode)}");
+    }
+
+    /// <summary>
+    /// An exception's message under the destination's rule, or null when the
+    /// record carries no exception.
+    /// </summary>
+    /// <remarks>
+    /// The message is text no type classifies, and the platform's own words
+    /// for an unreadable folder are "Access to the path '…' is denied." — a
+    /// full path, beside a hole that just hashed it. Only the exception's
+    /// type, which is the code's, crosses a redacted boundary.
+    /// </remarks>
+    /// <param name="record">The captured record.</param>
+    /// <param name="mode">What the destination may see.</param>
+    public static string? RenderExceptionMessage(LogRecord record, RenderMode mode)
+    {
+        ThrowHelper.ThrowIfNull(record);
+
+        if (record.ExceptionType is null)
+        {
+            return null;
+        }
+
+        return mode == RenderMode.Redacted ? Withheld : record.ExceptionMessage;
     }
 
     /// <summary>
     /// Renders one value under the destination's rule. Public because the
-    /// wire projection renders values individually rather than as a line.
+    /// wire projection and the diagnostic bundle render values individually
+    /// rather than as a line.
     /// </summary>
     /// <param name="value">The value as logged.</param>
     /// <param name="mode">What the destination may see.</param>
+    /// <remarks>
+    /// Fail-closed (ADR-0081): across the boundary a value renders only when
+    /// its declared type says how. A secret is not handled here at all: its
+    /// own ToString already redacts, at the point it was declared, so it is
+    /// safe in every mode without this method knowing it exists.
+    /// </remarks>
     public static string RenderValue(object? value, RenderMode mode) => value switch
     {
         null => "(null)",
+        _ when mode == RenderMode.Full => AsWritten(value),
 
-        // Redaction by DECLARED TYPE. A secret is not handled here at all: its
-        // own ToString already redacts, at the point it was declared, so it is
-        // safe in either mode without this method knowing it exists.
-        IRedactedValue redactable when mode == RenderMode.Redacted => redactable.ToRedactedString(),
+        // Redaction by DECLARED TYPE.
+        LogPath path when mode == RenderMode.RedactedWithPaths => path.ToString(),
+        IRedactedValue redactable => redactable.ToRedactedString(),
+        LogLabel label => label.ToString(),
+        bool or Enum or byte or sbyte or short or ushort or int or uint or long or ulong
+            or float or double or decimal or TimeSpan or DateTime or DateTimeOffset => AsWritten(value),
 
+        // A string declares nothing, and neither does a type nobody
+        // classified; only a person's opt-in to paths lets them through.
+        _ when mode == RenderMode.RedactedWithPaths => AsWritten(value),
+        _ => Withheld,
+    };
+
+    private static string AsWritten(object value) => value switch
+    {
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? "(null)",
     };

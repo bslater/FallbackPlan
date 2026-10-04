@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using FallbackPlan.Api;
 using FallbackPlan.Api.Transport;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Protocol;
 using ProtocolIdentity = FallbackPlan.Protocol.PeerIdentity;
 using Microsoft.Extensions.Logging;
@@ -297,7 +298,8 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
             if (result.Grant is { } grant)
             {
-                Log.PeerPaired(_log, grant.Label, grant.Identity.Fingerprint);
+                var paired = LogId.Fingerprint(grant.Identity.Fingerprint);
+                Log.PeerPaired(_log, new LogLabel(grant.Label), paired);
 
                 // Durable, not just a log line: the issuing operator learns who
                 // redeemed their invite even if they were away (FR-DEST-008's
@@ -311,12 +313,12 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             else
             {
                 Log.PairingRefused(
-                    _log, result.Refusal?.Reason.ToString() ?? "unknown", result.Refusal?.Text ?? string.Empty);
+                    _log, new LogLabel(result.Refusal?.Reason.ToString() ?? "unknown"), result.Refusal?.Text ?? string.Empty);
             }
         }
         catch (PeerProtocolException refusal)
         {
-            Log.PairingRefused(_log, refusal.Reason.ToString(), refusal.Message);
+            Log.PairingRefused(_log, new LogLabel(refusal.Reason.ToString()), refusal.Message);
         }
     }
 
@@ -372,12 +374,13 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             }
             catch (PeerProtocolException refusal)
             {
-                Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
+                Log.RemoteRefused(_log, new LogLabel(refusal.Reason.ToString()), refusal.Message);
                 return;
             }
 
             var peer = DescribePeer(session.Peer.Identity);
-            Log.PeerAuthenticated(_log, peer);
+            var fingerprint = LogId.Fingerprint(session.Peer.Identity.Fingerprint);
+            Log.PeerAuthenticated(_log, fingerprint);
 
             // The grant's role decides which payload the open stream carries
             // (peer-protocol 03 §1). A peer entitled to store objects here speaks
@@ -387,7 +390,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
             {
                 if (_replicasRoot is null)
                 {
-                    Log.ReplicationWithoutReplicas(_log, peer);
+                    Log.ReplicationWithoutReplicas(_log, fingerprint);
                     return;
                 }
 
@@ -446,7 +449,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         _replicasRoot, session.Stream, session.Peer, _owners!, _notices!, _grants,
                         session.Binding, _stopping.Token)
                         .ConfigureAwait(false);
-                    Log.ReplicaClaimed(_log, peer, claimed.Count);
+                    Log.ReplicaClaimed(_log, fingerprint, claimed.Count);
                     return;
                 }
 
@@ -458,7 +461,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         RetrieveOpen.Read(payload.Value.Body), _stopping.Token,
                         session.Supports(PeerSessionNegotiation.ChunkPossessionFeature))
                         .ConfigureAwait(false);
-                    Log.RetrievalServed(_log, peer);
+                    Log.RetrievalServed(_log, fingerprint);
                     return;
                 }
 
@@ -486,7 +489,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
 
                 if (outcome.ReceiptFilingProblem is { } filingProblem)
                 {
-                    Log.DeletionReceiptNotFiled(_log, peer, filingProblem);
+                    Log.DeletionReceiptNotFiled(_log, fingerprint, filingProblem);
                 }
 
                 if (outcome.Termination is { } termination)
@@ -505,11 +508,11 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                         + $"{(termination.GraceDays > 0 ? $"; it suggests a {termination.GraceDays}-day grace" : string.Empty)}.",
                         now);
                     _grants.Revoke(session.Peer.Identity);
-                    Log.PeeringTerminated(_log, peer);
+                    Log.PeeringTerminated(_log, fingerprint);
                     return;
                 }
 
-                Log.Replicated(_log, outcome.Committed, peer);
+                Log.Replicated(_log, outcome.Committed, fingerprint);
                 return;
             }
 
@@ -522,7 +525,7 @@ public sealed class RemoteServiceListener : IAsyncDisposable
         {
             // A replication exchange that violated the protocol was refused on
             // the wire by the responder; it ends this connection and no other.
-            Log.RemoteRefused(_log, refusal.Reason.ToString(), refusal.Message);
+            Log.RemoteRefused(_log, new LogLabel(refusal.Reason.ToString()), refusal.Message);
         }
         catch (Exception exception) when (exception is OperationCanceledException or IOException or SocketException or ObjectDisposedException)
         {

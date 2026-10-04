@@ -2666,6 +2666,123 @@ public static class CliApplication
             }));
         }
 
+        // -------------------------------------------------- diagnostics-export
+
+        {
+            var fileArgument = new Argument<string>("file")
+            {
+                Description = "Where to write the bundle. A file already there is left alone.",
+            };
+            var includePathsOption = new Option<bool>("--include-paths")
+            {
+                Description = "Also include plaintext paths: the folders you back up, where your destinations are, "
+                    + "the names of files in the log, and the text of errors, which often names them. Path names "
+                    + "can say more about a person than the files' contents do.",
+            };
+
+            var command = WithRemoteCapableSession(new Command(
+                "diagnostics-export",
+                "Write a diagnostic bundle to send to whoever is helping you (ADR-0081): the service's log, "
+                + "versions, configuration, status, open notices and recent jobs, without credentials or keys, "
+                + "and without paths unless --include-paths. Needs a running service: the log is in its memory."));
+            command.Arguments.Add(fileArgument);
+            command.Options.Add(includePathsOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                // First, before any service is asked: the file is the person's to
+                // send, and a file already at that path is somebody's too.
+                var file = Path.GetFullPath(parse.GetValue(fileArgument)!);
+                if (File.Exists(file) || Directory.Exists(file))
+                {
+                    throw new CliFailureException(
+                        $"'{file}' already exists. diagnostics-export writes a new file and leaves that one alone; "
+                        + "name another.");
+                }
+
+                var remote = ResolveRemote(parse, direct: false);
+                var state = parse.GetValue(stateOption);
+                if (remote is null && state is not { Length: > 0 })
+                {
+                    throw new CliFailureException(
+                        "diagnostics-export asks a running service for its bundle, so it needs to know which one: "
+                        + "pass --state <dir> for the service on this machine, or --connect <host:port> "
+                        + "--fingerprint <fp> for a paired one.");
+                }
+
+                var includePaths = parse.GetValue(includePathsOption);
+                if (includePaths)
+                {
+                    // Said before anything is built, where the person who typed
+                    // the flag is looking (architecture 10 §4).
+                    error.WriteLine(
+                        "This bundle will include plaintext paths: the folders you back up, where your destinations "
+                        + "are, the names of files in the log, and the text of errors. Path names can say more about "
+                        + "a person than the files' contents do; send it only to someone you would show those names to.");
+                }
+
+                var request = new ExportDiagnosticsCommand(includePaths);
+                DiagnosticBundleResult bundle;
+                if (remote is { } target)
+                {
+                    bundle = await QueryRemoteAsync<DiagnosticBundleResult>(target, request, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    LocalServiceClient client;
+                    try
+                    {
+                        client = await LocalServiceClient.ConnectAsync(
+                            state!, "fallbackplan-cli", cancellationToken).ConfigureAwait(false);
+                        await new SessionCache(state!)
+                            .PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (ServiceConnectionException unreachable)
+                    {
+                        throw new CliFailureException(
+                            $"{unreachable.Message} The bundle is built by the running service, so there is "
+                            + "nothing to export until one is up.",
+                            unreachable);
+                    }
+
+                    await using (client.ConfigureAwait(false))
+                    {
+                        bundle = await client.ExecuteAsync(request, cancellationToken).ConfigureAwait(false) switch
+                        {
+                            DiagnosticBundleResult built => built,
+                            ServiceError failure => throw new CliFailureException(failure.Message),
+                            var other => throw new CliFailureException(
+                                $"the service answered with {other.GetType().Name}."),
+                        };
+                    }
+                }
+
+                var bytes = Convert.FromBase64String(bundle.ContentBase64);
+                var directory = Path.GetDirectoryName(file);
+                if (directory is { Length: > 0 })
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                // CreateNew, so a file that appeared since the check above is
+                // still not written over.
+                await using (var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                }
+
+                var leftOut = bundle.LogRecordsLeftOut > 0
+                    ? string.Create(CultureInfo.InvariantCulture, $", {bundle.LogRecordsLeftOut} older one(s) left out")
+                    : string.Empty;
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"wrote {file} ({bytes.Length} bytes): {bundle.LogRecords} log record(s){leftOut}; "
+                    + $"paths {(bundle.IncludesPaths ? "included" : "left out")}."));
+                return 0;
+            }));
+        }
+
         // -------------------------------------------------------------- status
 
         {

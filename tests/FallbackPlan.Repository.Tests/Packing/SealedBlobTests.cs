@@ -1,5 +1,6 @@
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Domain.Profiles;
 using FallbackPlan.Repository.Crypto;
@@ -359,7 +360,7 @@ public sealed class SealedBlobTests : IDisposable
         var recorded = Assert.ContainsSingle(logger.Records);
         Assert.AreEqual(1601, recorded.EventId, "the discard carries its allocated event id");
         Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, recorded.Level);
-        Assert.AreEqual(restart.Reason, recorded.Value("Reason"), "the logged reason is the returned reason");
+        Assert.AreEqual(LogLabel.Of(restart.Reason), recorded.Value("Reason"), "the logged reason is the returned reason");
         Assert.Contains("checkpoint_unreadable", recorded.Message, StringComparison.Ordinal);
     }
 

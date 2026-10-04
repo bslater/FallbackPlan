@@ -1,3 +1,4 @@
+using FallbackPlan.Domain.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace FallbackPlan.Retention;
@@ -17,17 +18,17 @@ internal static partial class Log
     [LoggerMessage(
         EventId = 2900, Level = LogLevel.Information,
         Message = "Retention planning for set {SetName}: {Snapshots} snapshots considered")]
-    internal static partial void PlanningRetention(ILogger logger, string setName, int snapshots);
+    internal static partial void PlanningRetention(ILogger logger, LogLabel setName, int snapshots);
 
     [LoggerMessage(
         EventId = 2901, Level = LogLevel.Information,
         Message = "Retention plan for {SetName}: {Keep} kept, {Retire} to retire")]
-    internal static partial void RetentionPlanned(ILogger logger, string setName, int keep, int retire);
+    internal static partial void RetentionPlanned(ILogger logger, LogLabel setName, int keep, int retire);
 
     [LoggerMessage(
         EventId = 2902, Level = LogLevel.Warning,
         Message = "Retention held back for {SetName}: {Reason} — nothing was deleted")]
-    internal static partial void RetentionHeld(ILogger logger, string setName, string reason);
+    internal static partial void RetentionHeld(ILogger logger, LogLabel setName, string reason);
 
     // Bytes reclaimed is not one number here. The sweep deletes objects and
     // reports counts; only the trim knows byte totals, because only it deletes
@@ -55,5 +56,5 @@ internal static partial class Log
         Message = "Write intents for {SetName}: {LiveIntents} live at generation {Generation}, "
             + "surveyed with a {ClockSkewMargin} clock skew margin")]
     internal static partial void IntentsSurveyed(
-        ILogger logger, string setName, int liveIntents, ulong generation, TimeSpan clockSkewMargin);
+        ILogger logger, LogLabel setName, int liveIntents, ulong generation, TimeSpan clockSkewMargin);
 }

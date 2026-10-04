@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Storage.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -159,7 +160,7 @@ public static class StoreToStoreCopier
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
 
-        Log.ReplicationStarting(log, name, "copy");
+        Log.ReplicationStarting(log, new LogLabel(name), new LogLabel("copy"));
 
         var copied = 0L;
         var alreadyHeld = 0L;
@@ -235,7 +236,7 @@ public static class StoreToStoreCopier
             }
         }
 
-        Log.ReplicationComplete(log, name, "copy", copied, alreadyHeld, deleted: 0);
+        Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("copy"), copied, alreadyHeld, deleted: 0);
 
         return new CopyOutcome(copied, alreadyHeld);
     }
@@ -290,7 +291,7 @@ public static class StoreToStoreCopier
         ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNull(keeps);
 
-        Log.ReplicationStarting(log, name, "converge");
+        Log.ReplicationStarting(log, new LogLabel(name), new LogLabel("converge"));
 
         var copied = 0L;
         var alreadyHeld = 0L;
@@ -413,17 +414,17 @@ public static class StoreToStoreCopier
                 {
                     // Counted as not-deleted and, until now, said nowhere: a
                     // replica quietly keeping what its policy dropped.
-                    Log.ConvergeDeleteRefused(log, name, ObjectKey.Parse(key), outcome.Outcome);
+                    Log.ConvergeDeleteRefused(log, new LogLabel(name), ObjectKey.Parse(key), outcome.Outcome);
                 }
             }
         }
 
         if (spared > 0)
         {
-            Log.ConvergeSpared(log, name, spared);
+            Log.ConvergeSpared(log, new LogLabel(name), spared);
         }
 
-        Log.ReplicationComplete(log, name, "converge", copied, alreadyHeld, deleted);
+        Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
         return new ConvergeOutcome(copied, alreadyHeld, deleted, spared);
     }
