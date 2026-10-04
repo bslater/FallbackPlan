@@ -382,6 +382,23 @@ public sealed class RecoveryBundleTests : IDisposable
     }
 
     [TestMethod]
+    [DataRow(false, DisplayName = "the flag ends the line")]
+    [DataRow(true, DisplayName = "another flag follows it")]
+    public async Task DiagnosticBundle_WithNoFileNamed_IsRefusedRatherThanSkipped(bool followedByAnotherFlag)
+    {
+        await BackUpTellingFolderAsync();
+
+        // Without the refusal the run would succeed and write nothing, and the
+        // person would find out only when they went to send the bundle.
+        var result = await RunAsync(followedByAnotherFlag
+            ? [.. Arguments("open"), "--diagnostic-bundle", "--log-level", "warning"]
+            : [.. Arguments("open"), "--diagnostic-bundle"]);
+
+        Assert.AreEqual(1, result.ExitCode, result.All);
+        Assert.Contains("--diagnostic-bundle needs the file", result.Error, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task IncludePaths_WithoutABundle_IsRefusedRatherThanIgnored()
     {
         var result = await RunAsync([.. Arguments("open"), "--include-paths"]);

@@ -18,7 +18,7 @@ namespace FallbackPlan.Recovery;
 public sealed record RecoveredSnapshot(SnapshotManifest Manifest, bool SignatureVerified);
 
 /// <summary>What one tree restore did.</summary>
-public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped, IReadOnlyList<string> Notes);
+public sealed record RecoveryRestoreReport(int Restored, int Failed, int Skipped, IReadOnlyList<RecoveryNote> Notes);
 
 /// <summary>
 /// The last line of defence (architecture 08 §5; FR-DRL-001; ADR-0060):
@@ -97,29 +97,65 @@ public sealed class RecoverySession : IDisposable
     /// <returns>The opened session.</returns>
     /// <exception cref="KeyUnwrapFailedException">The passphrase does not reproduce this archive's keys.</exception>
     /// <exception cref="RecoveryFailureException">The store has no readable descriptor.</exception>
-    public static async ValueTask<RecoverySession> OpenAsync(
-        Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken)
+    public static ValueTask<RecoverySession> OpenAsync(
+        Passphrase passphrase, IObjectStore store, CancellationToken cancellationToken) =>
+        OpenAsync(passphrase, store, run: null, cancellationToken);
+
+    /// <summary>
+    /// Opens a session, recording into <paramref name="run"/> what the
+    /// descriptor said and whether the passphrase reproduced the keys — before
+    /// either refusal is thrown, because a run that stops there is the one its
+    /// diagnostic bundle most needs to describe (ADR-0082).
+    /// </summary>
+    internal static async ValueTask<RecoverySession> OpenAsync(
+        Passphrase passphrase, IObjectStore store, RecoveryRun? run, CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(passphrase);
         ThrowHelper.ThrowIfNull(store);
 
-        var descriptor = await ReadDescriptorAsync(store, cancellationToken).ConfigureAwait(false);
+        if (run is not null)
+        {
+            run.Stage = RecoveryStage.Descriptor;
+        }
+
+        var descriptor = await ReadDescriptorAsync(store, run, cancellationToken).ConfigureAwait(false);
+
+        if (run is not null)
+        {
+            run.Stage = RecoveryStage.Passphrase;
+        }
 
         if (!WriteOnlyDerivation.TryDeriveVerified(
             passphrase, descriptor.KdfParameters, descriptor.KdfSalt.Span, descriptor.SealingPublicKey.Span,
             out var authority))
         {
+            if (run is not null)
+            {
+                run.Passphrase = PassphraseOutcome.Refused;
+            }
+
             throw new KeyUnwrapFailedException(Resources.Strings.RecoverySession_PassphraseDoesNotReproduce);
+        }
+
+        if (run is not null)
+        {
+            run.Passphrase = PassphraseOutcome.Reproduced;
         }
 
         try
         {
-            return new RecoverySession(store, descriptor.RepositoryId, authority!.Credential.Clone(), authority)
+            var session = new RecoverySession(store, descriptor.RepositoryId, authority!.Credential.Clone(), authority)
             {
                 FormatVersion = descriptor.FormatVersion,
                 EffectiveFormatVersion = await ReadEffectiveFormatAsync(
                     store, descriptor, authority.Credential, cancellationToken).ConfigureAwait(false),
             };
+            if (run is not null)
+            {
+                run.EffectiveFormatVersion = session.EffectiveFormatVersion;
+            }
+
+            return session;
         }
         catch
         {
@@ -184,15 +220,20 @@ public sealed class RecoverySession : IDisposable
             decoded => signer.Verify(decoded.SignedBytes.Span, decoded.Signature.Span));
     }
 
-    /// <summary>Reads and parses the archive's descriptor.</summary>
+    /// <summary>Reads and parses the archive's descriptor, recording what it said into <paramref name="run"/>.</summary>
     private static async ValueTask<RepositoryDescriptor> ReadDescriptorAsync(
-        IObjectStore store, CancellationToken cancellationToken)
+        IObjectStore store, RecoveryRun? run, CancellationToken cancellationToken)
     {
         using var read = await store.OpenReadAsync(DescriptorKey, range: null, cancellationToken)
             .ConfigureAwait(false);
 
         if (read.Outcome != OpenReadOutcome.Found)
         {
+            if (run is not null)
+            {
+                run.Descriptor = DescriptorOutcome.Missing;
+            }
+
             throw new RecoveryFailureException(Resources.Strings.RecoverySession_ArchiveHasNoDescriptor);
         }
 
@@ -203,7 +244,30 @@ public sealed class RecoverySession : IDisposable
         // archive this passphrase can open — but the tool still says which,
         // because "not a repository" and "digest does not verify" send an
         // operator to completely different places.
-        return RepositoryDescriptorCodec.Parse(memory.ToArray()) switch
+        var parsed = RepositoryDescriptorCodec.Parse(memory.ToArray());
+        if (run is not null)
+        {
+            switch (parsed)
+            {
+                case DescriptorParseResult.Ok ok:
+                    run.Read(ok.Descriptor);
+                    break;
+                case DescriptorParseResult.UnsupportedRequiredFeatures unsupported:
+                    run.Descriptor = DescriptorOutcome.UnsupportedFeatures;
+                    run.UnsupportedFeatures = unsupported.Features;
+                    break;
+                default:
+                    run.Descriptor = parsed switch
+                    {
+                        DescriptorParseResult.NotARepository => DescriptorOutcome.NotARepository,
+                        DescriptorParseResult.IntegrityFailure => DescriptorOutcome.IntegrityFailure,
+                        _ => DescriptorOutcome.FormatViolation,
+                    };
+                    break;
+            }
+        }
+
+        return parsed switch
         {
             DescriptorParseResult.Ok ok => ok.Descriptor,
             DescriptorParseResult.NotARepository =>
@@ -231,9 +295,9 @@ public sealed class RecoverySession : IDisposable
     /// object identifier — the index-free read path (specification 05 §4).
     /// A damaged blob is skipped with a note; corruption is local (04 §7).
     /// </summary>
-    public async ValueTask<(int Blobs, IReadOnlyList<string> Notes)> LoadBlobsAsync(CancellationToken cancellationToken)
+    public async ValueTask<(int Blobs, IReadOnlyList<RecoveryNote> Notes)> LoadBlobsAsync(CancellationToken cancellationToken)
     {
-        var notes = new List<string>();
+        var notes = new List<RecoveryNote>();
         var blobs = 0;
 
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
@@ -249,7 +313,7 @@ public sealed class RecoverySession : IDisposable
             }
             catch (BlobFormatException exception)
             {
-                notes.Add($"blob '{entry.Key.Value}' skipped: {exception.Message}");
+                notes.Add(new RecoveryNote(RecoveryNoteKind.BlobSkipped, Blob: entry.Key, Detail: exception.Message));
                 continue;
             }
 
@@ -345,7 +409,7 @@ public sealed class RecoverySession : IDisposable
         ThrowHelper.ThrowIfNullOrWhiteSpace(outputDirectory);
         Directory.CreateDirectory(outputDirectory);
 
-        var notes = new List<string>();
+        var notes = new List<RecoveryNote>();
         var restored = 0;
         var failed = 0;
         var skipped = 0;
@@ -359,7 +423,7 @@ public sealed class RecoverySession : IDisposable
             while (next is { } id)
             {
                 var treeBytes = await ReadRecordAsync(
-                    id, prefix.Length == 0 ? "<root tree>" : prefix, notes, cancellationToken).ConfigureAwait(false);
+                    id, prefix.Length == 0 ? null : prefix, notes, cancellationToken).ConfigureAwait(false);
                 if (treeBytes is null)
                 {
                     failed++;
@@ -381,7 +445,7 @@ public sealed class RecoverySession : IDisposable
                     if (!IsPlainName(name, out var why))
                     {
                         failed++;
-                        notes.Add($"FAILED {path}: refused — {why}");
+                        notes.Add(new RecoveryNote(RecoveryNoteKind.Refused, path, Reason: why));
                         continue;
                     }
 
@@ -406,7 +470,7 @@ public sealed class RecoverySession : IDisposable
                     if (manifest.EntryKind != EntryKind.File)
                     {
                         skipped++;
-                        notes.Add($"skipped {path}: {manifest.EntryKind} materialisation is the full client's job");
+                        notes.Add(new RecoveryNote(RecoveryNoteKind.SkippedSpecial, path, Outcome: manifest.EntryKind));
                         continue;
                     }
 
@@ -450,7 +514,7 @@ public sealed class RecoverySession : IDisposable
                         {
                             if (!_records.TryGetValue(segment.ObjectId, out var located))
                             {
-                                notes.Add($"FAILED {path}: segment {segment.ObjectId} is in no readable blob");
+                                notes.Add(new RecoveryNote(RecoveryNoteKind.SegmentMissing, path, Record: segment.ObjectId));
                                 return false;
                             }
 
@@ -458,7 +522,8 @@ public sealed class RecoverySession : IDisposable
                                 .ConfigureAwait(false);
                             if (read.Outcome != RecordReadOutcome.Ok)
                             {
-                                notes.Add($"FAILED {path}: segment read {read.Outcome} — {read.Detail}");
+                                notes.Add(new RecoveryNote(
+                                    RecoveryNoteKind.SegmentUnreadable, path, Outcome: read.Outcome, Detail: read.Detail));
                                 return false;
                             }
 
@@ -495,7 +560,7 @@ public sealed class RecoverySession : IDisposable
                 wholeFile.GetHashAndReset(hash);
                 if (!hash.SequenceEqual(manifest.WholeFileHash.Span))
                 {
-                    notes.Add($"FAILED {path}: the whole-file hash does not verify (FR-RST-002)");
+                    notes.Add(new RecoveryNote(RecoveryNoteKind.HashMismatch, path));
                     return false;
                 }
 
@@ -556,19 +621,23 @@ public sealed class RecoverySession : IDisposable
         return true;
     }
 
+    /// <param name="objectId">The record to read.</param>
+    /// <param name="path">The entry it serves, or null for the root tree.</param>
+    /// <param name="notes">Where a failure is noted.</param>
+    /// <param name="cancellationToken">Abandons the read.</param>
     private async ValueTask<byte[]?> ReadRecordAsync(
-        ObjectId objectId, string path, List<string> notes, CancellationToken cancellationToken)
+        ObjectId objectId, string? path, List<RecoveryNote> notes, CancellationToken cancellationToken)
     {
         if (!_records.TryGetValue(objectId, out var located))
         {
-            notes.Add($"FAILED {path}: metadata record {objectId} is in no readable blob");
+            notes.Add(new RecoveryNote(RecoveryNoteKind.RecordMissing, path, Record: objectId));
             return null;
         }
 
         var read = await located.Reader.ReadRecordAsync(located.Entry, cancellationToken).ConfigureAwait(false);
         if (read.Outcome != RecordReadOutcome.Ok)
         {
-            notes.Add($"FAILED {path}: record read {read.Outcome} — {read.Detail}");
+            notes.Add(new RecoveryNote(RecoveryNoteKind.RecordUnreadable, path, Outcome: read.Outcome, Detail: read.Detail));
             return null;
         }
 
