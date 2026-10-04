@@ -310,6 +310,13 @@ public sealed class DiagnosticBundleTests : IDisposable
         Assert.Contains(DeniedMessage, entries["log.txt"], StringComparison.Ordinal);
         Assert.Contains(SourceFolder, Readable(entries, "notices.json"), StringComparison.Ordinal);
 
+        // A path the configuration does not have is null, not a word that
+        // reads like one: this set has its roots and no legacy root.
+        using var configuration = JsonDocument.Parse(entries["configuration.json"]);
+        Assert.AreEqual(
+            JsonValueKind.Null,
+            configuration.RootElement.GetProperty("backup_sets")[0].GetProperty("root").ValueKind);
+
         // The opt-in is to paths. Secrets never depended on it, and
         // identifiers still shorten because correlation was never offered.
         foreach (var (what, value) in secrets)

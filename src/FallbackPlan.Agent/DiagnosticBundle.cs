@@ -163,6 +163,14 @@ internal static class DiagnosticBundle
     private static string? Render(object? value, RenderMode mode) =>
         value is null ? null : LogRecordRenderer.RenderValue(value, mode);
 
+    /// <summary>
+    /// A path the configuration may not have, as null when it has none. Not a
+    /// conditional around <see cref="LogPath"/>: its conversion from a null
+    /// string makes the null branch a path that renders as "(none)".
+    /// </summary>
+    private static string? RenderPath(string? path, RenderMode mode) =>
+        string.IsNullOrEmpty(path) ? null : LogRecordRenderer.RenderValue(new LogPath(path), mode);
+
     private static string? Instant(ulong? unixMilliseconds) =>
         unixMilliseconds is { } ms
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)ms).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
@@ -256,7 +264,7 @@ internal static class DiagnosticBundle
             inputs.ActiveJobs,
             inputs.RemoteBindingEnabled,
             Render(new LogPath(inputs.StateDirectory), mode),
-            Render(inputs.ArchivesRoot is null ? null : new LogPath(inputs.ArchivesRoot), mode),
+            RenderPath(inputs.ArchivesRoot, mode),
             logging);
     }
 
@@ -287,7 +295,7 @@ internal static class DiagnosticBundle
                 Render(LogId.Destination(destination.Id), mode),
                 Render(new LogLabel(destination.Name), mode),
                 destination.Kind.ToString(),
-                Render(string.IsNullOrEmpty(destination.Path) ? null : new LogPath(destination.Path), mode),
+                RenderPath(destination.Path, mode),
                 Render(destination.Fingerprint is null ? null : LogId.Fingerprint(destination.Fingerprint), mode),
                 Render(destination.Endpoint, mode),
                 destination.FailureDomain?.ToString(),
@@ -302,7 +310,7 @@ internal static class DiagnosticBundle
                 [.. set.Roots.Select(root => new RootEntry(
                     Render(new LogPath(root.Path), mode),
                     root.Label is null ? null : Render(new LogLabel(root.Label), mode)))],
-                Render(string.IsNullOrEmpty(set.Root) ? null : new LogPath(set.Root), mode),
+                RenderPath(set.Root, mode),
                 [.. set.IncludeRules.Select(rule => Render(new LogPath(rule), mode)!)],
                 [.. set.ExcludeRules.Select(rule => Render(new LogPath(rule), mode)!)],
                 set.Schedule,
