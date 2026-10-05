@@ -104,9 +104,19 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds((long)Modified).UtcDateTime, File.GetLastWriteTimeUtc(landed));
         Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds(1_722_500_000_000).UtcDateTime, File.GetLastAccessTimeUtc(landed));
 
-        // A directory's own captured metadata is not read back yet (ADR-0084
-        // says so), so its item says nothing.
-        Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data").NotApplied);
+        // A folder's own captured metadata is read back too (ADR-0086). The
+        // fake gives this one a modification time and permissions, which
+        // every POSIX target applies and Windows does not.
+        var folder = receipt.Items.Single(candidate => candidate.Path == "data");
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.IsNotNull(folder.NotApplied);
+            CollectionAssert.AreEqual(new[] { "posix_mode" }, folder.NotApplied.ToArray());
+        }
+        else
+        {
+            Assert.IsNull(folder.NotApplied);
+        }
     }
 
     [TestMethod]

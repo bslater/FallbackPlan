@@ -107,6 +107,12 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
     /// <summary>Every path whose content was opened — the short-circuit oracle (NFR-PERF-003).</summary>
     public List<string> OpenedPaths { get; } = [];
 
+    /// <summary>
+    /// A folder's own captured metadata, by its path. A folder not named here
+    /// carries a modification time and the permissions <c>rwxr-xr-x</c>.
+    /// </summary>
+    public Dictionary<string, EntryMetadata> Folders { get; } = new(StringComparer.Ordinal);
+
     public Node AddFile(string relativePath, byte[] content, uint linkCount = 1, ulong? fileId = null)
     {
         var node = new Node
@@ -249,7 +255,8 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
                     NameNormalisation = NameNormalisation.Nfc,
                     Kind = ScanEntryKind.Directory,
                     Length = 0,
-                    Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1ED },
+                    Metadata = Folders.GetValueOrDefault(childPath)
+                        ?? new EntryMetadata { ModifiedAt = 1_722_000_000_000, PosixMode = 0x1ED },
                     FullPath = childPath,
                 };
 

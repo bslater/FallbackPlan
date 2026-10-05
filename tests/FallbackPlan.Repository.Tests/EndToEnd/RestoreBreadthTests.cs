@@ -336,10 +336,10 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         // breaks this fixture is a receipt schema change and must bump
         // CurrentSchemaVersion with it.
         //
-        // The file carries only a modification time, which every target
-        // applies, so the fixture is the same document on every platform. A
-        // permission bit would be applied on one and listed as not applied on
-        // another.
+        // The file and its folder carry only a modification time, which
+        // every target applies, so the fixture is the same document on every
+        // platform. A permission bit would be applied on one and listed as not
+        // applied on another.
         var content = Deterministic(50_000, 5);
         var (plan, target, store, keys) = await PublishOneFileAsync(
             "golden", content, 0xE4, new EntryMetadata { ModifiedAt = 1_722_000_000_000 });
@@ -572,6 +572,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         if (metadata is not null)
         {
             file.Metadata = metadata;
+            source.Folders["data"] = metadata;
         }
 
         var store = CreateStore();

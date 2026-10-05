@@ -54,15 +54,16 @@ public sealed class RestoreHonestyCommandTests : IDisposable
         var restore = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
 
         // What no target here writes back: on a POSIX host the link's own
-        // owner, the only item whose owner is left off, because the files are
-        // the account's own and get theirs back (ADR-0085); on Windows every
-        // file's attribute bits. A file's access time is written back
-        // everywhere, so only the link's is listed. Metadata alone does not
-        // fail the restore.
+        // owner, the only item whose owner is left off, because the files and
+        // their folder are the account's own and get theirs back (ADR-0085,
+        // ADR-0086); on Windows the attribute bits of both files and of the
+        // folder one of them is in. A file's and a folder's access time is
+        // written back everywhere, so only the link's is listed. Metadata
+        // alone does not fail the restore.
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         if (OperatingSystem.IsWindows())
         {
-            Assert.Contains("file_attributes not applied to 2 item(s)", restore.Output, StringComparison.Ordinal);
+            Assert.Contains("file_attributes not applied to 3 item(s)", restore.Output, StringComparison.Ordinal);
             Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
         }
         else
