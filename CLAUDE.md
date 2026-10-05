@@ -34,6 +34,11 @@ dotnet test  FallbackPlan.slnx -c Release
   `FanOut.ReadBackBudget`, `DirectGateway.AvailableBytesInFlow`) belong to
   the flow that sets them, so set one before starting the runtime it is for,
   and it needs no marker.
+- A Debug build allows a local destination on its set's drive, which a
+  Release build refuses ([ADR-0051](docs/adr/0051-local-destination-placement.md)
+  Amendment 2). A test that depends on either answer says which it means
+  with `ServiceOptions.SameDrivePlacementOverride`, as
+  `Hosts.Tests/LocalPlacementTests` does.
 - **Tests first.** Fixes and features start with named failing tests; a
   compile error against a not-yet-written API counts as the red.
 
