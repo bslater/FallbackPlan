@@ -24,12 +24,16 @@ namespace FallbackPlan.Web.DomTests;
 /// step of its own. The defects are not: the field the strength verdict used
 /// to replace mid-typing is still there, and the dialog that froze two screens
 /// now stands over the account step. Both are asserted where they now live.
+/// The walk through the account step to a signed-in console is FR-USR-001's
+/// first account, captured before setup completes, as a person meets it.
 /// </remarks>
 [TestClass]
 [BrowserCondition]
 public sealed class SetupCeremonyDomTests
 {
     private const string StrongPassphrase = "Vault-Door-19-Kestrel-Harbour";
+
+    private const string OwnerPassword = "Owner-Pass-42";
 
     private const string DeviceIdHex = "00112233445566778899aabbccddeeff";
 
@@ -94,6 +98,79 @@ public sealed class SetupCeremonyDomTests
         // The proof that it is not inert: the fields take real input.
         await page.FillAsync("#setup-user", "owner");
         Assert.AreEqual("owner", await page.InputValueAsync("#setup-user"));
+    }
+
+    [TestMethod]
+    public async Task SetupCeremony_CreatingTheFirstAccount_EndsSignedInAsIt()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var provisioned = false;
+        string? owner = null;
+        var signedIn = false;
+        harness.Clients.Client.Respond = command =>
+        {
+            switch (command)
+            {
+                // Answered as the service answers: users_required once the
+                // passphrase is set, ready once an account exists, and the
+                // account named only to a connection signed in as it.
+                case DescribeServiceCommand:
+                    return Describe(
+                        !provisioned ? "setup_required" : owner is null ? "users_required" : "ready",
+                        signedInUser: signedIn ? owner : null);
+                case ProvisionInstallationCommand:
+                    provisioned = true;
+                    return new ConfigurationChangeResult(["This installation is set up."]);
+                case CreateUserCommand create:
+                    owner = create.Name;
+                    return new UserListResult([new UserDescriptor(create.Name, "Owner", now, IsOwner: true)]);
+                case LoginCommand login:
+                    signedIn = login.User == owner;
+                    return new SessionResult("tok-1", login.User, "Owner", now + 3_600_000, now + 28_800_000);
+                default:
+                    return new AcknowledgedResult();
+            }
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        var thrown = new PageErrors(page);
+        await page.GotoAsync(harness.TokenedUrl);
+
+        await page.CheckAsync("#setup-ack");
+        await page.ClickAsync("[data-action=\"setup-begin\"]");
+        await page.FillAsync("#setup-pass", StrongPassphrase);
+        await page.FillAsync("#setup-confirm", StrongPassphrase);
+        var finish = page.Locator("[data-action=\"setup-finish\"]");
+        await Expect(finish).ToBeEnabledAsync();
+        await finish.ClickAsync();
+        await Expect(page.GetByText("Create the first account")).ToBeVisibleAsync();
+
+        // Create User arms on the console's own password verdict, a password
+        // that is not the passphrase, and a confirmation that matches.
+        await page.FillAsync("#setup-user", "owner");
+        await page.FillAsync("#setup-user-pass", OwnerPassword);
+        await page.FillAsync("#setup-user-confirm", OwnerPassword);
+        var create = page.Locator("[data-action=\"setup-create-user\"]");
+        await Expect(create).ToBeEnabledAsync();
+        await create.ClickAsync();
+
+        // The account is created in the bootstrap window and signed straight
+        // in as, so the ceremony does not end at a form asking for what was
+        // just typed.
+        await harness.ReceivedAsync<CreateUserCommand>(created => created.Name == "owner");
+        await harness.ReceivedAsync<LoginCommand>(login => login.User == "owner");
+
+        // Then the ceremony is over: its gate gives way to the console, which
+        // names who is acting and shows the report setup ends with. Both
+        // commands above can succeed and the step still stay up, its button
+        // disabled, past which only a refresh and a sign-in would get.
+        await thrown.UntilAsync(Expect(page.Locator("#setup")).ToBeHiddenAsync());
+        await Expect(page.Locator("#app")).ToBeVisibleAsync();
+        await Expect(page.Locator("#signed-in")).ToHaveTextAsync("owner");
+        await Expect(page.Locator("#dialog h3")).ToHaveTextAsync("Setup complete");
+        await Expect(page.Locator("#dialog .report")).ToContainTextAsync("This installation is set up.");
     }
 
     [TestMethod]

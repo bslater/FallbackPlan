@@ -155,6 +155,54 @@ internal sealed class DomHarness : IAsyncDisposable
 }
 
 /// <summary>
+/// The uncaught errors a page raises, recorded from the moment it is built.
+/// </summary>
+/// <remarks>
+/// The console's actions are async functions the click router never awaits,
+/// so one that throws after an await rejects a promise nobody holds. Nothing
+/// reaches the screen: the control it disabled stays disabled, the step it
+/// was on stays up, and the only evidence is a line in devtools. That is how
+/// the first-account step stranded people. A test waiting on an outcome
+/// therefore fails with the page's own error the moment there is one, rather
+/// than with a timeout that says only what did not appear.
+/// </remarks>
+internal sealed class PageErrors
+{
+    private readonly List<string> _seen = [];
+
+    private readonly TaskCompletionSource<string> _first = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public PageErrors(IPage page) =>
+        page.PageError += (_, error) =>
+        {
+            lock (_seen)
+            {
+                _seen.Add(error);
+            }
+
+            _first.TrySetResult(error);
+        };
+
+    /// <summary>
+    /// Awaits <paramref name="outcome"/>, failing at once if the page throws
+    /// before it arrives, and then asserts the page threw nothing at all.
+    /// </summary>
+    public async Task UntilAsync(Task outcome)
+    {
+        if (await Task.WhenAny(outcome, _first.Task) == _first.Task)
+        {
+            Assert.Fail("The page threw before the outcome arrived: " + await _first.Task);
+        }
+
+        await outcome;
+        lock (_seen)
+        {
+            Assert.IsEmpty(_seen, "The page threw: " + string.Join(" | ", _seen));
+        }
+    }
+}
+
+/// <summary>
 /// The wire shapes the suites keep reaching for — one place to mint a
 /// describe answer and the common descriptors, so a test's fake reads as
 /// its scenario rather than as constructor plumbing.
