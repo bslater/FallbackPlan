@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Filesystem;
@@ -26,7 +27,11 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// refuses is listed even where the rule expected it to land. A file gets
 /// its modification and access times everywhere, its creation time where
 /// the target can set one, and its permissions where the target applies
-/// POSIX metadata. Ownership, security descriptors, extended attributes and
+/// POSIX metadata. It gets its owner and group where the names resolve on
+/// the target and the account running the restore may give them (ADR-0085):
+/// root, or CAP_CHOWN, may give a file to anyone, and any other account
+/// keeps a file as its own and gives it a group it is in. The plan
+/// predicts that per file. Security descriptors, extended attributes and
 /// file attributes are captured and recorded, not yet written back, and a
 /// symlink is created with none of its own.
 /// </para>
@@ -42,6 +47,15 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 {
     private const ulong Modified = 1_722_000_000_000;
+
+    /// <summary>An account no machine the suite runs on has.</summary>
+    private const string NoSuchAccount = "fallbackplan-no-such-account";
+
+    /// <summary>A group no machine the suite runs on has.</summary>
+    private const string NoSuchGroup = "fallbackplan-no-such-group";
+
+    /// <summary>An id no account or group is given on any machine the suite runs on.</summary>
+    private const uint Unclaimed = 54_321;
 
     private static readonly RestoreTargetProfile Posix = new()
     {
@@ -60,14 +74,15 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             ModifiedAt = Modified,
             CreatedAt = 1_721_000_000_000,
             AccessedAt = 1_722_500_000_000,
-            OwnerName = "ana",
-            GroupName = "staff",
+            OwnerName = NoSuchAccount,
+            GroupName = NoSuchGroup,
             ExtendedAttributes = [new ExtendedAttributeEntry("user.tag"u8.ToArray(), "kept"u8.ToArray())],
             FileAttributes = 0x20,
         };
 
-        // A target that sets no creation times, so the list is one list on
-        // every platform; the creation-time tests below hold the others.
+        // A target that sets no creation times, and an owner and group no
+        // machine has, so the list is one list on every platform and under
+        // any account; the tests below hold the others.
         var (receipt, output) = await PublishAndRestoreAsync(
             source, 0xC1, RestoreTargetProfile.ForLocalPlatform() with { SupportsCreationTimes = false });
 
@@ -162,6 +177,85 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Receipt_AnOwnerAndGroupTheAccountMayGive_AreWrittenBack_AndNotListed()
+    {
+        // The account itself, and a group it may give: any at all with
+        // privilege, else one it is in, other than the one a file is made
+        // with where it has one.
+        var group = Environment.IsPrivilegedProcess
+            ? Unclaimed
+            : PosixAccount.Groups.FirstOrDefault(candidate => candidate != PosixAccount.GroupId, PosixAccount.GroupId);
+        var source = new FakeFileSystemSource();
+        source.AddFile("owned.bin", Deterministic(1_000, 14)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, OwnerName = "ana", GroupName = "staff" };
+
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xCB, Resolving(user => user == "ana" ? PosixAccount.UserId : null, name => name == "staff" ? group : null));
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+        Assert.AreEqual((PosixAccount.UserId, group), FileOwner.Of(Path.Combine(output, "owned.bin")));
+    }
+
+    [TestMethod]
+    [UnprivilegedPlatformCondition(TestPlatforms.Posix, "only an unprivileged restore is refused another account")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Receipt_AnOwnerTheAccountMayNotGive_IsListed_AndTheFileStaysItsOwn()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("theirs.bin", Deterministic(1_000, 15)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, OwnerName = "ben" };
+
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xCC, Resolving(user => user == "ben" ? 0u : null, _ => null));
+
+        var item = Assert.ContainsSingle(receipt.Items);
+        Assert.AreEqual("restored", item.Outcome, "metadata alone does not change what the content achieved");
+        CollectionAssert.AreEqual(new[] { "owner" }, item.NotApplied!.ToArray());
+        Assert.AreEqual(PosixAccount.UserId, FileOwner.Of(Path.Combine(output, "theirs.bin")).UserId);
+    }
+
+    [TestMethod]
+    [PrivilegedPlatformCondition(TestPlatforms.Posix, "only a privileged restore may give a file to another account")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Receipt_AnOwnerAPrivilegedRestoreMayGive_IsWrittenBack()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("theirs.bin", Deterministic(1_000, 16)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, OwnerName = "ben" };
+
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xCD, Resolving(user => user == "ben" ? Unclaimed : null, _ => null));
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+        Assert.AreEqual(Unclaimed, FileOwner.Of(Path.Combine(output, "theirs.bin")).UserId);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Receipt_ASetUserIdBit_SurvivesTheOwnershipWrite()
+    {
+        // Changing a file's owner or group clears its set-user-id bit, so the
+        // permissions are written after the ownership, never before.
+        const int SetUserIdAndRwxrXrX = 0x9ED;
+        var source = new FakeFileSystemSource();
+        source.AddFile("tool", Deterministic(1_000, 17)).Metadata = new EntryMetadata
+        {
+            ModifiedAt = Modified, PosixMode = SetUserIdAndRwxrXrX, OwnerName = "ana", GroupName = "staff",
+        };
+
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xCE,
+            Resolving(user => user == "ana" ? PosixAccount.UserId : null, name => name == "staff" ? PosixAccount.GroupId : null));
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+        Assert.AreEqual((UnixFileMode)SetUserIdAndRwxrXrX, File.GetUnixFileMode(Path.Combine(output, "tool")));
+    }
+
+    [TestMethod]
     public async Task Receipt_PermissionsOnATargetThatDoesNotApplyThem_AreNotApplied()
     {
         var source = new FakeFileSystemSource();
@@ -241,6 +335,90 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_Ownership_IsDeclaredPerFile_ByWhetherItsNamesResolve_AndTheAccountMayGiveThem()
+    {
+        var source = new FakeFileSystemSource();
+        void Add(string name, string owner, string group, byte seed) =>
+            source.AddFile($"docs/{name}", Deterministic(700, seed)).Metadata =
+                new EntryMetadata { ModifiedAt = Modified, OwnerName = owner, GroupName = group };
+        Add("mine.txt", "ana", "staff", 20);
+        Add("theirs.txt", "ben", "staff", 21);
+        Add("wheel.txt", "ana", "wheel", 22);
+        Add("ghost.txt", "ghost", "staff", 23);
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xCF);
+
+        // The account is ana, in staff and not in wheel; ben is another
+        // account, and ghost is no account at all here.
+        var account = new RestoreAccount
+        {
+            UserId = 1_000,
+            GroupIds = new HashSet<uint> { 1_000 },
+            MayGiveFilesAway = false,
+            ResolveUser = name => name switch { "ana" => 1_000u, "ben" => 1_001u, _ => null },
+            ResolveGroup = name => name switch { "staff" => 1_000u, "wheel" => 0u, _ => null },
+        };
+
+        var declared = RestoreMetadata.Declare(plan, facts, Posix with { Account = account });
+
+        var privilege = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "ownership"));
+        Assert.Contains("2 file(s)", privilege.Detail, StringComparison.Ordinal);
+        Assert.Contains("CAP_CHOWN", privilege.Detail, StringComparison.Ordinal);
+        var unknown = Assert.ContainsSingle(declared.Where(degradation => degradation.Capability == "unknown-accounts"));
+        Assert.Contains("1 file(s)", unknown.Detail, StringComparison.Ordinal);
+
+        // An account that may give files away is told only of the name that
+        // is no account here.
+        var privileged = RestoreMetadata.Declare(plan, facts, Posix with { Account = account with { MayGiveFilesAway = true } });
+        Assert.DoesNotContain(degradation => degradation.Capability == "ownership", privileged);
+        Assert.Contains(
+            "1 file(s)",
+            Assert.ContainsSingle(privileged.Where(degradation => degradation.Capability == "unknown-accounts")).Detail,
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Summary_TellsOnlyAnAccountThatCannotGiveFilesAwayWhatOwnershipNeeds()
+    {
+        ReceiptItem[] items = [new ReceiptItem { Path = "a.txt", Outcome = "restored", Bytes = 0, NotApplied = ["owner"] }];
+        var account = new RestoreAccount { UserId = 1_000, GroupIds = new HashSet<uint> { 1_000 }, MayGiveFilesAway = false };
+
+        Assert.Contains(
+            "CAP_CHOWN",
+            Assert.ContainsSingle(RestoreMetadata.Summarise(items, Posix with { Account = account })),
+            StringComparison.Ordinal);
+
+        // Root that could not write an owner back was not short of privilege:
+        // the name resolved to nothing, or the volume refused.
+        Assert.DoesNotContain(
+            "CAP_CHOWN",
+            Assert.ContainsSingle(RestoreMetadata.Summarise(items, Posix with { Account = account with { MayGiveFilesAway = true } })),
+            StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public void Profile_ForThisMachine_KnowsTheAccountTheRestoreRunsAs()
+    {
+        var account = RestoreTargetProfile.ForLocalPlatform().Account;
+
+        Assert.IsNotNull(account);
+        Assert.AreEqual(PosixAccount.UserId, account.UserId);
+        Assert.IsTrue(PosixAccount.Groups.SetEquals(account.GroupIds));
+        Assert.AreEqual(FileOwnership.MayGiveFilesAway, account.MayGiveFilesAway);
+        Assert.AreEqual(PosixAccount.UserId, account.ResolveUser(Environment.UserName));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows, "a Windows file's owner lives in its security descriptor")]
+    [PlatformTrait(TestPlatforms.Windows)]
+    public void Profile_ForWindows_HasNoAccountToGiveFilesTo() =>
+        Assert.IsNull(RestoreTargetProfile.ForLocalPlatform().Account);
+
+    [TestMethod]
     public async Task Plan_TimesAreDeclaredOnlyWhereTheTargetCannotSetThem()
     {
         var source = new FakeFileSystemSource();
@@ -297,6 +475,22 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.AreEqual(CapturedMetadata.ModifiedAt | CapturedMetadata.PosixMode, known.Captured);
     }
 
+    [TestMethod]
+    public async Task Probe_EachFile_CarriesTheNamesItsOwnershipWasCapturedUnder()
+    {
+        // The plan predicts ownership per file, by the names, so the probe
+        // that already decodes each manifest keeps them.
+        var source = new FakeFileSystemSource();
+        source.AddFile("owned.txt", Deterministic(700, 24)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, OwnerName = "ana", GroupName = "staff" };
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD0);
+
+        var known = facts[Assert.ContainsSingle(plan.Items).ObjectId];
+        Assert.AreEqual("ana", known.Owner);
+        Assert.AreEqual("staff", known.Group);
+    }
+
     private static byte[] Deterministic(int length, byte seed)
     {
         var data = new byte[length];
@@ -306,6 +500,17 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         }
 
         return data;
+    }
+
+    /// <summary>
+    /// This machine's target, with the restoring account's names resolved
+    /// as the test says, so an owner can be any account the test needs.
+    /// </summary>
+    private static RestoreTargetProfile Resolving(Func<string, uint?> users, Func<string, uint?> groups)
+    {
+        var target = RestoreTargetProfile.ForLocalPlatform();
+        Assert.IsNotNull(target.Account);
+        return target with { Account = target.Account with { ResolveUser = users, ResolveGroup = groups } };
     }
 
     private static SnapshotJob Job(FakeFileSystemSource source, byte seed) => new()

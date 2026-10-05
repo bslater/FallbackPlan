@@ -138,6 +138,44 @@ public sealed class UnprivilegedPlatformConditionAttribute : ConditionBaseAttrib
 }
 
 /// <summary>
+/// Restricts a test to a privileged run on the given platforms — giving a
+/// file to another account needs root, which a container usually is and a
+/// CI runner is not. The counterpart of
+/// <see cref="UnprivilegedPlatformConditionAttribute"/>, skipped rather than
+/// silently vacuous for the same reason.
+/// </summary>
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false)]
+public sealed class PrivilegedPlatformConditionAttribute : ConditionBaseAttribute
+{
+    private readonly string? _skipReason;
+
+    /// <summary>Restricts the test to privileged runs on <paramref name="platforms"/>.</summary>
+    /// <param name="platforms">The platforms the test's subject exists on.</param>
+    /// <param name="because">Why the subject is platform-specific.</param>
+    public PrivilegedPlatformConditionAttribute(TestPlatforms platforms, string because)
+        : base(ConditionMode.Include)
+    {
+        Platforms = platforms;
+        _skipReason = TestPlatform.SkipReason(platforms, because)
+            ?? (Environment.IsPrivilegedProcess
+                ? null
+                : "Requires a privileged process — only one may give a file to another account.");
+    }
+
+    /// <summary>The platforms this test applies to.</summary>
+    public TestPlatforms Platforms { get; }
+
+    /// <inheritdoc />
+    public override bool ShouldRun => _skipReason is null;
+
+    /// <inheritdoc />
+    public override string? IgnoreMessage => _skipReason;
+
+    /// <inheritdoc />
+    public override string GroupName => "Platform";
+}
+
+/// <summary>
 /// Records the platform a test targets so a run can be filtered to one
 /// platform's surface (<c>--filter TestCategory=Posix</c>) rather than by
 /// guessing at test names.
