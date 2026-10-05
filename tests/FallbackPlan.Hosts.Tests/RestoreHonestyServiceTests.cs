@@ -121,14 +121,17 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual("complete", restored.Outcome, "metadata alone does not change what a restore achieved");
 
-        // Every platform captures a file's access time, and no target applies
-        // it yet.
+        // An attribute every file here carries and no target writes back yet:
+        // its owner on a POSIX host, its attribute bits on Windows. Access
+        // times are written back everywhere now, so they are not listed.
         Assert.IsNotNull(restored.NotApplied);
-        Assert.Contains(line => line.StartsWith("accessed_at", StringComparison.Ordinal), restored.NotApplied);
+        Assert.Contains(line => line.StartsWith(StillNotApplied, StringComparison.Ordinal), restored.NotApplied);
+        Assert.DoesNotContain(line => line.StartsWith("accessed_at", StringComparison.Ordinal), restored.NotApplied);
 
         var receipt = await File.ReadAllTextAsync(restored.ReceiptPath!, _timeout.Token);
         Assert.Contains("\"not_applied\"", receipt, StringComparison.Ordinal);
-        Assert.Contains("\"accessed_at\"", receipt, StringComparison.Ordinal);
+        Assert.Contains($"\"{StillNotApplied}\"", receipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"accessed_at\"", receipt, StringComparison.Ordinal);
     }
 
     [TestMethod]
@@ -143,15 +146,20 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             await handler.ExecuteAsync(new PlanRestoreCommand(snapshotId, null), _timeout.Token), out var plan);
 
         Assert.IsNotNull(plan.Degradations);
+        var declared = OperatingSystem.IsWindows() ? "File attributes" : "Ownership";
         Assert.Contains(
-            line => line.Contains("Access times", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
+            line => line.Contains(declared, StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
             plan.Degradations);
+        Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), plan.Degradations);
 
         // With no folder named there is nothing to measure against, so the
         // plan answers as it always did, plus what its files will write.
         Assert.IsNull(plan.Space);
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
     }
+
+    /// <summary>What every file here carries and no target writes back yet.</summary>
+    private static string StillNotApplied => OperatingSystem.IsWindows() ? "file_attributes" : "owner";
 
     public void Dispose()
     {

@@ -53,10 +53,14 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         var restore = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
 
-        // Every platform captures a file's access time, and no target applies
-        // it yet. Metadata alone does not fail the restore.
+        // An attribute every file here carries and no target writes back yet:
+        // its owner on a POSIX host, its attribute bits on Windows. Access
+        // times are written back everywhere now. Metadata alone does not fail
+        // the restore.
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
-        Assert.Contains("accessed_at not applied", restore.Output, StringComparison.Ordinal);
+        var stillNotApplied = OperatingSystem.IsWindows() ? "file_attributes" : "owner";
+        Assert.Contains($"{stillNotApplied} not applied", restore.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
     }
 
     public void Dispose() => _cli.Dispose();
