@@ -39,6 +39,8 @@ A file gets back, each where captured:
 
 The order is fixed by what each write disturbs. Permissions change no time, so they go first. The creation time goes last. On macOS, a modification time set earlier than the creation time makes the volume move the creation time back to it, and .NET then restores the one before. Written last, the captured creation time is the last word whichever of those holds. Every write still follows the content (architecture 08 §3).
 
+> **2026-10 ([ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md)).** Ownership now goes first, ahead of the permissions, because changing a file's owner or group clears its set-id bits. The permissions that follow keep a set-id bit only where its owner or group landed.
+
 ### 2. A creation time only through a call that sets one
 
 `Domain/FileTimes` sets a creation time on Windows through .NET, and on macOS through `setattrlist` with `ATTR_CMN_CRTIME` and `FSOPT_NOFOLLOW`, called directly. A volume that keeps no creation times answers with an error, and that is answered as not set. On Linux nothing is attempted. .NET's setter is never used on either Unix, because both of its fallbacks write the modification time.
@@ -69,6 +71,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 ## What this does not do
 
 - **Ownership.** Owner and group are captured by name, and not yet written back. That is the next slice, which needs native calls to resolve a name and give a file away, and the privilege to do it.
+
+  > **2026-10 ([ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md)).** Owner and group are now written back where their names resolve on the target and the restoring account may give them. The plan says, per file, which will not land and why.
 - **A directory's own metadata.** The executor creates directories and never reads their captured metadata, so a restored directory has the times and mode it was created with. Its receipt item names none of it, which is a silent drop that architecture 06 §3 rules out. Writing a directory's metadata back has to wait until its children have landed, since each child moves the directory's modification time. That is owed.
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed as before ([ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
 - **The recovery tool and the CLI's `restore-file`.** Both write content and no metadata, not even a modification time.
@@ -84,3 +88,4 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Access times are written back everywhere, and creation times on Windows and macOS through `Domain/FileTimes`. Each attribute is written on its own, a refused write is not applied rather than a failed item, and an impossible time is not applied rather than the end of the run. The receipt records what landed. |
+| 2026-10 | Accepted | [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) writes ownership back, first in §1's order, and the permissions after it drop a set-id bit whose owner or group did not land. The receipt still records what each write did. |

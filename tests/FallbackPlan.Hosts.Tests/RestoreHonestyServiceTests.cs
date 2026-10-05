@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 
@@ -11,6 +12,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// The run refuses before it writes anything, unless it is told to restore
 /// anyway. Both say which captured metadata will not be applied. The plan
 /// gives counts; the result summarises the receipt, which names it per item.
+/// The account running these tests restores its own files, so on a POSIX
+/// host it gives them back their owner and group (ADR-0085), and what is
+/// left to say comes from a symlink, whose own metadata is never written
+/// back.
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -106,7 +111,7 @@ public sealed class RestoreHonestyServiceTests : IDisposable
     [TestMethod]
     public async Task Run_WithRoom_SummarisesWhatItDidNotApply_AndTheReceiptNamesItPerItem()
     {
-        await BackUpTwoFilesAsync();
+        await BackUpTwoFilesAsync(withLink: !OperatingSystem.IsWindows());
         await using var runtime = await StartAsync(availableBytes: null);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var snapshotId = await SnapshotIdAsync(handler);
@@ -121,23 +126,36 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual("complete", restored.Outcome, "metadata alone does not change what a restore achieved");
 
-        // An attribute every file here carries and no target writes back yet:
-        // its owner on a POSIX host, its attribute bits on Windows. Access
-        // times are written back everywhere now, so they are not listed.
+        // What no target here writes back: the link's own owner on a POSIX
+        // host, the only item whose owner is left off, and every file's
+        // attribute bits on Windows. A file's access time is written back
+        // everywhere, so only the link's is listed.
         Assert.IsNotNull(restored.NotApplied);
         Assert.Contains(line => line.StartsWith(StillNotApplied, StringComparison.Ordinal), restored.NotApplied);
-        Assert.DoesNotContain(line => line.StartsWith("accessed_at", StringComparison.Ordinal), restored.NotApplied);
+        Assert.DoesNotContain(
+            line => line.StartsWith("accessed_at", StringComparison.Ordinal)
+                && !line.StartsWith(LinkOnly("accessed_at"), StringComparison.Ordinal),
+            restored.NotApplied);
 
-        var receipt = await File.ReadAllTextAsync(restored.ReceiptPath!, _timeout.Token);
-        Assert.Contains("\"not_applied\"", receipt, StringComparison.Ordinal);
-        Assert.Contains($"\"{StillNotApplied}\"", receipt, StringComparison.Ordinal);
-        Assert.DoesNotContain("\"accessed_at\"", receipt, StringComparison.Ordinal);
+        var receipt = NotAppliedByPath(await File.ReadAllTextAsync(restored.ReceiptPath!, _timeout.Token));
+        var notes = receipt.GetValueOrDefault(ItemEndingIn(receipt, "notes.txt")) ?? [];
+        Assert.DoesNotContain("accessed_at", notes);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("file_attributes", notes);
+        }
+        else
+        {
+            Assert.Contains("owner", receipt[ItemEndingIn(receipt, "link")]);
+            Assert.DoesNotContain("owner", notes);
+            Assert.DoesNotContain("group", notes);
+        }
     }
 
     [TestMethod]
     public async Task Plan_OverRealFiles_DeclaresTheCapturedMetadataItWillNotApply_WithCounts()
     {
-        await BackUpTwoFilesAsync();
+        await BackUpTwoFilesAsync(withLink: !OperatingSystem.IsWindows());
         await using var runtime = await StartAsync(availableBytes: null);
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var snapshotId = await SnapshotIdAsync(handler);
@@ -146,11 +164,15 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             await handler.ExecuteAsync(new PlanRestoreCommand(snapshotId, null), _timeout.Token), out var plan);
 
         Assert.IsNotNull(plan.Degradations);
-        var declared = OperatingSystem.IsWindows() ? "File attributes" : "Ownership";
+        var (declared, count) = OperatingSystem.IsWindows() ? ("File attributes", "2 file(s)") : ("Metadata captured", "1 symlink(s)");
         Assert.Contains(
-            line => line.Contains(declared, StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
+            line => line.Contains(declared, StringComparison.Ordinal) && line.Contains(count, StringComparison.Ordinal),
             plan.Degradations);
         Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), plan.Degradations);
+
+        // The files are the restoring account's own, so their ownership is
+        // given back and not declared.
+        Assert.DoesNotContain(line => line.Contains("Ownership", StringComparison.Ordinal), plan.Degradations);
 
         // With no folder named there is nothing to measure against, so the
         // plan answers as it always did, plus what its files will write.
@@ -158,8 +180,12 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
     }
 
-    /// <summary>What every file here carries and no target writes back yet.</summary>
-    private static string StillNotApplied => OperatingSystem.IsWindows() ? "file_attributes" : "owner";
+    /// <summary>What no target here writes back, and how many items it is left off.</summary>
+    private static string StillNotApplied =>
+        OperatingSystem.IsWindows() ? "file_attributes not applied to 2 item(s)" : LinkOnly("owner");
+
+    /// <summary>The summary's line for an attribute left off the link alone.</summary>
+    private static string LinkOnly(string attribute) => $"{attribute} not applied to 1 item(s)";
 
     public void Dispose()
     {
@@ -167,11 +193,31 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         _harness.Dispose();
     }
 
-    private async Task BackUpTwoFilesAsync()
+    /// <summary>Each item's not_applied in a receipt, by its path; an item that lists nothing is absent.</summary>
+    private static Dictionary<string, string[]> NotAppliedByPath(string receipt)
+    {
+        using var document = JsonDocument.Parse(receipt);
+        return document.RootElement.GetProperty("items").EnumerateArray()
+            .Where(item => item.TryGetProperty("not_applied", out _))
+            .ToDictionary(
+                item => item.GetProperty("path").GetString()!,
+                item => item.GetProperty("not_applied").EnumerateArray().Select(name => name.GetString()!).ToArray(),
+                StringComparer.Ordinal);
+    }
+
+    private static string ItemEndingIn(Dictionary<string, string[]> receipt, string name) =>
+        receipt.Keys.SingleOrDefault(path => path.EndsWith(name, StringComparison.Ordinal)) ?? name;
+
+    private async Task BackUpTwoFilesAsync(bool withLink = false)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
         _harness.WriteSourceFile("nested/deeper.txt", "deeper");
+        if (withLink)
+        {
+            File.CreateSymbolicLink(Path.Combine(_harness.SourceRoot, "link"), "notes.txt");
+        }
+
         await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
     }

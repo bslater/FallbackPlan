@@ -83,6 +83,8 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 - It does not write back any attribute it did not before. Creation and access times, ownership where the principal resolves and the restore may set it, extended attributes, security descriptors and attribute bits are the next slice.
 
   > **2026-10 ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md)).** Access times are now written back everywhere, and creation times where the platform has a call that sets one. The receipt's list records what each write did rather than what §5's rule expected. Ownership and the rest remain owed.
+
+  > **2026-10 ([ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md)).** Ownership is now written back where the names resolve and the restoring account may give them. The rest remains owed.
 - It does not recreate hard links. A hard-link group restores as separate files, as it did, and neither the plan nor the receipt says so yet.
 - It does not refuse for a security descriptor that cannot be applied. Architecture 06 §3 reserves that refusal for a descriptor whose absence would grant broader access, and that needs a descriptor to apply first.
 - It does not estimate the physical transfer size, which differs from the logical size when a store lacks range reads. It does not export a plan or resume one. And it does not report an object held only in an archival tier. All three are architecture 08 §2's, and all three stay owed.
@@ -104,3 +106,4 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first: the space measure per volume with the engine's working copy and the existing-file policy's credit, the plan's exact figure and the run's cheap one, the refusal and its override (contract 1.53), the metadata rule, the plan's counted declarations and receipt schema 6, through the service, the CLI and the console. |
 | 2026-10 | Accepted | [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) writes back access times everywhere and creation times where the platform can set them. The receipt's not_applied list keeps receipt schema 6's shape but now records each write's outcome, not §5's rule. The rule still drives the plan. |
+| 2026-10 | Accepted | [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) writes ownership back where the names resolve and the account may give them. §5's plan now names two reasons ownership will not land, privilege and a name that resolves to nothing, and a set-id bit it will drop. |

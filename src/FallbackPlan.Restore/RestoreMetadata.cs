@@ -54,22 +54,36 @@ public enum CapturedMetadata
 /// <param name="Kind">The entry's kind.</param>
 /// <param name="WrittenBytes">Its segments' bytes, its holes skipped (<see cref="RestoreSpace.WrittenBytes"/>).</param>
 /// <param name="Captured">The metadata captured with it.</param>
-public sealed record RestoreItemFacts(EntryKind Kind, ulong WrittenBytes, CapturedMetadata Captured);
+/// <param name="Owner">The name of the owner it was captured under, which the plan resolves on the target.</param>
+/// <param name="Group">The name of the group it was captured under, which the plan resolves on the target.</param>
+/// <param name="Mode">Its captured POSIX mode, whose set-id bits depend on the ownership given back.</param>
+public sealed record RestoreItemFacts(
+    EntryKind Kind,
+    ulong WrittenBytes,
+    CapturedMetadata Captured,
+    string? Owner = null,
+    string? Group = null,
+    uint? Mode = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
-/// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084; architecture 06 §3).
+/// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084, ADR-0085;
+/// architecture 06 §3).
 /// </summary>
 /// <remarks>
 /// <para>
 /// The rule is the executor's: a file's modification and access times
 /// everywhere, its creation time where the target can set one, and its
-/// permissions where the target applies POSIX metadata. Nothing else is
-/// written back yet. A symlink is created with none of its own metadata.
-/// The plan predicts by that rule. The receipt records what each write did
-/// (ADR-0084), which the rule cannot know in advance: a volume may refuse a
-/// write the platform supports, and a captured time may lie beyond what a
-/// file can carry.
+/// permissions where the target applies POSIX metadata. Its owner and group
+/// come back where the target applies POSIX metadata, each where its name
+/// resolves there and the restoring account may give it
+/// (<see cref="RestoreAccount"/>), so that part of the rule is decided file
+/// by file. A set-user-id or set-group-id bit is kept only where the owner
+/// or group it runs as was given back. Nothing else is written back yet. A
+/// symlink is created with none of its own metadata. The plan predicts by
+/// that rule. The receipt records what each write did (ADR-0084), which the
+/// rule cannot know in advance: a volume may refuse a write the platform
+/// supports, and a captured time may lie beyond what a file can carry.
 /// </para>
 /// <para>
 /// Alternate streams are never applied, whatever a profile claims, because
@@ -79,6 +93,15 @@ public sealed record RestoreItemFacts(EntryKind Kind, ulong WrittenBytes, Captur
 /// </remarks>
 public static class RestoreMetadata
 {
+    /// <summary>The set-user-id bit of a POSIX mode.</summary>
+    private const uint SetUserId = 0x800;
+
+    /// <summary>The set-group-id bit of a POSIX mode.</summary>
+    private const uint SetGroupId = 0x400;
+
+    /// <summary>The bits of a POSIX mode a restore writes: permissions, set-id and sticky.</summary>
+    private const uint ModeBits = 0xFFF;
+
     /// <summary>The receipt's vocabulary, in the order the format numbers the attributes.</summary>
     private static readonly (CapturedMetadata Attribute, string Name)[] Vocabulary =
     [
@@ -178,6 +201,32 @@ public static class RestoreMetadata
     }
 
     /// <summary>
+    /// The permissions a file captured with <paramref name="mode"/> may be
+    /// given once the halves of its ownership in <paramref name="given"/>
+    /// have landed (ADR-0085). A set-user-id file runs as its owner, so its
+    /// bit is kept only with the owner it was captured under; on any other
+    /// owner it would run as whoever restored it. A set-group-id bit is kept
+    /// only with its group, likewise.
+    /// </summary>
+    /// <param name="mode">The captured mode.</param>
+    /// <param name="given">Which of the owner and group were given back.</param>
+    public static uint PermittedMode(uint mode, CapturedMetadata given)
+    {
+        var permitted = mode & ModeBits;
+        if ((given & CapturedMetadata.Owner) == 0)
+        {
+            permitted &= ~SetUserId;
+        }
+
+        if ((given & CapturedMetadata.Group) == 0)
+        {
+            permitted &= ~SetGroupId;
+        }
+
+        return permitted;
+    }
+
+    /// <summary>
     /// The receipt's names for what was captured and is not applied by the
     /// rule, in the format's order, or null when nothing captured is left out.
     /// </summary>
@@ -207,11 +256,26 @@ public static class RestoreMetadata
     /// <param name="facts">What the plan probe read of each item's manifest.</param>
     /// <param name="target">The target.</param>
     /// <remarks>
+    /// <para>
+    /// Ownership is declared for two reasons, apart, because they have
+    /// different remedies. A name that resolves to an account or group the
+    /// restoring account may not give needs root or CAP_CHOWN. A name that
+    /// resolves to nothing on the target needs an account no privilege
+    /// creates. A target without an account gives no ownership, and says
+    /// what giving it would need.
+    /// </para>
+    /// <para>
+    /// A set-id bit whose owner or group will not be given back is dropped
+    /// (<see cref="PermittedMode"/>), and declared on its own line, because
+    /// the file lands with permissions other than those captured.
+    /// </para>
+    /// <para>
     /// What the planner already says is not said twice. On a target that
     /// applies no POSIX metadata, its line covers permissions and ownership.
     /// Its alternate-streams line covers streams. Symlinks on a target that
     /// cannot create them are reported skipped by its symlink line, so
     /// their metadata goes unmentioned here.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<MetadataDegradation> Declare(
         RestorePlan plan, IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts, RestoreTargetProfile target)
@@ -222,7 +286,10 @@ public static class RestoreMetadata
 
         var files = new Dictionary<CapturedMetadata, int>();
         var ownership = 0;
+        var unknown = 0;
+        var setIds = 0;
         var links = 0;
+        var names = new Names();
 
         foreach (var item in plan.Items)
         {
@@ -232,7 +299,18 @@ public static class RestoreMetadata
                 continue;
             }
 
-            var missing = known.Captured & ~Applied(item.Kind, target);
+            var (given, unresolved) = item.Kind == EntryKind.File
+                ? Ownership(known.Owner, known.Group, target, names)
+                : (CapturedMetadata.None, CapturedMetadata.None);
+            if (item.Kind == EntryKind.File
+                && (Applied(item.Kind, target) & CapturedMetadata.PosixMode) != 0
+                && known.Mode is { } mode
+                && PermittedMode(mode, given) != (mode & ModeBits))
+            {
+                setIds++;
+            }
+
+            var missing = known.Captured & ~(Applied(item.Kind, target) | given);
             if (missing == CapturedMetadata.None)
             {
                 continue;
@@ -244,10 +322,9 @@ public static class RestoreMetadata
                 continue;
             }
 
-            if ((missing & (CapturedMetadata.Owner | CapturedMetadata.Group)) != 0)
-            {
-                ownership++;
-            }
+            var owned = missing & (CapturedMetadata.Owner | CapturedMetadata.Group);
+            ownership += (owned & ~unresolved) != 0 ? 1 : 0;
+            unknown += (owned & unresolved) != 0 ? 1 : 0;
 
             foreach (var (attribute, _) in Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)))
             {
@@ -269,6 +346,12 @@ public static class RestoreMetadata
             Add("ownership", ownership, string.Create(CultureInfo.InvariantCulture,
                 $"Ownership captured on {ownership} file(s) will not be applied, so they will belong to the account "
                 + $"running the restore; applying it needs root or CAP_CHOWN."));
+            Add("unknown-accounts", unknown, string.Create(CultureInfo.InvariantCulture,
+                $"Ownership captured on {unknown} file(s) names an account or group this machine does not have; "
+                + $"that part of it will not be applied."));
+            Add("set-id-bits", setIds, string.Create(CultureInfo.InvariantCulture,
+                $"Permissions captured on {setIds} file(s) will lose a set-user-id or set-group-id bit, because "
+                + $"the owner or group it runs as will not be given back."));
         }
 
         var descriptors = files.GetValueOrDefault(CapturedMetadata.SecurityDescriptor);
@@ -299,7 +382,10 @@ public static class RestoreMetadata
     /// with how many items it was left off, in the format's order.
     /// </summary>
     /// <param name="items">The receipt's items.</param>
-    /// <param name="target">The target, for the privilege ownership would need.</param>
+    /// <param name="target">
+    /// The target, for the privilege ownership would need, said only to an
+    /// account without it: one that has it was refused for another reason.
+    /// </param>
     public static IReadOnlyList<string> Summarise(IEnumerable<ReceiptItem> items, RestoreTargetProfile target)
     {
         ThrowHelper.ThrowIfNull(items);
@@ -316,9 +402,74 @@ public static class RestoreMetadata
             .. Vocabulary
                 .Where(entry => counts.ContainsKey(entry.Name))
                 .Select(entry => string.Create(CultureInfo.InvariantCulture, $"{entry.Name} not applied to {counts[entry.Name]} item(s)")
-                    + (entry.Attribute is CapturedMetadata.Owner or CapturedMetadata.Group && target.SupportsPosixMetadata
+                    + (entry.Attribute is CapturedMetadata.Owner or CapturedMetadata.Group
+                        && target.SupportsPosixMetadata
+                        && target.Account is not { MayGiveFilesAway: true }
                         ? "; applying ownership needs root or CAP_CHOWN"
                         : string.Empty)),
         ];
+    }
+
+    /// <summary>
+    /// Which halves of a file's captured ownership the target gives back,
+    /// and which name nothing on the target: given where a name resolves
+    /// and the restoring account may give what it resolves to.
+    /// </summary>
+    private static (CapturedMetadata Given, CapturedMetadata Unresolved) Ownership(
+        string? owner, string? group, RestoreTargetProfile target, Names names)
+    {
+        if (!target.SupportsPosixMetadata || OperatingSystem.IsWindows() || target.Account is not { } account)
+        {
+            return (CapturedMetadata.None, CapturedMetadata.None);
+        }
+
+        var given = CapturedMetadata.None;
+        var unresolved = CapturedMetadata.None;
+        if (owner is not null)
+        {
+            if (names.User(owner, account) is not { } userId)
+            {
+                unresolved |= CapturedMetadata.Owner;
+            }
+            else if (account.MayGiveTo(userId))
+            {
+                given |= CapturedMetadata.Owner;
+            }
+        }
+
+        if (group is not null)
+        {
+            if (names.Group(group, account) is not { } groupId)
+            {
+                unresolved |= CapturedMetadata.Group;
+            }
+            else if (account.MayGiveToGroup(groupId))
+            {
+                given |= CapturedMetadata.Group;
+            }
+        }
+
+        return (given, unresolved);
+    }
+
+    /// <summary>The names one plan has resolved, so a tree of one owner asks the system once.</summary>
+    private sealed class Names
+    {
+        private readonly Dictionary<string, uint?> _users = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, uint?> _groups = new(StringComparer.Ordinal);
+
+        public uint? User(string name, RestoreAccount account) => Resolved(_users, name, account.ResolveUser);
+
+        public uint? Group(string name, RestoreAccount account) => Resolved(_groups, name, account.ResolveGroup);
+
+        private static uint? Resolved(Dictionary<string, uint?> known, string name, Func<string, uint?> resolve)
+        {
+            if (!known.TryGetValue(name, out var id))
+            {
+                known[name] = id = resolve(name);
+            }
+
+            return id;
+        }
     }
 }

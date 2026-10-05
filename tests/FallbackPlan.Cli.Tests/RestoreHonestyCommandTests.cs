@@ -49,27 +49,41 @@ public sealed class RestoreHonestyCommandTests : IDisposable
     [TestMethod]
     public async Task Restore_SaysWhichCapturedMetadataItDidNotApply()
     {
-        var snapshot = await BackUpAsync();
+        var snapshot = await BackUpAsync(withLink: !OperatingSystem.IsWindows());
 
         var restore = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
 
-        // An attribute every file here carries and no target writes back yet:
-        // its owner on a POSIX host, its attribute bits on Windows. Access
-        // times are written back everywhere now. Metadata alone does not fail
-        // the restore.
+        // What no target here writes back: on a POSIX host the link's own
+        // owner, the only item whose owner is left off, because the files are
+        // the account's own and get theirs back (ADR-0085); on Windows every
+        // file's attribute bits. A file's access time is written back
+        // everywhere, so only the link's is listed. Metadata alone does not
+        // fail the restore.
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
-        var stillNotApplied = OperatingSystem.IsWindows() ? "file_attributes" : "owner";
-        Assert.Contains($"{stillNotApplied} not applied", restore.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("file_attributes not applied to 2 item(s)", restore.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("owner not applied to 1 item(s)", restore.Output, StringComparison.Ordinal);
+            Assert.Contains("accessed_at not applied to 1 item(s)", restore.Output, StringComparison.Ordinal);
+        }
     }
 
     public void Dispose() => _cli.Dispose();
 
-    private async Task<string> BackUpAsync()
+    private async Task<string> BackUpAsync(bool withLink = false)
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
         _cli.WriteFile("tree/nested/two.txt", "second");
+        if (withLink)
+        {
+            File.CreateSymbolicLink(Path.Combine(_cli.WorkPath, "tree", "link"), "one.txt");
+        }
+
         var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));
         Assert.IsTrue(backup.ExitCode == 0, backup.All);
 

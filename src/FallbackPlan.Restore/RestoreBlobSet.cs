@@ -164,7 +164,8 @@ public static class RestoreBlobSet
             }
 
             facts[item.ObjectId] = new RestoreItemFacts(
-                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata));
+                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata),
+                manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode);
 
             var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
