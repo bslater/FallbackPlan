@@ -1176,10 +1176,12 @@ public sealed class RestoreExecutor(
     /// <remarks>
     /// The order is fixed by what each write disturbs. Permissions go first,
     /// as they change no time. Modification and access times follow. The
-    /// creation time goes last: on macOS a modification time set earlier than
-    /// the creation time pulls the creation time back with it, so the
-    /// captured one is the last word. A write that fails, or a time no file
-    /// can carry, is that attribute not applied, never the item failed.
+    /// creation time goes last. On macOS a modification time set earlier than
+    /// the creation time makes the volume move the creation time back to it,
+    /// and .NET then restores the one before; written last, the captured
+    /// creation time is the last word whichever of those holds. A write that
+    /// fails, or a time no file can carry, is that attribute not applied,
+    /// never the item failed.
     /// </remarks>
     private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata)
     {
