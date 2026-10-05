@@ -109,6 +109,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0082](adr/0082-the-recovery-tools-diagnostic-bundle.md) | The recovery tool's diagnostic bundle: every verb takes a bundle file and writes a report of that run however it ended, through the rule the service's log uses, which moved to Domain so the tool could reach it; no passphrase, key, salt, sealing key, creator or machine name, identifiers shortened, paths only by an opt-in for that run | **Built** | `Domain/Diagnostics/RedactedRendering` · `Recovery/RecoveryBundle` · `Recovery/RecoveryRun` · `Recovery/RecoveryNote` · `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Hosts.Tests/RecoveryBundleTests`, `Domain.Tests/RedactedRenderingRuleTests`, `ArchitectureTests/DependencyRuleTests`, `Repository.Tests/RecoveryContainmentTests` · [notes](#0082--the-tool-that-runs-on-the-worst-day-says-what-happened) |
 | [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item; since [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) the times are written back and the list records what each write did | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
 | [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) | A restore writes back the times it can set, and records what each write did: access times everywhere, and creation times on Windows and macOS through a call that refuses where it cannot set one rather than writing the modification time in its place. Each attribute is written on its own after the content, so a write the platform refuses, or a time no file can carry, is listed as not applied and neither fails the item nor ends the run. Receipt schema 6 keeps its shape, and its list now says what landed | **Built** | `Domain/FileTimes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/FileTimesTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0084--the-receipt-says-what-landed) |
+| [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
 
 ---
 
@@ -2175,12 +2176,56 @@ Windows, and assert that access times are gone.
 The creation-time call is exercised only where it exists, so its proof is
 the macOS and Windows legs of the CI matrix.
 
-What remains is recorded rather than done. Ownership is the other half of
-the slice: owner and group are captured by name, and giving a file away needs
-native calls and the privilege the plan already names. A directory's own
+What remains is recorded rather than done. Ownership was the other half of
+the slice, and has since landed
+([0085](#0085--whose-file-it-is)). A directory's own
 metadata is neither written back nor named in its receipt item, which is a
 silent drop architecture 06 §3 rules out; writing it has to wait until the
 directory's children have landed. A symlink's own metadata, extended
 attributes, Windows attribute bits, security descriptors and alternate
 streams are still listed. The recovery tool and the CLI's `restore-file`
 write no metadata at all.
+
+### 0085 — whose file it is
+
+0084 wrote back a file's times and left its owner and group as the other half
+of the slice. They are captured by name, and until now every restore listed
+both as not applied, even for the account that owned the files. A file now
+gets its owner and group back on a POSIX target where the names resolve there
+and the account running the restore may give them. Root, or a Linux process
+holding CAP_CHOWN, may give a file to anyone. Any other account keeps a file
+as its own and gives it a group it is in. Owner and group are written apart,
+so a refusal of one leaves the other.
+
+Ownership goes first, before the permissions, because changing it clears the
+set-id bits. Writing that order down turned up a hazard older than the slice.
+A restore wrote a captured mode whole, so one running as root landed every
+set-user-id file it restored as a root-owned set-user-id file, whoever had
+owned it. A set-id bit is now kept only where the owner or group it runs as
+was given back. Otherwise it is dropped, and the permissions are reported as
+not applied. GNU tar keeps the same rule.
+
+The plan predicts each file the way the run will, from the names and mode its
+probe already decodes. It declares ownership for one of two reasons, because
+their remedies differ. A name the account may not give needs root or
+CAP_CHOWN. A name that resolves to nothing needs an account, which no
+privilege creates. The plan also counts the set-id bits the run will drop,
+and the receipt summary's privilege hint now goes only to an account
+without the privilege.
+
+The service and CLI tests had anchored on the owner as the attribute no
+target applied, and the account running them now gets its files back. On
+POSIX they anchor on a symlink, whose own metadata is still never written
+back.
+
+The proof is split by privilege. A suite running as root, as it does in a
+container, proves the privileged half. CI's runners, which are unprivileged,
+prove the other. Neither runs both.
+
+What remains is recorded rather than done. A directory's ownership is owed
+with the rest of a directory's metadata, and a symlink's with the rest of a
+symlink's. A Windows file's owner lives in the security descriptor, which is
+captured and not applied. A restore running as root into the default
+quarantine folder still recreates a root-owned set-user-id program
+faithfully, in a folder other accounts may reach. Whether a quarantine restore
+should keep set-id bits at all is a decision for a later record.
