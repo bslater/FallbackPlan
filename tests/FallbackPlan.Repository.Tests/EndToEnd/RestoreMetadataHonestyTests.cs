@@ -256,6 +256,35 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Receipt_ASetIdBitWhoseOwnerOrGroupIsNotGivenBack_IsDropped_AndSaid()
+    {
+        // A set-user-id file runs as its owner. Kept on a file whose captured
+        // owner did not land, it would run as whoever restored it, root
+        // included: a file wrong in a way nobody would see. So the bit goes,
+        // and the permissions are said not applied; set-group-id likewise.
+        const int SetUserIdAndRwxrXrX = 0x9ED;
+        const int SetGroupIdAndRwxrXrX = 0x5ED;
+        const int RwxrXrX = 0x1ED;
+        var source = new FakeFileSystemSource();
+        source.AddFile("tool", Deterministic(1_000, 18)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, PosixMode = SetUserIdAndRwxrXrX, OwnerName = NoSuchAccount };
+        source.AddFile("shared", Deterministic(1_000, 19)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, PosixMode = SetGroupIdAndRwxrXrX, GroupName = NoSuchGroup };
+
+        var (receipt, output) = await PublishAndRestoreAsync(source, 0xD1, RestoreTargetProfile.ForLocalPlatform());
+
+        CollectionAssert.AreEqual(
+            new[] { "posix_mode", "owner" }, receipt.Items.Single(item => item.Path == "tool").NotApplied!.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "posix_mode", "group" }, receipt.Items.Single(item => item.Path == "shared").NotApplied!.ToArray());
+        Assert.AreEqual((UnixFileMode)RwxrXrX, File.GetUnixFileMode(Path.Combine(output, "tool")));
+        Assert.AreEqual((UnixFileMode)RwxrXrX, File.GetUnixFileMode(Path.Combine(output, "shared")));
+    }
+
+    [TestMethod]
     public async Task Receipt_PermissionsOnATargetThatDoesNotApplyThem_AreNotApplied()
     {
         var source = new FakeFileSystemSource();
@@ -377,6 +406,40 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             "1 file(s)",
             Assert.ContainsSingle(privileged.Where(degradation => degradation.Capability == "unknown-accounts")).Detail,
             StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "a POSIX file's owner and group are accounts the machine names")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Plan_ASetIdBitThatWillBeDropped_IsDeclared()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("bin/theirs", Deterministic(700, 25)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, PosixMode = 0x9ED, OwnerName = "ben", GroupName = "staff" };
+        source.AddFile("bin/mine", Deterministic(700, 26)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, PosixMode = 0x9ED, OwnerName = "ana", GroupName = "staff" };
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xD2);
+
+        var account = new RestoreAccount
+        {
+            UserId = 1_000,
+            GroupIds = new HashSet<uint> { 1_000 },
+            MayGiveFilesAway = false,
+            ResolveUser = name => name switch { "ana" => 1_000u, "ben" => 1_001u, _ => null },
+            ResolveGroup = name => name == "staff" ? 1_000u : null,
+        };
+
+        // ben's file cannot be given back, so its set-user-id bit would run
+        // as the restorer: it is dropped, and the plan says so first.
+        var dropped = Assert.ContainsSingle(
+            RestoreMetadata.Declare(plan, facts, Posix with { Account = account })
+                .Where(degradation => degradation.Capability == "set-id-bits"));
+        Assert.Contains("1 file(s)", dropped.Detail, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            degradation => degradation.Capability == "set-id-bits",
+            RestoreMetadata.Declare(plan, facts, Posix with { Account = account with { MayGiveFilesAway = true } }));
     }
 
     [TestMethod]
