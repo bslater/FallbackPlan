@@ -58,16 +58,18 @@ public sealed record RestoreItemFacts(EntryKind Kind, ulong WrittenBytes, Captur
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
-/// does not (FR-RST-003, FR-RST-004; ADR-0083; architecture 06 §3).
+/// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084; architecture 06 §3).
 /// </summary>
 /// <remarks>
 /// <para>
-/// One rule answers the plan's declarations and the receipt's record of each
-/// item, so the two cannot disagree about what a target gets back. It is the
-/// executor's: a file's modification time everywhere, and its permissions
-/// where the target applies POSIX metadata. Nothing else is written back
-/// yet. A symlink is created with none of its own metadata, because the
-/// platform calls that would set it follow the link.
+/// The rule is the executor's: a file's modification and access times
+/// everywhere, its creation time where the target can set one, and its
+/// permissions where the target applies POSIX metadata. Nothing else is
+/// written back yet. A symlink is created with none of its own metadata.
+/// The plan predicts by that rule. The receipt records what each write did
+/// (ADR-0084), which the rule cannot know in advance: a volume may refuse a
+/// write the platform supports, and a captured time may lie beyond what a
+/// file can carry.
 /// </para>
 /// <para>
 /// Alternate streams are never applied, whatever a profile claims, because
@@ -161,18 +163,36 @@ public static class RestoreMetadata
             return CapturedMetadata.None;
         }
 
-        return target.SupportsPosixMetadata && !OperatingSystem.IsWindows()
-            ? CapturedMetadata.ModifiedAt | CapturedMetadata.PosixMode
-            : CapturedMetadata.ModifiedAt;
+        var applied = CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt;
+        if (target.SupportsCreationTimes)
+        {
+            applied |= CapturedMetadata.CreatedAt;
+        }
+
+        if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows())
+        {
+            applied |= CapturedMetadata.PosixMode;
+        }
+
+        return applied;
     }
 
     /// <summary>
-    /// The receipt's names for what was captured and is not applied, in the
-    /// format's order, or null when nothing captured is left out.
+    /// The receipt's names for what was captured and is not applied by the
+    /// rule, in the format's order, or null when nothing captured is left out.
     /// </summary>
-    public static IReadOnlyList<string>? NotApplied(CapturedMetadata captured, EntryKind kind, RestoreTargetProfile target)
+    public static IReadOnlyList<string>? NotApplied(CapturedMetadata captured, EntryKind kind, RestoreTargetProfile target) =>
+        NotApplied(captured, Applied(kind, target));
+
+    /// <summary>
+    /// The receipt's names for what was captured and not <paramref name="applied"/>,
+    /// in the format's order, or null when nothing captured is left out.
+    /// </summary>
+    /// <param name="captured">What the entry carries.</param>
+    /// <param name="applied">What the writes for it actually did.</param>
+    public static IReadOnlyList<string>? NotApplied(CapturedMetadata captured, CapturedMetadata applied)
     {
-        var missing = captured & ~Applied(kind, target);
+        var missing = captured & ~applied;
         return missing == CapturedMetadata.None
             ? null
             : [.. Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)).Select(entry => entry.Name)];
@@ -262,11 +282,7 @@ public static class RestoreMetadata
 
         var created = files.GetValueOrDefault(CapturedMetadata.CreatedAt);
         Add("creation-times", created, string.Create(CultureInfo.InvariantCulture,
-            $"Creation times captured on {created} file(s) will not be applied."));
-
-        var accessed = files.GetValueOrDefault(CapturedMetadata.AccessedAt);
-        Add("access-times", accessed, string.Create(CultureInfo.InvariantCulture,
-            $"Access times captured on {accessed} file(s) will not be applied."));
+            $"Creation times captured on {created} file(s) will not be applied; this target cannot set them."));
 
         var flags = files.GetValueOrDefault(CapturedMetadata.FileAttributes);
         Add("file-attributes", flags, string.Create(CultureInfo.InvariantCulture,

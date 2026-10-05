@@ -21,12 +21,14 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// </summary>
 /// <remarks>
 /// <para>
-/// One rule answers both, so the plan and the receipt cannot disagree about
-/// what a target applies. Today that is a file's modification time
-/// everywhere, and its permissions where the target applies POSIX metadata.
-/// Nothing else is written back yet: creation and access times, ownership,
-/// security descriptors, extended attributes and file attributes are
-/// captured and recorded, and a symlink is created with none of its own.
+/// The plan predicts by the target's rule; the receipt records what each
+/// attribute's write actually did (ADR-0084), so a write the platform
+/// refuses is listed even where the rule expected it to land. A file gets
+/// its modification and access times everywhere, its creation time where
+/// the target can set one, and its permissions where the target applies
+/// POSIX metadata. Ownership, security descriptors, extended attributes and
+/// file attributes are captured and recorded, not yet written back, and a
+/// symlink is created with none of its own.
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -64,13 +66,16 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             FileAttributes = 0x20,
         };
 
-        var (receipt, output) = await PublishAndRestoreAsync(source, 0xC1, RestoreTargetProfile.ForLocalPlatform());
+        // A target that sets no creation times, so the list is one list on
+        // every platform; the creation-time tests below hold the others.
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xC1, RestoreTargetProfile.ForLocalPlatform() with { SupportsCreationTimes = false });
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/owned.bin");
         Assert.AreEqual("restored", item.Outcome, "metadata alone does not change what the content achieved");
         Assert.IsNotNull(item.NotApplied);
         CollectionAssert.AreEqual(
-            new[] { "created_at", "accessed_at", "owner", "group", "extended_attributes", "file_attributes" },
+            new[] { "created_at", "owner", "group", "extended_attributes", "file_attributes" },
             item.NotApplied.ToArray());
 
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
@@ -78,12 +83,14 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.AreEqual(6, RestoreReceipt.CurrentSchemaVersion);
         Assert.Contains("\"not_applied\"", receipt.ToJson(), StringComparison.Ordinal);
 
-        // What it did apply, it applied.
-        Assert.AreEqual(
-            DateTimeOffset.FromUnixTimeMilliseconds((long)Modified).UtcDateTime,
-            File.GetLastWriteTimeUtc(Path.Combine(output, "data", "owned.bin")));
+        // What it did apply, it applied. Nothing has read the file since, so
+        // its access time is still the one the restore wrote.
+        var landed = Path.Combine(output, "data", "owned.bin");
+        Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds((long)Modified).UtcDateTime, File.GetLastWriteTimeUtc(landed));
+        Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds(1_722_500_000_000).UtcDateTime, File.GetLastAccessTimeUtc(landed));
 
-        // A directory carries nothing captured, so it says nothing.
+        // A directory's own captured metadata is not read back yet (ADR-0084
+        // says so), so its item says nothing.
         Assert.IsNull(receipt.Items.Single(candidate => candidate.Path == "data").NotApplied);
     }
 
@@ -97,6 +104,61 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
         Assert.DoesNotContain("not_applied", receipt.ToJson(), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows | TestPlatforms.MacOs, "only Windows and macOS can set a file's creation time")]
+    [PlatformTrait(TestPlatforms.Windows | TestPlatforms.MacOs)]
+    public async Task Receipt_ACreationTimeTheTargetCanSet_IsWrittenBack_AndNotListed()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("created.bin", Deterministic(1_000, 10)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, CreatedAt = 1_721_000_000_000 };
+
+        var (receipt, output) = await PublishAndRestoreAsync(source, 0xC7, RestoreTargetProfile.ForLocalPlatform());
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+        var landed = Path.Combine(output, "created.bin");
+        Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds(1_721_000_000_000).UtcDateTime, File.GetCreationTimeUtc(landed));
+        Assert.AreEqual(DateTimeOffset.FromUnixTimeMilliseconds((long)Modified).UtcDateTime, File.GetLastWriteTimeUtc(landed));
+    }
+
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Linux, "Linux has no call that sets a file's creation time")]
+    [PlatformTrait(TestPlatforms.Linux)]
+    public async Task Receipt_ACreationTimeThePlatformCannotSet_IsListed_WhateverTheProfileClaims()
+    {
+        // The receipt records what the write did, not what the rule expected:
+        // a profile claiming creation times on Linux still gets none.
+        var source = new FakeFileSystemSource();
+        source.AddFile("created.bin", Deterministic(1_000, 11)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, CreatedAt = 1_721_000_000_000 };
+
+        var (receipt, output) = await PublishAndRestoreAsync(
+            source, 0xC8, RestoreTargetProfile.ForLocalPlatform() with { SupportsCreationTimes = true });
+
+        CollectionAssert.AreEqual(new[] { "created_at" }, Assert.ContainsSingle(receipt.Items).NotApplied!.ToArray());
+        Assert.AreEqual(
+            DateTimeOffset.FromUnixTimeMilliseconds((long)Modified).UtcDateTime,
+            File.GetLastWriteTimeUtc(Path.Combine(output, "created.bin")),
+            "an attempt at the creation time must not land on the modification time");
+    }
+
+    [TestMethod]
+    public async Task Receipt_ATimeBeyondWhatAFileCanCarry_IsNotApplied_AndTheRunCompletes()
+    {
+        // A manifest is untrusted input. A modification time in the year 10000
+        // used to end the whole run with no receipt at all.
+        var source = new FakeFileSystemSource();
+        source.AddFile("far.bin", Deterministic(1_000, 12)).Metadata =
+            new EntryMetadata { ModifiedAt = 253_402_300_800_000, AccessedAt = 1_722_500_000_000 };
+
+        var (receipt, _) = await PublishAndRestoreAsync(source, 0xC9, RestoreTargetProfile.ForLocalPlatform());
+
+        var item = Assert.ContainsSingle(receipt.Items);
+        Assert.AreEqual("restored", item.Outcome);
+        CollectionAssert.AreEqual(new[] { "modified_at" }, item.NotApplied!.ToArray());
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
     }
 
     [TestMethod]
@@ -176,6 +238,30 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
         Assert.DoesNotContain(
             degradation => degradation.Capability == "ownership",
             RestoreMetadata.Declare(plan, facts, Posix with { SupportsPosixMetadata = false }));
+    }
+
+    [TestMethod]
+    public async Task Plan_TimesAreDeclaredOnlyWhereTheTargetCannotSetThem()
+    {
+        var source = new FakeFileSystemSource();
+        foreach (var name in new[] { "a.txt", "b.txt" })
+        {
+            source.AddFile($"docs/{name}", Deterministic(700, 13)).Metadata = new EntryMetadata
+            {
+                ModifiedAt = Modified, CreatedAt = 1_721_000_000_000, AccessedAt = 1_722_500_000_000,
+            };
+        }
+
+        var (plan, facts) = await PublishAndProbeAsync(source, 0xCA);
+
+        // Access times are written back on every target, so they are never
+        // declared. Creation times are, where the target cannot set them.
+        var withoutCreation = RestoreMetadata.Declare(plan, facts, Posix);
+        Assert.DoesNotContain(degradation => degradation.Capability == "access-times", withoutCreation);
+        var created = Assert.ContainsSingle(withoutCreation.Where(degradation => degradation.Capability == "creation-times"));
+        Assert.Contains("2 file(s)", created.Detail, StringComparison.Ordinal);
+
+        Assert.IsEmpty(RestoreMetadata.Declare(plan, facts, Posix with { SupportsCreationTimes = true }));
     }
 
     [TestMethod]

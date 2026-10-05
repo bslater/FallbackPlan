@@ -39,7 +39,7 @@ Every restore:
 - authenticates and decrypts every object;
 - verifies each segment's plaintext content identifier after decryption;
 - verifies the reconstructed file's length and whole-file verification hash;
-- restores metadata **after** content, so a failure mid-content never leaves a file with correct permissions and wrong bytes;
+- restores metadata **after** content, so a failure mid-content never leaves a file with correct permissions and wrong bytes; each attribute is written on its own, and one the platform refuses is reported as not applied rather than failing a file whose content landed ([ADR-0084](../adr/0084-a-restore-writes-back-the-times-it-can-set.md));
 - reports every skipped or degraded attribute;
 - produces a machine-readable **restore receipt**;
 - **never reports success when any required file failed.**

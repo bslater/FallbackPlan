@@ -107,7 +107,8 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0080](adr/0080-a-person-deletes-a-snapshot.md) | A person deletes a snapshot, from staging and every copy: `delete_snapshots` (contract 1.51) under the set's reclaim grant. The request is a tombstone of reason *requested* that every survey reads and every plan expires. Staging keeps the snapshot until every declared destination has converged since the request, one with no rules included, and one command converges every copy, carries the deletion through in two passes and records who asked. A set keeps something to restore from | **Built** | `Retention/SnapshotDeletion` · `Retention/StagingMark` · `Retention/RetentionPlanner` · `Retention/ReplicationGate` · `Retention/StagingSweep` · `Retention/RetentionRunner` · `Repository.Format/Manifests/Tombstone` · `Repository.Index/Journal/JournalRecordCodec` · `Repository.Catalogue/Catalogue` · `Application/DestinationSyncStore` · `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceCommandHandler.Deletion` · `Agent/AuthenticatingService` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Web/WebConsoleHost` · `Retention.Tests/SnapshotDeletionPlanTests`, `Retention.Tests/SnapshotDeletionCycleTests`, `Retention.Tests/SnapshotDeletionFanOutTests`, `Retention.Tests/SnapshotDeletionPeerTests`, `Retention.Tests/SnapshotDeletionServiceTests`, `Repository.ConformanceTests/TombstoneConformanceTests`, `Web.Tests/SnapshotDeletionCeremonyTests`, `Web.DomTests/SnapshotDeletionDomTests` · [notes](#0080--the-request-is-a-tombstone-and-a-missing-row-is-not-a-missing-copy) |
 | [0081](adr/0081-diagnostic-bundle.md) | A diagnostic bundle, and a redacted rendering that withholds what no type declares: `export_diagnostics` (contract 1.52) builds one zip whose every field is classified by the types the log uses, paths only by a per-bundle opt-in a paired console may not make; the redacted rendering is fail-closed, `LogLabel` vouches for safe words, identifiers held as text are `LogId`s, and every product log hole is classified | **Built** | `Diagnostics/LogRecordRenderer` · `Domain/Diagnostics/LogLabel` · `Domain/Diagnostics/LogId` · `Storage.Abstractions/ObjectKey` · `Agent/DiagnosticBundle` · `Agent/ServiceCommandHandler.Diagnostics` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/DiagnosticBundleTests`, `Diagnostics.Tests/RedactedRenderingTests`, `Hosts.Tests/DiagnosticsCommandTests`, `ArchitectureTests/LoggingShapeTests`, `Cli.Tests/DiagnosticsExportVerbTests`, `Web.Tests/DiagnosticsRelayTests`, `Web.DomTests/ConsoleViewsDomTests` · [notes](#0081--a-bundle-needed-the-redaction-to-be-true-first) |
 | [0082](adr/0082-the-recovery-tools-diagnostic-bundle.md) | The recovery tool's diagnostic bundle: every verb takes a bundle file and writes a report of that run however it ended, through the rule the service's log uses, which moved to Domain so the tool could reach it; no passphrase, key, salt, sealing key, creator or machine name, identifiers shortened, paths only by an opt-in for that run | **Built** | `Domain/Diagnostics/RedactedRendering` · `Recovery/RecoveryBundle` · `Recovery/RecoveryRun` · `Recovery/RecoveryNote` · `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Hosts.Tests/RecoveryBundleTests`, `Domain.Tests/RedactedRenderingRuleTests`, `ArchitectureTests/DependencyRuleTests`, `Repository.Tests/RecoveryContainmentTests` · [notes](#0082--the-tool-that-runs-on-the-worst-day-says-what-happened) |
-| [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
+| [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item; since [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) the times are written back and the list records what each write did | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
+| [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) | A restore writes back the times it can set, and records what each write did: access times everywhere, and creation times on Windows and macOS through a call that refuses where it cannot set one rather than writing the modification time in its place. Each attribute is written on its own after the content, so a write the platform refuses, or a time no file can carry, is listed as not applied and neither fails the item nor ends the run. Receipt schema 6 keeps its shape, and its list now says what landed | **Built** | `Domain/FileTimes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/FileTimesTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0084--the-receipt-says-what-landed) |
 
 ---
 
@@ -2131,7 +2132,55 @@ summarises it, a line an attribute. Outcomes do not move for metadata alone.
 
 Every plan over real files now lists access times, and most list creation
 times and ownership. That is the truth, and it is the next slice's work.
-Still owed: writing those back; architecture 06 §3's refusal for a security
-descriptor; hard links, which restore as separate files without saying so;
-the physical transfer size; plan export and resume; archival-tier reporting;
-and the recovery tool's own restore.
+Still owed: writing those back, which the times have since been
+([0084](#0084--the-receipt-says-what-landed)); architecture 06 §3's refusal
+for a security descriptor; hard links, which restore as separate files
+without saying so; the physical transfer size; plan export and resume;
+archival-tier reporting; and the recovery tool's own restore.
+
+### 0084 — the receipt says what landed
+
+0083 named, per item, what a restore did not write back, and left writing it
+back as the next slice. This is the first half of that slice: the times. A
+restored file reads back its captured access time on every platform, and its
+creation time on Windows and macOS. Linux has no call that sets a creation
+time, so there it is still listed, and the plan still declares it.
+
+.NET has a creation-time setter on every platform, and on two of them it does
+something else. On Linux, and on a macOS volume that keeps no creation times,
+it writes the modification time instead. A restore that used it would replace
+the time it had just put back and say nothing. `FileTimes` calls
+`setattrlist` itself on macOS and answers a refusal as not set, and on Linux
+it attempts nothing.
+
+Writing the times back turned up three defects in the path that already
+existed. Metadata was applied inside the catch that lands a file, so a
+refused write failed an item whose content had landed and verified, and a
+drill counts that as a failed drill. A captured time past the year 9999
+threw outside every per-item catch and ended the run with no receipt, from a
+manifest a restore treats as untrusted. And the receipt's list came from the
+rule, so a write that failed would still have read as applied. Each
+attribute is now written on its own, after the content and outside the
+landing's catch. An impossible time is nothing to apply. The executor
+returns what landed, and the list is what was captured minus that.
+
+The plan still predicts by the rule, because it cannot know what a write will
+do. The target profile gains `SupportsCreationTimes`, and the executor tries
+a creation time only where the profile allows one, so the two agree. Access
+times are no longer declared anywhere. The service and CLI tests had anchored
+on access times as the attribute every file carries and no target applied.
+They now anchor on the owner on a POSIX host and the attribute bits on
+Windows, and assert that access times are gone.
+
+The creation-time call is exercised only where it exists, so its proof is
+the macOS and Windows legs of the CI matrix.
+
+What remains is recorded rather than done. Ownership is the other half of
+the slice: owner and group are captured by name, and giving a file away needs
+native calls and the privilege the plan already names. A directory's own
+metadata is neither written back nor named in its receipt item, which is a
+silent drop architecture 06 §3 rules out; writing it has to wait until the
+directory's children have landed. A symlink's own metadata, extended
+attributes, Windows attribute bits, security descriptors and alternate
+streams are still listed. The recovery tool and the CLI's `restore-file`
+write no metadata at all.

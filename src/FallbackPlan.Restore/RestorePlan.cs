@@ -26,6 +26,15 @@ public sealed record RestoreTargetProfile
     /// </summary>
     public bool SupportsAlternateStreams { get; init; }
 
+    /// <summary>
+    /// Whether the executor writes a file's creation time back on this
+    /// target: Windows and macOS have a call that sets one, Linux does not
+    /// (<see cref="FileTimes"/>). It is what the plan predicts by. The
+    /// receipt records what each write did, so a volume that keeps no
+    /// creation times is still said where it refuses one.
+    /// </summary>
+    public bool SupportsCreationTimes { get; init; }
+
     /// <summary>The target's maximum path bytes, when known.</summary>
     public uint? MaxPathBytes { get; init; }
 
@@ -35,6 +44,7 @@ public sealed record RestoreTargetProfile
         CaseSensitive = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = !OperatingSystem.IsWindows(),
+        SupportsCreationTimes = FileTimes.CanSetCreationTime,
     };
 }
 
