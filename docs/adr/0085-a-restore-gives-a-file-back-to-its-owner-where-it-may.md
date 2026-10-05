@@ -68,6 +68,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
 - **Whether a quarantine restore should keep set-id bits at all.** A restore running as root into the default quarantine folder recreates a root-owned set-user-id program faithfully, such as an old one from a historical snapshot, in a folder other accounts may reach. That predates this record, which neither makes it worse nor decides it.
+
+  > **2026-10 ([Amendment 1](#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).** Decided: a quarantine restore keeps them, as any restore does, and the docs say what that means for the folder.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
 ## Alternatives considered
@@ -77,8 +79,19 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 - **Keep the set-id bit and report it.** Rejected. Reporting does not stop the file running as the restorer.
 - **Refuse a set-id file whose ownership will not land.** Rejected. Its content is right, and dropping the bit leaves a file that is less than the original, not wrong. The plan says so before the run.
 
+## Amendment 1 (2026-10) — a quarantine restore keeps set-id bits
+
+This record left one question open, and it is now decided. A restore into the quarantine folder follows §4 exactly as any other restore does. It keeps a set-id bit wherever the owner or group the bit runs as was given back. So a restore running as root into the quarantine folder recreates a root-owned set-user-id program as it was captured, including an old one from a historical snapshot. The behaviour stays as it is, and it is documented where a person restoring will look.
+
+- **Why it stays.** A quarantine restore is still a restore. Quarantine exists so that unscanned historical content does not land in a live tree ([architecture 08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default), FR-RST-006). It decides where content lands, not what comes back. A person restoring a system tree into quarantine, to inspect it and then move it into place, needs the bits as they were captured. Stripped, every set-id program would need its bits put back by hand, and nothing would say which.
+- **What it costs.** The quarantine folder is `.fbp-quarantine/<run>`, under the folder the restore was pointed at. It is created like any directory a restore makes, with the restoring process's defaults, and its own metadata is not applied ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md)). So whether other accounts can reach what lands there depends on the folder the restore was pointed at and the restoring process's umask. Under the usual umask, a folder others can already reach puts a restored set-user-id root program within their reach too, along with any flaw it was later patched for.
+- **What a person does about it.** Point a restore of a historical system tree, run as root, at a folder only the restoring account can reach, or restrict the folder before anyone else uses the machine. Then move or remove what was inspected. Architecture 08 §3.1 says so where quarantine is described, the threat model lists it beside the malware a snapshot can hold, and `SECURITY.md` names it among what the product does not protect against.
+
+Two alternatives were weighed and not taken. Stripping set-id bits from a quarantine restore would make it give back something other than what was captured. Creating the quarantine folder private to its owner would change who may reach a folder the person chose, which the person can decide for themselves.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Owner and group are written back on a POSIX target where their names resolve and the restoring account may give them, apart and before the permissions. A set-id bit is kept only with the owner or group it runs as. The plan predicts each file and says why ownership will not land. |
+| 2026-10 | Accepted | Amendment 1: a quarantine restore keeps set-id bits, as any restore does. The open question is decided and documented in architecture 08 §3.1, the threat model and SECURITY.md. No behaviour changes. |
