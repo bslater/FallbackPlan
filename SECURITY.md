@@ -45,6 +45,7 @@ Stated plainly because a backup product that overstates its guarantees is itself
 - it cannot prevent an administrator with access to every device and to retention controls from destroying data, only make it attributable;
 - it cannot detect malware inside historical snapshots, which is why restore defaults to a quarantine path.
 - it restores a set-user-id program faithfully, quarantine included: restored as root into a folder other accounts can reach, an old one from a historical snapshot is within their reach, flaws and all ([ADR-0085 Amendment 1](docs/adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).
+- it writes a restore by path, checking each path before the write it guards rather than in one step with it, so an account that can change the folder being restored into while the restore runs can still redirect a write; restore in place only into a folder no other account can write to ([ADR-0086](docs/adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).
 
 ## Cryptographic review
 

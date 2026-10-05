@@ -64,6 +64,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 ## What this does not do
 
 - **A directory's own ownership.** A directory's metadata is still neither written back nor named ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md)), and its owner with it.
+
+  > **2026-10 ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).** A folder the restore makes now gets its owner and group back by §2's rule, and keeps a set-group-id bit only with its group, as §4 holds a file's.
 - **A symlink's own owner.** `lchown` could set it. It is owed with the rest of a symlink's own metadata.
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
@@ -85,6 +87,8 @@ This record left one question open, and it is now decided. A restore into the qu
 
 - **Why it stays.** A quarantine restore is still a restore. Quarantine exists so that unscanned historical content does not land in a live tree ([architecture 08 §3.1](../architecture/08-restore-and-recovery.md#31-quarantine-by-default), FR-RST-006). It decides where content lands, not what comes back. A person restoring a system tree into quarantine, to inspect it and then move it into place, needs the bits as they were captured. Stripped, every set-id program would need its bits put back by hand, and nothing would say which.
 - **What it costs.** The quarantine folder is `.fbp-quarantine/<run>`, under the folder the restore was pointed at. It is created like any directory a restore makes, with the restoring process's defaults, and its own metadata is not applied ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md)). So whether other accounts can reach what lands there depends on the folder the restore was pointed at and the restoring process's umask. Under the usual umask, a folder others can already reach puts a restored set-user-id root program within their reach too, along with any flaw it was later patched for.
+
+  > **2026-10 ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).** A folder restored from the snapshot now gets its captured permissions and owner back once its contents have landed. The quarantine folder is not one of them: it is made for the run, takes the restoring process's defaults, and is given no snapshot's metadata.
 - **What a person does about it.** Point a restore of a historical system tree, run as root, at a folder only the restoring account can reach, or restrict the folder before anyone else uses the machine. Then move or remove what was inspected. Architecture 08 §3.1 says so where quarantine is described, the threat model lists it beside the malware a snapshot can hold, and `SECURITY.md` names it among what the product does not protect against.
 
 Two alternatives were weighed and not taken. Stripping set-id bits from a quarantine restore would make it give back something other than what was captured. Creating the quarantine folder private to its owner would change who may reach a folder the person chose, which the person can decide for themselves.
@@ -95,3 +99,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. Owner and group are written back on a POSIX target where their names resolve and the restoring account may give them, apart and before the permissions. A set-id bit is kept only with the owner or group it runs as. The plan predicts each file and says why ownership will not land. |
 | 2026-10 | Accepted | Amendment 1: a quarantine restore keeps set-id bits, as any restore does. The open question is decided and documented in architecture 08 §3.1, the threat model and SECURITY.md. No behaviour changes. |
+| 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) gives a folder the restore makes its owner and group by §2's rule, and its permissions by §4's. |
