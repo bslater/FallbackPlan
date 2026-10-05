@@ -699,11 +699,6 @@ public sealed class RestoreExecutor(
                     try
                     {
                         File.Move(spool, landing, overwrite: true);
-
-                        // Metadata strictly AFTER content (architecture 08 §3):
-                        // a crash between the two leaves verified content with
-                        // default metadata — recoverable — never the reverse.
-                        ApplyMetadata(landing, manifest.Metadata);
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
@@ -722,14 +717,22 @@ public sealed class RestoreExecutor(
                         continue;
                     }
 
+                    // Metadata strictly AFTER content (architecture 08 §3): a
+                    // crash between the two leaves verified content with
+                    // default metadata, which is recoverable, never the
+                    // reverse. And outside the landing's catch, because a
+                    // write the platform refuses leaves that attribute not
+                    // applied; it does not undo content that landed and
+                    // verified (ADR-0084).
+                    var notApplied = RestoreMetadata.NotApplied(
+                        RestoreMetadata.Captured(manifest.Metadata), ApplyMetadata(landing, manifest.Metadata));
+
                     // The main stream restored and verified; alternate data
                     // streams the manifest carries did not (RR-6's honesty
                     // half — write-back is not implemented on any target).
                     // "degraded", not "restored": the file on disk is not the
                     // file that was captured, and the receipt says so per
                     // item, exactly where the shortfall is.
-                    var notApplied = RestoreMetadata.NotApplied(
-                        RestoreMetadata.Captured(manifest.Metadata), EntryKind.File, target);
                     if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
                     {
                         items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
@@ -1166,16 +1169,60 @@ public sealed class RestoreExecutor(
         return true;
     }
 
-    private void ApplyMetadata(string destination, EntryMetadata metadata)
+    /// <summary>
+    /// Writes back what the target takes of <paramref name="metadata"/>, one
+    /// attribute at a time, and answers which writes landed.
+    /// </summary>
+    /// <remarks>
+    /// The order is fixed by what each write disturbs. Permissions go first,
+    /// as they change no time. Modification and access times follow. The
+    /// creation time goes last: on macOS a modification time set earlier than
+    /// the creation time pulls the creation time back with it, so the
+    /// captured one is the last word. A write that fails, or a time no file
+    /// can carry, is that attribute not applied, never the item failed.
+    /// </remarks>
+    private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata)
     {
-        if (metadata.ModifiedAt is { } modified)
+        var applied = CapturedMetadata.None;
+
+        if (target.SupportsPosixMetadata && metadata.PosixMode is { } mode && !OperatingSystem.IsWindows()
+            && Wrote(() => File.SetUnixFileMode(destination, (UnixFileMode)(mode & 0xFFF))))
         {
-            File.SetLastWriteTimeUtc(destination, DateTimeOffset.FromUnixTimeMilliseconds((long)modified).UtcDateTime);
+            applied |= CapturedMetadata.PosixMode;
         }
 
-        if (target.SupportsPosixMetadata && metadata.PosixMode is { } mode && !OperatingSystem.IsWindows())
+        if (FileTimes.FromUnixMilliseconds(metadata.ModifiedAt) is { } modified
+            && Wrote(() => File.SetLastWriteTimeUtc(destination, modified)))
         {
-            File.SetUnixFileMode(destination, (UnixFileMode)(mode & 0xFFF));
+            applied |= CapturedMetadata.ModifiedAt;
+        }
+
+        if (FileTimes.FromUnixMilliseconds(metadata.AccessedAt) is { } accessed
+            && Wrote(() => File.SetLastAccessTimeUtc(destination, accessed)))
+        {
+            applied |= CapturedMetadata.AccessedAt;
+        }
+
+        if (target.SupportsCreationTimes
+            && FileTimes.FromUnixMilliseconds(metadata.CreatedAt) is { } created
+            && FileTimes.TrySetCreationTime(destination, created))
+        {
+            applied |= CapturedMetadata.CreatedAt;
+        }
+
+        return applied;
+
+        static bool Wrote(Action write)
+        {
+            try
+            {
+                write();
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
     }
 }
