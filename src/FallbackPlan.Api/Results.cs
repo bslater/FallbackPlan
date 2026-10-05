@@ -710,14 +710,49 @@ public sealed record DirectoryResult(
 /// does not hold (FR-RST-003; ADR-0041).
 /// </param>
 /// <param name="ConflictSample">At most twenty conflicts, as <c>path — reason</c> lines.</param>
-/// <param name="Degradations">Declared metadata shortfalls on this target, one line each.</param>
+/// <param name="Degradations">
+/// Declared metadata shortfalls on this target, one line each. Since 1.53
+/// these include each captured attribute the tree carries and the target
+/// will not get back, with how many files carry it (FR-RST-003, ADR-0083).
+/// </param>
+/// <param name="WriteBytes">
+/// The bytes the files will write: their logical lengths less the holes a
+/// sparse file keeps (contract 1.53). Null from a service before 1.53.
+/// </param>
+/// <param name="Space">
+/// The room the run needs on each volume it would write to, against what is
+/// free there (contract 1.53, FR-RST-003). Null unless the plan was told
+/// where the run would write. A volume short of room is a conflict too, so
+/// a client that predates this field still hears of it.
+/// </param>
 public sealed record RestorePlanResult(
     long Files,
     long Bytes,
     IReadOnlyList<string> MissingObjects,
     long Conflicts = 0,
     IReadOnlyList<string>? ConflictSample = null,
-    IReadOnlyList<string>? Degradations = null) : ServiceResult;
+    IReadOnlyList<string>? Degradations = null,
+    long? WriteBytes = null,
+    IReadOnlyList<RestoreSpaceDescriptor>? Space = null) : ServiceResult;
+
+/// <summary>The room a restore needs on one volume it writes to (contract 1.53, FR-RST-003).</summary>
+/// <param name="Directory">
+/// The folder the run writes to on that volume, on the service's machine, or
+/// the engine's working directory when that volume holds none of the run's
+/// folders.
+/// </param>
+/// <param name="NeededBytes">
+/// The bytes the run needs there: each file's written bytes in whole 4 KiB
+/// clusters, a cluster for each directory it creates, and room for the
+/// largest file where the engine holds it while its hash verifies.
+/// </param>
+/// <param name="AvailableBytes">What the platform says is free there; null when it will not say, which never counts as short.</param>
+/// <param name="Working">Whether this is the engine's working directory alone, needing room for the largest file only.</param>
+public sealed record RestoreSpaceDescriptor(
+    string Directory,
+    long NeededBytes,
+    long? AvailableBytes,
+    bool Working = false);
 
 /// <summary>What a restore did.</summary>
 /// <param name="Restored">Files written.</param>
@@ -748,6 +783,12 @@ public sealed record RestorePlanResult(
 /// naming the copy each came from and what was wrong with the copies passed
 /// over.
 /// </param>
+/// <param name="NotApplied">
+/// The captured metadata the restored items came back without, one line an
+/// attribute with how many items it was left off, such as
+/// <c>accessed_at not applied to 12 item(s)</c> (contract 1.53, FR-RST-004).
+/// The receipt names it item by item. Null when nothing was left out.
+/// </param>
 public sealed record RestoreResult(
     long Restored,
     long Failed,
@@ -760,7 +801,8 @@ public sealed record RestoreResult(
     string? ReceiptPath = null,
     IReadOnlyList<string>? FailedSample = null,
     long ReadAround = 0,
-    IReadOnlyList<string>? ReadAroundSample = null) : ServiceResult;
+    IReadOnlyList<string>? ReadAroundSample = null,
+    IReadOnlyList<string>? NotApplied = null) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

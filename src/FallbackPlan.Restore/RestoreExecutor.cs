@@ -131,6 +131,21 @@ public sealed record ReceiptItem
     [JsonPropertyName("read_around")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? ReadAround { get; init; }
+
+    /// <summary>
+    /// The metadata captured with this item that the target did not get
+    /// back, in the format's order: <c>modified_at</c>, <c>created_at</c>,
+    /// <c>accessed_at</c>, <c>posix_mode</c>, <c>owner</c>, <c>group</c>,
+    /// <c>security_descriptor</c>, <c>extended_attributes</c>,
+    /// <c>alternate_streams</c>, <c>file_attributes</c> (FR-RST-004;
+    /// ADR-0083). Null when nothing captured was left out. Recorded for each
+    /// item the run landed. The outcome does not change for metadata alone,
+    /// because the content landed and verified; the plan declared this
+    /// beforehand, and this says where.
+    /// </summary>
+    [JsonPropertyName("not_applied")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? NotApplied { get; init; }
 }
 
 /// <summary>
@@ -159,8 +174,12 @@ public sealed record RestoreReceipt
     /// <c>read_around</c> (FR-RST-007): a file read from another copy,
     /// because the copy it was first read from would not serve, says where its
     /// bytes came from and what was wrong with the copies passed over.
+    /// Version 6 added the optional per-item <c>not_applied</c> (FR-RST-004,
+    /// ADR-0083): the captured metadata the target did not get back, which
+    /// architecture 06 §3 always said the receipt records and which it had
+    /// never once written.
     /// </remarks>
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -709,6 +728,8 @@ public sealed class RestoreExecutor(
                     // "degraded", not "restored": the file on disk is not the
                     // file that was captured, and the receipt says so per
                     // item, exactly where the shortfall is.
+                    var notApplied = RestoreMetadata.NotApplied(
+                        RestoreMetadata.Captured(manifest.Metadata), EntryKind.File, target);
                     if (manifest.Metadata.AlternateStreams.Count > 0 && !target.SupportsAlternateStreams)
                     {
                         items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
@@ -716,6 +737,7 @@ public sealed class RestoreExecutor(
                             Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
                             Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
                                 + "and not written back on this target (declared in the plan)",
+                            NotApplied = notApplied,
                         }));
                         break;
                     }
@@ -723,6 +745,7 @@ public sealed class RestoreExecutor(
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
+                        NotApplied = notApplied,
                     }));
                     break;
                 }
@@ -801,6 +824,8 @@ public sealed class RestoreExecutor(
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
+                        NotApplied = RestoreMetadata.NotApplied(
+                            RestoreMetadata.Captured(manifest.Metadata), EntryKind.Symlink, target),
                     }));
                     break;
                 }
@@ -1002,7 +1027,7 @@ public sealed class RestoreExecutor(
     /// platform normalises differently from the checker — which is most of the
     /// interesting cases.
     /// </remarks>
-    private static bool TryResolve(
+    internal static bool TryResolve(
         string root, string path, out string destination, out string refusal)
     {
         destination = string.Empty;

@@ -175,6 +175,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, DirectGateway_CatalogueKnowsNothingUnderSnapshot, arg0);
 
     /// <summary>
+    /// {0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.
+    /// </summary>
+    private static string DirectGateway_RestoreWouldNotFit => Get(nameof(DirectGateway_RestoreWouldNotFit));
+
+    /// <summary>
+    /// {0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.
+    /// </summary>
+    internal static string FormatDirectGateway_RestoreWouldNotFit(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, DirectGateway_RestoreWouldNotFit, arg0);
+
+    /// <summary>
     /// No backup set named '{0}' exists in {1}.
     /// </summary>
     private static string DirectGateway_NoBackupSetNamedExists => Get(nameof(DirectGateway_NoBackupSetNamedExists));

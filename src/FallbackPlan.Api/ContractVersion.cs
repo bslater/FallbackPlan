@@ -512,8 +512,25 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// them as written. Additive: a pre-1.52 client never sends the command,
     /// and a paired one reads the withheld text as `(withheld)`.
     /// </para>
+    /// <para>
+    /// 1.53 makes a restore say whether it fits and what it will not write
+    /// back (FR-RST-003, FR-RST-004, ADR-0083). `plan_restore` takes the
+    /// run's shape, `output_directory`, `target`, `existing` and `in_place`,
+    /// and with a folder or the original location named, `restore_plan`
+    /// answers `space`: each volume the run would write to, with the bytes it
+    /// needs there, what is free, and whether it is only the engine's working
+    /// directory. A volume short of room is also a conflict. `restore_plan`
+    /// gains `write_bytes`, which is the logical bytes less a sparse file's
+    /// holes, and its degradations now count each captured attribute the
+    /// target will not get back. `run_restore` refuses a run that will not
+    /// fit before writing anything, unless told `ignore_free_space`, and
+    /// `restore` gains `not_applied`, a line an attribute. Additive: a
+    /// pre-1.53 client names no folder and is planned as before. It never
+    /// sends `ignore_free_space`, so its restore that will not fit is
+    /// refused, as it should be.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 52);
+    public static ContractVersion Current { get; } = new(1, 53);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

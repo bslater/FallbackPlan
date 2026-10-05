@@ -103,6 +103,9 @@
   <data name="DirectGateway_CatalogueKnowsNothingUnderSnapshot" xml:space="preserve">
     <value>The catalogue knows nothing under snapshot {0} — run `rebuild-index` first.</value>
   </data>
+  <data name="DirectGateway_RestoreWouldNotFit" xml:space="preserve">
+    <value>{0} Nothing was written. Free some space or choose another folder, or pass --ignore-free-space to restore anyway: a volume that compresses what it stores can hold more than this estimate.</value>
+  </data>
   <data name="DirectGateway_NoBackupSetNamedExists" xml:space="preserve">
     <value>No backup set named '{0}' exists in {1}.</value>
   </data>

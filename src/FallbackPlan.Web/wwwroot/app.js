@@ -5374,6 +5374,9 @@ function rstStep6() {
         because a copy they were first read from was damaged or would not read. Each was verified like any other,
         and a notice says where the damage is.</p>
         ${W.result.readAroundSample?.length ? `<pre class="report">${esc(W.result.readAroundSample.join("\n"))}</pre>` : ""}` : ""}
+      ${W.result.notApplied?.length ? `<p class="dlg-sub">The files came back without some of what was captured with them;
+        the receipt names it file by file.</p>
+        <pre class="report" id="rst-not-applied">${esc(W.result.notApplied.join("\n"))}</pre>` : ""}
       <div class="dlg-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div>`;
   }
 
@@ -5381,13 +5384,26 @@ function rstStep6() {
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
+  // The room the run needs on each volume it writes to (FR-RST-003). A
+  // volume short of it arms the restore only when the person chooses to go on.
+  const space = plan?.space ?? [];
+  const short = space.some(need => need.availableBytes != null && need.availableBytes < need.neededBytes);
   const figures = plan ? `
     <div class="plan-figures">
       <div class="fig"><b>${fmtCount(plan.files)}</b><span>files</span></div>
-      <div class="fig"><b>${fmtBytes(plan.bytes)}</b><span>to write</span></div>
+      <div class="fig"><b>${fmtBytes(plan.writeBytes ?? plan.bytes)}</b><span>to write</span></div>
       <div class="fig"><b>${fmtCount(plan.missingObjects?.length ?? 0)}</b><span>missing objects</span></div>
       <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
     </div>
+    ${space.length ? `<p class="subtle" id="rst-space">${space.map(need => `Needs <b>${fmtBytes(need.neededBytes)}</b>
+      ${need.working ? "of working space for the largest file in" : "on the disk holding"}
+      <span class="mono">${esc(need.directory)}</span> —
+      ${need.availableBytes == null ? "free space unknown" : `${fmtBytes(need.availableBytes)} free`}.`).join("<br>")}</p>` : ""}
+    ${short ? `<div id="rst-space-short">
+      <ul class="warnings"><li>The restore will not fit where it writes, so nothing will be written unless you choose
+        to restore anyway. Free some space or go back and choose another folder.</li></ul>
+      <label class="check-row"><input type="checkbox" id="rst-ignore-space" data-arms="confirm-word">
+        Restore anyway — a disk that compresses what it stores can hold more than this estimate</label></div>` : ""}
     ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
       needs cannot be found — those files will fail.</li></ul>` : ""}
     ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
@@ -5404,7 +5420,7 @@ function rstStep6() {
     ${figures}
     <label class="field" for="confirm-word">Type <b>restore</b> to confirm</label>
     <input type="text" id="confirm-word" class="confirm-word" autocomplete="off" spellcheck="false"
-           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go"${plan ? "" : " disabled"}>
+           data-action-input="confirm-word" data-word="restore" data-enables="rst-run-go"${short ? ` data-needs="rst-ignore-space"` : ""}${plan ? "" : " disabled"}>
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="close-dialog">Cancel</button>
       <button type="button" class="btn" data-action="rst-back">‹ Back</button>
@@ -5551,12 +5567,18 @@ const rstActions = {
     W.result = null;
     rstRender();
 
+    // Asked with the run's shape, so the plan measures the room where the
+    // run will write (FR-RST-003).
     const plan = await run({
       command: "plan_restore",
       snapshotId: W.snapshot.snapshotId,
       path: null,
       source: W.source.sourceId,
       paths: rstCompile(),
+      outputDirectory: W.target === "original" ? "" : W.output,
+      target: W.target,
+      existing: W.existing,
+      inPlace: true,
     }, { errToast: "The plan refused" });
     if (!W || W.step !== 6) return;
     if (plan?.result === "restore_plan") {
@@ -5603,6 +5625,7 @@ Object.assign(actions, {
         target: W.target,
         existing: W.existing,
         inPlace: true,
+        ignoreFreeSpace: document.getElementById("rst-ignore-space")?.checked ?? false,
       }, { errToast: "Restore refused" });
       if (result?.result === "restore") {
         W.result = result;
@@ -5687,7 +5710,8 @@ function boot() {
     if (!el) return;
     const go = document.getElementById(el.dataset.enables);
     const needed = el.dataset.needs ? document.getElementById(el.dataset.needs) : null;
-    if (go) go.disabled = el.value.trim().toLowerCase() !== el.dataset.word || (needed !== null && !needed.value);
+    const given = needed === null || (needed.type === "checkbox" ? needed.checked : Boolean(needed.value));
+    if (go) go.disabled = el.value.trim().toLowerCase() !== el.dataset.word || !given;
   });
 
   document.addEventListener("change", event => {
