@@ -110,6 +110,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item; since [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) the times are written back and the list records what each write did | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
 | [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) | A restore writes back the times it can set, and records what each write did: access times everywhere, and creation times on Windows and macOS through a call that refuses where it cannot set one rather than writing the modification time in its place. Each attribute is written on its own after the content, so a write the platform refuses, or a time no file can carry, is listed as not applied and neither fails the item nor ends the run. Receipt schema 6 keeps its shape, and its list now says what landed | **Built** | `Domain/FileTimes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/FileTimesTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0084--the-receipt-says-what-landed) |
 | [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart. Amendment 1: a quarantine restore keeps set-id bits as any restore does, a decision documented rather than a change | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
+| [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
 
 ---
 
@@ -2179,9 +2180,10 @@ the macOS and Windows legs of the CI matrix.
 What remains is recorded rather than done. Ownership was the other half of
 the slice, and has since landed
 ([0085](#0085--whose-file-it-is)). A directory's own
-metadata is neither written back nor named in its receipt item, which is a
-silent drop architecture 06 §3 rules out; writing it has to wait until the
-directory's children have landed. A symlink's own metadata, extended
+metadata was neither written back nor named in its receipt item, which is a
+silent drop architecture 06 §3 rules out; writing it had to wait until the
+directory's children had landed, and has since landed too
+([0086](#0086--a-folders-own)). A symlink's own metadata, extended
 attributes, Windows attribute bits, security descriptors and alternate
 streams are still listed. The recovery tool and the CLI's `restore-file`
 write no metadata at all.
@@ -2222,8 +2224,9 @@ The proof is split by privilege. A suite running as root, as it does in a
 container, proves the privileged half. CI's runners, which are unprivileged,
 prove the other. Neither runs both.
 
-What remains is recorded rather than done. A directory's ownership is owed
-with the rest of a directory's metadata, and a symlink's with the rest of a
+What remains is recorded rather than done. A directory's ownership was owed
+with the rest of a directory's metadata, which has since landed
+([0086](#0086--a-folders-own)), and a symlink's is owed with the rest of a
 symlink's. A Windows file's owner lives in the security descriptor, which is
 captured and not applied. A restore running as root into the default
 quarantine folder still recreates a root-owned set-user-id program
@@ -2234,3 +2237,48 @@ content lands and not what comes back. Architecture 08 §3.1, the threat model
 and SECURITY.md say what that means for the folder, and that a historical
 system tree restored as root belongs in one only the restoring account can
 reach ([ADR-0085 Amendment 1](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).
+
+### 0086 — a folder's own
+
+A tree manifest's first record has always carried what was captured with its
+folder. No restore read it. Each folder came back with the time the restore
+made it, the restoring process's default permissions and the restoring account
+as its owner, and its receipt item said nothing of it. 0084 recorded that as
+owed.
+
+The run now reads each folder's tree as it reads a file's manifest, and the
+read-ahead fetches it with the files' manifests from the same metadata blobs,
+so the read budget is unchanged. A folder the run makes is held to the file's
+rule: owner and group where the account may give them, then permissions that
+keep a set-id bit only with its owner or group, then the times. It gets them
+only once the run has written everything else, deepest folder first, because
+every item landing in a folder moves its modification time, and a folder
+captured read-only would refuse what was still to come.
+
+Three cases keep a folder from being given anything, and its item lists
+everything captured with the reason. A folder already at the destination keeps
+its own, because no existing-file policy reaches a folder and a live folder's
+permissions are its owner's current choice. Anything that has taken the place
+of a folder the run made is given nothing, because the permissions and times
+are written by path and would land on whatever a link points at; the check is
+made just before the write. A folder whose tree will not read is still made,
+since it holds what restored under it, and its item says why. Metadata alone
+still changes no outcome.
+
+The plan reads each folder's tree for the same reason, names a folder whose
+tree the store does not hold, and counts folders apart from files. On Windows
+each folder's attribute bits are now listed with the files', so the service and
+CLI tests count three items where they counted two.
+
+The swap check is proven by a store that moves the folder aside and plants a
+link in its place while the run reads its first file. Without the check, the
+folder's permissions land on the link's target.
+
+What remains is recorded rather than done. The snapshot's root is restored as
+its contents, into the folder the restore writes into, and that folder keeps
+its own metadata; the plan does not declare the root's. The run writes by
+path, so an account that can change the tree while it runs can still redirect
+a write in the moment between a check and the write it guards. The threat
+model now says so. A symlink's own metadata, extended attributes, Windows
+attribute bits, security descriptors and alternate streams are still listed,
+for folders as for files.

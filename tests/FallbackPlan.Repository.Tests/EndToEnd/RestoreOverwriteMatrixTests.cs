@@ -213,10 +213,11 @@ public sealed class RestoreOverwriteMatrixTests : ArchiveTestHarness
 
         using var cancellation = new CancellationTokenSource();
 
-        // Reads during execution: alpha's manifest, alpha's segment, beta's
-        // manifest. The third read cancels and throws with the token — the
-        // fault arrives mid-item, after alpha already landed.
-        var cancelling = new CancellingObjectStore(store, cancellation, cancelOnRead: 3);
+        // Reads during execution: the folder's own tree (ADR-0086), alpha's
+        // manifest, alpha's segment, beta's manifest. The fourth read cancels
+        // and throws with the token — the fault arrives mid-item, after alpha
+        // already landed.
+        var cancelling = new CancellingObjectStore(store, cancellation, cancelOnRead: 4);
         using var reader = new RepositoryReader(Repo, keys, cancelling, Authority);
         await reader.LoadBlobsAsync(CancellationToken.None);
         cancelling.Arm();

@@ -52,7 +52,7 @@ public enum CapturedMetadata
 /// it writes, and what was captured with it.
 /// </summary>
 /// <param name="Kind">The entry's kind.</param>
-/// <param name="WrittenBytes">Its segments' bytes, its holes skipped (<see cref="RestoreSpace.WrittenBytes"/>).</param>
+/// <param name="WrittenBytes">Its segments' bytes, its holes skipped (<see cref="RestoreSpace.WrittenBytes"/>); none for a folder.</param>
 /// <param name="Captured">The metadata captured with it.</param>
 /// <param name="Owner">The name of the owner it was captured under, which the plan resolves on the target.</param>
 /// <param name="Group">The name of the group it was captured under, which the plan resolves on the target.</param>
@@ -67,23 +67,24 @@ public sealed record RestoreItemFacts(
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
-/// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084, ADR-0085;
-/// architecture 06 §3).
+/// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084, ADR-0085,
+/// ADR-0086; architecture 06 §3).
 /// </summary>
 /// <remarks>
 /// <para>
-/// The rule is the executor's: a file's modification and access times
-/// everywhere, its creation time where the target can set one, and its
-/// permissions where the target applies POSIX metadata. Its owner and group
-/// come back where the target applies POSIX metadata, each where its name
-/// resolves there and the restoring account may give it
-/// (<see cref="RestoreAccount"/>), so that part of the rule is decided file
-/// by file. A set-user-id or set-group-id bit is kept only where the owner
-/// or group it runs as was given back. Nothing else is written back yet. A
-/// symlink is created with none of its own metadata. The plan predicts by
-/// that rule. The receipt records what each write did (ADR-0084), which the
-/// rule cannot know in advance: a volume may refuse a write the platform
-/// supports, and a captured time may lie beyond what a file can carry.
+/// The rule is the executor's, and a folder it makes is held to it as a file
+/// is: modification and access times everywhere, a creation time where the
+/// target can set one, and permissions where the target applies POSIX
+/// metadata. Owner and group come back where the target applies POSIX
+/// metadata, each where its name resolves there and the restoring account
+/// may give it (<see cref="RestoreAccount"/>), so that part of the rule is
+/// decided item by item. A set-user-id or set-group-id bit is kept only
+/// where the owner or group it goes with was given back. Nothing else is
+/// written back yet. A symlink is created with none of its own metadata.
+/// The plan predicts by that rule. The receipt records what each write did
+/// (ADR-0084), which the rule cannot know in advance: a volume may refuse a
+/// write the platform supports, a captured time may lie beyond what a file
+/// can carry, and a folder already at the destination keeps its own.
 /// </para>
 /// <para>
 /// Alternate streams are never applied, whatever a profile claims, because
@@ -176,12 +177,16 @@ public static class RestoreMetadata
         return captured;
     }
 
-    /// <summary>The attributes the executor writes back for an entry of <paramref name="kind"/> on <paramref name="target"/>.</summary>
+    /// <summary>
+    /// The attributes the executor writes back for an entry of
+    /// <paramref name="kind"/> on <paramref name="target"/>: the same for a
+    /// folder it makes as for a file it lands, and nothing for anything else.
+    /// </summary>
     public static CapturedMetadata Applied(EntryKind kind, RestoreTargetProfile target)
     {
         ThrowHelper.ThrowIfNull(target);
 
-        if (kind != EntryKind.File)
+        if (kind is not (EntryKind.File or EntryKind.DirectoryPlaceholder))
         {
             return CapturedMetadata.None;
         }
@@ -201,12 +206,13 @@ public static class RestoreMetadata
     }
 
     /// <summary>
-    /// The permissions a file captured with <paramref name="mode"/> may be
-    /// given once the halves of its ownership in <paramref name="given"/>
-    /// have landed (ADR-0085). A set-user-id file runs as its owner, so its
-    /// bit is kept only with the owner it was captured under; on any other
-    /// owner it would run as whoever restored it. A set-group-id bit is kept
-    /// only with its group, likewise.
+    /// The permissions a file or folder captured with <paramref name="mode"/>
+    /// may be given once the halves of its ownership in
+    /// <paramref name="given"/> have landed (ADR-0085). A set-user-id file
+    /// runs as its owner, so its bit is kept only with the owner it was
+    /// captured under; on any other owner it would run as whoever restored
+    /// it. A set-group-id bit is kept only with its group, likewise: on a
+    /// folder it hands that group to everything made in it.
     /// </summary>
     /// <param name="mode">The captured mode.</param>
     /// <param name="given">Which of the owner and group were given back.</param>
@@ -250,7 +256,8 @@ public static class RestoreMetadata
     /// <summary>
     /// What the plan declares about metadata beyond the planner's own lines:
     /// each attribute the tree carries and <paramref name="target"/> will
-    /// not get back, with how many files carry it, and only when some do.
+    /// not get back, with how many files and how many folders carry it, and
+    /// only when some do.
     /// </summary>
     /// <param name="plan">The plan.</param>
     /// <param name="facts">What the plan probe read of each item's manifest.</param>
@@ -284,30 +291,32 @@ public static class RestoreMetadata
         ThrowHelper.ThrowIfNull(facts);
         ThrowHelper.ThrowIfNull(target);
 
-        var files = new Dictionary<CapturedMetadata, int>();
-        var ownership = 0;
-        var unknown = 0;
-        var setIds = 0;
+        var attributes = new Dictionary<CapturedMetadata, Tally>();
+        var ownership = new Tally();
+        var unknown = new Tally();
+        var setIds = new Tally();
         var links = 0;
         var names = new Names();
 
         foreach (var item in plan.Items)
         {
-            if (item.Kind is not (EntryKind.File or EntryKind.Symlink)
+            if (item.Kind is not (EntryKind.File or EntryKind.DirectoryPlaceholder or EntryKind.Symlink)
                 || !facts.TryGetValue(item.ObjectId, out var known))
             {
                 continue;
             }
 
-            var (given, unresolved) = item.Kind == EntryKind.File
+            // A file or folder is given what the rule gives it; a link nothing.
+            var held = item.Kind != EntryKind.Symlink;
+            var (given, unresolved) = held
                 ? Ownership(known.Owner, known.Group, target, names)
                 : (CapturedMetadata.None, CapturedMetadata.None);
-            if (item.Kind == EntryKind.File
+            if (held
                 && (Applied(item.Kind, target) & CapturedMetadata.PosixMode) != 0
                 && known.Mode is { } mode
                 && PermittedMode(mode, given) != (mode & ModeBits))
             {
-                setIds++;
+                setIds.Add(item.Kind);
             }
 
             var missing = known.Captured & ~(Applied(item.Kind, target) | given);
@@ -316,26 +325,38 @@ public static class RestoreMetadata
                 continue;
             }
 
-            if (item.Kind == EntryKind.Symlink)
+            if (!held)
             {
                 links += target.SupportsSymlinks ? 1 : 0;
                 continue;
             }
 
             var owned = missing & (CapturedMetadata.Owner | CapturedMetadata.Group);
-            ownership += (owned & ~unresolved) != 0 ? 1 : 0;
-            unknown += (owned & unresolved) != 0 ? 1 : 0;
+            if ((owned & ~unresolved) != 0)
+            {
+                ownership.Add(item.Kind);
+            }
+
+            if ((owned & unresolved) != 0)
+            {
+                unknown.Add(item.Kind);
+            }
 
             foreach (var (attribute, _) in Vocabulary.Where(entry => missing.HasFlag(entry.Attribute)))
             {
-                files[attribute] = files.GetValueOrDefault(attribute) + 1;
+                if (!attributes.TryGetValue(attribute, out var carried))
+                {
+                    attributes[attribute] = carried = new Tally();
+                }
+
+                carried.Add(item.Kind);
             }
         }
 
         var declared = new List<MetadataDegradation>();
-        void Add(string capability, int count, string detail)
+        void Add(string capability, Tally? count, string detail)
         {
-            if (count > 0)
+            if (count is { Any: true })
             {
                 declared.Add(new MetadataDegradation(capability, detail));
             }
@@ -344,35 +365,38 @@ public static class RestoreMetadata
         if (target.SupportsPosixMetadata)
         {
             Add("ownership", ownership, string.Create(CultureInfo.InvariantCulture,
-                $"Ownership captured on {ownership} file(s) will not be applied, so they will belong to the account "
+                $"Ownership captured on {ownership} will not be applied, so they will belong to the account "
                 + $"running the restore; applying it needs root or CAP_CHOWN."));
             Add("unknown-accounts", unknown, string.Create(CultureInfo.InvariantCulture,
-                $"Ownership captured on {unknown} file(s) names an account or group this machine does not have; "
+                $"Ownership captured on {unknown} names an account or group this machine does not have; "
                 + $"that part of it will not be applied."));
             Add("set-id-bits", setIds, string.Create(CultureInfo.InvariantCulture,
-                $"Permissions captured on {setIds} file(s) will lose a set-user-id or set-group-id bit, because "
-                + $"the owner or group it runs as will not be given back."));
+                $"Permissions captured on {setIds} will lose a set-user-id or set-group-id bit, because "
+                + $"the owner or group the bit goes with will not be given back."));
         }
 
-        var descriptors = files.GetValueOrDefault(CapturedMetadata.SecurityDescriptor);
+        var descriptors = attributes.GetValueOrDefault(CapturedMetadata.SecurityDescriptor);
         Add("security-descriptors", descriptors, string.Create(CultureInfo.InvariantCulture,
-            $"Security descriptors captured on {descriptors} file(s) will not be applied; they will take the "
+            $"Security descriptors captured on {descriptors} will not be applied; they will take the "
             + $"permissions of the folder they land in."));
 
-        var attributes = files.GetValueOrDefault(CapturedMetadata.ExtendedAttributes);
-        Add("extended-attributes", attributes, string.Create(CultureInfo.InvariantCulture,
-            $"Extended attributes captured on {attributes} file(s) will not be written back."));
+        var extended = attributes.GetValueOrDefault(CapturedMetadata.ExtendedAttributes);
+        Add("extended-attributes", extended, string.Create(CultureInfo.InvariantCulture,
+            $"Extended attributes captured on {extended} will not be written back."));
 
-        var created = files.GetValueOrDefault(CapturedMetadata.CreatedAt);
+        var created = attributes.GetValueOrDefault(CapturedMetadata.CreatedAt);
         Add("creation-times", created, string.Create(CultureInfo.InvariantCulture,
-            $"Creation times captured on {created} file(s) will not be applied; this target cannot set them."));
+            $"Creation times captured on {created} will not be applied; this target cannot set them."));
 
-        var flags = files.GetValueOrDefault(CapturedMetadata.FileAttributes);
+        var flags = attributes.GetValueOrDefault(CapturedMetadata.FileAttributes);
         Add("file-attributes", flags, string.Create(CultureInfo.InvariantCulture,
-            $"File attributes (read-only, hidden, system, archive) captured on {flags} file(s) will not be applied."));
+            $"File attributes (read-only, hidden, system, archive) captured on {flags} will not be applied."));
 
-        Add("symlink-metadata", links, string.Create(CultureInfo.InvariantCulture,
-            $"Metadata captured on {links} symlink(s) will not be applied; each link is created with the platform's defaults."));
+        if (links > 0)
+        {
+            declared.Add(new MetadataDegradation("symlink-metadata", string.Create(CultureInfo.InvariantCulture,
+                $"Metadata captured on {links} symlink(s) will not be applied; each link is created with the platform's defaults.")));
+        }
 
         return declared;
     }
@@ -411,9 +435,9 @@ public static class RestoreMetadata
     }
 
     /// <summary>
-    /// Which halves of a file's captured ownership the target gives back,
-    /// and which name nothing on the target: given where a name resolves
-    /// and the restoring account may give what it resolves to.
+    /// Which halves of a file's or folder's captured ownership the target
+    /// gives back, and which name nothing on the target: given where a name
+    /// resolves and the restoring account may give what it resolves to.
     /// </summary>
     private static (CapturedMetadata Given, CapturedMetadata Unresolved) Ownership(
         string? owner, string? group, RestoreTargetProfile target, Names names)
@@ -450,6 +474,40 @@ public static class RestoreMetadata
         }
 
         return (given, unresolved);
+    }
+
+    /// <summary>
+    /// How many files and how many folders a declaration covers, said the way
+    /// a person reads it: "2 file(s)", "1 folder(s)", or both joined.
+    /// </summary>
+    private sealed class Tally
+    {
+        private int _files;
+        private int _folders;
+
+        /// <summary>Whether it covers anything at all.</summary>
+        public bool Any => _files + _folders > 0;
+
+        /// <summary>Counts one item of <paramref name="kind"/>: a folder, or else a file.</summary>
+        public void Add(EntryKind kind)
+        {
+            if (kind == EntryKind.DirectoryPlaceholder)
+            {
+                _folders++;
+            }
+            else
+            {
+                _files++;
+            }
+        }
+
+        /// <inheritdoc />
+        public override string ToString() => (_files, _folders) switch
+        {
+            (_, 0) => string.Create(CultureInfo.InvariantCulture, $"{_files} file(s)"),
+            (0, _) => string.Create(CultureInfo.InvariantCulture, $"{_folders} folder(s)"),
+            _ => string.Create(CultureInfo.InvariantCulture, $"{_files} file(s) and {_folders} folder(s)"),
+        };
     }
 
     /// <summary>The names one plan has resolved, so a tree of one owner asks the system once.</summary>

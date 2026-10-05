@@ -44,6 +44,23 @@ public sealed class FileTimesTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Windows | TestPlatforms.MacOs, "only Windows and macOS can set a folder's creation time")]
+    [PlatformTrait(TestPlatforms.Windows | TestPlatforms.MacOs)]
+    public void TrySetCreationTime_OnAFolder_SetsItWhereThePlatformCan()
+    {
+        // A restore gives a folder its own times back as it does a file's
+        // (ADR-0086). Windows opens a folder for its times differently from a
+        // file, so the file's call alone is refused there.
+        var folder = Directory.CreateDirectory(Path.Combine(_root, "folder")).FullName;
+        Directory.SetLastWriteTimeUtc(folder, Modified);
+
+        Assert.IsTrue(FileTimes.TrySetCreationTime(folder, Created));
+
+        Assert.AreEqual(Created, Directory.GetCreationTimeUtc(folder));
+        Assert.AreEqual(Modified, Directory.GetLastWriteTimeUtc(folder));
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Linux, "Linux has no call that sets a file's creation time")]
     [PlatformTrait(TestPlatforms.Linux)]
     public void TrySetCreationTime_OnLinux_SetsNothing_AndLeavesTheModificationTimeAlone()

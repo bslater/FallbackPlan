@@ -127,9 +127,10 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.AreEqual("complete", restored.Outcome, "metadata alone does not change what a restore achieved");
 
         // What no target here writes back: the link's own owner on a POSIX
-        // host, the only item whose owner is left off, and every file's
-        // attribute bits on Windows. A file's access time is written back
-        // everywhere, so only the link's is listed.
+        // host, the only item whose owner is left off, and on Windows the
+        // attribute bits of every file and of the folder they share. A file's
+        // and a folder's access time is written back everywhere, so only the
+        // link's is listed.
         Assert.IsNotNull(restored.NotApplied);
         Assert.Contains(line => line.StartsWith(StillNotApplied, StringComparison.Ordinal), restored.NotApplied);
         Assert.DoesNotContain(
@@ -150,6 +151,29 @@ public sealed class RestoreHonestyServiceTests : IDisposable
             Assert.DoesNotContain("owner", notes);
             Assert.DoesNotContain("group", notes);
         }
+    }
+
+    [TestMethod]
+    public async Task Run_GivesARestoredFolderItsOwnModificationTimeBack()
+    {
+        // Captured from a real folder and written back onto the one the
+        // restore made, once the file inside it had landed (ADR-0086).
+        var modified = new DateTime(2020, 9, 13, 12, 26, 40, DateTimeKind.Utc);
+        await BackUpTwoFilesAsync(nestedModified: modified);
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, Path.Combine(_harness.WorkPath, "restored"), Source: source.SourceId),
+                _timeout.Token),
+            out var restored);
+
+        Assert.AreEqual("complete", restored.Outcome);
+        Assert.AreEqual(modified, Directory.GetLastWriteTimeUtc(Path.Combine(restored.OutputDirectory, "nested")));
     }
 
     [TestMethod]
@@ -180,9 +204,9 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
     }
 
-    /// <summary>What no target here writes back, and how many items it is left off.</summary>
+    /// <summary>What no target here writes back, and how many items it is left off: two files and their folder on Windows.</summary>
     private static string StillNotApplied =>
-        OperatingSystem.IsWindows() ? "file_attributes not applied to 2 item(s)" : LinkOnly("owner");
+        OperatingSystem.IsWindows() ? "file_attributes not applied to 3 item(s)" : LinkOnly("owner");
 
     /// <summary>The summary's line for an attribute left off the link alone.</summary>
     private static string LinkOnly(string attribute) => $"{attribute} not applied to 1 item(s)";
@@ -208,7 +232,7 @@ public sealed class RestoreHonestyServiceTests : IDisposable
     private static string ItemEndingIn(Dictionary<string, string[]> receipt, string name) =>
         receipt.Keys.SingleOrDefault(path => path.EndsWith(name, StringComparison.Ordinal)) ?? name;
 
-    private async Task BackUpTwoFilesAsync(bool withLink = false)
+    private async Task BackUpTwoFilesAsync(bool withLink = false, DateTime? nestedModified = null)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -216,6 +240,11 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         if (withLink)
         {
             File.CreateSymbolicLink(Path.Combine(_harness.SourceRoot, "link"), "notes.txt");
+        }
+
+        if (nestedModified is { } modified)
+        {
+            Directory.SetLastWriteTimeUtc(Path.Combine(_harness.SourceRoot, "nested"), modified);
         }
 
         await _harness.BackUpAsync();

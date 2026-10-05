@@ -5,8 +5,8 @@ using System.Runtime.Versioning;
 namespace FallbackPlan.Domain;
 
 /// <summary>
-/// The times a restore writes back onto a file it landed (specification 06
-/// §4.1 keys 1 to 3; FR-RST-004).
+/// The times a restore writes back onto a file it landed or a folder it made
+/// (specification 06 §4.1 keys 1 to 3; FR-RST-004).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -45,13 +45,13 @@ public static partial class FileTimes
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)value).UtcDateTime
             : null;
 
-    /// <summary>Sets the creation time of the file at <paramref name="path"/>.</summary>
-    /// <param name="path">The file.</param>
+    /// <summary>Sets the creation time of the file or folder at <paramref name="path"/>.</summary>
+    /// <param name="path">The file or folder.</param>
     /// <param name="utc">The time, in UTC.</param>
     /// <returns>
-    /// Whether the file now carries it. False on Linux, which has no call that
-    /// sets one; on a macOS volume that keeps none; and wherever the
-    /// filesystem refuses the write.
+    /// Whether it now carries it. False on Linux, which has no call that sets
+    /// one; on a macOS volume that keeps none; and wherever the filesystem
+    /// refuses the write.
     /// </returns>
     public static bool TrySetCreationTime(string path, DateTime utc)
     {
@@ -61,7 +61,17 @@ public static partial class FileTimes
         {
             try
             {
-                File.SetCreationTimeUtc(path, utc);
+                // Windows opens a folder for its times only when asked to
+                // open a folder, so the file's call is refused for one.
+                if (Directory.Exists(path))
+                {
+                    Directory.SetCreationTimeUtc(path, utc);
+                }
+                else
+                {
+                    File.SetCreationTimeUtc(path, utc);
+                }
+
                 return true;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)

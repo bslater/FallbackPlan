@@ -21,7 +21,8 @@ namespace FallbackPlan.Restore;
 /// <param name="Missing">
 /// Paths whose manifest or whose segments the store does not hold, reported
 /// before any byte moves rather than discovered part-way through
-/// (FR-RST-003).
+/// (FR-RST-003). A folder's manifest is its own record, which the run reads
+/// for the folder's metadata.
 /// </param>
 public sealed record RestoreBlobSetResult(
     IReadOnlyCollection<ObjectKey> Blobs,
@@ -32,7 +33,9 @@ public sealed record RestoreBlobSetResult(
     /// object identifier: the bytes restoring it writes and the metadata
     /// captured with it (FR-RST-003; ADR-0083). The probe decodes every
     /// manifest to find the segments it names, so this costs it nothing
-    /// more. An item whose manifest is missing or will not read is absent.
+    /// more. A folder's manifest is its tree, whose head carries the folder's
+    /// own metadata (ADR-0086). An item whose manifest is missing or will not
+    /// read is absent.
     /// </summary>
     public IReadOnlyDictionary<ObjectId, RestoreItemFacts> Facts { get; init; } =
         new Dictionary<ObjectId, RestoreItemFacts>();
@@ -134,11 +137,6 @@ public static class RestoreBlobSet
 
         foreach (var item in plan.Items)
         {
-            if (item.Kind == EntryKind.DirectoryPlaceholder)
-            {
-                continue;
-            }
-
             if (catalogue.ResolveLocation(item.ObjectId) is not { } location)
             {
                 missing.Add(item.Path);
@@ -154,11 +152,30 @@ public static class RestoreBlobSet
             // A manifest that is present but will not read is damage, not
             // absence — verify's business, and nothing this plan can name
             // segments from.
-            var manifest = await ReadManifestAsync(
+            var record = await ReadManifestAsync(
                 store, repositoryId, keys, item.ObjectId, location, keyDeriver, objectIdDeriver, metaReaders,
                 cancellationToken)
                 .ConfigureAwait(false);
-            if (manifest is null)
+            if (record is null)
+            {
+                continue;
+            }
+
+            // A folder's manifest is its tree, whose head carries what was
+            // captured with the folder itself. It names no segments.
+            if (item.Kind == EntryKind.DirectoryPlaceholder)
+            {
+                if (Decode(record, TreeManifestCodec.Decode)?.Metadata is { } own)
+                {
+                    facts[item.ObjectId] = new RestoreItemFacts(
+                        EntryKind.DirectoryPlaceholder, 0, RestoreMetadata.Captured(own),
+                        own.OwnerName, own.GroupName, own.PosixMode);
+                }
+
+                continue;
+            }
+
+            if (Decode(record, FileVersionManifestCodec.Decode) is not { } manifest)
             {
                 continue;
             }
@@ -184,11 +201,12 @@ public static class RestoreBlobSet
     }
 
     /// <summary>
-    /// Reads one file-version manifest through its meta blob's authenticated
-    /// footer — the plan-side targeted read, cached per blob because a
-    /// snapshot's manifests cluster in a few metadata blobs.
+    /// Reads one manifest's record — a file version's, or a folder's tree —
+    /// through its meta blob's authenticated footer: the plan-side targeted
+    /// read, cached per blob because a snapshot's manifests cluster in a few
+    /// metadata blobs.
     /// </summary>
-    private static async ValueTask<FileVersionManifest?> ReadManifestAsync(
+    private static async ValueTask<byte[]?> ReadManifestAsync(
         IObjectStore store,
         RepositoryId repositoryId,
         RepositoryKeySet keys,
@@ -229,14 +247,16 @@ public static class RestoreBlobSet
         }
 
         var read = await cached.Reader.ReadRecordAsync(located, cancellationToken).ConfigureAwait(false);
-        if (read.Outcome != RecordReadOutcome.Ok || read.Plaintext is null)
-        {
-            return null;
-        }
+        return read.Outcome == RecordReadOutcome.Ok ? read.Plaintext : null;
+    }
 
+    /// <summary>A manifest record decoded, or null where it will not decode.</summary>
+    private static T? Decode<T>(byte[] record, Func<ReadOnlyMemory<byte>, T> decode)
+        where T : class
+    {
         try
         {
-            return FileVersionManifestCodec.Decode(read.Plaintext);
+            return decode(record);
         }
         catch (FormatException)
         {
@@ -320,7 +340,7 @@ public static class RestoreBlobSet
             var manifests = new Dictionary<ObjectId, RecordTableEntry>();
             foreach (var entry in reader.RecordTable)
             {
-                if (entry.ObjectType == ObjectType.FileVersionManifest)
+                if (entry.ObjectType is ObjectType.FileVersionManifest or ObjectType.TreeManifest)
                 {
                     manifests.TryAdd(entry.ObjectId, entry);
                 }

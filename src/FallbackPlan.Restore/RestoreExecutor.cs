@@ -304,7 +304,9 @@ public sealed class RestoreExecutor(
     /// loop takes it, so looking ahead costs a decode rather than a second
     /// decrypt — and a read the wave could not make is simply not cached,
     /// leaving the loop to make it and to report what it finds, which is
-    /// where the receipt's account of a failure belongs.
+    /// where the receipt's account of a failure belongs. A folder's manifest
+    /// is its tree, read for the folder's own metadata (ADR-0086); it sits in
+    /// the metadata blobs beside the files' and names no segments.
     /// </para>
     /// </remarks>
     private sealed class PrefetchWave(RepositoryReader reader, RestorePlan plan)
@@ -346,7 +348,6 @@ public sealed class RestoreExecutor(
             var manifests = plan.Items
                 .Take(last)
                 .Skip(from)
-                .Where(item => item.Kind != EntryKind.DirectoryPlaceholder)
                 .Select(item => item.ObjectId)
                 .ToList();
 
@@ -378,12 +379,6 @@ public sealed class RestoreExecutor(
             for (var index = from; index < last && held < ceiling; index++)
             {
                 var item = plan.Items[index];
-                if (item.Kind == EntryKind.DirectoryPlaceholder)
-                {
-                    _through = index + 1;
-                    continue;
-                }
-
                 RecordReadResult read;
                 try
                 {
@@ -397,7 +392,7 @@ public sealed class RestoreExecutor(
                 _read[item.ObjectId] = read;
                 _through = index + 1;
 
-                if (read.Outcome != RecordReadOutcome.Ok)
+                if (item.Kind == EntryKind.DirectoryPlaceholder || read.Outcome != RecordReadOutcome.Ok)
                 {
                     continue;
                 }
@@ -485,6 +480,7 @@ public sealed class RestoreExecutor(
         var displacedRoot = Path.Combine(chosen, options.DisplacedDirectory, options.RunId);
         var engine = new RestoreEngine(reader);
         var items = new List<ReceiptItem>();
+        var folders = new List<Folder>();
         var displaced = new List<string>();
 
         var existingPolicy = options.ExistingDestination.ToString();
@@ -526,8 +522,37 @@ public sealed class RestoreExecutor(
 
             if (item.Kind == EntryKind.DirectoryPlaceholder)
             {
+                // Read before the folder is made, so a run stopped mid-read
+                // leaves nothing the receipt does not account for.
+                EntryMetadata? captured;
+                string? unread;
+                try
+                {
+                    (captured, unread) = OwnMetadata(
+                        await wave.ReadManifestAsync(index, item.ObjectId, cancellationToken).ConfigureAwait(false));
+                }
+                catch (IOException exception)
+                {
+                    (captured, unread) = (null, exception.Message);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                // Whatever already stands here keeps its own metadata: no
+                // existing-file policy reaches a folder (ADR-0086).
+                var found = Directory.Exists(destination);
                 Directory.CreateDirectory(destination);
                 items.Add(new ReceiptItem { Path = item.Path, Outcome = "restored", Bytes = 0 });
+                folders.Add(new Folder(
+                    items.Count - 1, item, destination, found,
+                    captured is null ? CapturedMetadata.None : RestoreMetadata.Captured(captured),
+                    captured is null ? null : captured with
+                    {
+                        WindowsSecurityDescriptor = null, ExtendedAttributes = [], AlternateStreams = [],
+                    },
+                    unread));
                 continue;
             }
 
@@ -857,6 +882,17 @@ public sealed class RestoreExecutor(
             }
         }
 
+        // A folder's own metadata goes on last, deepest folder first, once
+        // nothing more will land in it (ADR-0086). Every item written into a
+        // folder moves its modification time, and permissions that forbid
+        // writing would refuse what was still to come, so it cannot go on as
+        // the folder is made. A stopped run settles the folders it made too:
+        // each is in the receipt, and its item says what it was given.
+        foreach (var folder in folders.OrderByDescending(folder => Depth(folder.Item.Path)))
+        {
+            items[folder.Receipt] = ReadAroundOf([folder.Item.ObjectId], Settle(root, folder, items[folder.Receipt]));
+        }
+
         var receipt = new RestoreReceipt
         {
             SchemaVersion = RestoreReceipt.CurrentSchemaVersion,
@@ -911,10 +947,19 @@ public sealed class RestoreExecutor(
     /// content came from when some came from another than the restore's own
     /// store, and what was wrong with those it was read around (FR-RST-007).
     /// </summary>
-    private ReceiptItem ReadAroundOf(ObjectId manifestId, FileVersionManifest manifest, ReceiptItem landed)
+    private ReceiptItem ReadAroundOf(ObjectId manifestId, FileVersionManifest manifest, ReceiptItem landed) =>
+        ReadAroundOf(manifest.SegmentReferences.Select(reference => reference.ObjectId).Prepend(manifestId), landed);
+
+    /// <summary>
+    /// <paramref name="landed"/>, saying which copies the records
+    /// <paramref name="objectIds"/> came from when some came from another
+    /// than the restore's own store, and what was wrong with those passed
+    /// over (FR-RST-007).
+    /// </summary>
+    private ReceiptItem ReadAroundOf(IEnumerable<ObjectId> objectIds, ReceiptItem landed)
     {
         var around = new List<RecordReadAround>();
-        foreach (var objectId in manifest.SegmentReferences.Select(reference => reference.ObjectId).Prepend(manifestId))
+        foreach (var objectId in objectIds)
         {
             if (reader.TryGetReadAround(objectId, out var readAround))
             {
@@ -946,6 +991,113 @@ public sealed class RestoreExecutor(
             ReadAround = faults.Count == 0 ? null : faults,
         };
     }
+
+    /// <summary>
+    /// A folder the run made or found, and what it is given once nothing more
+    /// will land in it. Everything captured with it is kept as flags, for the
+    /// receipt; of the values, only those the rule can apply, so a tree of
+    /// many folders holds no descriptors or attributes it will not write.
+    /// </summary>
+    /// <param name="Receipt">Where its item is in the receipt.</param>
+    /// <param name="Item">The plan's item.</param>
+    /// <param name="Destination">Where it was made.</param>
+    /// <param name="Found">Whether a folder already stood there.</param>
+    /// <param name="Captured">What was captured with it.</param>
+    /// <param name="Values">The captured values the rule can apply, or null when its record would not read.</param>
+    /// <param name="Unread">Why its record would not read.</param>
+    private sealed record Folder(
+        int Receipt,
+        RestorePlanItem Item,
+        string Destination,
+        bool Found,
+        CapturedMetadata Captured,
+        EntryMetadata? Values,
+        string? Unread);
+
+    /// <summary>
+    /// A folder's own captured metadata, from the head of its tree, or why
+    /// it could not be had.
+    /// </summary>
+    private static (EntryMetadata? Captured, string? Unread) OwnMetadata(RecordReadResult read)
+    {
+        if (read.Outcome != RecordReadOutcome.Ok)
+        {
+            return (null, $"manifest read {read.Outcome}");
+        }
+
+        try
+        {
+            return (TreeManifestCodec.Decode(read.Plaintext!).Metadata ?? EntryMetadata.Empty, null);
+        }
+        catch (FormatException exception)
+        {
+            return (null, exception.Message);
+        }
+    }
+
+    /// <summary>How many folders deep <paramref name="path"/> lies.</summary>
+    private static int Depth(string path) => path.Count(character => character == '/');
+
+    /// <summary>
+    /// The receipt's item for <paramref name="folder"/>, once it has been
+    /// given what it may be given (ADR-0086).
+    /// </summary>
+    /// <remarks>
+    /// A folder whose record would not read is still made, because it holds
+    /// what restored under it; what it carried is unknown, so the item says
+    /// why rather than listing anything. A folder that was already there
+    /// keeps its own metadata, and so does anything that has taken the place
+    /// of the one the run made. Either way nothing captured was applied, and
+    /// the item lists all of it.
+    /// </remarks>
+    private ReceiptItem Settle(string root, Folder folder, ReceiptItem made)
+    {
+        if (folder.Values is not { } values)
+        {
+            return made with
+            {
+                Detail = $"its own captured metadata could not be read ({folder.Unread}), so none of it was applied",
+            };
+        }
+
+        var none = RestoreMetadata.NotApplied(folder.Captured, CapturedMetadata.None);
+        if (folder.Found)
+        {
+            return made with { Detail = "a folder was already here, and keeps its own metadata", NotApplied = none };
+        }
+
+        if (!IsStillTheFolderMade(root, folder.Item.Path, folder.Destination))
+        {
+            return made with
+            {
+                Detail = "the folder was moved or replaced before its own metadata went on, so none of it did",
+                NotApplied = none,
+            };
+        }
+
+        return made with
+        {
+            NotApplied = RestoreMetadata.NotApplied(
+                folder.Captured, ApplyMetadata(folder.Destination, values, folder: true)),
+        };
+    }
+
+    /// <summary>
+    /// Whether what stands at <paramref name="destination"/> is still the
+    /// folder this run made there for <paramref name="path"/>: reached
+    /// without leaving the root through a link, a folder, and not itself a
+    /// link.
+    /// </summary>
+    /// <remarks>
+    /// A folder's metadata goes on at the end of the run, so an account that
+    /// can write beside it has had the whole run to put something else in
+    /// its place. Written through a link, the folder's permissions and times
+    /// would land on whatever the link points at.
+    /// </remarks>
+    private static bool IsStillTheFolderMade(string root, string path, string destination) =>
+        TryResolve(root, path, out var resolved, out _)
+        && string.Equals(resolved, destination, StringComparison.Ordinal)
+        && new DirectoryInfo(destination) is { Exists: true, LinkTarget: null };
 
     /// <summary>Reduces the item outcomes to what the restore as a whole achieved.</summary>
     /// <param name="items">Every item's outcome.</param>
@@ -1176,8 +1328,9 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>
-    /// Writes back what the target takes of <paramref name="metadata"/>, one
-    /// attribute at a time, and answers which writes landed.
+    /// Writes back what the target takes of <paramref name="metadata"/> onto
+    /// the file landed or the folder made at <paramref name="destination"/>,
+    /// one attribute at a time, and answers which writes landed.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -1189,7 +1342,8 @@ public sealed class RestoreExecutor(
     /// last. On macOS a modification time set earlier than the creation time
     /// makes the volume move the creation time back to it, and .NET then
     /// restores the one before; written last, the captured creation time is
-    /// the last word whichever of those holds.
+    /// the last word whichever of those holds. A folder is written through
+    /// the folder's own calls, which Windows needs to open one for its times.
     /// </para>
     /// <para>
     /// An owner or group is attempted wherever its name resolves, whatever
@@ -1199,9 +1353,10 @@ public sealed class RestoreExecutor(
     /// failed.
     /// </para>
     /// </remarks>
-    private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata)
+    private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata, bool folder = false)
     {
         var applied = CapturedMetadata.None;
+        FileSystemInfo landed = folder ? new DirectoryInfo(destination) : new FileInfo(destination);
 
         if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows() && target.Account is { } account)
         {
@@ -1225,20 +1380,20 @@ public sealed class RestoreExecutor(
             // A set-id bit whose owner or group did not land is dropped, so
             // the mode that lands is not the one captured.
             var permitted = RestoreMetadata.PermittedMode(mode, applied);
-            if (Wrote(() => File.SetUnixFileMode(destination, (UnixFileMode)permitted)) && permitted == (mode & 0xFFF))
+            if (Wrote(() => landed.UnixFileMode = (UnixFileMode)permitted) && permitted == (mode & 0xFFF))
             {
                 applied |= CapturedMetadata.PosixMode;
             }
         }
 
         if (FileTimes.FromUnixMilliseconds(metadata.ModifiedAt) is { } modified
-            && Wrote(() => File.SetLastWriteTimeUtc(destination, modified)))
+            && Wrote(() => landed.LastWriteTimeUtc = modified))
         {
             applied |= CapturedMetadata.ModifiedAt;
         }
 
         if (FileTimes.FromUnixMilliseconds(metadata.AccessedAt) is { } accessed
-            && Wrote(() => File.SetLastAccessTimeUtc(destination, accessed)))
+            && Wrote(() => landed.LastAccessTimeUtc = accessed))
         {
             applied |= CapturedMetadata.AccessedAt;
         }
