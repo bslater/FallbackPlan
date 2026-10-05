@@ -2281,7 +2281,7 @@ const setupActions = {
       // below handles a service that would not answer.
     }
 
-    trace("setup-done", { result: result?.result ?? null });
+    trace("setup-done", { result: answered?.result ?? null });
     U.busy = false;
     const lines = U.setupLines;
     U = null;
