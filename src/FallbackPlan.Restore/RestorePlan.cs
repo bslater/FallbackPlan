@@ -35,16 +35,26 @@ public sealed record RestoreTargetProfile
     /// </summary>
     public bool SupportsCreationTimes { get; init; }
 
+    /// <summary>
+    /// The account the restore runs as, which decides whose files it may
+    /// give away and to which groups (<see cref="RestoreAccount"/>), or null
+    /// where the target gives no file an owner by name. The plan predicts
+    /// each file's ownership by it, and the executor resolves names through
+    /// it.
+    /// </summary>
+    public RestoreAccount? Account { get; init; }
+
     /// <summary>The target's maximum path bytes, when known.</summary>
     public uint? MaxPathBytes { get; init; }
 
-    /// <summary>The local defaults for this process's platform.</summary>
+    /// <summary>The local defaults for this process's platform, and the account it runs as.</summary>
     public static RestoreTargetProfile ForLocalPlatform() => new()
     {
         CaseSensitive = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS(),
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = !OperatingSystem.IsWindows(),
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
+        Account = RestoreAccount.OfThisProcess(),
     };
 }
 

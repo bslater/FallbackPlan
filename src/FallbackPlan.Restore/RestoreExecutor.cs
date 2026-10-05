@@ -278,6 +278,12 @@ public sealed class RestoreExecutor(
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
 
+    /// <summary>The owners' names this run has resolved, so a tree of one owner asks the system once.</summary>
+    private readonly Dictionary<string, uint?> _owners = new(StringComparer.Ordinal);
+
+    /// <summary>The groups' names this run has resolved.</summary>
+    private readonly Dictionary<string, uint?> _groups = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Reads ahead of the restore loop so a blob costs one GET rather than
     /// one a file (NFR-PERF-009). A wave prefetches the manifests of a
@@ -1174,23 +1180,55 @@ public sealed class RestoreExecutor(
     /// attribute at a time, and answers which writes landed.
     /// </summary>
     /// <remarks>
-    /// The order is fixed by what each write disturbs. Permissions go first,
-    /// as they change no time. Modification and access times follow. The
-    /// creation time goes last. On macOS a modification time set earlier than
-    /// the creation time makes the volume move the creation time back to it,
-    /// and .NET then restores the one before; written last, the captured
-    /// creation time is the last word whichever of those holds. A write that
-    /// fails, or a time no file can carry, is that attribute not applied,
-    /// never the item failed.
+    /// <para>
+    /// The order is fixed by what each write disturbs. Ownership goes first:
+    /// giving a file to another owner or group clears its set-user-id and
+    /// set-group-id bits, so the permissions have to follow it, and they keep
+    /// a set-id bit only where its owner or group landed. Permissions change
+    /// no time. Modification and access times follow. The creation time goes
+    /// last. On macOS a modification time set earlier than the creation time
+    /// makes the volume move the creation time back to it, and .NET then
+    /// restores the one before; written last, the captured creation time is
+    /// the last word whichever of those holds.
+    /// </para>
+    /// <para>
+    /// An owner or group is attempted wherever its name resolves, whatever
+    /// the plan predicted, and the platform decides: the receipt records
+    /// that. A write that fails, a name that resolves to nothing, or a time
+    /// no file can carry is that attribute not applied, never the item
+    /// failed.
+    /// </para>
     /// </remarks>
     private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata)
     {
         var applied = CapturedMetadata.None;
 
-        if (target.SupportsPosixMetadata && metadata.PosixMode is { } mode && !OperatingSystem.IsWindows()
-            && Wrote(() => File.SetUnixFileMode(destination, (UnixFileMode)(mode & 0xFFF))))
+        if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows() && target.Account is { } account)
         {
-            applied |= CapturedMetadata.PosixMode;
+            if (metadata.OwnerName is { } owner
+                && Resolved(_owners, owner, account.ResolveUser) is { } userId
+                && FileOwnership.TrySetOwner(destination, userId))
+            {
+                applied |= CapturedMetadata.Owner;
+            }
+
+            if (metadata.GroupName is { } group
+                && Resolved(_groups, group, account.ResolveGroup) is { } groupId
+                && FileOwnership.TrySetGroup(destination, groupId))
+            {
+                applied |= CapturedMetadata.Group;
+            }
+        }
+
+        if (target.SupportsPosixMetadata && metadata.PosixMode is { } mode && !OperatingSystem.IsWindows())
+        {
+            // A set-id bit whose owner or group did not land is dropped, so
+            // the mode that lands is not the one captured.
+            var permitted = RestoreMetadata.PermittedMode(mode, applied);
+            if (Wrote(() => File.SetUnixFileMode(destination, (UnixFileMode)permitted)) && permitted == (mode & 0xFFF))
+            {
+                applied |= CapturedMetadata.PosixMode;
+            }
         }
 
         if (FileTimes.FromUnixMilliseconds(metadata.ModifiedAt) is { } modified
@@ -1225,6 +1263,16 @@ public sealed class RestoreExecutor(
             {
                 return false;
             }
+        }
+
+        static uint? Resolved(Dictionary<string, uint?> known, string name, Func<string, uint?> resolve)
+        {
+            if (!known.TryGetValue(name, out var id))
+            {
+                known[name] = id = resolve(name);
+            }
+
+            return id;
         }
     }
 }
