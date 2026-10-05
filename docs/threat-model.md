@@ -171,6 +171,7 @@ Stated plainly so no other document implies otherwise:
 - **A malicious administrator** with access to every device and to retention controls can destroy data. Audit records make it attributable, not impossible.
 - **Hardware faults across every replica** are undetectable without verification, which is why verification coverage is a first-class status.
 - **Malware already present in a historical snapshot** will be faithfully restored. Restore defaults to a quarantine path for this reason ([`08-restore-and-recovery.md` §3.1](architecture/08-restore-and-recovery.md#31-quarantine-by-default)): content lands under a directory of its own and reaching the live tree is a deliberate choice. FR-RST-006.
+- **A set-user-id program in a historical snapshot** will be faithfully restored too, its owner and bits included, so a restore running as root recreates an old set-user-id root program as it was captured. Quarantine decides only where it lands. Whether other accounts can reach it depends on the folder the restore was pointed at. Keeping the bits is a decision, because a restore that gave back something other than what was captured would not be a restore ([ADR-0085 Amendment 1](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)). Restore historical system trees as root into a folder only the restoring account can reach.
 
 ## Controls summary
 

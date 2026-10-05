@@ -67,6 +67,8 @@ They are now distinct:
 
 A displaced file goes into a directory namespaced by the restore run. A single shared refuge is worse than none: restoring the same path twice silently destroys the first displaced copy, which is precisely the data the policy exists to keep.
 
+**Quarantine decides where content lands, not what comes back.** A quarantine restore is as faithful as any other. Times, owner, group and permissions come back as they would anywhere, set-id bits included ([ADR-0085](../adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md)). So a restore running as root recreates a root-owned set-user-id program in the quarantine folder as it was captured, including an old one from a historical snapshot. The folder is `.fbp-quarantine/<run>`, under the folder the restore was pointed at, and it is created with the restoring process's defaults. Whether other accounts can reach what lands there depends on the folder the restore was pointed at. A historical system tree restored as root belongs in a folder only the restoring account can reach, or one restricted before anyone else uses the machine ([ADR-0085 Amendment 1](../adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).
+
 ### 3.2 Reading around damage
 
 Every copy of a set's blobs is the same bytes: blobs are immutable, and a replica holds them key for key. So a record sits at the same offset of the same blob wherever the blob is held, and a restore that meets a record its own store will not serve can read that record from another copy ([ADR-0075](../adr/0075-a-restore-reads-around-damage.md)). → FR-RST-007
