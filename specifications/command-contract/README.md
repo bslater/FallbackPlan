@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.52
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.53
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.52 — 62 commands. One line each; parameters, results
+The register as of 1.53 — 62 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -99,7 +99,13 @@ work is held to).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
-`close_restore_source` (ADR-0041). Since 1.45, a `run_restore` of a set's
+`close_restore_source` (ADR-0041). Since 1.53, `plan_restore` takes the run's
+shape (`output_directory`, `target`, `existing`, `in_place`) and answers the
+room the run needs on each volume it writes to (`space`) and what its files
+write (`write_bytes`); `run_restore` refuses a run that will not fit before
+writing anything unless told `ignore_free_space`, and `restore` says which
+captured metadata was not applied (`not_applied`) ([ADR-0083](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
+Since 1.45, a `run_restore` of a set's
 own archive that read some files from another copy, because a copy passed
 over was damaged or would not read, says how many (`read_around`) and which
 (`read_around_sample`) ([ADR-0075](../../docs/adr/0075-a-restore-reads-around-damage.md)).
@@ -199,3 +205,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.50 | `reclaim_grants` on `retention` ([ADR-0055 Amendment 3](../../docs/adr/0055-reclaim-authority.md#amendment-3-2026-10--a-grant-per-set-from-every-client-proved-against-the-archives-key), FR-GC-008): a reclaim grant per set, keyed by set id, each in `reclaim_grant`'s sealed shape, because a set adopted from a destination keeps the salt it was born under and the installation's grant is not its authority. A set the map names is collected under its own entry, and one it leaves out falls back to `reclaim_grant`. With neither, the set is reported and not applied, and the report says so. A command with no map is refused for want of a grant exactly as before. Every grant is now proved against the reclaim public key its archive's credential carries, before any set runs, so a wrong one is refused by name even on an archive with no tombstone yet. Additive with a null default: a pre-1.50 client sends one grant or none, and is answered as before |
 | 1.51 | `delete_snapshots`, answered by `snapshots_deleted` ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md), FR-GC-013): a person deletes named snapshots of one set from staging and every copy. Without `apply` it is a dry run that needs no grant and says where each snapshot is held. With it, under the set's `reclaim_grant`, the service requests the deletion, converges every copy it can reach and takes the snapshots, and what only they held, out of staging, answering each snapshot `deleted` or `pending` with the destinations it awaits. An id the set does not hold, and a request that would leave the set nothing to restore from, are refused before anything is written. Who asked is not on the wire: the connection's gate supplies it from the session. `list_snapshots` gains `deletion_pending` on each snapshot a person asked to delete. Additive: a pre-1.51 client never sends the command, and reads the listing as before |
 | 1.52 | `export_diagnostics`, answered by `diagnostic_bundle` ([ADR-0081](../../docs/adr/0081-diagnostic-bundle.md), NFR-PRIV-003): the service builds one diagnostic bundle — its log, versions and environment, configuration, status, open notices and recent jobs, as a zip — and answers with `content_base64`, a suggested `file_name`, `includes_paths`, the `entries` and how many log records it carries and left out (`log_records`, `log_records_left_out`; the bundle is kept under 5 MiB so its base64 clears the frame). Every field is rendered as a record leaving the machine is: credentials, keys and recovery material never, identifiers shortened, paths and text no type classifies withheld. `include_paths` is the per-bundle opt-in to plaintext paths; a paired console asking for it is refused. The service writes no file. `read_log` now withholds from a paired caller an exception's message and every value no type declares safe, as `(withheld)`, where it had passed them as written. Additive: a pre-1.52 client never sends the command |
+| 1.53 | The restore says whether it fits and what it will not write back ([ADR-0083](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md), FR-RST-003, FR-RST-004). `plan_restore` takes the run's shape — `output_directory`, `target`, `existing`, `in_place`, as `run_restore` takes them — and, with a folder or the original location named, `restore_plan` answers `space`: each volume the run would write to, with `directory`, `needed_bytes`, `available_bytes` (null where the platform will not say, never short) and `working` for the engine's working directory standing alone. A volume short of room is also a conflict line. `restore_plan` gains `write_bytes`, the logical bytes less a sparse file's holes, and its `degradations` now count each captured attribute the target will not get back, naming root or CAP_CHOWN for ownership. `run_restore` refuses a run that will not fit before writing anything, naming the space needed, the space free and where, unless `ignore_free_space` is true; and `restore` gains `not_applied`, one line an attribute with how many items it was left off. Additive: a pre-1.53 client names no folder and is planned as before; it never sends `ignore_free_space`, so its run that will not fit is refused |

@@ -405,11 +405,17 @@ reports rotted citations). What both reviews deliberately left is below.
 8. **Sample read-back after upload** (with the first remote provider) —
    architecture 04 §5's optional step-5 sampling, worth building when
    acknowledgements are less honest than a local fsync.
-9. **Restore-plan completeness** — the plan omits free space, required
-   privileges, physical-vs-logical size, and archival-tier rehydration
-   (FR-RST-003), and is neither exportable nor resumable (arch 08 §2). Needs
-   filesystem fault injection on the restore target to test. Done when the
-   plan reports each and a plan survives a round trip.
+9. **Restore-plan completeness** — the *space and metadata* half is ✅ done
+   ([ADR-0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)):
+   the plan measures free space on each volume the run writes to, sparse files
+   by the bytes they write, and the run refuses one that will not fit before
+   writing anything unless told to go on. The plan declares the captured
+   metadata the target will not get back, with counts and the privilege
+   ownership needs, and the receipt names it per item. A fault-injecting
+   filesystem proved unnecessary, because the free-space probe is a seam. Still
+   owed: physical-vs-logical transfer size and archival-tier rehydration
+   (FR-RST-003), and a plan that is exportable and resumable (arch 08 §2). Done
+   when the plan reports each and a plan survives a round trip.
 10. **Alternate data streams on restore** (RR-6) — the *honesty* half is
     ✅ done: catalogue schema v5 carries `has_alternate_streams` through the
     live projection and both rebuilders, `RestorePlanner` declares the

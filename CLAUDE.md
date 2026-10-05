@@ -31,8 +31,9 @@ dotnet test  FallbackPlan.slnx -c Release
   process-wide listener or culture, an assertion about real durations) runs
   alone: `[DoNotParallelize]`, with the reason beside it. Nothing else should.
   The product's test hooks (`ServiceRuntime.ArchiveFormatVersion`,
-  `FanOut.ReadBackBudget`) belong to the flow that sets them, so set one
-  before starting the runtime it is for, and it needs no marker.
+  `FanOut.ReadBackBudget`, `DirectGateway.AvailableBytesInFlow`) belong to
+  the flow that sets them, so set one before starting the runtime it is for,
+  and it needs no marker.
 - **Tests first.** Fixes and features start with named failing tests; a
   compile error against a not-yet-written API counts as the red.
 

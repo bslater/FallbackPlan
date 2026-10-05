@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §10 · **Resolves:** [M3](../review/2026-08-architecture-review.md#m3--cross-platform-metadata-semantics-are-named-but-never-resolved)
 
-**Built:** Yes — the no-follow handle-relative traversal §4.1 owed has since landed (names open relative to a directory descriptor, `O_NOFOLLOW`, stat re-taken from the descriptor) — see [implementation status](../implementation-status.md).
+**Built:** Yes for capture — the no-follow handle-relative traversal §4.1 owed has since landed (names open relative to a directory descriptor, `O_NOFOLLOW`, stat re-taken from the descriptor). §3's matrix is only partly built on the restore side: a restore writes back a file's modification time everywhere and its POSIX mode on a POSIX target, and reports everything else it captured as not applied, in the plan and per item in the receipt, rather than preserving it ([ADR-0083](../adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)). See [implementation status](../implementation-status.md).
 
 ---
 
@@ -56,6 +56,8 @@ For each metadata class and target platform: **preserve** it, **degrade** it and
 | Compression / encryption attributes | Degrade → report | Degrade → report | Degrade → report |
 
 **Degrade → report** means: restore the file's *content* correctly, apply the closest available approximation of the attribute, and record the degradation in the restore receipt ([`08-restore-and-recovery.md` §3](08-restore-and-recovery.md#3-restore-verification)). The user learns what was lost without losing the data.
+
+> **Built, 2026-10 ([ADR-0083](../adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).** The matrix is the target, and today's restore meets less of it. It preserves a file's modification time everywhere, its POSIX mode on macOS and Linux, symbolic links where the platform allows them, and sparse extents. Hard links restore as separate files. Every other attribute a snapshot captured is degraded and reported: the plan names it with how many files carry it, and the receipt names it per item as not applied. None is dropped silently. Writing them back is the next slice. The refusal below is not built, because a descriptor must first be applied before a restore can refuse for one it cannot apply.
 
 **Refuse** is reserved for cases where restoring would produce a file that is wrong in a way the user could not detect — for example, restoring a file whose security descriptor cannot be applied into a location where the default descriptor would grant broader access than the original. These are enumerated in the restore plan and require explicit acknowledgement.
 

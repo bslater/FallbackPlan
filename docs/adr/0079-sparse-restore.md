@@ -82,6 +82,8 @@ Capture recorded a file's sparse extents only when the file also had data. A fil
 - **It does not report a target that cannot hold holes.** Specification 09 §4 makes zeroes the expected materialisation there. The file is correct and fully allocated, and nothing is lost.
 - **It does not move the engine's spool.** The spool still lives in the system temporary directory unless a caller names another. A dense file larger than that directory's free space still fails to restore. That matters most where the temporary directory is RAM-backed, and it is recorded as a finding (restore review RR-7) rather than changed here.
 
+  > **2026-10 ([ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).** The spool still lives there, but a restore now measures the room its largest file needs there before it starts, and refuses rather than failing at that file. Moving the spool is still not done.
+
 ## Alternatives considered
 
 **Amending FR-ARCH-013 to say holes restore as zeroes** (Q22's option (b)). Declined by the owner. It would have made the requirement true by lowering it, and left the temporary-space failure in place.
@@ -95,3 +97,4 @@ Capture recorded a file's sparse extents only when the file also had data. A fil
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice with its tests, closing Q22 and RR-7 on option (a). |
+| 2026-10 | Accepted (noted) | [ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) measures the spool's room before a restore starts: a dense file larger than the temporary directory's free space is now refused up front, where it failed at that file. The spool itself has not moved. |
