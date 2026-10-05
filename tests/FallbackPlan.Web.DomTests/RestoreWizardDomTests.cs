@@ -17,7 +17,11 @@ namespace FallbackPlan.Web.DomTests;
 /// process deriving with Argon2id against its key files, the secret never on
 /// the service wire (NFR-SEC-009). The last step confirms a plan, so nothing
 /// there can be confirmed until the plan is on screen — the console's half of
-/// FR-RST-003, which puts the plan before any byte is written.
+/// FR-RST-003, which puts the plan before any byte is written. The plan is
+/// asked with the run's shape, so it shows the room the run needs where it
+/// will write, and a plan that will not fit arms the restore only when the
+/// person chooses to restore anyway (ADR-0083). The result says which
+/// captured metadata the files came back without (FR-RST-004).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -205,6 +209,105 @@ public sealed class RestoreWizardDomTests
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#dialog")).ToContainTextAsync("read from another copy");
         await Expect(page.Locator("#dialog pre.report")).ToContainTextAsync("around destination 'vault'");
+    }
+
+    [TestMethod]
+    public async Task Wizard_ThePlanIsAskedForTheRunItPlans_AndShowsWhatItWritesAndTheRoomThereIs()
+    {
+        // FR-RST-003: the plan a person confirms is measured against the
+        // folder the run will write to, so it is asked with the run's shape.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(
+                1, 42, [], WriteBytes: 42,
+                Space: [new RestoreSpaceDescriptor("/restore/out", 8_192, 5L * 1024 * 1024 * 1024)])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+
+        var planned = await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        Assert.AreEqual("/restore/out", planned.OutputDirectory);
+        Assert.AreEqual("folder", planned.Target);
+        Assert.AreEqual("rename", planned.Existing);
+        Assert.IsTrue(planned.InPlace);
+
+        await Expect(page.Locator("#rst-space")).ToContainTextAsync("/restore/out");
+        await Expect(page.Locator("#rst-space")).ToContainTextAsync("8.0 KiB");
+        await Expect(page.Locator("#rst-space")).ToContainTextAsync("5.0 GiB free");
+        await Expect(page.Locator("#rst-space-short")).ToHaveCountAsync(0);
+
+        // Room enough: the word alone arms the restore, which asks for no
+        // exception to the check.
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+        var restored = await harness.ReceivedAsync<RunRestoreCommand>();
+        Assert.IsFalse(restored.IgnoreFreeSpace);
+    }
+
+    [TestMethod]
+    public async Task Wizard_APlanThatWillNotFit_SaysSo_AndOnlyChoosingToRestoreAnywayArmsTheRestore()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = command => command is PlanRestoreCommand
+            ? new RestorePlanResult(
+                1, 42, [], Conflicts: 1,
+                ConflictSample: ["/restore/out — needs 976.6 KiB on this volume, which has 1000 B free"],
+                WriteBytes: 42,
+                Space: [new RestoreSpaceDescriptor("/restore/out", 1_000_000, 1_000)])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+
+        await Expect(page.Locator("#rst-space-short")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-space-short")).ToContainTextAsync("will not fit");
+
+        // The word alone does not arm a restore the plan says will not fit.
+        var run = page.Locator("#rst-run-go");
+        await page.FillAsync("#confirm-word", "restore");
+        await Expect(run).ToBeDisabledAsync();
+
+        // A volume that compresses what it stores can hold more than the
+        // estimate, so the person may choose to go on, and says so.
+        await page.CheckAsync("#rst-ignore-space");
+        await Expect(run).ToBeEnabledAsync();
+        await run.ClickAsync();
+
+        var restored = await harness.ReceivedAsync<RunRestoreCommand>();
+        Assert.IsTrue(restored.IgnoreFreeSpace);
+    }
+
+    [TestMethod]
+    public async Task Wizard_ARestoreThatDidNotApplyCapturedMetadata_SaysSoOnItsResult()
+    {
+        // FR-RST-004 where the person restoring is looking: what the files
+        // came back without.
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = command => command is RunRestoreCommand
+            ? new ApiRestoreResult(
+                1, 0, "/restore/out", "complete", ReceiptPath: "/restore/out/receipt.json",
+                NotApplied: ["accessed_at not applied to 1 item(s)"])
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+
+        await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-not-applied")).ToContainTextAsync("accessed_at not applied to 1 item(s)");
     }
 
     [TestMethod]
