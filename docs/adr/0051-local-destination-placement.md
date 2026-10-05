@@ -40,6 +40,11 @@ destination that satisfies it **earn protection**.
    > draft that names no set is not judged, because a standing binding could
    > not be told from a new one.
 
+   > **2026-10 ([Amendment 2](#amendment-2-2026-10--a-debug-build-lets-the-binding-stand-and-says-so)).**
+   > A Debug build lets such a binding stand instead, and says what a
+   > Release build refuses and why. Every build CI makes, and every build
+   > that ships, is a Release build and refuses.
+
 2. **"Where possible", honestly.** Volume separation is the hard core of
    the condition — judged by volume identity via the nearest existing
    ancestor. The physical-drive refinement applies only where the platform
@@ -141,6 +146,77 @@ again rather than reusing the prior version, and writes new manifests without
 the stray groups. The content deduplicates against what is stored, so it
 costs a read and not the space.
 
+## Amendment 2 (2026-10) — a Debug build lets the binding stand, and says so
+
+The condition is unchanged for every build that ships. A Release build
+refuses exactly as §1 says, and every build CI makes, and every build a
+person installs, is a Release build.
+
+A Debug build allows the binding. A developer working on this product
+usually has one disk, and §1 refused every backup set they tried to create
+on it. Nothing past the destinations step could be run end to end without a
+second drive, or a test harness's override of the volume probe. The
+allowance is the build's: `Agent/BuildConfiguration` answers from the
+compilation symbol. A test harness can set the answer either way through
+`ServiceOptions.SameDrivePlacementOverride`, so a suite says which build it
+means rather than inheriting the one it runs in.
+
+What it relaxes, and what it does not:
+
+- **The choosing, and nothing else.** Wherever §1 refuses, a Debug build
+  lets the binding stand: a set's save, its draft (ADR-0037 Amendment 2), a
+  referenced destination's path edit, and an adoption. The volume probe
+  still answers truly. So status still derives `captured`, never
+  `protected`, for such a binding (§4), and the draft's durability warning
+  still says so. The allowance makes the binding possible. It does not make
+  it safe, and nothing says it does.
+- **Never silently.** Each answer says so. It names the conflict the refusal
+  would name, says that only a Debug build allows it, and gives the reason a
+  Release build refuses. That goes in the save's answer, the draft's
+  warnings, a path edit's answer and an adoption's lines. The console shows
+  all four:
+  - the set editor's report;
+  - the destinations step's advisories;
+  - the adoption's report;
+  - the destination editor's report. Until now that editor dropped whatever a
+    save answered with, which already lost the line saying a relative path
+    was resolved.
+- **Both halves of §1.** Two partitions of one disk are as common on a
+  developer's machine as one volume, so the physical-drive refusal is
+  relaxed and said the same way.
+
+This is not the warn-and-confirm alternative rejected below. That
+alternative was rejected because a person protecting their files must not
+be able to confirm their way into a backup that dies with them. A Release
+build keeps the rejection whole. A Debug build protects nobody's files: it
+is what a developer runs to see the product work, on the one disk they
+have.
+
+CI builds Release only, so it never compiles the Debug branch of
+`Agent/BuildConfiguration`. That branch is one property, and building the
+Agent and its tests in Debug was part of this change's validation. The pin
+runs on every build. `Hosts.Tests/LocalPlacementTests` saves a same-volume
+binding with no override and expects the answer the Agent assembly's own
+configuration attribute calls for. On CI, that pins the property that
+matters: a Release build refuses.
+
+The tests:
+
+- `Hosts.Tests/LocalPlacementTests`:
+  - the build's own answer, with no override;
+  - the allowance, on one volume and on one drive;
+  - the draft's warning, in the save's words, beside a durability warning
+    that still reads the real volumes;
+  - a path edit.
+- `Hosts.Tests/DestinationAdoptionTests`: adoption's refusal, which had no
+  test before, and its allowance.
+- `Web.DomTests/ConfigEditingDomTests`: the destination editor shows what the
+  service said.
+
+The refusal tests now set the override to false. Without it, a Debug run of
+the suite (an IDE's test explorer, or a bare `dotnet test`) would allow what
+they expect refused. Their assertions are unchanged.
+
 ## Status history
 
 | Date | Status | Note |
@@ -148,3 +224,4 @@ costs a read and not the space.
 | 2026-08 | Accepted | The owner's direction: drive separation as the condition of choosing a local destination, and the protection boundary moved from machine to volume — `Application/LocalDestinationPlacement`, `Filesystem.Local/PhysicalDisk`, the upsert guards, and the deriver's gates, pinned by `Application.Tests/LocalDestinationPlacementTests`, `Hosts.Tests/LocalPlacementTests` and the flipped deriver suite |
 | 2026-10 | Amended | Amendment 1: the Windows volume probe read the wrong field of `BY_HANDLE_FILE_INFORMATION` and called every path volume 0, so every local destination was refused. The struct has its native layout again, held by `Filesystem.Tests/WindowsFileIdentityTests` and `Hosts.Tests/LocalPlacementRealVolumeTests` |
 | 2026-10 | Amended | §1's refusal is said in the draft too, under ADR-0037 Amendment 2: a draft that names its set is answered with the refusal its save would give, from the same judgement in `Agent/ServiceCommandHandler`, held by `Hosts.Tests/LocalPlacementTests` |
+| 2026-10 | Amended | Amendment 2: a Debug build lets a binding that fails §1 stand and says what a Release build refuses and why, at every door §1 guards. A Release build refuses as before. The volume probe and status are untouched. `Agent/BuildConfiguration` answers per build and `ServiceOptions.SameDrivePlacementOverride` lets a suite say which it means. Held by `Hosts.Tests/LocalPlacementTests`, `Hosts.Tests/DestinationAdoptionTests` and `Web.DomTests/ConfigEditingDomTests` |

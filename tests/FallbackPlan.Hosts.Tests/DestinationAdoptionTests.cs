@@ -21,8 +21,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// re-seed. Nothing takes effect until that shape has been shown and
 /// confirmed: a preview writes nothing, an adoption without its confirmation
 /// is refused, and one confirmed against an archive that has since changed is
-/// refused as changed. The drill is the one <c>eng/recovery-drill.sh</c>
-/// step 8 runs on the Release binaries.
+/// refused as changed. Adoption binds the set to the destination, so it is
+/// judged as any choosing of a local destination is (FR-DEST-017): refused on
+/// a root's volume, and allowed with a note only by a Debug build. The drill
+/// is the one <c>eng/recovery-drill.sh</c> step 8 runs on the Release
+/// binaries.
 /// </summary>
 [TestClass]
 public sealed class DestinationAdoptionTests : IDisposable
@@ -449,6 +452,57 @@ public sealed class DestinationAdoptionTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Adopt_ADestinationOnTheRootsVolume_IsRefusedNamingBoth_AndStoresNothing()
+    {
+        // Adoption binds the set it re-declares to the destination, so it is
+        // a choosing like any other (ADR-0051).
+        _harness.WriteSourceFile("docs/notes.txt", "words");
+        await BackUpThenLoseTheMachineAsync();
+
+        await using var runtime = await StartAsync(options => options with
+        {
+            VolumeIdentityOverride = _ => 1UL,
+            SameDrivePlacementOverride = false,
+        });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var row = await DiscoverSingleAsync(handler);
+
+        var result = await AdoptConfirmedAsync(
+            handler, new AdoptArchiveCommand(Vault, row.RepositoryId, await EnvelopeForAsync(handler, row, PassphraseText)));
+
+        Assert.IsInstanceOfType<ServiceError>(result, out var refused);
+        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
+        Assert.Contains($"'{Vault}' shares a volume", refused.Message, StringComparison.Ordinal);
+        Assert.Contains(_harness.SourceRoot, refused.Message, StringComparison.Ordinal);
+        Assert.IsEmpty(runtime.Configuration.BackupSets);
+        Assert.IsNull(runtime.WriteCredentials.TryLoad(_harness.DocsSetId));
+    }
+
+    [TestMethod]
+    public async Task Adopt_ADestinationOnTheRootsVolume_WhereTheBuildAllowsIt_IsAdoptedAndSaysSo()
+    {
+        _harness.WriteSourceFile("docs/notes.txt", "words");
+        await BackUpThenLoseTheMachineAsync();
+
+        await using var runtime = await StartAsync(options => options with
+        {
+            VolumeIdentityOverride = _ => 1UL,
+            SameDrivePlacementOverride = true,
+        });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var row = await DiscoverSingleAsync(handler);
+
+        var result = await AdoptConfirmedAsync(
+            handler, new AdoptArchiveCommand(Vault, row.RepositoryId, await EnvelopeForAsync(handler, row, PassphraseText)));
+
+        Assert.IsInstanceOfType<ArchiveAdoptedResult>(result, out var adopted, (result as ServiceError)?.Message);
+        var said = Assert.ContainsSingle(line => line.Contains("Debug build", StringComparison.Ordinal), adopted.Lines);
+        Assert.Contains($"'{Vault}' shares a volume", said, StringComparison.Ordinal);
+        Assert.Contains("a Release build refuses", said, StringComparison.Ordinal);
+        Assert.ContainsSingle(runtime.Configuration.BackupSets);
+    }
+
+    [TestMethod]
     public async Task Adopt_Twice_IsAcknowledgedNotRepeated()
     {
         _harness.WriteSourceFile("docs/notes.txt", "words");
@@ -816,7 +870,7 @@ public sealed class DestinationAdoptionTests : IDisposable
     /// the agent's own verb — a new salt under the same passphrase — because
     /// the harness's once-only guard remembers the installation that died.
     /// </summary>
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(Func<ServiceOptions, ServiceOptions>? adjust = null)
     {
         var setup = await HostHarness.RunAsync(
             AgentHost.RunAsync,
@@ -824,7 +878,8 @@ public sealed class DestinationAdoptionTests : IDisposable
             "--passphrase-env", _harness.PassphraseVariable, "--acknowledge-loss",
             "--user", HostHarness.OwnerUser, "--password-env", _harness.PasswordVariable);
         Assert.IsTrue(setup.ExitCode == 0 || setup.All.Contains("already", StringComparison.OrdinalIgnoreCase), setup.All);
-        return await ServiceRuntime.StartAsync(OptionsFor(_harness), Timeout);
+        var options = OptionsFor(_harness);
+        return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, Timeout);
     }
 
     private static ServiceOptions OptionsFor(HostHarness harness) => new()

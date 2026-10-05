@@ -79,6 +79,16 @@ public sealed record ServiceOptions
     internal Func<string, string?>? PhysicalDiskOverride { get; init; }
 
     /// <summary>
+    /// Overrides whether a local destination may be chosen on a volume or
+    /// physical drive one of its set's roots lives on (ADR-0051 Amendment 2):
+    /// true allows it and says so, false refuses it. A test harness's knob,
+    /// so a suite says which build it means rather than inheriting the one it
+    /// runs in. Null, the production value, is the build's own answer:
+    /// allowed in a Debug build, refused in a Release build.
+    /// </summary>
+    internal bool? SameDrivePlacementOverride { get; init; }
+
+    /// <summary>
     /// A test harness's view of the destination-sync ledger: each row as it
     /// is written, so every state a reader could have read — which polling
     /// can only hope to catch. Null, the production value, observes nothing.
@@ -383,6 +393,15 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The physical drive behind a path, or null where it cannot be named (ADR-0051).</summary>
     internal Func<string, string?> DiskIdOf => Options.PhysicalDiskOverride ?? Filesystem.Local.PhysicalDisk.Identify;
+
+    /// <summary>
+    /// Whether choosing a local destination on a root's volume or drive is
+    /// allowed, and said, rather than refused (ADR-0051 Amendment 2). It
+    /// relaxes the choosing only: <see cref="VolumeIdOf"/> still answers
+    /// truly, so status and the draft's durability warning are unchanged.
+    /// </summary>
+    internal bool AllowsSameDrivePlacement =>
+        Options.SameDrivePlacementOverride ?? BuildConfiguration.AllowsSameDrivePlacement;
 
     /// <summary>
     /// How a restore asks this machine about room (FR-RST-003, ADR-0083): the

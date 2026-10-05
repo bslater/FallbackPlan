@@ -33,7 +33,7 @@ The status vocabulary is normative, because collapsing any two of these is how a
 | State | Meaning |
 |-------|---------|
 | `never backed up` | No committed snapshot exists for the set |
-| `captured` | Snapshot committed to a replica — the staging archive, or a same-volume destination — but only on the drive the files live on: real, and **not** a defence against losing that drive ([ADR-0051](../adr/0051-local-destination-placement.md): such a destination can no longer be newly chosen) |
+| `captured` | Snapshot committed to a replica — the staging archive, or a same-volume destination — but only on the drive the files live on: real, and **not** a defence against losing that drive ([ADR-0051](../adr/0051-local-destination-placement.md): such a destination can no longer be newly chosen, except in a Debug build, which says so: [Amendment 2](../adr/0051-local-destination-placement.md#amendment-2-2026-10--a-debug-build-lets-the-binding-stand-and-says-so)) |
 | `protected` | Durable at a replica **separate from the drive the source lives on** — a second drive, a same-site machine, or an independent store, the best copy's residual risk always named beside the badge ([`04-concurrency-and-publication.md` §6.4](04-concurrency-and-publication.md#64-protected-requires-an-independent-failure-domain) as amended by [ADR-0051](../adr/0051-local-destination-placement.md)) |
 | `verified` | Independently confirmed at that destination, with coverage and age |
 | `degraded` | Recoverable, but below policy — an offline destination, failed verification, or quota exhaustion |

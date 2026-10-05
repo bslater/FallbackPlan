@@ -1,3 +1,4 @@
+using System.Reflection;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
@@ -11,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// destination on any root's volume — or, where the platform can say, on
 /// the same physical drive — is refused with both paths named. Existing
 /// configuration files keep loading and keep their warnings (ADR-0035);
-/// only the choosing is gated.
+/// only the choosing is gated. A Debug build allows the binding instead and
+/// says what a Release build would refuse (ADR-0051 Amendment 2); the
+/// durability warnings still read the real volumes.
 /// </summary>
 [TestClass]
 public sealed class LocalPlacementTests : IDisposable
@@ -227,6 +230,136 @@ public sealed class LocalPlacementTests : IDisposable
         Assert.IsEmpty(draft.Defects);
     }
 
+    [TestMethod]
+    public async Task Upsert_ALocalDestinationOnTheRootsVolume_WithNoOverride_IsAnsweredAsTheBuildWasCompiled()
+    {
+        // Production sets no override, so the build decides. A Release build
+        // (every build CI makes, and every one that ships) refuses; only a
+        // Debug build allows.
+        var debug = typeof(ServiceRuntime).Assembly
+            .GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration == "Debug";
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync(options => options with { SameDrivePlacementOverride = null });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new UpsertBackupSetCommand(new BackupSetDescriptor(
+            new string('b', 32), "second", _harness.SourceRoot, null, [], [], ["vault-b"])), Timeout);
+
+        if (debug)
+        {
+            Assert.IsInstanceOfType<ConfigurationChangeResult>(result, (result as ServiceError)?.Message);
+        }
+        else
+        {
+            Assert.IsInstanceOfType<ServiceError>(result, out var error, "a Release build must refuse");
+            Assert.Contains("'vault-b' shares a volume", error.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
+    public async Task Upsert_ALocalDestinationOnTheRootsVolume_WhereTheBuildAllowsIt_IsAcceptedAndSaysSo()
+    {
+        // What lets a developer's one-disk machine run end to end. The save
+        // goes through, and its answer still says what a Release build
+        // refuses and why.
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync(options => options with { SameDrivePlacementOverride = true });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new UpsertBackupSetCommand(new BackupSetDescriptor(
+            new string('b', 32), "second", _harness.SourceRoot, null, [], [], ["vault-b"])), Timeout);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var saved, (result as ServiceError)?.Message);
+        var said = Assert.ContainsSingle(line => line.Contains("Debug build", StringComparison.Ordinal), saved.Lines);
+        Assert.Contains("'vault-b' shares a volume", said, StringComparison.Ordinal);
+        Assert.Contains(_harness.SourceRoot, said, StringComparison.Ordinal);
+        Assert.Contains("a Release build refuses", said, StringComparison.Ordinal);
+        Assert.AreEqual(
+            "vault-b",
+            Assert.ContainsSingle(set => set.Name == "second", runtime.Configuration.BackupSets)
+                .Destinations.Single().Ref);
+    }
+
+    [TestMethod]
+    public async Task Upsert_DistinctVolumesOnOneDisk_WhereTheBuildAllowsIt_IsAcceptedAndSaysSo()
+    {
+        // Two partitions of one drive are the other half of the rule, and a
+        // developer's machine is as likely to have them.
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync(options => options with
+        {
+            VolumeIdentityOverride = path =>
+                path.StartsWith(_harness.WorkPath, StringComparison.Ordinal) ? 2UL : 1UL,
+            PhysicalDiskOverride = _ => "disk-a",
+            SameDrivePlacementOverride = true,
+        });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        var result = await handler.ExecuteAsync(new UpsertBackupSetCommand(new BackupSetDescriptor(
+            new string('b', 32), "second", _harness.SourceRoot, null, [], [], ["vault-b"])), Timeout);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var saved, (result as ServiceError)?.Message);
+        var said = Assert.ContainsSingle(line => line.Contains("Debug build", StringComparison.Ordinal), saved.Lines);
+        Assert.Contains("'vault-b' shares a physical drive", said, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Draft_ADestinationOnTheRootsVolume_WhereTheBuildAllowsIt_WarnsInTheSavesWordsAndIsNoDefect()
+    {
+        // The draft says what the save will say, as it does for a refusal.
+        // The allowance belongs to the gate alone: the durability warning
+        // still reads the real volumes, so the set is still told that it
+        // will report captured, never protected.
+        Directory.CreateDirectory(VaultPath);
+        _harness.WriteConfiguration("every 4h");
+        AddVaultDeclaration();
+        await using var runtime = await StartAsync(options => options with { SameDrivePlacementOverride = true });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var id = new string('b', 32);
+
+        var draft = await ValidateAsync(handler, id, [_harness.SourceRoot], ["vault-b"]);
+        var saved = await handler.ExecuteAsync(new UpsertBackupSetCommand(new BackupSetDescriptor(
+            id, "second", _harness.SourceRoot, null, [], [], ["vault-b"])), Timeout);
+
+        Assert.IsEmpty(draft.Defects);
+        Assert.IsNotNull(draft.Warnings);
+        var warned = Assert.ContainsSingle(
+            warning => warning.Contains("Debug build", StringComparison.Ordinal), draft.Warnings);
+        Assert.Contains(warning => warning.Contains("captured", StringComparison.Ordinal), draft.Warnings);
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(saved, out var change, (saved as ServiceError)?.Message);
+        Assert.Contains(warned, change.Lines);
+    }
+
+    [TestMethod]
+    public async Task UpsertDestination_APathEditOntoARootsVolume_WhereTheBuildAllowsIt_IsAcceptedAndSaysSo()
+    {
+        _harness.WriteConfiguration("every 4h");
+        await using var runtime = await StartAsync(options => options with
+        {
+            VolumeIdentityOverride = path =>
+                path.StartsWith(Path.Combine(_harness.StateDirectory, "vault"), StringComparison.Ordinal) ? 2UL : 1UL,
+            SameDrivePlacementOverride = true,
+        });
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var declared = runtime.Configuration.Destinations.Single();
+        var moved = Path.Combine(_harness.WorkPath, "vault-moved");
+
+        var result = await handler.ExecuteAsync(new UpsertDestinationCommand(new DestinationDescriptor(
+            declared.Id, declared.Name, "local-path", moved, null, null)), Timeout);
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(result, out var saved, (result as ServiceError)?.Message);
+        var said = Assert.ContainsSingle(line => line.Contains("Debug build", StringComparison.Ordinal), saved.Lines);
+        Assert.Contains($"Moving '{declared.Name}' to '{moved}'", said, StringComparison.Ordinal);
+        Assert.Contains("a Release build refuses", said, StringComparison.Ordinal);
+        Assert.AreEqual(moved, runtime.Configuration.Destinations.Single().Path);
+    }
+
     private async Task<SetDraftValidationResult> ValidateAsync(
         ServiceCommandHandler handler, string? setId, IReadOnlyList<string> roots, IReadOnlyList<string> destinations)
     {
@@ -266,6 +399,10 @@ public sealed class LocalPlacementTests : IDisposable
         {
             ArchivesRoot = _harness.ArchivesRoot,
             StateDirectory = _harness.StateDirectory,
+            // The gate as a Release build keeps it. A Debug build allows what
+            // these tests refuse (ADR-0051 Amendment 2), so the suite says
+            // which build it means rather than inheriting the one it runs in.
+            SameDrivePlacementOverride = false,
         };
 
         return await ServiceRuntime.StartAsync(adjust?.Invoke(options) ?? options, Timeout);

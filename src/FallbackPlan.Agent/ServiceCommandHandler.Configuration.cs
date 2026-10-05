@@ -202,7 +202,9 @@ public sealed partial class ServiceCommandHandler
         // FR-DEST-017): moving an already-referenced local destination's
         // path onto a root's drive creates the same violation choosing it
         // would — judged only when the path actually changes, so a standing
-        // older binding survives unrelated edits (ADR-0035).
+        // older binding survives unrelated edits (ADR-0035). A Debug build
+        // lets the move stand and says so (Amendment 2).
+        List<string> allowed = [];
         if (kind == DestinationKind.LocalPath
             && path is { Length: > 0 }
             && existing is not null
@@ -215,12 +217,17 @@ public sealed partial class ServiceCommandHandler
                         [.. set.Roots.Select(root => root.Path)], path,
                         runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
                 {
-                    return new ServiceError(
-                        ServiceErrorReason.InvalidArgument,
-                        $"Moving '{existing.Name}' to '{path}' would put it on "
-                        + $"{(conflict.SamePhysicalDisk ? "the same physical drive as" : "the same volume as")} "
-                        + $"root '{conflict.Root}' of backup set '{set.Name}' — a backup on the drive the files "
-                        + "live on dies with them (ADR-0051).");
+                    var onto = $"{(conflict.SamePhysicalDisk ? "the same physical drive as" : "the same volume as")} "
+                        + $"root '{conflict.Root}' of backup set '{set.Name}'";
+                    if (!runtime.AllowsSameDrivePlacement)
+                    {
+                        return new ServiceError(
+                            ServiceErrorReason.InvalidArgument,
+                            $"Moving '{existing.Name}' to '{path}' would put it on {onto} — a backup on the drive "
+                            + "the files live on dies with them (ADR-0051).");
+                    }
+
+                    allowed.Add(AllowedOnlyInDebug($"Moving '{existing.Name}' to '{path}' puts it on {onto}"));
                 }
             }
         }
@@ -265,11 +272,16 @@ public sealed partial class ServiceCommandHandler
         }
 
         // The resolution is the one part of the declaration the operator did
-        // not type, so it is said back rather than silently stored.
-        return resolvedFromRelative
-            ? new ConfigurationChangeResult(
-                [$"Destination '{replacement.Name}' named the relative path '{declaredPath}'; stored as '{path}'."])
-            : new AcknowledgedResult();
+        // not type, so it is said back rather than silently stored, as is a
+        // move only a Debug build lets stand.
+        List<string> said = [];
+        if (resolvedFromRelative)
+        {
+            said.Add($"Destination '{replacement.Name}' named the relative path '{declaredPath}'; stored as '{path}'.");
+        }
+
+        said.AddRange(allowed);
+        return said.Count > 0 ? new ConfigurationChangeResult(said) : new AcknowledgedResult();
     }
 
     private ServiceSettingsResult GetServiceSettings()
@@ -918,6 +930,7 @@ public sealed partial class ServiceCommandHandler
     private SetDraftValidationResult ValidateSetDraft(ValidateSetDraftCommand command)
     {
         List<string> defects = [];
+        List<string> allowed = [];
 
         // Validity is case-independent, so case sensitivity here is a
         // placeholder the same way it is in configuration validation.
@@ -951,12 +964,24 @@ public sealed partial class ServiceCommandHandler
             // That takes the set the draft is of: a draft naming none comes
             // from a client older than the question (contract 1.49), and a
             // standing binding the save would leave alone cannot be told from
-            // a new one, so it is not asked.
+            // a new one, so it is not asked. A Debug build lets the binding
+            // stand, so the draft warns in the line the save will give
+            // (Amendment 2).
             if (command.SetId is { Length: > 0 } setId && command.Destinations is { Count: > 0 } chosen)
             {
                 var existing = declared.BackupSets.FirstOrDefault(set =>
                     string.Equals(set.Id, setId, StringComparison.Ordinal));
-                defects.AddRange(PlacementRefusals(declared, existing, draftRoots, chosen));
+                foreach (var (destination, conflict) in PlacementConflicts(declared, existing, draftRoots, chosen))
+                {
+                    if (runtime.AllowsSameDrivePlacement)
+                    {
+                        allowed.Add(PlacementAllowed(destination, conflict));
+                    }
+                    else
+                    {
+                        defects.Add(PlacementRefusal(destination, conflict));
+                    }
+                }
             }
         }
 
@@ -981,7 +1006,9 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
-        return new SetDraftValidationResult(defects, nextRuns, DurabilityWarnings(command));
+        var durability = DurabilityWarnings(command);
+        return new SetDraftValidationResult(
+            defects, nextRuns, allowed.Count == 0 ? durability : [.. allowed, .. durability ?? []]);
     }
 
     /// <summary>

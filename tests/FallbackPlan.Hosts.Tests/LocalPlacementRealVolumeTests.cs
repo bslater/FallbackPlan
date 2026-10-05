@@ -101,12 +101,15 @@ public sealed partial class LocalPlacementRealVolumeTests : IDisposable
     {
         await _harness.SetupAsync();
 
-        // No volume override: the platform's own probe answers.
+        // No volume override: the platform's own probe answers. The gate is
+        // the one a Release build keeps, whatever build runs this (ADR-0051
+        // Amendment 2).
         return await ServiceRuntime.StartAsync(
             new ServiceOptions
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                SameDrivePlacementOverride = false,
             },
             _timeout.Token);
     }

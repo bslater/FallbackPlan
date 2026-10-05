@@ -4757,6 +4757,12 @@ Object.assign(actions, {
       if (result) {
         toast("ok", `Destination '${descriptor.name}' saved.`);
         closeDialog();
+        // The service answers with lines only when it has something to say
+        // back: a relative path it resolved, or a move onto a root's drive
+        // that only a Debug build lets stand (ADR-0051 Amendment 2).
+        if (result.result === "configuration_change" && result.lines?.length) {
+          reportDialog(`Destination '${descriptor.name}' saved`, result.lines);
+        }
         refreshConfigData(); refreshStatus();
       }
     });

@@ -45,6 +45,8 @@ Bodu — the library supplying Argon2id, one of two primitives .NET does not pro
 
 **Warnings are errors.** This is a backup engine; a warning we habitually ignore is a defect we ship. The gate covers `src/` and `tests/` and excludes `external/`.
 
+**A Debug build lets a local destination share its set's drive.** A Release build refuses a local destination on a volume or drive that a set's roots live on ([ADR-0051](docs/adr/0051-local-destination-placement.md)), which leaves a one-disk machine unable to run the product end to end. A Debug build allows it, and says so each time ([Amendment 2](docs/adr/0051-local-destination-placement.md#amendment-2-2026-10--a-debug-build-lets-the-binding-stand-and-says-so)). Debug is Visual Studio's default and a bare `dotnet build`'s. Status still reports such a set `captured`, never `protected`. CI and every build that ships are Release.
+
 ### Building on Windows with Visual Studio
 
 - **Visual Studio 2022 17.14 or later** (or Visual Studio 2026) — earlier versions cannot open the `.slnx` solution format.
