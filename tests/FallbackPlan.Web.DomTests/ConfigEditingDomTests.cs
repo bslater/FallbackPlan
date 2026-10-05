@@ -123,6 +123,40 @@ public sealed class ConfigEditingDomTests
     }
 
     [TestMethod]
+    public async Task DestinationEditor_ASaveTheServiceSaysSomethingAbout_ShowsWhatItSaid()
+    {
+        // The service answers a destination save with lines only when it has
+        // something to say back: a relative path it resolved, or a move onto
+        // a root's drive that only a Debug build allows (ADR-0051 Amendment
+        // 2). A toast that says only "saved" drops them.
+        const string Said =
+            "Moving 'vault' to '/srv/vault' puts it on the same volume as root '/home/me' of backup set 'docs', "
+            + "which only a Debug build allows: a Release build refuses it, because a backup on the drive the files "
+            + "live on dies with them (ADR-0051).";
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([]),
+            UpsertDestinationCommand => new ConfigurationChangeResult([Said]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-add-local\"]");
+        await page.FillAsync("#dest-name", "vault");
+        await page.FillAsync("#dest-path", "/srv/vault");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+        await harness.ReceivedAsync<UpsertDestinationCommand>();
+
+        await Expect(page.Locator("#dialog h3")).ToHaveTextAsync("Destination 'vault' saved");
+        await Expect(page.Locator("#dialog .report")).ToHaveTextAsync(Said);
+    }
+
+    [TestMethod]
     public async Task ServiceSettingsCard_Saving_SendsTheUpdateAndShowsWhatTheServiceSaid()
     {
         await using var harness = await DomHarness.StartAsync();
