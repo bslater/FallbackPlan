@@ -567,16 +567,21 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, string.Join(" ", circular));
         }
 
+        // A Debug build lets the binding stand and says so (ADR-0051
+        // Amendment 2).
+        string? allowed = null;
         if (destination.Kind == DestinationKind.LocalPath
             && LocalDestinationPlacement.Judge(
                 [.. resolvedRoots.Select(root => root.Path)], destination.Path!, runtime.VolumeIdOf, runtime.DiskIdOf)
             is { } conflict)
         {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                $"Destination '{destination.Name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
-                + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
-                + "Choose a local destination on a different drive (ADR-0051).");
+            if (!runtime.AllowsSameDrivePlacement)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument, PlacementRefusal(destination.Name, conflict));
+            }
+
+            allowed = PlacementAllowed(destination.Name, conflict);
         }
 
         // ---- writes ----
@@ -619,6 +624,11 @@ public sealed partial class ServiceCommandHandler
         if (shape.OtherSetIds.Count > 0)
         {
             lines.Add($"The archive also holds snapshots for other set id(s): {string.Join(", ", shape.OtherSetIds)}.");
+        }
+
+        if (allowed is not null)
+        {
+            lines.Add(allowed);
         }
 
         lines.AddRange(warnings.Select(warning => $"Catalogue rebuild: {warning}"));

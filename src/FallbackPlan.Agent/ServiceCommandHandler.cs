@@ -1497,13 +1497,19 @@ public sealed partial class ServiceCommandHandler(
         }
 
         // The condition of choosing a local destination (ADR-0051,
-        // FR-DEST-017), refused on the first binding that fails it.
-        if (PlacementRefusals(
+        // FR-DEST-017), refused on the first binding that fails it. A Debug
+        // build lets every such binding stand and says so in the answer
+        // (Amendment 2).
+        var conflicts = PlacementConflicts(
                 configuration, existing, [.. resolvedRoots.Select(root => root.Path)], command.Set.Destinations)
-            .FirstOrDefault() is { } refusal)
+            .ToList();
+        if (conflicts.Count > 0 && !runtime.AllowsSameDrivePlacement)
         {
-            return new ServiceError(ServiceErrorReason.InvalidArgument, refusal);
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, PlacementRefusal(conflicts[0].Destination, conflicts[0].Conflict));
         }
+
+        List<string> allowed = [.. conflicts.Select(chosen => PlacementAllowed(chosen.Destination, chosen.Conflict))];
 
         // Replace in place: the first set is the default RunBackupCommand
         // runs, and status renders declaration order — an edit must not
@@ -1580,6 +1586,7 @@ public sealed partial class ServiceCommandHandler(
                 $"Backup set '{replacement.Name}' created.",
                 $"First backup queued as job {Scheduler.LatestJobFor(runtime, replacement.Id) ?? "(pending)"}; "
                     + "its destinations receive the archive when it completes.",
+                .. allowed,
             ]);
         }
 
@@ -1661,10 +1668,12 @@ public sealed partial class ServiceCommandHandler(
             }
 
             lines.AddRange(seeded);
+            lines.AddRange(allowed);
             return new ConfigurationChangeResult(lines);
         }
 
-        return seeded.Count > 0 ? new ConfigurationChangeResult(seeded) : new AcknowledgedResult();
+        List<string> said = [.. seeded, .. allowed];
+        return said.Count > 0 ? new ConfigurationChangeResult(said) : new AcknowledgedResult();
     }
 
     /// <summary>
@@ -1679,17 +1688,20 @@ public sealed partial class ServiceCommandHandler(
         || !existing.ExcludeRules.ToHashSet(StringComparer.Ordinal).SetEquals(replacement.ExcludeRules);
 
     /// <summary>
-    /// The refusals the condition of choosing a local destination (ADR-0051,
-    /// FR-DEST-017) gives a set's bindings, one per destination that fails
-    /// it, in the order the destinations are named. The save refuses with
-    /// the first, and a draft names them all (ADR-0037 Amendment 2), so the
-    /// two say the same thing in the same words.
+    /// The bindings of a set that fail the condition of choosing a local
+    /// destination (ADR-0051, FR-DEST-017), one per destination, in the order
+    /// the destinations are named. The save refuses with the first, and a
+    /// draft names them all (ADR-0037 Amendment 2), each worded by
+    /// <see cref="PlacementRefusal"/> so the two say the same thing in the
+    /// same words. A Debug build words them by <see cref="PlacementAllowed"/>
+    /// instead, in the save's answer and the draft's warnings alike
+    /// (ADR-0051 Amendment 2).
     /// </summary>
     /// <param name="configuration">The configuration the destinations are declared in.</param>
     /// <param name="existing">The set as the configuration holds it, or null for a new set.</param>
     /// <param name="rootPaths">The set's roots, in the order it names them.</param>
     /// <param name="destinationNames">The destinations the set references.</param>
-    /// <returns>Each refusal, worded as the save words it.</returns>
+    /// <returns>Each failing binding: the destination's name, and the root it shares a drive with.</returns>
     /// <remarks>
     /// A destination must sit on a different volume than every root, and on
     /// a different physical drive where the platform can say, or the backup
@@ -1699,7 +1711,7 @@ public sealed partial class ServiceCommandHandler(
     /// loading and keeps its status warnings (ADR-0035). It is the choosing
     /// that is gated.
     /// </remarks>
-    private IEnumerable<string> PlacementRefusals(
+    private IEnumerable<(string Destination, PlacementConflict Conflict)> PlacementConflicts(
         ClientConfiguration configuration,
         BackupSetConfiguration? existing,
         IReadOnlyList<string> rootPaths,
@@ -1727,13 +1739,32 @@ public sealed partial class ServiceCommandHandler(
             if (LocalDestinationPlacement.Judge(
                     rootPaths, destinationPath, runtime.VolumeIdOf, runtime.DiskIdOf) is { } conflict)
             {
-                yield return
-                    $"Destination '{name}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
-                    + $"with root '{conflict.Root}' — a backup on the drive the files live on dies with them. "
-                    + "Choose a local destination on a different drive (ADR-0051).";
+                yield return (name, conflict);
             }
         }
     }
+
+    /// <summary>The refusal a binding that fails the placement condition gets (ADR-0051).</summary>
+    private static string PlacementRefusal(string destination, PlacementConflict conflict) =>
+        $"{BindingConflict(destination, conflict)} — a backup on the drive the files live on dies with them. "
+        + "Choose a local destination on a different drive (ADR-0051).";
+
+    /// <summary>What a Debug build says of the same binding as it lets it stand (ADR-0051 Amendment 2).</summary>
+    private static string PlacementAllowed(string destination, PlacementConflict conflict) =>
+        AllowedOnlyInDebug(BindingConflict(destination, conflict));
+
+    private static string BindingConflict(string destination, PlacementConflict conflict) =>
+        $"Destination '{destination}' shares {(conflict.SamePhysicalDisk ? "a physical drive" : "a volume")} "
+        + $"with root '{conflict.Root}'";
+
+    /// <summary>
+    /// A placement a Release build refuses, said as a Debug build lets it
+    /// stand (ADR-0051 Amendment 2): the conflict, that only this build
+    /// allows it, and the reason the other refuses.
+    /// </summary>
+    private static string AllowedOnlyInDebug(string conflict) =>
+        $"{conflict}, which only a Debug build allows: a Release build refuses it, because a backup on the drive "
+        + "the files live on dies with them (ADR-0051).";
 
     /// <summary>
     /// The 1↔N coordinate transitions (ADR-0040), applied per rule and only
