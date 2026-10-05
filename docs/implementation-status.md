@@ -107,6 +107,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0080](adr/0080-a-person-deletes-a-snapshot.md) | A person deletes a snapshot, from staging and every copy: `delete_snapshots` (contract 1.51) under the set's reclaim grant. The request is a tombstone of reason *requested* that every survey reads and every plan expires. Staging keeps the snapshot until every declared destination has converged since the request, one with no rules included, and one command converges every copy, carries the deletion through in two passes and records who asked. A set keeps something to restore from | **Built** | `Retention/SnapshotDeletion` · `Retention/StagingMark` · `Retention/RetentionPlanner` · `Retention/ReplicationGate` · `Retention/StagingSweep` · `Retention/RetentionRunner` · `Repository.Format/Manifests/Tombstone` · `Repository.Index/Journal/JournalRecordCodec` · `Repository.Catalogue/Catalogue` · `Application/DestinationSyncStore` · `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceCommandHandler.Deletion` · `Agent/AuthenticatingService` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Web/WebConsoleHost` · `Retention.Tests/SnapshotDeletionPlanTests`, `Retention.Tests/SnapshotDeletionCycleTests`, `Retention.Tests/SnapshotDeletionFanOutTests`, `Retention.Tests/SnapshotDeletionPeerTests`, `Retention.Tests/SnapshotDeletionServiceTests`, `Repository.ConformanceTests/TombstoneConformanceTests`, `Web.Tests/SnapshotDeletionCeremonyTests`, `Web.DomTests/SnapshotDeletionDomTests` · [notes](#0080--the-request-is-a-tombstone-and-a-missing-row-is-not-a-missing-copy) |
 | [0081](adr/0081-diagnostic-bundle.md) | A diagnostic bundle, and a redacted rendering that withholds what no type declares: `export_diagnostics` (contract 1.52) builds one zip whose every field is classified by the types the log uses, paths only by a per-bundle opt-in a paired console may not make; the redacted rendering is fail-closed, `LogLabel` vouches for safe words, identifiers held as text are `LogId`s, and every product log hole is classified | **Built** | `Diagnostics/LogRecordRenderer` · `Domain/Diagnostics/LogLabel` · `Domain/Diagnostics/LogId` · `Storage.Abstractions/ObjectKey` · `Agent/DiagnosticBundle` · `Agent/ServiceCommandHandler.Diagnostics` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/DiagnosticBundleTests`, `Diagnostics.Tests/RedactedRenderingTests`, `Hosts.Tests/DiagnosticsCommandTests`, `ArchitectureTests/LoggingShapeTests`, `Cli.Tests/DiagnosticsExportVerbTests`, `Web.Tests/DiagnosticsRelayTests`, `Web.DomTests/ConsoleViewsDomTests` · [notes](#0081--a-bundle-needed-the-redaction-to-be-true-first) |
 | [0082](adr/0082-the-recovery-tools-diagnostic-bundle.md) | The recovery tool's diagnostic bundle: every verb takes a bundle file and writes a report of that run however it ended, through the rule the service's log uses, which moved to Domain so the tool could reach it; no passphrase, key, salt, sealing key, creator or machine name, identifiers shortened, paths only by an opt-in for that run | **Built** | `Domain/Diagnostics/RedactedRendering` · `Recovery/RecoveryBundle` · `Recovery/RecoveryRun` · `Recovery/RecoveryNote` · `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Hosts.Tests/RecoveryBundleTests`, `Domain.Tests/RedactedRenderingRuleTests`, `ArchitectureTests/DependencyRuleTests`, `Repository.Tests/RecoveryContainmentTests` · [notes](#0082--the-tool-that-runs-on-the-worst-day-says-what-happened) |
+| [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
 
 ---
 
@@ -2093,3 +2094,44 @@ What remains is recorded rather than done. A default bundle withholds the
 format codec's own explanations along with the platform's, because both are
 text no type classifies. The stage and the reason say which kind of failure it
 was, and the opt-in says the rest.
+
+### 0083 — a plan that knew the disk
+
+FR-RST-003 has always asked a restore plan to report free space and the
+privileges a restore needs, and to report a space shortfall before any byte is
+written. FR-RST-004 asks the receipt for every degraded attribute.
+Architecture 08's Built line claimed its §2 whole. None of it existed. The plan
+summed logical lengths and never looked at a disk, so a restore that could not
+fit started anyway and failed file by file as the disk filled. The executor
+wrote back a modification time and, on a POSIX target, a mode, and dropped the
+rest without a word.
+
+A plan told where the run would write now measures what the run writes there,
+volume by volume. That is each file's segments in whole clusters, its holes
+skipped, and a cluster for each directory it creates. It adds room for the
+largest file where the engine holds it until its hash verifies, which is the
+volume's own figure when the two share it. In place, only what the
+existing-file policy frees is credited. The plan already decodes every
+manifest, so its figure is exact. The run measures from logical lengths and
+reads manifests only when those say it is short, so a restore that fits pays
+nothing for the check. One that will not fit is refused before it writes
+anything, its folder included, naming the space needed, the space free and
+the folder.
+
+A person may go on regardless: through the service with ignore_free_space,
+through the CLI with --ignore-free-space, and in the console's wizard by
+ticking "restore anyway". The estimate errs high, and a volume that compresses
+what it stores holds more than it is asked to.
+
+One rule says what a target gets back, and the plan and the receipt both read
+it. The plan declares each captured attribute the tree carries and the target
+will not get back, with how many files carry it, and names root or CAP_CHOWN
+for ownership. Receipt schema 6 names it per landed item, and the answer
+summarises it, a line an attribute. Outcomes do not move for metadata alone.
+
+Every plan over real files now lists access times, and most list creation
+times and ownership. That is the truth, and it is the next slice's work.
+Still owed: writing those back; architecture 06 §3's refusal for a security
+descriptor; hard links, which restore as separate files without saying so;
+the physical transfer size; plan export and resume; archival-tier reporting;
+and the recovery tool's own restore.

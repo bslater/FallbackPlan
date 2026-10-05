@@ -25,7 +25,18 @@ namespace FallbackPlan.Restore;
 /// </param>
 public sealed record RestoreBlobSetResult(
     IReadOnlyCollection<ObjectKey> Blobs,
-    IReadOnlyList<string> Missing);
+    IReadOnlyList<string> Missing)
+{
+    /// <summary>
+    /// What each item whose manifest read says of itself, by the manifest's
+    /// object identifier: the bytes restoring it writes and the metadata
+    /// captured with it (FR-RST-003; ADR-0083). The probe decodes every
+    /// manifest to find the segments it names, so this costs it nothing
+    /// more. An item whose manifest is missing or will not read is absent.
+    /// </summary>
+    public IReadOnlyDictionary<ObjectId, RestoreItemFacts> Facts { get; init; } =
+        new Dictionary<ObjectId, RestoreItemFacts>();
+}
 
 /// <summary>
 /// Resolves what a <see cref="RestorePlan"/> needs from the store
@@ -100,6 +111,7 @@ public static class RestoreBlobSet
         var blobKeys = new Dictionary<BlobId, ObjectKey?>();
         var missing = new List<string>();
         var needed = new HashSet<ObjectKey>();
+        var facts = new Dictionary<ObjectId, RestoreItemFacts>();
 
         async ValueTask<bool> PresentAsync(ResolvedLocation location)
         {
@@ -151,6 +163,9 @@ public static class RestoreBlobSet
                 continue;
             }
 
+            facts[item.ObjectId] = new RestoreItemFacts(
+                manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata));
+
             var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));
             foreach (var referenced in references)
@@ -164,7 +179,7 @@ public static class RestoreBlobSet
             }
         }
 
-        return new RestoreBlobSetResult(needed, missing);
+        return new RestoreBlobSetResult(needed, missing) { Facts = facts };
     }
 
     /// <summary>

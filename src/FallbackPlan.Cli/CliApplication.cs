@@ -1391,11 +1391,17 @@ public static class CliApplication
                 Arity = ArgumentArity.ZeroOrOne,
             };
             var outputOption = new Option<string>("--output") { Description = "Destination directory. With --connect this is a path on the service's machine (ADR-0028 §6) — the console is told where, never sent the files.", Required = true };
+            var ignoreFreeSpaceOption = new Option<bool>("--ignore-free-space")
+            {
+                Description = "Restore even when the destination looks too small. Without it, a restore that will not fit "
+                    + "is refused before anything is written; a volume that compresses what it stores can hold more than the estimate.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
             command.Arguments.Add(pathArgument);
             command.Options.Add(outputOption);
+            command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(directOption);
 
             command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
@@ -1404,7 +1410,8 @@ public static class CliApplication
                     new RestoreRequest(
                         parse.GetValue(snapshotArgument)!,
                         parse.GetValue(pathArgument),
-                        parse.GetValue(outputOption)!),
+                        parse.GetValue(outputOption)!,
+                        parse.GetValue(ignoreFreeSpaceOption)),
                     token),
                 cancellationToken)));
         }

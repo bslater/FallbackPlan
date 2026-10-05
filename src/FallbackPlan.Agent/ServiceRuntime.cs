@@ -54,9 +54,9 @@ public sealed record ServiceOptions
 
     /// <summary>
     /// Overrides the free-space probe behind the ship-sink's capacity floor
-    /// (FR-DEST-010): destination root → available bytes, null meaning "the
-    /// platform will not say", which is answered as room. Null, the
-    /// production value, asks <see cref="DriveInfo"/>.
+    /// (FR-DEST-010) and a restore's room (FR-RST-003): directory → available
+    /// bytes, null meaning "the platform will not say", which is answered as
+    /// room. Null, the production value, asks <see cref="DriveInfo"/>.
     /// </summary>
     internal Func<string, long?>? AvailableBytesProbe { get; init; }
 
@@ -383,6 +383,18 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The physical drive behind a path, or null where it cannot be named (ADR-0051).</summary>
     internal Func<string, string?> DiskIdOf => Options.PhysicalDiskOverride ?? Filesystem.Local.PhysicalDisk.Identify;
+
+    /// <summary>
+    /// How a restore asks this machine about room (FR-RST-003, ADR-0083): the
+    /// free-space probe the destination floor asks, and the volume identity
+    /// placement asks, so a restore and placement agree on what shares a
+    /// drive.
+    /// </summary>
+    internal Restore.RestoreSpaceProbe RestoreSpaceProbe => new()
+    {
+        AvailableBytes = Options.AvailableBytesProbe ?? Restore.RestoreSpaceProbe.PlatformAvailableBytes,
+        VolumeOf = VolumeIdOf,
+    };
 
     private static ulong? DefaultVolumeIdOf(string path)
     {

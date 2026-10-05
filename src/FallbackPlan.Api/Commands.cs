@@ -462,11 +462,25 @@ public sealed record ListDirectoryCommand(
 /// <paramref name="Path"/> when present, exactly as the set descriptor's
 /// roots win over its root.
 /// </param>
+/// <param name="OutputDirectory">
+/// Where the run would write, as <see cref="RunRestoreCommand"/> names it
+/// (contract 1.53, FR-RST-003). With this or an <c>original</c>
+/// <paramref name="Target"/>, the plan measures the room the run needs there
+/// against what is free, and a shortfall is a conflict too. Without either,
+/// it measures nothing, as before 1.53.
+/// </param>
+/// <param name="Target">The run's target, as <see cref="RunRestoreCommand"/> takes it.</param>
+/// <param name="Existing">The run's existing-file policy, as <see cref="RunRestoreCommand"/> takes it.</param>
+/// <param name="InPlace">Whether the run would land in place, as <see cref="RunRestoreCommand"/> takes it.</param>
 public sealed record PlanRestoreCommand(
     string SnapshotId,
     string? Path,
     string? Source = null,
-    IReadOnlyList<string>? Paths = null) : ServiceCommand;
+    IReadOnlyList<string>? Paths = null,
+    string? OutputDirectory = null,
+    string? Target = null,
+    string? Existing = null,
+    bool InPlace = false) : ServiceCommand;
 
 /// <summary>
 /// Performs a restore. The output directory is a path <b>on the machine running
@@ -497,6 +511,13 @@ public sealed record PlanRestoreCommand(
 /// the quarantine directory. False keeps today's quarantine default; the
 /// wizard's confirmed flow sends true.
 /// </param>
+/// <param name="IgnoreFreeSpace">
+/// Whether to run although the volume it writes to looks too small (contract
+/// 1.53, FR-RST-003). False, the default, refuses such a run before anything
+/// is written, naming the space needed, the space free and where. The
+/// estimate errs high, and a volume that compresses what it stores can hold
+/// more than it says, so a person who knows theirs does may go on.
+/// </param>
 public sealed record RunRestoreCommand(
     string SnapshotId,
     string? Path,
@@ -505,7 +526,8 @@ public sealed record RunRestoreCommand(
     IReadOnlyList<string>? Paths = null,
     string? Target = null,
     string? Existing = null,
-    bool InPlace = false) : ServiceCommand;
+    bool InPlace = false,
+    bool IgnoreFreeSpace = false) : ServiceCommand;
 
 /// <summary>
 /// Opens a restore source (ADR-0041): the place a guided restore reads from —

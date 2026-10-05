@@ -34,11 +34,100 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ADiagnosticBundleCommand_IsRecordedAtOneFiftyTwo()
+    public void ContractVersion_RestoreSpaceAndMetadataHonesty_IsRecordedAtOneFiftyThree()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.52", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.53", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void PlanRestoreCommand_CarriesTheRunsShape_UnderItsWireNames_AndNamesNoFolderUnlessTold()
+    {
+        // FR-RST-003: a plan answers for the run it plans, so it is told where
+        // the run would write and how. A pre-1.53 client tells it nothing, and
+        // is answered as before.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new PlanRestoreCommand(
+                new string('a', 32), null,
+                OutputDirectory: "/srv/restored", Target: "folder", Existing: "overwrite", InPlace: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"plan_restore\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"output_directory\":\"/srv/restored\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"target\":\"folder\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"existing\":\"overwrite\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"in_place\":true", asked, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<PlanRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                $$"""{"command":"plan_restore","snapshot_id":"{{new string('a', 32)}}"}""", FrameCodec.SerializerOptions),
+            out var bare);
+        Assert.IsNull(bare.OutputDirectory);
+        Assert.IsNull(bare.Target);
+        Assert.IsNull(bare.Existing);
+        Assert.IsFalse(bare.InPlace);
+    }
+
+    [TestMethod]
+    public void RunRestoreCommand_IgnoresFreeSpaceOnlyWhenTold()
+    {
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new RunRestoreCommand(new string('a', 32), null, "/srv/restored", IgnoreFreeSpace: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"ignore_free_space\":true", asked, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RunRestoreCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                $$"""{"command":"run_restore","snapshot_id":"{{new string('a', 32)}}","output_directory":"/srv/restored"}""",
+                FrameCodec.SerializerOptions),
+            out var bare);
+        Assert.IsFalse(bare.IgnoreFreeSpace, "a client that never heard of the check must not skip it");
+    }
+
+    [TestMethod]
+    public void RestorePlanResult_CarriesWhatItWritesAndTheSpaceItNeeds_UnderTheirWireNames()
+    {
+        var result = JsonSerializer.Serialize<ServiceResult>(
+            new RestorePlanResult(
+                2, 9_000, [],
+                WriteBytes: 4_096,
+                Space:
+                [
+                    new RestoreSpaceDescriptor("/srv/restored", 16_384, 1_000),
+                    new RestoreSpaceDescriptor("/tmp", 8_192, null, Working: true),
+                ]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"restore_plan\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"write_bytes\":4096", result, StringComparison.Ordinal);
+        Assert.Contains("\"space\":[", result, StringComparison.Ordinal);
+        Assert.Contains("\"directory\":\"/srv/restored\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"needed_bytes\":16384", result, StringComparison.Ordinal);
+        Assert.Contains("\"available_bytes\":1000", result, StringComparison.Ordinal);
+        Assert.Contains("\"working\":true", result, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RestorePlanResult>(
+            JsonSerializer.Deserialize<ServiceResult>(result, FrameCodec.SerializerOptions), out var read);
+        Assert.AreEqual(4_096L, read.WriteBytes);
+        Assert.IsNotNull(read.Space);
+        Assert.HasCount(2, read.Space);
+        Assert.IsNull(read.Space[1].AvailableBytes, "a platform that would not say crosses as unknown, never as zero");
+    }
+
+    [TestMethod]
+    public void RestoreResult_CarriesWhatItDidNotApply_UnderItsWireName()
+    {
+        var result = JsonSerializer.Serialize<ServiceResult>(
+            new RestoreResult(2, 0, "/srv/restored", "complete", NotApplied: ["accessed_at not applied to 2 item(s)"]),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"not_applied\":[\"accessed_at not applied to 2 item(s)\"]", result, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<RestoreResult>(
+            JsonSerializer.Deserialize<ServiceResult>(result, FrameCodec.SerializerOptions), out var read);
+        Assert.IsNotNull(read.NotApplied);
+        Assert.ContainsSingle(read.NotApplied);
     }
 
     [TestMethod]

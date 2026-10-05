@@ -759,9 +759,8 @@ public sealed partial class ServiceCommandHandler(
         try
         {
             using var catalogue = context.OpenCatalogue();
-            var plan = RestorePlanner.Plan(
-                catalogue, snapshotId, PrefixesOf(command.Paths, command.Path),
-                RestoreTargetProfile.ForLocalPlatform());
+            var target = RestoreTargetProfile.ForLocalPlatform();
+            var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
 
             if (plan.Items.Count == 0)
             {
@@ -771,24 +770,142 @@ public sealed partial class ServiceCommandHandler(
                     + $"{(command.Path is { Length: > 0 } path ? $" at '{path}'" : string.Empty)}.");
             }
 
-            var (missing, _) = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+            // Measured only against where the run would write, which a
+            // pre-1.53 client never names: without it there is nothing to
+            // measure against.
+            IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? slices = null;
+            var mode = RestoreDestinationMode.Quarantine;
+            var policy = ExistingDestinationPolicy.Preserve;
+            if (command.OutputDirectory is { Length: > 0 } || command.Target == "original")
+            {
+                var invalidShape = TryParseRestoreShape(
+                    command.Target, command.Existing, command.InPlace, command.OutputDirectory,
+                    out var toOriginal, out mode, out policy);
+                if (invalidShape is not null)
+                {
+                    return invalidShape;
+                }
+
+                var (resolved, refusal) = SlicesFor(catalogue, snapshotId, plan, toOriginal, command.OutputDirectory);
+                if (resolved is null)
+                {
+                    return refusal!;
+                }
+
+                slices = resolved;
+            }
+
+            var probed = await ProbePlanAsync(context, catalogue, plan, cancellationToken).ConfigureAwait(false);
+
+            // What the files write and what they carry, from the manifests
+            // the probe has already read.
+            var writeBytes = plan.Items
+                .Where(item => item.Kind == EntryKind.File)
+                .Aggregate(0ul, (sum, item) => sum
+                    + (probed.Facts.TryGetValue(item.ObjectId, out var known) ? known.WrittenBytes : item.Length));
+            List<string> conflicts = [.. plan.Conflicts.Select(conflict => $"{conflict.Path} — {conflict.Reason}")];
+            List<string> degradations =
+            [
+                .. plan.Degradations.Concat(RestoreMetadata.Declare(plan, probed.Facts, target))
+                    .Select(degradation => degradation.Detail),
+            ];
+
+            IReadOnlyList<RestoreSpaceDescriptor>? space = null;
+            if (slices is not null)
+            {
+                var report = await RestoreSpace.MeasureAsync(
+                    [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
+                    mode, policy, runtime.RestoreSpaceProbe, RestoreSpace.WrittenBytesFrom(probed.Facts),
+                    cancellationToken).ConfigureAwait(false);
+                space =
+                [
+                    .. report.Needs.Select(need => new RestoreSpaceDescriptor(
+                        need.Directory, (long)need.NeededBytes, need.AvailableBytes, need.Working)),
+                ];
+
+                // A conflict too, where a client that predates the space
+                // figure already looks.
+                conflicts.AddRange(report.Shortfalls.Select(need =>
+                    $"{need.Directory} — the restore would not fit: it {need.Describe()}"));
+            }
+
             return new RestorePlanResult(
                 plan.Items.Count(item => item.Kind != EntryKind.DirectoryPlaceholder),
                 (long)plan.SpaceEstimateBytes,
-                missing,
-                plan.Conflicts.Count,
-                plan.Conflicts.Count == 0
-                    ? null
-                    : [.. plan.Conflicts.Take(20).Select(conflict => $"{conflict.Path} — {conflict.Reason}")],
-                plan.Degradations.Count == 0
-                    ? null
-                    : [.. plan.Degradations.Select(degradation => degradation.Detail)]);
+                probed.Missing,
+                conflicts.Count,
+                conflicts.Count == 0 ? null : [.. conflicts.Take(20)],
+                degradations.Count == 0 ? null : degradations,
+                (long)writeBytes,
+                space);
         }
         finally
         {
             context.Source?.Gate.Release();
         }
     }
+
+    /// <summary>
+    /// The run's shape, as a plan or a run names it: whether it writes back
+    /// to the captured roots, where restored content lands, and what happens
+    /// to a file already there. One reading for both, so a plan answers for
+    /// the run it plans (FR-RST-003).
+    /// </summary>
+    private static ServiceError? TryParseRestoreShape(
+        string? target,
+        string? existing,
+        bool inPlace,
+        string? outputDirectory,
+        out bool toOriginal,
+        out RestoreDestinationMode mode,
+        out ExistingDestinationPolicy policy)
+    {
+        toOriginal = target == "original";
+        mode = inPlace || toOriginal ? RestoreDestinationMode.InPlace : RestoreDestinationMode.Quarantine;
+        policy = ExistingDestinationPolicy.Preserve;
+
+        if (target is not (null or "folder" or "original"))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument, $"'{target}' is not a restore target (folder | original).");
+        }
+
+        if (!toOriginal && string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return new ServiceError(ServiceErrorReason.InvalidArgument, "A restore needs an output directory.");
+        }
+
+        switch (existing)
+        {
+            case null:
+                return null;
+            case "rename":
+                policy = ExistingDestinationPolicy.WriteBeside;
+                return null;
+            case "overwrite":
+                policy = ExistingDestinationPolicy.Replace;
+                return null;
+            default:
+                return new ServiceError(
+                    ServiceErrorReason.InvalidArgument,
+                    $"'{existing}' is not an existing-file policy (rename | overwrite).");
+        }
+    }
+
+    /// <summary>
+    /// The run's slices: the whole plan into the folder, or one slice per
+    /// captured root for the original location (ADR-0041).
+    /// </summary>
+    private (IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)>? Slices, ServiceError? Refusal)
+        SlicesFor(
+            Repository.Catalogue.Catalogue catalogue,
+            byte[] snapshotId,
+            RestorePlan plan,
+            bool toOriginal,
+            string? outputDirectory) =>
+        toOriginal
+            ? SliceForOriginal(catalogue, snapshotId, plan)
+            : ([(plan, outputDirectory!, string.Empty)], null);
 
     /// <summary>
     /// What a plan is for: the objects it needs and cannot find, reported
@@ -801,7 +918,7 @@ public sealed partial class ServiceCommandHandler(
     /// it: the CLI's direct restore opened every footer in the store, and so
     /// did this handler whenever the source was local.
     /// </remarks>
-    private async ValueTask<(List<string> Missing, HashSet<ObjectKey> NeededBlobs)> ProbePlanAsync(
+    private async ValueTask<Restore.RestoreBlobSetResult> ProbePlanAsync(
         RestoreContext context,
         Repository.Catalogue.Catalogue catalogue,
         RestorePlan plan,
@@ -811,15 +928,13 @@ public sealed partial class ServiceCommandHandler(
         // its own store does not hold counts a file missing only when no copy
         // of the set holds what it needs (FR-RST-007).
         await using var copies = context.OtherCopies(runtime);
-        var resolved = copies is null
+        return copies is null
             ? await Restore.RestoreBlobSet.ResolveAsync(
                 catalogue, plan, context.Store, context.RepositoryId, context.Keys, cancellationToken)
                 .ConfigureAwait(false)
             : await Restore.RestoreBlobSet.ResolveAsync(
                 catalogue, plan, context.Store, copies.Sources, context.RepositoryId, context.Keys, cancellationToken)
                 .ConfigureAwait(false);
-
-        return ([.. resolved.Missing], [.. resolved.Blobs]);
     }
 
     /// <summary>Performs a restore, writing on this machine (ADR-0028 §6).</summary>
@@ -830,34 +945,12 @@ public sealed partial class ServiceCommandHandler(
             return invalid!;
         }
 
-        var toOriginal = command.Target == "original";
-        if (command.Target is not (null or "folder" or "original"))
+        var invalidShape = TryParseRestoreShape(
+            command.Target, command.Existing, command.InPlace, command.OutputDirectory,
+            out var toOriginal, out var mode, out var existing);
+        if (invalidShape is not null)
         {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument, $"'{command.Target}' is not a restore target (folder | original).");
-        }
-
-        if (!toOriginal && string.IsNullOrWhiteSpace(command.OutputDirectory))
-        {
-            return new ServiceError(ServiceErrorReason.InvalidArgument, "A restore needs an output directory.");
-        }
-
-        ExistingDestinationPolicy existing;
-        switch (command.Existing)
-        {
-            case null:
-                existing = ExistingDestinationPolicy.Preserve;
-                break;
-            case "rename":
-                existing = ExistingDestinationPolicy.WriteBeside;
-                break;
-            case "overwrite":
-                existing = ExistingDestinationPolicy.Replace;
-                break;
-            default:
-                return new ServiceError(
-                    ServiceErrorReason.InvalidArgument,
-                    $"'{command.Existing}' is not an existing-file policy (rename | overwrite).");
+            return invalidShape;
         }
 
         var target = RestoreTargetProfile.ForLocalPlatform();
@@ -887,20 +980,10 @@ public sealed partial class ServiceCommandHandler(
             // The original-location mapping is resolved BEFORE anything is
             // read or written (plan-before-transfer): every top-level slice
             // must name a configured root, or the run is refused whole.
-            IReadOnlyList<(RestorePlan Plan, string OutputDirectory, string LabelPrefix)> slices;
-            if (toOriginal)
+            var (slices, refusal) = SlicesFor(catalogue, snapshotId, plan, toOriginal, command.OutputDirectory);
+            if (slices is null)
             {
-                var (resolved, refusal) = SliceForOriginal(catalogue, snapshotId, plan);
-                if (resolved is null)
-                {
-                    return refusal!;
-                }
-
-                slices = resolved;
-            }
-            else
-            {
-                slices = [(plan, command.OutputDirectory, string.Empty)];
+                return refusal!;
             }
 
             using var reader = new RepositoryReader(
@@ -928,9 +1011,7 @@ public sealed partial class ServiceCommandHandler(
 
             var options = new RestoreExecutionOptions
             {
-                DestinationMode = command.InPlace || toOriginal
-                    ? RestoreDestinationMode.InPlace
-                    : RestoreDestinationMode.Quarantine,
+                DestinationMode = mode,
                 ExistingDestination = existing,
 
                 // A fresh identifier per run, not per snapshot: two restores of
@@ -941,6 +1022,23 @@ public sealed partial class ServiceCommandHandler(
                 RunId = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8)),
                 NowUnixMilliseconds = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+
+            // Whether the whole run fits, before its first slice writes a byte
+            // (FR-RST-003): every slice is measured together, because two on
+            // one volume share its room. The figure errs high, and a volume
+            // that compresses what it stores holds more than it says, so a
+            // person may go on regardless.
+            var space = await RestoreSpace.MeasureRunAsync(
+                [.. slices.Select(slice => new RestoreSlice(slice.Plan, slice.OutputDirectory))],
+                options.DestinationMode, options.ExistingDestination, runtime.RestoreSpaceProbe, reader,
+                cancellationToken).ConfigureAwait(false);
+            if (space.IsShort && !command.IgnoreFreeSpace)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Refused,
+                    $"{space.Refusal()} Nothing was written. Free some space or choose another folder, or restore "
+                    + "anyway, ignoring free space: a volume that compresses what it stores can hold more than this estimate.");
+            }
 
             // The output directory is a path on the machine running the
             // service: a restore commanded from elsewhere writes here and the
@@ -978,6 +1076,7 @@ public sealed partial class ServiceCommandHandler(
                 .ToHashSet(StringComparer.Ordinal);
 
             var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
+            var notApplied = RestoreMetadata.Summarise(receipt.Items, target);
             return new RestoreResult(
                 // A degraded file's content was written and verified, so it
                 // counts among the files written; the Outcome carries the
@@ -1007,7 +1106,8 @@ public sealed partial class ServiceCommandHandler(
                     ? null
                     : [.. readAround.Take(20).Select(item =>
                         $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
-                        + $"around {string.Join("; ", item.ReadAround!)}")]);
+                        + $"around {string.Join("; ", item.ReadAround!)}")],
+                NotApplied: notApplied.Count == 0 ? null : notApplied);
         }
         finally
         {

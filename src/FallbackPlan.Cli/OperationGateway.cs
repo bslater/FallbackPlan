@@ -169,7 +169,11 @@ public interface IOperationGateway : IAsyncDisposable
 /// Where to write. In service mode this is a path on the machine running the
 /// service (ADR-0028 §6) — the same machine, on the local binding.
 /// </param>
-public sealed record RestoreRequest(string SnapshotId, string? Path, string OutputDirectory);
+/// <param name="IgnoreFreeSpace">
+/// Whether to restore although the volume looks too small (FR-RST-003). A
+/// restore that will not fit is otherwise refused before anything is written.
+/// </param>
+public sealed record RestoreRequest(string SnapshotId, string? Path, string OutputDirectory, bool IgnoreFreeSpace = false);
 
 /// <summary>Resolves which gateway a command gets.</summary>
 public static class OperationGateway
@@ -532,7 +536,9 @@ internal sealed class ServiceGateway(
         try
         {
             var result = await SendAsync<RestoreResult>(
-                new RunRestoreCommand(request.SnapshotId, request.Path, request.OutputDirectory, Source: source),
+                new RunRestoreCommand(
+                    request.SnapshotId, request.Path, request.OutputDirectory, Source: source,
+                    IgnoreFreeSpace: request.IgnoreFreeSpace),
                 "a restore",
                 cancellationToken).ConfigureAwait(false);
 
@@ -550,6 +556,10 @@ internal sealed class ServiceGateway(
                     $"{result.ReadAround} file(s) came from another copy, because a copy they were first read from was damaged or would not read; each was verified like any other:"));
                 lines.AddRange(result.ReadAroundSample ?? []);
             }
+
+            // What the files came back without, which the receipt names file
+            // by file (FR-RST-004).
+            lines.AddRange(result.NotApplied ?? []);
 
             return new OperationReport(result.Failed == 0, lines);
         }
@@ -975,6 +985,21 @@ internal sealed class ServiceGateway(
 /// <summary>The gateway that does the work in this process, holding the writer role.</summary>
 internal sealed class DirectGateway(CliSession session, ILogger? logger = null) : IOperationGateway
 {
+    private static readonly AsyncLocal<Func<string, long?>?> AvailableBytesFlow = new();
+
+    /// <summary>
+    /// A test harness's view of the disk for this flow's restores
+    /// (FR-RST-003): directory → available bytes, null meaning the platform
+    /// will not say. Null, the production value, asks the platform. Scoped to
+    /// the flow that sets it, like <c>FanOut.ReadBackBudget</c>, so it
+    /// belongs to the test that sets it and to no other.
+    /// </summary>
+    internal static Func<string, long?>? AvailableBytesInFlow
+    {
+        get => AvailableBytesFlow.Value;
+        set => AvailableBytesFlow.Value = value;
+    }
+
     /// <summary>The session this gateway works through — the verbs a service cannot serve still need it.</summary>
     public CliSession Session => session;
 
@@ -1237,6 +1262,27 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // before a byte of payload.
         reader.UseLocationSource(catalogue.ResolveLocation);
 
+        // Whether it fits, before anything is written (FR-RST-003). The run
+        // below lands in place and preserves what it finds, so that is the
+        // run measured.
+        var space = await RestoreSpace.MeasureRunAsync(
+            [new RestoreSlice(plan, request.OutputDirectory)],
+            RestoreDestinationMode.InPlace,
+            ExistingDestinationPolicy.Preserve,
+            new RestoreSpaceProbe
+            {
+                AvailableBytes = AvailableBytesInFlow ?? RestoreSpaceProbe.PlatformAvailableBytes,
+                VolumeOf = path => FallbackPlan.Filesystem.Local.LocalFileSystemSource.TryStat(path, out var stat)
+                    ? stat.Device
+                    : null,
+            },
+            reader,
+            cancellationToken).ConfigureAwait(false);
+        if (space.IsShort && !request.IgnoreFreeSpace)
+        {
+            throw new CliFailureException(Strings.FormatDirectGateway_RestoreWouldNotFit(space.Refusal()));
+        }
+
         var receipt = await new RestoreExecutor(reader, target).ExecuteAsync(
             plan,
             request.OutputDirectory,
@@ -1277,6 +1323,10 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
 
         lines.Add(string.Create(CultureInfo.InvariantCulture,
             $"restore {receipt.Outcome}: {restored} file(s) to {receipt.WrittenTo}; {failed} failure(s), {skipped} skipped, {degraded} degraded"));
+
+        // What the files came back without, which the receipt names file by
+        // file (FR-RST-004).
+        lines.AddRange(RestoreMetadata.Summarise(receipt.Items, target));
 
         return new OperationReport(receipt.Outcome is RestoreOutcome.Complete, lines);
     }

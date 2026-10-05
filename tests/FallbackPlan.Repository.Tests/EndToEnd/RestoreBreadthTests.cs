@@ -1,4 +1,5 @@
 using FallbackPlan.Domain.Identifiers;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Domain;
@@ -20,8 +21,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// that keeps both files under a dated name (FR-RST-006's explicit-choice
 /// posture), the receipt pinned whole (schema 4 added <c>written_as</c>;
 /// schema 5, the optional <c>read_from</c> and <c>read_around</c> a run that
-/// reads around damage writes, which this run does not) (FR-RST-004),
-/// several prefixes in one plan, and the targeted blob load.
+/// reads around damage writes, which this run does not; schema 6, the
+/// optional <c>not_applied</c>, which a file carrying only what every target
+/// applies does not write) (FR-RST-004), several prefixes in one plan, and
+/// the targeted blob load.
 /// </summary>
 /// <remarks>
 /// The budget case began as a characterisation of a shortfall and is now the
@@ -332,8 +335,14 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
         // is redacted through the record before serializing. A change that
         // breaks this fixture is a receipt schema change and must bump
         // CurrentSchemaVersion with it.
+        //
+        // The file carries only a modification time, which every target
+        // applies, so the fixture is the same document on every platform. A
+        // permission bit would be applied on one and listed as not applied on
+        // another.
         var content = Deterministic(50_000, 5);
-        var (plan, target, store, keys) = await PublishOneFileAsync("golden", content, 0xE4);
+        var (plan, target, store, keys) = await PublishOneFileAsync(
+            "golden", content, 0xE4, new EntryMetadata { ModifiedAt = 1_722_000_000_000 });
         using var _ = keys;
 
         using var reader = new RepositoryReader(Repo, keys, store, Authority);
@@ -356,7 +365,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
     private const string GoldenReceipt = """
         {
-          "schema_version": 5,
+          "schema_version": 6,
           "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
           "started_at": 1722700000000,
           "completed_at": 1722700000000,
@@ -556,10 +565,14 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
     }
 
     private async Task<(RestorePlan Plan, RestoreTargetProfile Target, Storage.Local.LocalFileSystemObjectStore Store, RepositoryKeySet Keys)>
-        PublishOneFileAsync(string name, byte[] content, byte seed)
+        PublishOneFileAsync(string name, byte[] content, byte seed, EntryMetadata? metadata = null)
     {
         var source = new FakeFileSystemSource();
-        source.AddFile("data/file.bin", content, fileId: 9_001);
+        var file = source.AddFile("data/file.bin", content, fileId: 9_001);
+        if (metadata is not null)
+        {
+            file.Metadata = metadata;
+        }
 
         var store = CreateStore();
         var keys = CreateKeys();
