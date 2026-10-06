@@ -823,16 +823,18 @@ public sealed partial class PublicationOrchestrator
                     }
 
                     // The plan counted this leaf at this length, so this is
-                    // what it contributes to what the run has backed up,
-                    // however it is published or fails (ADR-0088).
+                    // what it contributes to the bytes the run has backed up,
+                    // however it is published or fails (ADR-0088). As a file
+                    // it counts only if it was published.
                     session.BackedUp.BeginFile(leaf.Entry.Length);
+                    var publishedBefore = _files.Count;
                     try
                     {
                         await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
                     }
                     finally
                     {
-                        session.BackedUp.EndFile();
+                        session.BackedUp.EndFile(published: _files.Count > publishedBefore);
                     }
 
                     break;
@@ -1570,9 +1572,10 @@ public sealed partial class PublicationOrchestrator
             _lastState = state;
             _lastEmittedFiles = files;
             _lastEmittedAt = Stopwatch.GetTimestamp();
+            var backedUp = _backedUp?.Read();
             reporter.Report(new JobProgress(
                 _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes,
-                _currentFile, _backedUp?.BackedUp, _hintsWritten, _hintsTotal));
+                _currentFile, backedUp?.Bytes, _hintsWritten, _hintsTotal, backedUp?.Files));
         }
     }
 }

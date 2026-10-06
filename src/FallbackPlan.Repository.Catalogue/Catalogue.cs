@@ -96,6 +96,24 @@ public sealed record DamageReach(
     public bool Complete => Untraced == 0;
 }
 
+/// <summary>What a destination holds of one snapshot's files (ADR-0088 Amendment 1).</summary>
+/// <param name="Total">The snapshot's files.</param>
+/// <param name="Held">Of them, those whose content is all at the destination.</param>
+/// <param name="Whole">Whether it holds the snapshot itself as well: every file, and the record naming them.</param>
+public sealed record FilesDelivered(long Total, long Held, bool Whole);
+
+/// <summary>One blob a snapshot's content is read from.</summary>
+/// <param name="BlobId">The blob.</param>
+/// <param name="StoreBlobKey">Its keyed store name, or null where the catalogue holds none and a reader derives it.</param>
+/// <param name="Class">Which namespace the blob lives under.</param>
+public sealed record ContentBlob(BlobId BlobId, StoreBlobKey? StoreBlobKey, BlobClass Class);
+
+/// <summary>A snapshot's files as the blobs their content is read from (ADR-0088 Amendment 1).</summary>
+/// <param name="Files">The snapshot's files, those with no content included.</param>
+/// <param name="Blobs">Every blob any of its files' content is read from.</param>
+/// <param name="FileBlobs">For each file with content, the indexes into <paramref name="Blobs"/> it needs.</param>
+public sealed record SnapshotContent(long Files, IReadOnlyList<ContentBlob> Blobs, IReadOnlyList<int[]> FileBlobs);
+
 /// <summary>
 /// The local catalogue (architecture 02 §7; FR-MAN-002, FR-MAN-005;
 /// NFR-PERF-004, NFR-PERF-010): a disposable SQLite cache of index and
@@ -1051,6 +1069,173 @@ public sealed class Catalogue : IDisposable
         command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
         command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
         return (long)(command.ExecuteScalar() ?? 0L);
+    }
+
+    /// <summary>
+    /// What a destination holds of one snapshot's files, given the watermark
+    /// its ledger records (ADR-0088 Amendment 1): it holds everything
+    /// published at or before the snapshot that watermark names, so a file
+    /// is held when every content object it needs was published by then.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The watermark is a snapshot record's counter, which is its run's write
+    /// intent, and the run publishes its content later, in its index delta.
+    /// So the watermark is first moved to the delta that published the next
+    /// snapshot record after it: that run's own, and the last whose content
+    /// the destination was given. Content another writer published is taken
+    /// as held, since this writer's counters say nothing of it.
+    /// </para>
+    /// <para>
+    /// A file with no content needs nothing beyond the snapshot that names it.
+    /// That record is what <see cref="FilesDelivered.Whole"/> waits on, and a
+    /// copy sends it last.
+    /// </para>
+    /// </remarks>
+    /// <param name="snapshotId">The snapshot counted against, ordinarily the set's newest.</param>
+    /// <param name="writer">The writer whose counters the watermark is in.</param>
+    /// <param name="syncedSequence">The destination's watermark; positive.</param>
+    public FilesDelivered FilesDeliveredThrough(ReadOnlySpan<byte> snapshotId, WriterId writer, ulong syncedSequence)
+    {
+        ThrowHelper.ThrowIfZero(syncedSequence);
+
+        var total = CountFiles(snapshotId);
+        long through;
+        using (var bound = _connection.CreateCommand())
+        {
+            bound.CommandText = """
+                SELECT MIN(l.sequence) FROM snapshots s
+                JOIN object_locations l ON l.object_id = s.object_id
+                WHERE l.writer_id = $writer AND l.sequence > $synced;
+                """;
+            bound.Parameters.AddWithValue("$writer", writer.ToArray());
+            bound.Parameters.AddWithValue("$synced", (long)syncedSequence);
+            through = bound.ExecuteScalar() is long sequence ? sequence : long.MaxValue;
+        }
+
+        using var missing = _connection.CreateCommand();
+        missing.CommandText = """
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT t.path FROM tree_entries t
+                JOIN version_contents c ON c.version_id = t.object_id
+                WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory
+                  AND NOT EXISTS (
+                      SELECT 1 FROM object_locations l
+                      LEFT JOIN blobs b ON b.blob_id = l.blob_id
+                      WHERE l.object_id = c.object_id
+                        AND COALESCE(b.state, 1) <> 3
+                        AND (l.writer_id <> $writer OR l.sequence <= $through)));
+            """;
+        missing.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        missing.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+        missing.Parameters.AddWithValue("$writer", writer.ToArray());
+        missing.Parameters.AddWithValue("$through", through);
+        var lacking = (long)(missing.ExecuteScalar() ?? 0L);
+
+        using var record = _connection.CreateCommand();
+        record.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM snapshots s
+                JOIN object_locations l ON l.object_id = s.object_id
+                WHERE s.snapshot_id = $snapshot AND (l.writer_id <> $writer OR l.sequence <= $through));
+            """;
+        record.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        record.Parameters.AddWithValue("$writer", writer.ToArray());
+        record.Parameters.AddWithValue("$through", through);
+        var named = (long)record.ExecuteScalar()! > 0;
+
+        return new FilesDelivered(total, total - lacking, named && lacking == 0);
+    }
+
+    /// <summary>
+    /// One snapshot's files as the blobs their content is read from (ADR-0088
+    /// Amendment 1): what a sync counts as content lands. Each content object
+    /// is taken from its winning live location, the blob a restore reads it
+    /// from (07 §3).
+    /// </summary>
+    /// <param name="snapshotId">The snapshot, ordinarily the set's newest.</param>
+    public SnapshotContent ContentOf(ReadOnlySpan<byte> snapshotId)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.path, c.object_id, l.blob_id, b.store_blob_key, b.blob_class,
+                   l.generation, l.writer_id, l.sequence
+            FROM tree_entries t
+            JOIN version_contents c ON c.version_id = t.object_id
+            JOIN object_locations l ON l.object_id = c.object_id
+            LEFT JOIN blobs b ON b.blob_id = l.blob_id
+            WHERE t.snapshot_id = $snapshot AND t.entry_kind <> $directory AND COALESCE(b.state, 1) <> 3;
+            """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+
+        // Per object, its winner by 07 §3's order; per file, the objects it needs.
+        var winners = new Dictionary<ObjectId, (ContentBlob Blob, ulong Generation, byte[] Writer, ulong Sequence)>();
+        var needs = new Dictionary<string, HashSet<ObjectId>>(StringComparer.Ordinal);
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var path = reader.GetString(0);
+                var objectId = ObjectId.FromBytes((byte[])reader.GetValue(1));
+                var blobBytes = (byte[])reader.GetValue(2);
+                var blobId = BlobId.FromBytes(blobBytes);
+
+                // A blob whose store key the catalogue never learned carries
+                // its own id in that column; a reader derives the real one.
+                StoreBlobKey? storeKey = reader.IsDBNull(3) || ((byte[])reader.GetValue(3)).AsSpan().SequenceEqual(blobBytes)
+                    ? null
+                    : StoreBlobKey.FromBytes((byte[])reader.GetValue(3));
+                var blobClass = reader.IsDBNull(4) ? BlobClass.Data : (BlobClass)reader.GetInt64(4);
+                var generation = (ulong)reader.GetInt64(5);
+                var writer = (byte[])reader.GetValue(6);
+                var sequence = (ulong)reader.GetInt64(7);
+
+                if (!needs.TryGetValue(path, out var objects))
+                {
+                    needs[path] = objects = [];
+                }
+
+                objects.Add(objectId);
+                var candidate = (new ContentBlob(blobId, storeKey, blobClass), generation, writer, sequence);
+                if (!winners.TryGetValue(objectId, out var standing) || Outranks(candidate, standing))
+                {
+                    winners[objectId] = candidate;
+                }
+            }
+        }
+
+        var blobs = new List<ContentBlob>();
+        var indexOf = new Dictionary<BlobId, int>();
+        var fileBlobs = new List<int[]>();
+        foreach (var objects in needs.Values)
+        {
+            var needed = new HashSet<int>();
+            foreach (var objectId in objects)
+            {
+                var blob = winners[objectId].Blob;
+                if (!indexOf.TryGetValue(blob.BlobId, out var index))
+                {
+                    indexOf[blob.BlobId] = index = blobs.Count;
+                    blobs.Add(blob);
+                }
+
+                needed.Add(index);
+            }
+
+            fileBlobs.Add([.. needed]);
+        }
+
+        return new SnapshotContent(CountFiles(snapshotId), blobs, fileBlobs);
+
+        static bool Outranks(
+            (ContentBlob Blob, ulong Generation, byte[] Writer, ulong Sequence) candidate,
+            (ContentBlob Blob, ulong Generation, byte[] Writer, ulong Sequence) standing) =>
+            candidate.Generation != standing.Generation
+                ? candidate.Generation > standing.Generation
+                : candidate.Writer.AsSpan().SequenceCompareTo(standing.Writer) is var order && order != 0
+                    ? order > 0
+                    : candidate.Sequence > standing.Sequence;
     }
 
     private static CatalogueTreeEntry ReadTreeEntry(SqliteDataReader reader) => new(

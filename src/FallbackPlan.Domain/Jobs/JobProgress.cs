@@ -68,6 +68,14 @@ namespace FallbackPlan.Domain.Jobs;
 /// §11): the count a client shows while the run finishes. Null until the
 /// run starts writing them.
 /// </param>
+/// <param name="FilesBackedUp">
+/// The plan's files backed up so far (ADR-0088 Amendment 1): files whose
+/// content the store has acknowledged at every destination the run writes
+/// to, and files whose content it already held. A file that failed is never
+/// counted. The third of a job's three stages — scanned, processed, and this
+/// — each over <paramref name="TotalFiles"/>. Null from producers that do not
+/// measure it (contract pre-1.55, the counting pass, verification sweeps).
+/// </param>
 public sealed record JobProgress(
     string JobId,
     JobState State,
@@ -82,7 +90,8 @@ public sealed record JobProgress(
     string? CurrentFile = null,
     long? BytesBackedUp = null,
     long? HintsWritten = null,
-    long? HintsTotal = null);
+    long? HintsTotal = null,
+    long? FilesBackedUp = null);
 
 /// <summary>
 /// Where a running job reports progress. Distinct from

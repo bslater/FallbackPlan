@@ -446,7 +446,7 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var row = JsonSerializer.Serialize(
             new JobDescriptor(
                 "job-1", new string('a', 32), FallbackPlan.Domain.Jobs.JobState.Complete, 1_000, 2_000,
-                TotalFiles: 10, BytesBackedUp: 4096, FilesBackedUp: 9),
+                SnapshotId: null, Detail: null, TotalFiles: 10, BytesBackedUp: 4096, FilesBackedUp: 9),
             FrameCodec.SerializerOptions);
         Assert.Contains("\"files_backed_up\":9", row, StringComparison.Ordinal);
 

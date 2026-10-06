@@ -613,8 +613,14 @@ public static class FanOut
             // hook's answer is what sets it aside for the session.
             var attested = 0UL;
             SequenceAdoption.Adopted? ahead = null;
+
+            // The newest backup's files at this peer (ADR-0088 Amendment 1),
+            // counted from the inventory it declares and then as the push
+            // sends their content.
+            using var count = SyncCount.Start(runtime, set, destination.Name, archive);
             bool OnInventory(IReadOnlyCollection<string> held)
             {
+                count?.Seed(held);
                 attested = ObservedHead.JournalHeadOf(held, runtime.Writer);
                 ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
                 return ahead is null;
@@ -637,7 +643,8 @@ public static class FanOut
                 OnInventory,
                 new ReplicationInitiator.ReceiptExpectation(
                     grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()),
-                pushOnly)
+                pushOnly,
+                count is null ? null : count.Holds)
                 .ConfigureAwait(false);
 
             // The receipt is dealt with before anything else is judged: the
@@ -1176,6 +1183,16 @@ public static class FanOut
 
             long copied = 0;
             long alreadyHeld = 0;
+
+            // The newest backup's files at this destination, counted as the
+            // copy lands their content and read by the status while it runs
+            // (ADR-0088 Amendment 1). The ledger's figure moves only once the
+            // pass has succeeded, so the count stands until then.
+            using var count = scope == SyncScope.Skip
+                ? null
+                : await SyncCount.StartAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
+                    .ConfigureAwait(false);
+
             if (scope == SyncScope.Skip)
             {
                 // Nothing published since this pair was last read through, its
@@ -1198,7 +1215,7 @@ public static class FanOut
                         var converged = await StoreToStoreCopier.ConvergeAsync(
                             archive.Store, replica, keeps, cancellationToken,
                             destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                            spares, counting, copyScope).ConfigureAwait(false);
+                            spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
                         copied = converged.Copied;
                         alreadyHeld = converged.AlreadyHeld;
                     }
@@ -1207,7 +1224,7 @@ public static class FanOut
                         var outcome = await StoreToStoreCopier.CopyAsync(
                             archive.Store, replica, cancellationToken,
                             destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                            counting, copyScope).ConfigureAwait(false);
+                            counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
                         copied = outcome.Copied;
                         alreadyHeld = outcome.AlreadyHeld;
                     }

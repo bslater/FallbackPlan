@@ -144,6 +144,11 @@ public static class StoreToStoreCopier
     /// Whether to walk the catch-all phase as well as the named ones. A pass
     /// on the reconciliation cadence takes it; the ones between do not.
     /// </param>
+    /// <param name="holds">
+    /// Told each key the destination holds once the pass has looked at it,
+    /// whether it was there already or has just been copied: what lets a
+    /// caller count a backup's files as their content lands.
+    /// </param>
     /// <returns>What was copied and what was already there.</returns>
     public static async ValueTask<CopyOutcome> CopyAsync(
         IObjectStore source,
@@ -152,7 +157,8 @@ public static class StoreToStoreCopier
         string? destinationName = null,
         ILogger? logger = null,
         IProgress<CopyProgress>? progress = null,
-        CopyScope scope = CopyScope.Reconcile)
+        CopyScope scope = CopyScope.Reconcile,
+        Action<string>? holds = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(destination);
@@ -202,6 +208,7 @@ public static class StoreToStoreCopier
                     alreadyHeld++;
                     heldBytes += entry.Length;
                     progress?.Report(new CopyProgress(heldBytes, owedBytes));
+                    holds?.Invoke(entry.Key.Value);
                     continue;
                 }
 
@@ -233,6 +240,7 @@ public static class StoreToStoreCopier
                 // question this figure asks.
                 heldBytes += entry.Length;
                 progress?.Report(new CopyProgress(heldBytes, owedBytes));
+                holds?.Invoke(entry.Key.Value);
             }
         }
 
@@ -272,6 +280,10 @@ public static class StoreToStoreCopier
     /// Whether to walk the catch-all phase as well as the named ones. A pass
     /// on the reconciliation cadence takes it; the ones between do not.
     /// </param>
+    /// <param name="holds">
+    /// Told each key the destination holds once the pass has looked at it,
+    /// as <see cref="CopyAsync"/> tells it.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async ValueTask<ConvergeOutcome> ConvergeAsync(
         IObjectStore source,
@@ -282,7 +294,8 @@ public static class StoreToStoreCopier
         ILogger? logger = null,
         Func<string, bool>? spares = null,
         IProgress<CopyProgress>? progress = null,
-        CopyScope scope = CopyScope.Reconcile)
+        CopyScope scope = CopyScope.Reconcile,
+        Action<string>? holds = null)
     {
         var log = logger ?? NullLogger.Instance;
         var name = destinationName ?? "the destination";
@@ -328,6 +341,7 @@ public static class StoreToStoreCopier
                     alreadyHeld++;
                     heldBytes += entry.Length;
                     progress?.Report(new CopyProgress(heldBytes, owedBytes));
+                    holds?.Invoke(entry.Key.Value);
                     continue;
                 }
 
@@ -356,6 +370,7 @@ public static class StoreToStoreCopier
 
                 heldBytes += entry.Length;
                 progress?.Report(new CopyProgress(heldBytes, owedBytes));
+                holds?.Invoke(entry.Key.Value);
             }
         }
 

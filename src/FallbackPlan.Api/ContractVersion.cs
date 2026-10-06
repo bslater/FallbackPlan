@@ -542,8 +542,23 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// got. Additive: a pre-1.54 service sends none of them, and a client
     /// that sees null divides by files as before.
     /// </para>
+    /// <para>
+    /// 1.55 keeps two figures apart (FR-SVC-006, ADR-0088 Amendment 1). A
+    /// job's progress is three equal stages over its counted plan's files:
+    /// scanned, processed, and stored, which `JobProgress` and the job row
+    /// now count as `files_backed_up`. How much of a backup a destination
+    /// holds is a separate figure. Each status row gains `files_held` and
+    /// `files_total`: of the set's newest backup's files, how many have all
+    /// their content at that destination. `holds_newest` says whether the
+    /// destination holds that backup whole, snapshot record included, and is
+    /// the only thing that lets a client draw 100%. `in_run` says the set's
+    /// live run writes to the destination, so that run's stored files are
+    /// gaining there. `syncing` says a sync to it is under way, and the count
+    /// is then that sync's own. Additive: a pre-1.55 service sends none of
+    /// them. A client reads null `files_held` as not counted, never as none.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 54);
+    public static ContractVersion Current { get; } = new(1, 55);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

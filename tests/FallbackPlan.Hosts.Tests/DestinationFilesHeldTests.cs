@@ -123,10 +123,17 @@ public sealed class DestinationFilesHeldTests : IDisposable
         var set = runtime.Configuration.BackupSets.Single();
         var gate = new PauseGate();
         gate.Pause("held so the test can read the status mid-run");
+        var now = DateTimeOffset.Now;
+        var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
         var run = BackupRunner.RunAsync(
-            runtime, set, "job-held", DateTimeOffset.Now, userInitiated: true, pauseGate: gate,
+            runtime, set, job.Id, now, userInitiated: true, pauseGate: gate,
             cancellationToken: Timeout).AsTask();
-        await gate.Parked.WaitAsync(Timeout);
+
+        // A run that ends before it parks has said why: fail on that, not on a timeout.
+        if (await Task.WhenAny(gate.Parked, run).WaitAsync(Timeout) == run)
+        {
+            Assert.Fail($"the run ended before it could be held: {(await run).Outcome} {(await run).Detail}");
+        }
 
         Assert.IsTrue((await RowAsync(runtime, "vault")).InRun, "the held run writes to the vault");
         Assert.IsFalse((await RowAsync(runtime, "spare")).InRun, "the run left the unplugged spare out");

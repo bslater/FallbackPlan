@@ -1265,6 +1265,14 @@ public static class CliApplication
                                     $"backed up      {backedUp} of {plannedBytes} planned bytes")
                                 : string.Create(CultureInfo.InvariantCulture, $"backed up      {backedUp} bytes"));
                         }
+
+                        if (row.FilesBackedUp is { } stored)
+                        {
+                            report.Add(row.TotalFiles is { } plannedFiles
+                                ? string.Create(CultureInfo.InvariantCulture,
+                                    $"stored         {stored} of {plannedFiles} planned files")
+                                : string.Create(CultureInfo.InvariantCulture, $"stored         {stored} files"));
+                        }
                     }
                     else
                     {

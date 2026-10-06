@@ -229,6 +229,11 @@ internal static class ReplicationInitiator
     /// holds no authority to delete and must still not send what a person has
     /// asked to delete (FR-GC-013).
     /// </param>
+    /// <param name="delivered">
+    /// Told each key once it has been sent whole, so a caller can count a
+    /// backup's files as their content reaches the destination. Sent is not
+    /// yet acknowledged: the acknowledgement covers the whole push.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -241,7 +246,8 @@ internal static class ReplicationInitiator
         ReadOnlyMemory<byte> claimPublicKey = default,
         Func<IReadOnlyCollection<string>, bool>? onInventory = null,
         ReceiptExpectation? expectReceipt = null,
-        bool pushOnly = false)
+        bool pushOnly = false,
+        Action<string>? delivered = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -310,6 +316,8 @@ internal static class ReplicationInitiator
                 {
                     resumed++;
                 }
+
+                delivered?.Invoke(key);
             }
 
             var sent = (long)sentKeys.Count;
