@@ -30,8 +30,10 @@ public sealed record RestoreBlobSetResult(
 {
     /// <summary>
     /// What each item whose manifest read says of itself, by the manifest's
-    /// object identifier: the bytes restoring it writes and the metadata
-    /// captured with it (FR-RST-003; ADR-0083). The probe decodes every
+    /// object identifier: the bytes restoring it writes, the metadata
+    /// captured with it, and the kinds of extended attribute among that a
+    /// restore does not write back everywhere (FR-RST-003; ADR-0083,
+    /// ADR-0087). The probe decodes every
     /// manifest to find the segments it names, so this costs it nothing
     /// more. A folder's manifest is its tree, whose head carries the folder's
     /// own metadata (ADR-0086). An item whose manifest is missing or will not
@@ -169,7 +171,7 @@ public static class RestoreBlobSet
                 {
                     facts[item.ObjectId] = new RestoreItemFacts(
                         EntryKind.DirectoryPlaceholder, 0, RestoreMetadata.Captured(own),
-                        own.OwnerName, own.GroupName, own.PosixMode);
+                        own.OwnerName, own.GroupName, own.PosixMode, RestoreMetadata.KindsOf(own));
                 }
 
                 continue;
@@ -182,7 +184,8 @@ public static class RestoreBlobSet
 
             facts[item.ObjectId] = new RestoreItemFacts(
                 manifest.EntryKind, RestoreSpace.WrittenBytes(manifest), RestoreMetadata.Captured(manifest.Metadata),
-                manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode);
+                manifest.Metadata.OwnerName, manifest.Metadata.GroupName, manifest.Metadata.PosixMode,
+                RestoreMetadata.KindsOf(manifest.Metadata));
 
             var references = manifest.SegmentReferences.Select(reference => reference.ObjectId)
                 .Concat(manifest.Metadata.AlternateStreams.Select(stream => stream.ObjectId));

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -177,6 +178,36 @@ public sealed class RestoreHonestyServiceTests : IDisposable
     }
 
     [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Run_GivesARealFileItsExtendedAttributesBack_AndItsAclWhereThisInstallationCapturedIt()
+    {
+        // Captured from a real file and written back through the service
+        // (ADR-0087). On Linux the file also carries an ACL naming an account
+        // by number, which comes back because this installation captured it.
+        await BackUpTwoFilesAsync(tagged: true, acl: OperatingSystem.IsLinux() ? NumberedAcl : null);
+        await using var runtime = await StartAsync(availableBytes: null);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var snapshotId = await SnapshotIdAsync(handler);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+
+        Assert.IsInstanceOfType<RestoreResult>(
+            await handler.ExecuteAsync(
+                new RunRestoreCommand(
+                    snapshotId, null, Path.Combine(_harness.WorkPath, "restored"), Source: source.SourceId),
+                _timeout.Token),
+            out var restored);
+
+        Assert.AreEqual("complete", restored.Outcome);
+        var notes = Path.Combine(restored.OutputDirectory, "notes.txt");
+        CollectionAssert.AreEqual("kept"u8.ToArray(), Xattr.Get(notes, "user.tag"));
+        if (OperatingSystem.IsLinux())
+        {
+            CollectionAssert.AreEqual(NumberedAcl, Xattr.Get(notes, "system.posix_acl_access"));
+        }
+    }
+
+    [TestMethod]
     public async Task Plan_OverRealFiles_DeclaresTheCapturedMetadataItWillNotApply_WithCounts()
     {
         await BackUpTwoFilesAsync(withLink: !OperatingSystem.IsWindows());
@@ -203,6 +234,14 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         Assert.IsNull(plan.Space);
         Assert.AreEqual(plan.Bytes, plan.WriteBytes);
     }
+
+    /// <summary>user::rw-, user:54321:r--, group::r--, mask::r--, other::---: an ACL naming an account by number.</summary>
+    private static byte[] NumberedAcl => Xattr.Acl(
+        (Xattr.AclUserObject, 6, Xattr.AclUndefinedId),
+        (Xattr.AclUser, 4, 54_321),
+        (Xattr.AclGroupObject, 4, Xattr.AclUndefinedId),
+        (Xattr.AclMask, 4, Xattr.AclUndefinedId),
+        (Xattr.AclOther, 0, Xattr.AclUndefinedId));
 
     /// <summary>What no target here writes back, and how many items it is left off: two files and their folder on Windows.</summary>
     private static string StillNotApplied =>
@@ -232,7 +271,8 @@ public sealed class RestoreHonestyServiceTests : IDisposable
     private static string ItemEndingIn(Dictionary<string, string[]> receipt, string name) =>
         receipt.Keys.SingleOrDefault(path => path.EndsWith(name, StringComparison.Ordinal)) ?? name;
 
-    private async Task BackUpTwoFilesAsync(bool withLink = false, DateTime? nestedModified = null)
+    private async Task BackUpTwoFilesAsync(
+        bool withLink = false, DateTime? nestedModified = null, bool tagged = false, byte[]? acl = null)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "hello");
@@ -240,6 +280,16 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         if (withLink)
         {
             File.CreateSymbolicLink(Path.Combine(_harness.SourceRoot, "link"), "notes.txt");
+        }
+
+        if (tagged)
+        {
+            Xattr.Set(Path.Combine(_harness.SourceRoot, "notes.txt"), "user.tag", "kept"u8.ToArray());
+        }
+
+        if (acl is not null)
+        {
+            Xattr.Set(Path.Combine(_harness.SourceRoot, "notes.txt"), "system.posix_acl_access", acl);
         }
 
         if (nestedModified is { } modified)

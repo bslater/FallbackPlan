@@ -36,6 +36,32 @@ public sealed record RestoreTargetProfile
     public bool SupportsCreationTimes { get; init; }
 
     /// <summary>
+    /// Whether the executor writes extended attributes back on this target:
+    /// Linux and macOS have a call that writes one, Windows does not
+    /// (<see cref="ExtendedAttributes"/>). Each is still the platform's to
+    /// refuse, and the receipt says which it did (ADR-0087).
+    /// </summary>
+    public bool SupportsExtendedAttributes { get; init; }
+
+    /// <summary>
+    /// Whether this installation captured the snapshot being restored: its
+    /// device is the one the snapshot names. A Linux ACL names accounts by
+    /// number, and a number names the account it meant only on the machine
+    /// that captured it, so an ACL that names one is written back only where
+    /// this holds (ADR-0087). False unless a caller that knows who captured
+    /// the snapshot says so.
+    /// </summary>
+    /// <remarks>
+    /// The device a snapshot names is attribution by claim (ADR-0020): any
+    /// member of the repository could have written it. This keeps an honest
+    /// restore on another machine from giving a file to whoever holds a
+    /// number there. It is no defence against a member who lies about it:
+    /// such a member can already name any owner, which a restore as root
+    /// gives back (ADR-0085).
+    /// </remarks>
+    public bool CapturedHere { get; init; }
+
+    /// <summary>
     /// The account the restore runs as, which decides whose files it may
     /// give away and to which groups (<see cref="RestoreAccount"/>), or null
     /// where the target gives no file an owner by name. The plan predicts
@@ -54,8 +80,36 @@ public sealed record RestoreTargetProfile
         SupportsPosixMetadata = !OperatingSystem.IsWindows(),
         SupportsSymlinks = !OperatingSystem.IsWindows(),
         SupportsCreationTimes = FileTimes.CanSetCreationTime,
+        SupportsExtendedAttributes = ExtendedAttributes.CanSet,
         Account = RestoreAccount.OfThisProcess(),
     };
+
+    /// <summary>
+    /// The local defaults for a restore of <paramref name="snapshotId"/> by the
+    /// installation whose device is <paramref name="deviceId"/>, which
+    /// captured it where the catalogue says the snapshot names that device
+    /// (<see cref="CapturedHere"/>).
+    /// </summary>
+    /// <param name="catalogue">The catalogue the restore is planned from.</param>
+    /// <param name="snapshotId">The snapshot, 16 bytes.</param>
+    /// <param name="deviceId">This installation's device.</param>
+    public static RestoreTargetProfile ForLocalPlatform(
+        Catalogue catalogue, ReadOnlySpan<byte> snapshotId, ReadOnlySpan<byte> deviceId)
+    {
+        ThrowHelper.ThrowIfNull(catalogue);
+
+        var capturedHere = false;
+        foreach (var snapshot in catalogue.EnumerateSnapshots())
+        {
+            if (snapshot.SnapshotId.Span.SequenceEqual(snapshotId))
+            {
+                capturedHere = snapshot.DeviceId.Span.SequenceEqual(deviceId);
+                break;
+            }
+        }
+
+        return ForLocalPlatform() with { CapturedHere = capturedHere };
+    }
 }
 
 /// <summary>One planned restore item.</summary>
