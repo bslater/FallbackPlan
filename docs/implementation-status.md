@@ -112,7 +112,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart. Amendment 1: a quarantine restore keeps set-id bits as any restore does, a decision documented rather than a change | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
 | [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
 | [0087](adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md) | A restore writes back the extended attributes it may: each captured attribute of a file or a folder is written alone by its captured name, never through a link, after its owner and group and before its permissions, and one left is named in the item's detail. An ACL that names accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the security and trusted namespaces. Where an ACL does not come back the group gets no more than it gave. The plan declares each with counts | **Built** | `Domain/ExtendedAttributes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestorePlan` · `Restore/RestoreAccount` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreExtendedAttributesTests`, `Domain.Tests/ExtendedAttributesTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0087--extended-attributes) |
-| [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count; the console shows one figure for bar and percentage, held at 99 until the job settles, with the step and its count beside it, and the estimate runs on the same measure. The source-identity hints are written up to sixteen at once, all before the snapshot record | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Tests/BackedUpProgressTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
+| [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count, and the source-identity hints are written up to sixteen at once, all before the snapshot record. Amendment 1 makes two figures of it: a job's bar is its three stages over the plan's files (scanned, processed, backed up, contract 1.55), and each destination's circle is how many of the newest backup's files it holds, worked out from its ledger watermark at rest, counted live during a sync, with a live run folded in by the console; the set's circle is its least complete destination's | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Catalogue/Catalogue` · `Agent/DeliveredFiles` · `Agent/FileHoldingCounter` · `Agent/LiveHoldings` · `Agent/DestinationShipSink` · `Repository.Tests/BackedUpProgressTests`, `Hosts.Tests/DestinationFilesHeldTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
 
 ---
 
@@ -2365,9 +2365,43 @@ rather than a race it hopes to catch. The same tests show that releasing one
 blob counts what it carried and nothing past it, and that an unchanged file
 counts before any upload.
 
-What remains is recorded rather than done. Destinations a run does not write
-to — a peer, a destination with no baseline yet, one dropped mid-run — are
-brought up to date by their own catch-up, which reports no live progress; the
-owner's "every destination" waits on that. The last percent covers the
-finishing work whatever its length, and the count beside it, not the bar, says
-how far through it is.
+What remained was the owner's "every destination", and the owner then
+separated two questions the one figure had blurred. Amendment 1 answers each
+on its own.
+
+**How far the job has got** is its bar: three equal stages over the plan's
+files, scanned, processed and backed up. The tally now counts files beside
+bytes, each once everything archived up to its end has been acknowledged.
+An unchanged file counts at once, and a file that failed never counts.
+
+**How much of the backup each destination holds** is its circle: how many of
+the newest backup's files have all their content there. At rest it is worked
+out from the ledger's watermark and the catalogue, with nothing listed.
+Getting that right turned on one fact. A snapshot record's counter is its
+run's write intent, and the run's content is published later, in its index
+delta, so the watermark is first moved to the delta of the next snapshot
+after it. Measured against the raw watermark, every destination would seem to
+lack the run it had just received. While a sync runs, its own count takes
+over, from the destination's listing or a peer's declared inventory, and then
+from each key as it lands. While a backup runs, the console folds the run in:
+what it stored, where it writes, and elsewhere what it found unchanged, at
+the share held before. So a run that changes nothing leaves the circle at
+100%, and a first backup's circle stops at 99%. A destination's line says the
+circle in words, then what is moving files there, and no longer repeats the
+job. The set's summary carries its least complete destination's circle.
+
+Writing the status side turned up an older fault. The status took a set's
+latest snapshot as the last row of a newest-first listing, so its
+partial-capture warning described the first backup ever taken. It now takes
+the first row.
+
+The proof again holds things still. A held run names the destination it
+writes to. A missed backup leaves exactly its unchanged files counted. A sync
+is watched counting up from nothing.
+
+What remains is recorded rather than done. The set's circle is the least
+complete destination's, which overstates the share every destination holds
+only when two destinations lack different files. A destination whose last
+sync failed part-way is counted at what its watermark supports until a sync
+counts it again. The last percent of a job's bar still covers the finishing
+work whatever its length, with the count beside it.

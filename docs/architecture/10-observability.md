@@ -202,6 +202,20 @@ reports count the source-identity hints it is writing, which a client shows
 beside the meter. A report reaches the hub each time an acknowledged blob
 moves the figure, so the meter moves while one large file is still being read.
 
+[ADR-0088](../adr/0088-a-backups-percentage-is-what-it-has-backed-up.md)
+Amendment 1 splits that one figure into two. A job's bar is its **three
+stages** over the plan's files, scanned, processed and backed up, where the
+last is `files_backed_up` (contract 1.55), counted as the bytes are. Each
+destination's status row carries a second figure, **files held**: how many of
+the set's newest backup's files have all their content there. The service
+works it out from the ledger's watermark and the catalogue, with no listing,
+except while a sync fills the destination, when the sync's own count takes
+over. `holds_newest` says whether the destination holds that backup whole,
+and only then may a client draw 100%. `in_run` names the destinations a live
+run writes to, so a console can fold the run's stored files into their
+circles; it folds in what the run found unchanged for the rest. The set's
+circle is its least complete destination's.
+
 **A console watching several machines** ([ADR-0028](../adr/0028-service-boundary-and-deployment-topologies.md) §8)
 aggregates only by derivation: a machine's summary is computed from its per-set,
 per-destination detail, the detail stays reachable, and no roll-up invents a
