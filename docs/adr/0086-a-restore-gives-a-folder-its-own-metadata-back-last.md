@@ -38,6 +38,8 @@ The run reads each folder's tree when it reaches the folder, makes the folder, a
 
 The run keeps only what the rule can apply, plus which attributes were captured. A tree of many folders holds no security descriptors or extended attributes the run will not write.
 
+> **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** A folder's extended attributes are now written back by the file's rule, so the run keeps them with the rest. A folder's default ACL goes on with them, after the files restored into it are made, so none of them inherits from it.
+
 ### 3. A folder already there keeps its own
 
 No existing-file policy reaches a folder. The executor already refuses to let Preserve displace a folder or Replace delete one, because a policy that resolved a folder would act on a subtree it never planned. So a folder that stands at the destination before the run reaches it keeps its own metadata. Its item lists everything captured as not applied, with the reason. A folder the restore writes into, whether chosen by the person or made for the run's quarantine, is not an item, and it too keeps its own. The snapshot's root, the folder a single-folder set captured, is restored as its contents, into the folder the restore writes into. Its own metadata is not given to that folder, for the reason [ADR-0085 Amendment 1](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits) gave for the quarantine folder: it would change who may reach a folder the person chose.
@@ -65,6 +67,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 ## What this does not do
 
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed, for folders as for files.
+
+  > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back, for folders as for files. The rest of this item remains owed.
 - **The snapshot's root.** Its metadata is not applied to the folder a restore writes into (§3), and the plan does not declare it, because that folder is not an item.
 - **A handle-relative restore.** The run writes by path, and checks containment before each write rather than in one step with it. Opening each folder relative to its parent, as capture does, would close the window §4 narrows.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
@@ -82,3 +86,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A folder the restore makes gets its captured times, permissions and ownership back by the file's rule, last and deepest first. One already there keeps its own, nothing is applied through a link, and the plan and receipt count folders apart from files. |
+| 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes a folder's extended attributes back by the file's rule, in §2's end pass, so a folder's default ACL goes on after what is restored into it. |

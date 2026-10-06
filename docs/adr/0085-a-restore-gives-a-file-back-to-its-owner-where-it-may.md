@@ -41,6 +41,8 @@ Ownership by name means a name that belongs to a different person on the restori
 
 Each is written with its own `lchown`, which never follows a link, so a refusal of the owner leaves the group the account could give. Ownership goes before the permissions, which go before the times ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) §1), because changing it clears the set-id bits. The executor attempts each wherever its name resolves, whatever the plan predicted, and the platform decides. A refusal is that attribute not applied, never the item failed.
 
+> **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes now go between ownership and the permissions. Changing the owner strips a file capability as it clears a set-id bit, so they follow it.
+
 ### 4. A set-id bit only with its owner
 
 A set-user-id bit is kept only where the owner it was captured under was given back, and a set-group-id bit only with its group. Otherwise the bit is dropped, the rest of the mode is written, and the receipt lists `posix_mode` beside the owner or group that did not land. Dropping the bit is the closest approximation that is not wrong, which is what architecture 06 §3 means by degrade and report.
@@ -69,6 +71,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 - **A symlink's own owner.** `lchown` could set it. It is owed with the rest of a symlink's own metadata.
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
+
+  > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes, POSIX ACLs among them, are now written back on Linux and macOS where the account and the volume allow them. An ACL naming accounts by number comes back only where this installation captured the snapshot, for the reason §1 resolves a name: a number names an account only on the machine that captured it.
 - **Whether a quarantine restore should keep set-id bits at all.** A restore running as root into the default quarantine folder recreates a root-owned set-user-id program faithfully, such as an old one from a historical snapshot, in a folder other accounts may reach. That predates this record, which neither makes it worse nor decides it.
 
   > **2026-10 ([Amendment 1](#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)).** Decided: a quarantine restore keeps them, as any restore does, and the docs say what that means for the folder.
@@ -89,6 +93,8 @@ This record left one question open, and it is now decided. A restore into the qu
 - **What it costs.** The quarantine folder is `.fbp-quarantine/<run>`, under the folder the restore was pointed at. It is created like any directory a restore makes, with the restoring process's defaults, and its own metadata is not applied ([ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md)). So whether other accounts can reach what lands there depends on the folder the restore was pointed at and the restoring process's umask. Under the usual umask, a folder others can already reach puts a restored set-user-id root program within their reach too, along with any flaw it was later patched for.
 
   > **2026-10 ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).** A folder restored from the snapshot now gets its captured permissions and owner back once its contents have landed. The quarantine folder is not one of them: it is made for the run, takes the restoring process's defaults, and is given no snapshot's metadata.
+
+  > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** A restore as root now writes back file capabilities too. A capability lets a program do some of what only root may, whoever runs it, so a historical one restored into a folder others can reach is within their reach as a set-user-id program is, and the same advice holds.
 - **What a person does about it.** Point a restore of a historical system tree, run as root, at a folder only the restoring account can reach, or restrict the folder before anyone else uses the machine. Then move or remove what was inspected. Architecture 08 §3.1 says so where quarantine is described, the threat model lists it beside the malware a snapshot can hold, and `SECURITY.md` names it among what the product does not protect against.
 
 Two alternatives were weighed and not taken. Stripping set-id bits from a quarantine restore would make it give back something other than what was captured. Creating the quarantine folder private to its owner would change who may reach a folder the person chose, which the person can decide for themselves.
@@ -100,3 +106,4 @@ Two alternatives were weighed and not taken. Stripping set-id bits from a quaran
 | 2026-10 | Accepted | Built in one slice, tests first. Owner and group are written back on a POSIX target where their names resolve and the restoring account may give them, apart and before the permissions. A set-id bit is kept only with the owner or group it runs as. The plan predicts each file and says why ownership will not land. |
 | 2026-10 | Accepted | Amendment 1: a quarantine restore keeps set-id bits, as any restore does. The open question is decided and documented in architecture 08 §3.1, the threat model and SECURITY.md. No behaviour changes. |
 | 2026-10 | Accepted | [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) gives a folder the restore makes its owner and group by §2's rule, and its permissions by §4's. |
+| 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back between §3's ownership and the permissions. A restore as root recreates file capabilities, which Amendment 1's advice covers. |

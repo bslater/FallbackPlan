@@ -548,10 +548,7 @@ public sealed class RestoreExecutor(
                 folders.Add(new Folder(
                     items.Count - 1, item, destination, found,
                     captured is null ? CapturedMetadata.None : RestoreMetadata.Captured(captured),
-                    captured is null ? null : captured with
-                    {
-                        WindowsSecurityDescriptor = null, ExtendedAttributes = [], AlternateStreams = [],
-                    },
+                    captured is null ? null : captured with { WindowsSecurityDescriptor = null, AlternateStreams = [] },
                     unread));
                 continue;
             }
@@ -755,8 +752,8 @@ public sealed class RestoreExecutor(
                     // write the platform refuses leaves that attribute not
                     // applied; it does not undo content that landed and
                     // verified (ADR-0084).
-                    var notApplied = RestoreMetadata.NotApplied(
-                        RestoreMetadata.Captured(manifest.Metadata), ApplyMetadata(landing, manifest.Metadata));
+                    var written = ApplyMetadata(landing, manifest.Metadata);
+                    var notApplied = RestoreMetadata.NotApplied(RestoreMetadata.Captured(manifest.Metadata), written.Applied);
 
                     // The main stream restored and verified; alternate data
                     // streams the manifest carries did not (RR-6's honesty
@@ -770,7 +767,8 @@ public sealed class RestoreExecutor(
                         {
                             Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
                             Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
-                                + "and not written back on this target (declared in the plan)",
+                                + "and not written back on this target (declared in the plan)"
+                                + (written.Detail is { } left ? $"; {left}" : string.Empty),
                             NotApplied = notApplied,
                         }));
                         break;
@@ -779,7 +777,7 @@ public sealed class RestoreExecutor(
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                        NotApplied = notApplied,
+                        Detail = written.Detail, NotApplied = notApplied,
                     }));
                     break;
                 }
@@ -996,7 +994,7 @@ public sealed class RestoreExecutor(
     /// A folder the run made or found, and what it is given once nothing more
     /// will land in it. Everything captured with it is kept as flags, for the
     /// receipt; of the values, only those the rule can apply, so a tree of
-    /// many folders holds no descriptors or attributes it will not write.
+    /// many folders holds no descriptors or streams it will not write.
     /// </summary>
     /// <param name="Receipt">Where its item is in the receipt.</param>
     /// <param name="Item">The plan's item.</param>
@@ -1075,10 +1073,10 @@ public sealed class RestoreExecutor(
             };
         }
 
+        var written = ApplyMetadata(folder.Destination, values, folder: true);
         return made with
         {
-            NotApplied = RestoreMetadata.NotApplied(
-                folder.Captured, ApplyMetadata(folder.Destination, values, folder: true)),
+            Detail = written.Detail, NotApplied = RestoreMetadata.NotApplied(folder.Captured, written.Applied),
         };
     }
 
@@ -1330,30 +1328,43 @@ public sealed class RestoreExecutor(
     /// <summary>
     /// Writes back what the target takes of <paramref name="metadata"/> onto
     /// the file landed or the folder made at <paramref name="destination"/>,
-    /// one attribute at a time, and answers which writes landed.
+    /// one attribute at a time, and answers which writes landed, and which
+    /// extended attributes were left and why.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The order is fixed by what each write disturbs. Ownership goes first:
     /// giving a file to another owner or group clears its set-user-id and
-    /// set-group-id bits, so the permissions have to follow it, and they keep
-    /// a set-id bit only where its owner or group landed. Permissions change
-    /// no time. Modification and access times follow. The creation time goes
-    /// last. On macOS a modification time set earlier than the creation time
-    /// makes the volume move the creation time back to it, and .NET then
-    /// restores the one before; written last, the captured creation time is
-    /// the last word whichever of those holds. A folder is written through
-    /// the folder's own calls, which Windows needs to open one for its times.
+    /// set-group-id bits and strips its file capabilities, so the permissions
+    /// and the extended attributes have to follow it, and the permissions
+    /// keep a set-id bit only where its owner or group landed. Extended
+    /// attributes go on before the permissions, because a captured mode that
+    /// takes away the owner's write permission would refuse the owner's own
+    /// attributes, and an ACL sets the mode's group bits that the
+    /// permissions then set as captured. Permissions change no time.
+    /// Modification and access times follow. The creation time goes last. On
+    /// macOS a modification time set earlier than the creation time makes
+    /// the volume move the creation time back to it, and .NET then restores
+    /// the one before; written last, the captured creation time is the last
+    /// word whichever of those holds. A folder is written through the
+    /// folder's own calls, which Windows needs to open one for its times.
     /// </para>
     /// <para>
     /// An owner or group is attempted wherever its name resolves, whatever
     /// the plan predicted, and the platform decides: the receipt records
-    /// that. A write that fails, a name that resolves to nothing, or a time
-    /// no file can carry is that attribute not applied, never the item
-    /// failed.
+    /// that. So is each extended attribute the rule does not withhold
+    /// (<see cref="RestoreMetadata.Withheld"/>); any that is withheld or
+    /// refused leaves extended attributes not applied, and the detail names
+    /// it. A write that fails, a name that resolves to nothing, or a time no
+    /// file can carry is that attribute not applied, never the item failed.
+    /// </para>
+    /// <para>
+    /// Where the file's captured ACL did not come back, its group is given
+    /// no more than the ACL gave it (<see cref="RestoreMetadata.WithoutAcl"/>),
+    /// and its permissions are then not those captured.
     /// </para>
     /// </remarks>
-    private CapturedMetadata ApplyMetadata(string destination, EntryMetadata metadata, bool folder = false)
+    private Written ApplyMetadata(string destination, EntryMetadata metadata, bool folder = false)
     {
         var applied = CapturedMetadata.None;
         FileSystemInfo landed = folder ? new DirectoryInfo(destination) : new FileInfo(destination);
@@ -1375,11 +1386,46 @@ public sealed class RestoreExecutor(
             }
         }
 
+        // Each alone, so a refusal leaves the rest. The access ACL is
+        // remembered, because the permissions depend on whether it landed.
+        var writes = target.SupportsExtendedAttributes && ExtendedAttributes.CanSet;
+        var left = new List<(string Name, string Why)>();
+        ExtendedAttributeEntry? acl = null;
+        var aclLanded = false;
+        foreach (var attribute in metadata.ExtendedAttributes)
+        {
+            var isAcl = RestoreMetadata.IsAccessAcl(attribute.Name.Span);
+            var why = !writes ? null : RestoreMetadata.Withheld(attribute, target);
+            var landedHere = writes
+                && why is null
+                && ExtendedAttributes.TrySet(destination, attribute.Name.Span, attribute.Value.Span);
+            if (writes && !landedHere)
+            {
+                left.Add((System.Text.Encoding.UTF8.GetString(attribute.Name.Span), why ?? "refused by the target"));
+            }
+
+            if (isAcl)
+            {
+                (acl, aclLanded) = (attribute, landedHere);
+            }
+        }
+
+        if (writes && metadata.ExtendedAttributes.Count > 0 && left.Count == 0)
+        {
+            applied |= CapturedMetadata.ExtendedAttributes;
+        }
+
         if (target.SupportsPosixMetadata && metadata.PosixMode is { } mode && !OperatingSystem.IsWindows())
         {
-            // A set-id bit whose owner or group did not land is dropped, so
-            // the mode that lands is not the one captured.
+            // A set-id bit whose owner or group did not land is dropped, and
+            // so is any group permission only an ACL that did not land gave,
+            // so the mode that lands is not the one captured.
             var permitted = RestoreMetadata.PermittedMode(mode, applied);
+            if (acl is not null && !aclLanded)
+            {
+                permitted = RestoreMetadata.WithoutAcl(permitted, acl);
+            }
+
             if (Wrote(() => landed.UnixFileMode = (UnixFileMode)permitted) && permitted == (mode & 0xFFF))
             {
                 applied |= CapturedMetadata.PosixMode;
@@ -1405,7 +1451,13 @@ public sealed class RestoreExecutor(
             applied |= CapturedMetadata.CreatedAt;
         }
 
-        return applied;
+        return new Written(
+            applied,
+            left.Count == 0
+                ? null
+                : "extended attribute(s) not applied: " + string.Join("; ", left
+                    .GroupBy(entry => entry.Why, StringComparer.Ordinal)
+                    .Select(reason => $"{string.Join(", ", reason.Select(entry => entry.Name))} ({reason.Key})")));
 
         static bool Wrote(Action write)
         {
@@ -1430,4 +1482,9 @@ public sealed class RestoreExecutor(
             return id;
         }
     }
+
+    /// <summary>What the metadata writes for one file or folder did.</summary>
+    /// <param name="Applied">The attributes that landed as captured.</param>
+    /// <param name="Detail">Which extended attributes were left and why, or null when none was.</param>
+    private readonly record struct Written(CapturedMetadata Applied, string? Detail);
 }

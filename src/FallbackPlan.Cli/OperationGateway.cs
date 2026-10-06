@@ -1244,9 +1244,9 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // property of the executor (architecture 08 §3), and this is now that
         // executor.
         var snapshotId = Convert.FromHexString(request.SnapshotId);
-        var target = RestoreTargetProfile.ForLocalPlatform();
 
         using var catalogue = Catalogue.Open(session.CataloguePath, session.Repository.RepositoryId, logger);
+        var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, session.DeviceId);
         var plan = RestorePlanner.Plan(catalogue, snapshotId, request.Path ?? string.Empty, target);
         if (plan.Items.Count == 0)
         {

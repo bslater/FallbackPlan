@@ -1,3 +1,5 @@
+using FallbackPlan.TestSupport;
+
 namespace FallbackPlan.Cli.Tests;
 
 /// <summary>
@@ -73,9 +75,39 @@ public sealed class RestoreHonestyCommandTests : IDisposable
         }
     }
 
+    [TestMethod]
+    [PlatformCondition(TestPlatforms.Posix, "Linux and macOS write a file's extended attributes")]
+    [PlatformTrait(TestPlatforms.Posix)]
+    public async Task Restore_GivesARealFileItsExtendedAttributesBack_AndItsAclWhereThisInstallationCapturedIt()
+    {
+        // In direct mode the CLI runs the restore itself, so it is the CLI
+        // that knows this installation captured the snapshot and an ACL's
+        // account numbers mean here what they meant then (ADR-0087).
+        var snapshot = await BackUpAsync(tagged: true, acl: OperatingSystem.IsLinux() ? NumberedAcl : null);
+        var destination = Path.Combine(_cli.WorkPath, "restored");
+
+        var restore = await _cli.RunAsync("restore", snapshot, "--output", destination);
+
+        Assert.IsTrue(restore.ExitCode == 0, restore.All);
+        var one = Path.Combine(destination, "one.txt");
+        CollectionAssert.AreEqual("kept"u8.ToArray(), Xattr.Get(one, "user.tag"));
+        if (OperatingSystem.IsLinux())
+        {
+            CollectionAssert.AreEqual(NumberedAcl, Xattr.Get(one, "system.posix_acl_access"));
+        }
+    }
+
     public void Dispose() => _cli.Dispose();
 
-    private async Task<string> BackUpAsync(bool withLink = false)
+    /// <summary>user::rw-, user:54321:r--, group::r--, mask::r--, other::---: an ACL naming an account by number.</summary>
+    private static byte[] NumberedAcl => Xattr.Acl(
+        (Xattr.AclUserObject, 6, Xattr.AclUndefinedId),
+        (Xattr.AclUser, 4, 54_321),
+        (Xattr.AclGroupObject, 4, Xattr.AclUndefinedId),
+        (Xattr.AclMask, 4, Xattr.AclUndefinedId),
+        (Xattr.AclOther, 0, Xattr.AclUndefinedId));
+
+    private async Task<string> BackUpAsync(bool withLink = false, bool tagged = false, byte[]? acl = null)
     {
         await _cli.InitAsync();
         _cli.WriteFile("tree/one.txt", "first");
@@ -83,6 +115,16 @@ public sealed class RestoreHonestyCommandTests : IDisposable
         if (withLink)
         {
             File.CreateSymbolicLink(Path.Combine(_cli.WorkPath, "tree", "link"), "one.txt");
+        }
+
+        if (tagged)
+        {
+            Xattr.Set(Path.Combine(_cli.WorkPath, "tree", "one.txt"), "user.tag", "kept"u8.ToArray());
+        }
+
+        if (acl is not null)
+        {
+            Xattr.Set(Path.Combine(_cli.WorkPath, "tree", "one.txt"), "system.posix_acl_access", acl);
         }
 
         var backup = await _cli.RunAsync("backup", Path.Combine(_cli.WorkPath, "tree"));

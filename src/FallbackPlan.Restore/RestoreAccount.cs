@@ -25,6 +25,13 @@ public sealed record RestoreAccount
     /// <summary>Whether it may give a file to any account and group: root, or CAP_CHOWN on Linux.</summary>
     public required bool MayGiveFilesAway { get; init; }
 
+    /// <summary>
+    /// Whether it is root. On Linux only root writes the extended attributes
+    /// in the security and trusted namespaces, so a restore that is not root
+    /// leaves them, and its plan says so (ADR-0087).
+    /// </summary>
+    public bool IsSuperuser { get; init; }
+
     /// <summary>The id a captured owner's name has on the target, or null where no account has it.</summary>
     public Func<string, uint?> ResolveUser { get; init; } = FileOwnership.UserId;
 
@@ -42,6 +49,7 @@ public sealed record RestoreAccount
                 UserId = FileOwnership.EffectiveUserId,
                 GroupIds = FileOwnership.GroupIds,
                 MayGiveFilesAway = FileOwnership.MayGiveFilesAway,
+                IsSuperuser = Environment.IsPrivilegedProcess,
             }
             : null;
 
