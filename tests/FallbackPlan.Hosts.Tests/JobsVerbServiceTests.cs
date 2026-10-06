@@ -13,7 +13,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// much of its plan it backed up included (FR-SVC-006, ADR-0088) — and
 /// <c>jobs &lt;id&gt; --changes --failures</c> printing exactly what the
 /// drill-down verbs answer — the requirement's "answers the same from the
-/// CLI", held to the service's own answer rather than to a description of it.
+/// CLI", held to the service's own answer rather than to a description of it
+/// — and only with the passphrase named (FR-WOR-007, ADR-0089).
 /// </summary>
 /// <remarks>
 /// <c>Cli.Tests/JobsVerbTests</c> holds the other half: the verb's wiring, and
@@ -105,15 +106,25 @@ public sealed class JobsVerbServiceTests : IDisposable
 
         var second = await RunBackupAsync(runtime, handler);
 
+        var source = (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId;
         Assert.IsInstanceOfType<JobChangesResult>(
-            await handler.ExecuteAsync(new JobChangesCommand(second.Id), _timeout.Token), out var changes);
+            await handler.ExecuteAsync(new JobChangesCommand(second.Id, Source: source), _timeout.Token), out var changes);
         Assert.IsInstanceOfType<JobFailuresResult>(
-            await handler.ExecuteAsync(new JobFailuresCommand(second.Id), _timeout.Token), out var failures);
+            await handler.ExecuteAsync(new JobFailuresCommand(second.Id, Source: source), _timeout.Token), out var failures);
         Assert.IsTrue(
             changes.New.Count > changes.New.Sample.Count,
             "the case needs more arrivals than the default sample shows");
 
-        var drilldown = await JobsAsync(second.Id, "--changes", "--failures");
+        // A run's files are the backup's, so asking for them takes the
+        // passphrase (FR-WOR-007); without it the verb says which option
+        // brings it.
+        var refused = await JobsAsync(second.Id, "--changes");
+        Assert.AreNotEqual(0, refused.ExitCode, refused.All);
+        Assert.Contains("--passphrase-env", refused.All, StringComparison.Ordinal);
+        Assert.DoesNotContain("fresh-00.txt", refused.All, StringComparison.Ordinal);
+
+        var drilldown = await JobsAsync(
+            second.Id, "--changes", "--failures", "--passphrase-env", _harness.PassphraseVariable);
         Assert.AreEqual(0, drilldown.ExitCode, drilldown.All);
         var printed = drilldown.Output;
 
@@ -134,7 +145,7 @@ public sealed class JobsVerbServiceTests : IDisposable
 
         // The set's first run has no predecessor, and says so instead of
         // diffing against nothing.
-        var firstRun = await JobsAsync(first.Id, "--changes");
+        var firstRun = await JobsAsync(first.Id, "--changes", "--passphrase-env", _harness.PassphraseVariable);
         Assert.AreEqual(0, firstRun.ExitCode, firstRun.All);
         Assert.Contains("the set's first backup — everything is new", firstRun.Output, StringComparison.Ordinal);
     }

@@ -7,143 +7,37 @@ using FallbackPlan.Storage.Local;
 namespace FallbackPlan.Web;
 
 /// <summary>
-/// The restore wizard's passphrase gate (ADR-0041): verified HERE, in the
-/// console process on the operator's machine, against the staging archive's
-/// own key files — the passphrase never crosses the command contract
-/// (NFR-SEC-009 stands untouched) and never reaches the service, which
-/// already holds its own copy. The same posture as key export (ADR-0028 §9):
-/// passphrase work runs where the person typed it.
+/// The console's passphrase ceremonies: where a typed passphrase is derived
+/// — in the console process, on the machine the person typed it on — and
+/// what leaves for the service is only ever an envelope sealed to its
+/// recipient key (NFR-SEC-009). The restore gate (FR-WOR-007, ADR-0089)
+/// derives under the facts the service publishes for each set and proves the
+/// derivation against that set's sealing key before it seals a grant, so a
+/// console on any machine checks a passphrase alike and nothing passes a
+/// passphrase that did not check out. The same posture as key export
+/// (ADR-0028 §9): passphrase work runs where the person typed it.
 /// </summary>
 /// <remarks>
 /// This is the one class in the console permitted to reach below the client
 /// contract — the dependency rule is scoped to it by name
 /// (<c>DependencyRuleTests</c>), because a console that opened repositories
-/// anywhere else would stop being a client. It reads the descriptor and the
-/// wrapped key objects, derives, and answers; it opens no blob and derives
-/// no state.
+/// anywhere else would stop being a client. The provisioning ceremony reads a
+/// local descriptor when one is there; the grant ceremonies read nothing
+/// local at all.
 /// </remarks>
 public static class ConsoleRestoreGate
 {
-    /// <summary>How a verification attempt resolved.</summary>
+    /// <summary>How a ceremony resolved.</summary>
     public enum GateOutcome
     {
-        /// <summary>The passphrase unwrapped a key object — it is the repository's.</summary>
+        /// <summary>The passphrase reproduced the key it was proved against, and what it opens was sealed.</summary>
         Verified = 0,
 
-        /// <summary>The derivation ran and no key object opened.</summary>
+        /// <summary>The derivation ran and reproduced no key it was proved against.</summary>
         Wrong = 1,
 
-        /// <summary>Nothing local to verify against — a remote console, or no archive yet.</summary>
+        /// <summary>Nothing to derive under or seal to — a service not set up, or one publishing an unusable key.</summary>
         Unavailable = 2,
-    }
-
-    /// <summary>An attempt's answer.</summary>
-    /// <param name="Outcome">How it resolved.</param>
-    /// <param name="Detail">What an unavailable outcome met, for the page to show.</param>
-    /// <param name="GrantEnvelope">
-    /// A restore grant for a write-only archive (ADR-0042 §5): the derived
-    /// scalar sealed to the service's recipient key, hex-rendered — minted
-    /// only when the passphrase verified against a v2 archive and a recipient
-    /// key was given. Opaque to the page and to the relay; only the service
-    /// can open it. Null on v1 archives.
-    /// </param>
-    public sealed record GateAnswer(GateOutcome Outcome, string? Detail = null, string? GrantEnvelope = null);
-
-    /// <summary>
-    /// Verifies a typed passphrase against the first repository of the
-    /// installation that will answer: a staging archive under
-    /// <paramref name="archivesRoot"/>, or a direct-ship set's metadata
-    /// store under <paramref name="stateDirectory"/><c>/sets</c> (ADR-0046 —
-    /// on an install whose every set ships direct, the metadata stores are
-    /// the only local key files there are). Every repository a service
-    /// manages opens under the one service passphrase, so any is as good a
-    /// witness as another; a damaged one is skipped for the next. A
-    /// write-only repository is verified by derive-and-compare against its
-    /// descriptor's sealing public key (ADR-0042 §1 — no key object exists
-    /// to unwrap), and when <paramref name="grantRecipientHex"/> names the
-    /// service's recipient key the verified scalar is sealed into a restore
-    /// grant on the way out.
-    /// </summary>
-    /// <param name="archivesRoot">The service's archives root, from <c>describe_service</c>.</param>
-    /// <param name="stateDirectory">The service's state directory, from <c>describe_service</c>; its <c>sets</c> child holds the metadata stores.</param>
-    /// <param name="passphraseText">The typed passphrase; used for one derivation and released.</param>
-    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>; null mints no grant.</param>
-    /// <param name="cancellationToken">Cancels the derivation.</param>
-    /// <returns>The answer.</returns>
-    public static async Task<GateAnswer> VerifyAsync(
-        string? archivesRoot,
-        string? stateDirectory,
-        string passphraseText,
-        string? grantRecipientHex,
-        CancellationToken cancellationToken)
-    {
-        ThrowHelper.ThrowIfNull(passphraseText);
-
-        if (RepositoryRoots(archivesRoot, stateDirectory).Count == 0)
-        {
-            return new GateAnswer(
-                GateOutcome.Unavailable,
-                "The service's archives are not readable from this console.");
-        }
-
-        // The recipient key is parsed ONCE, before any archive is touched: a
-        // service publishing an unusable key is its own finding, never to be
-        // mistaken for a damaged archive — and a wizard verified without a
-        // mintable grant would only defer the failure to the restore.
-        byte[]? recipient = null;
-        if (grantRecipientHex is { Length: > 0 })
-        {
-            if (!TryParseRecipient(grantRecipientHex, out recipient))
-            {
-                return new GateAnswer(
-                    GateOutcome.Unavailable,
-                    "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
-                    + "and try again (ADR-0042).");
-            }
-        }
-
-        using var passphrase = Passphrase.Create(passphraseText);
-        var sawAnArchive = false;
-        foreach (var archive in LocalRepositories(archivesRoot, stateDirectory))
-        {
-            sawAnArchive = true;
-            try
-            {
-                var store = OpenStore(archive);
-                var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, cancellationToken)
-                    .ConfigureAwait(false);
-
-                // The verifier is equality, not decryption: derive and
-                // compare the sealing public key (ADR-0042 §1). The same
-                // derivation's scalar is the restore grant, so a verified
-                // answer carries it sealed rather than making the wizard pay
-                // the Argon2 cost twice.
-                if (!RepositoryLifecycle.TryDeriveReadAuthority(descriptor, passphrase, out var authority))
-                {
-                    return new GateAnswer(GateOutcome.Wrong);
-                }
-
-                using (authority)
-                {
-                    return new GateAnswer(
-                        GateOutcome.Verified,
-                        GrantEnvelope: recipient is not null
-                            ? Convert.ToHexStringLower(
-                                WriteOnlyProvisioning.SealGrant(recipient, authority!.SealingPrivateKey))
-                            : null);
-                }
-            }
-            catch (Exception damaged) when (damaged is RepositoryOpenException or IOException or FormatException)
-            {
-                // A damaged archive proves nothing either way; try the next.
-            }
-        }
-
-        return new GateAnswer(
-            GateOutcome.Unavailable,
-            sawAnArchive
-                ? "No local archive could answer the check."
-                : "No local repository exists yet to verify against — run a backup first.");
     }
 
     /// <summary>A provisioning ceremony's client half, resolved.</summary>
@@ -267,16 +161,6 @@ public static class ConsoleRestoreGate
 
         return roots;
     }
-
-    /// <summary>
-    /// Every local directory carrying a repository descriptor, whichever
-    /// shape wrote it. Order follows <see cref="RepositoryRoots"/>.
-    /// </summary>
-    private static IEnumerable<string> LocalRepositories(string? archivesRoot, string? stateDirectory) =>
-        RepositoryRoots(archivesRoot, stateDirectory)
-            .SelectMany(Directory.GetDirectories)
-            .Where(candidate =>
-                File.Exists(Path.Combine(candidate, RepositoryLifecycle.DescriptorKey.Value)));
 
     /// <summary>
     /// One named set's repository, under whichever root holds it, or null
@@ -434,11 +318,11 @@ public static class ConsoleRestoreGate
                 WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));
     }
 
-    /// <summary>An applied retention run's grants, resolved.</summary>
+    /// <summary>A grant ceremony's answer: one sealed grant per set the passphrase opens.</summary>
     /// <param name="Outcome"><see cref="GateOutcome.Verified"/> when at least one set's grant was minted.</param>
     /// <param name="Detail">Why not, when none was.</param>
-    /// <param name="Grants">Each opened set's sealed reclaim grant, hex, keyed by set id.</param>
-    public sealed record ReclaimAnswer(
+    /// <param name="Grants">Each opened set's sealed grant, hex, keyed by set id.</param>
+    public sealed record GrantsAnswer(
         GateOutcome Outcome, string? Detail = null, IReadOnlyDictionary<string, string>? Grants = null);
 
     /// <summary>
@@ -447,26 +331,56 @@ public static class ConsoleRestoreGate
     /// the service holds the key that publishes and not the key that
     /// authorises a deletion, so the reclaim sub-root is derived here and
     /// only the sealed grant goes to the service. One grant per set the
-    /// passphrase opens, derived under the facts the service publishes for
-    /// it: a set adopted from a destination keeps the salt it was born under
-    /// (ADR-0061), and every other set has the installation's. Pure, like
-    /// <see cref="BuildAdoptEnvelope"/>: the facts come from the service's
-    /// own answers.
+    /// passphrase opens, as <see cref="BuildRestoreGrants"/> mints them.
+    /// </summary>
+    /// <param name="description">The service's <c>describe_service</c> answer.</param>
+    /// <param name="sets">The service's <c>list_backup_sets</c> answer.</param>
+    /// <param name="passphraseText">The typed passphrase; used for the derivations and released.</param>
+    /// <returns>The grants, or why there are none.</returns>
+    public static GrantsAnswer BuildReclaimGrants(
+        ServiceDescriptionResult description, IReadOnlyList<BackupSetDescriptor> sets, string passphraseText) =>
+        BuildGrants(
+            description, sets, passphraseText,
+            (recipient, authority) => WriteOnlyProvisioning.SealReclaimGrant(recipient, authority.ReclaimKeySeed),
+            "No backup set has an archive yet, so there is nothing to apply retention to.");
+
+    /// <summary>
+    /// The passphrase gate's client half (FR-WOR-007, ADR-0089; ADR-0042 §5):
+    /// a restore grant per set the passphrase opens, each the set's sealing
+    /// scalar sealed to the service's recipient key. Opening a restore source
+    /// under one is what lets a person see that set's files.
+    /// </summary>
+    /// <param name="description">The service's <c>describe_service</c> answer.</param>
+    /// <param name="sets">The service's <c>list_backup_sets</c> answer.</param>
+    /// <param name="passphraseText">The typed passphrase; used for the derivations and released.</param>
+    /// <returns>The grants, or why there are none.</returns>
+    public static GrantsAnswer BuildRestoreGrants(
+        ServiceDescriptionResult description, IReadOnlyList<BackupSetDescriptor> sets, string passphraseText) =>
+        BuildGrants(
+            description, sets, passphraseText,
+            (recipient, authority) => WriteOnlyProvisioning.SealGrant(recipient, authority.SealingPrivateKey),
+            "No backup set has anything to unlock yet.");
+
+    /// <summary>
+    /// One grant per set the passphrase opens, derived under the facts the
+    /// service publishes for it: a set adopted from a destination keeps the
+    /// salt it was born under (ADR-0061), and every other set has the
+    /// installation's. Pure, like <see cref="BuildAdoptEnvelope"/>: the facts
+    /// come from the service's own answers.
     /// </summary>
     /// <remarks>
     /// One derivation per distinct salt and parameters, so the ordinary
     /// installation runs Argon2id once. Each derivation is proved against the
     /// sealing public key published beside the salt before a set's grant is
-    /// sealed; a set it does not reproduce is left out, which the service
-    /// reports as not applied. A passphrase that opens no set is wrong, and
-    /// nothing is minted.
+    /// sealed; a set it does not reproduce is left out. A passphrase that
+    /// opens no set is wrong, and nothing is minted.
     /// </remarks>
-    /// <param name="description">The service's <c>describe_service</c> answer.</param>
-    /// <param name="sets">The service's <c>list_backup_sets</c> answer.</param>
-    /// <param name="passphraseText">The typed passphrase; used for the derivations and released.</param>
-    /// <returns>The grants, or why there are none.</returns>
-    public static ReclaimAnswer BuildReclaimGrants(
-        ServiceDescriptionResult description, IReadOnlyList<BackupSetDescriptor> sets, string passphraseText)
+    private static GrantsAnswer BuildGrants(
+        ServiceDescriptionResult description,
+        IReadOnlyList<BackupSetDescriptor> sets,
+        string passphraseText,
+        Func<byte[], RepositoryReadAuthority, byte[]> seal,
+        string nothingToJudge)
     {
         ThrowHelper.ThrowIfNull(description);
         ThrowHelper.ThrowIfNull(sets);
@@ -475,7 +389,7 @@ public static class ConsoleRestoreGate
         if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex
             || !TryParseRecipient(recipientHex, out var recipient))
         {
-            return new ReclaimAnswer(
+            return new GrantsAnswer(
                 GateOutcome.Unavailable,
                 "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
                 + "and try again (ADR-0042).");
@@ -537,14 +451,14 @@ public static class ConsoleRestoreGate
             }
             catch (FormatException)
             {
-                return new ReclaimAnswer(
+                return new GrantsAnswer(
                     GateOutcome.Unavailable,
                     $"Set '{set.Name}' was listed with derivation facts that do not parse.");
             }
 
             if (salt.Length != KekDerivation.SaltLength)
             {
-                return new ReclaimAnswer(
+                return new GrantsAnswer(
                     GateOutcome.Unavailable,
                     $"Set '{set.Name}' was listed with a salt of {salt.Length} bytes; {KekDerivation.SaltLength} are expected.");
             }
@@ -560,7 +474,7 @@ public static class ConsoleRestoreGate
                 }
                 catch (ArgumentException refused)
                 {
-                    return new ReclaimAnswer(
+                    return new GrantsAnswer(
                         GateOutcome.Unavailable,
                         $"Set '{set.Name}' was listed with derivation parameters this console will not use: {refused.Message}");
                 }
@@ -569,8 +483,7 @@ public static class ConsoleRestoreGate
                 {
                     known = (
                         authority.Credential.SealingPublicKey.ToArray(),
-                        Convert.ToHexStringLower(
-                            WriteOnlyProvisioning.SealReclaimGrant(recipient!, authority.ReclaimKeySeed)));
+                        Convert.ToHexStringLower(seal(recipient!, authority)));
                 }
 
                 derived[key] = known;
@@ -584,17 +497,15 @@ public static class ConsoleRestoreGate
 
         if (!judged)
         {
-            return new ReclaimAnswer(
-                GateOutcome.Unavailable,
-                "No backup set has an archive yet, so there is nothing to apply retention to.");
+            return new GrantsAnswer(GateOutcome.Unavailable, nothingToJudge);
         }
 
         return grants.Count == 0
-            ? new ReclaimAnswer(
+            ? new GrantsAnswer(
                 GateOutcome.Wrong,
                 "That passphrase does not open any backup set here — it does not reproduce a sealing key the "
                 + "service publishes. Nothing was sent.")
-            : new ReclaimAnswer(GateOutcome.Verified, Grants: grants);
+            : new GrantsAnswer(GateOutcome.Verified, Grants: grants);
     }
 
     private static ProvisionAnswer BuildCreationEnvelope(Passphrase passphrase, byte[] recipient)

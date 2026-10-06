@@ -436,6 +436,12 @@ public sealed record ChangeBucketDescriptor(long Count, IReadOnlyList<string> Sa
 /// <param name="NoLongerIncluded">Files the last snapshot holds that the rules no longer capture — they leave future snapshots because of the rules, not the disk.</param>
 /// <param name="Failures">Paths the walk could not read.</param>
 /// <param name="SampleLimit">The per-bucket sample cap that was applied.</param>
+/// <param name="NamesWithheld">
+/// Whether the deleted and no-longer-included buckets were counted without
+/// their names (contract 1.56, FR-WOR-007): those files are named only by the
+/// backup, and the ask carried no source unlocked with the passphrase. A
+/// pre-1.56 service never withholds, and answers false.
+/// </param>
 public sealed record SetChangePreviewResult(
     string SetName,
     string? BaselineSnapshotId,
@@ -448,7 +454,8 @@ public sealed record SetChangePreviewResult(
     ChangeBucketDescriptor Deleted,
     ChangeBucketDescriptor NoLongerIncluded,
     long Failures,
-    int SampleLimit) : ServiceResult;
+    int SampleLimit,
+    bool NamesWithheld = false) : ServiceResult;
 
 /// <summary>A freshly issued pairing invite — the one time the code exists in the clear.</summary>
 /// <param name="Code">The code to speak to the other operator. Never persisted, never shown again.</param>

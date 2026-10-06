@@ -51,7 +51,7 @@ public sealed partial class JobDrilldownTests : IDisposable
         var second = await RunBackupAsync(runtime, handler);
 
         Assert.IsInstanceOfType<JobChangesResult>(
-            await handler.ExecuteAsync(new JobChangesCommand(second.Id, SampleLimit: 1), _timeout.Token),
+            await handler.ExecuteAsync(new JobChangesCommand(second.Id, SampleLimit: 1, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
             out var changes);
 
         Assert.AreEqual(first.SnapshotId, changes.BaselineSnapshotId,
@@ -78,7 +78,7 @@ public sealed partial class JobDrilldownTests : IDisposable
         var job = await RunBackupAsync(runtime, handler);
 
         Assert.IsInstanceOfType<JobChangesResult>(
-            await handler.ExecuteAsync(new JobChangesCommand(job.Id), _timeout.Token),
+            await handler.ExecuteAsync(new JobChangesCommand(job.Id, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
             out var changes);
 
         Assert.IsNull(changes.BaselineSnapshotId, "a first backup has nothing to be compared against");
@@ -157,7 +157,7 @@ public sealed partial class JobDrilldownTests : IDisposable
             Assert.AreEqual(JobState.CompletedWithFailures, job.State);
 
             Assert.IsInstanceOfType<JobFailuresResult>(
-                await handler.ExecuteAsync(new JobFailuresCommand(job.Id), _timeout.Token),
+                await handler.ExecuteAsync(new JobFailuresCommand(job.Id, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
                 out var failures);
 
             Assert.AreEqual(1L, failures.Failures);
@@ -184,7 +184,7 @@ public sealed partial class JobDrilldownTests : IDisposable
         var job = await RunBackupAsync(runtime, handler);
 
         Assert.IsInstanceOfType<JobFailuresResult>(
-            await handler.ExecuteAsync(new JobFailuresCommand(job.Id), _timeout.Token),
+            await handler.ExecuteAsync(new JobFailuresCommand(job.Id, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
             out var failures);
 
         Assert.AreEqual(0L, failures.Failures);

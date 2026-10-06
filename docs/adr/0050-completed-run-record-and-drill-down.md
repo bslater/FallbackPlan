@@ -1,6 +1,6 @@
 # ADR-0050 — The completed-run record and its drill-down: a job that can say what it did
 
-**Status:** Accepted
+**Status:** Accepted, amended (2026-10, [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md))
 **Date:** 2026-08
 **Requirements:** FR-SVC-018, FR-SVC-006, FR-DEST-004
 **Related:** [ADR-0027](0027-services-scheduling-status-telemetry.md), [ADR-0048](0048-determinate-backup-progress.md), [ADR-0035](0035-destination-fitness.md), [ADR-0043](0043-structured-logging-and-diagnostics.md), [ADR-0047](0047-backup-pool-and-priorities.md)
@@ -83,6 +83,13 @@ neither operand of the comparison was on the wire. ADR-0027 §4's own
      recorded name bytes have no faithful decoding the rendering
      substitutes while the raw truth stays in the manifest.
 
+   > **Amended 2026-10 ([ADR-0089](0089-a-backups-file-names-need-the-passphrase.md)).**
+   > Both verbs' paths are the backup's, and flow only to a caller who
+   > proved the run's set's passphrase for that look: each takes a `source`
+   > opened under a restore grant, held by the caller's session and of the
+   > run's own set, and is refused without one (contract 1.56, FR-WOR-007).
+   > `list_directory` is gated the same way, so the precedent itself moved.
+
 4. **Counts exact, samples bounded — no cursors.** Both verbs answer the
    exact count with a first-encountered sample under a cap the result
    echoes (`preview_set_changes`' caps for the diff; 100 default / 1000
@@ -150,6 +157,13 @@ reason, never re-derived.
    authenticated callers `list_directory` already shows every path to.
    The telemetry allowlist (NFR-PRIV-002) is untouched.
 
+   > **Amended 2026-10 ([ADR-0089](0089-a-backups-file-names-need-the-passphrase.md)).**
+   > `list_directory` no longer shows every path to every caller, so this
+   > feed rests on a different footing: the file it names is being read off
+   > the source now, a name on disk that the folder picker shows any signed-in
+   > account. The passphrase gate covers what only the backup can say, and
+   > the feed is left as it was.
+
 7. **The error-manifest decoder is brought to its own specification.**
    Specification 06 §8.1 assigns failure reason 8 (name not representable)
    and the encoder writes it unchecked; the decoder rejected anything
@@ -202,3 +216,4 @@ reason, never re-derived.
 | 2026-08 | Accepted | Written from the 2026-08 field asks: the completed-job drill-down and the unexplained Degraded flip |
 | 2026-08 | Amended | The catch-up window keeps the badge: a held previous backup still earns Captured/Protected, owed seeds classify as awaiting-seed even under a completed set, and the console chip reads syncing — pinned by `Repository.Tests/ApplicationServiceTests`, `Application.Tests/DestinationStatusTests`, `Web.Tests/ConsoleProgressScriptTests` |
 | 2026-08 | Built | The run record at every terminal site (`JobStateStore`, `BackupRunner`), the drill-down pair and bounded `list_jobs` (contract 1.22, `ServiceCommandHandler`), the decoder bound (`ErrorManifestCodec`), the carried behind-reason (`StatusModel`), the current-file feed (`SnapshotPublication`), the console's clickable history with its report and detail dialogs and the destination reason line, and the CLI `jobs` verb — pinned by `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Repository.Tests/PartialBackupHonestyTests`, `Repository.Tests/SnapshotPublicationTests`, `Repository.Tests/ManifestCodecTests`, `Hosts.Tests/JobDrilldownTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Web.Tests/CommandRelayTests` and `Cli.Tests/JobsVerbTests` |
+| 2026-10 | Amended | [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): `job_changes` and `job_failures` name the backup's paths only through a source of the run's set unlocked with the passphrase and held by the caller's session (contract 1.56); the live feed's current file stays, a name on disk now. `Agent/ServiceCommandHandler`; `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/JobDrilldownTests`, `Web.DomTests/PassphraseGateDomTests` |

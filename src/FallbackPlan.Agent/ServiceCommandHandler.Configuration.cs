@@ -899,6 +899,21 @@ public sealed partial class ServiceCommandHandler
                     : $"roots do not exist: '{string.Join("', '", missing)}'");
         }
 
+        // A deleted file, and one the rules stop capturing, is named by the
+        // backup alone, so those names go only to a caller who unlocked the set
+        // with the passphrase (FR-WOR-007). What is on disk now is named either
+        // way: the folder picker shows it to anyone signed in.
+        var unlocked = !NamesNeedThePassphrase;
+        if (command.Source is not null)
+        {
+            if (RefuseUnproved(command.Source, command.SessionId, set?.Id ?? string.Empty, "A comparison") is { } unproved)
+            {
+                return unproved;
+            }
+
+            unlocked = true;
+        }
+
         var limit = Math.Clamp(
             command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
         var (comparison, baseline) = set is null
@@ -909,6 +924,7 @@ public sealed partial class ServiceCommandHandler
             : await SetChangeScan.CompareAsync(
                 runtime, set, roots, includes, excludes, limit, cancellationToken).ConfigureAwait(false);
 
+        var withheld = !unlocked && baseline is not null;
         return new SetChangePreviewResult(
             set?.Name ?? command.SetName ?? "(draft)",
             baseline is null ? null : Convert.ToHexStringLower(baseline.SnapshotId.Span),
@@ -918,13 +934,14 @@ public sealed partial class ServiceCommandHandler
             ToBucket(comparison.Updated),
             ToBucket(comparison.MetadataOnly),
             ToBucket(comparison.Moved),
-            ToBucket(comparison.Deleted),
-            ToBucket(comparison.NoLongerIncluded),
+            ToBucket(comparison.Deleted, withheld),
+            ToBucket(comparison.NoLongerIncluded, withheld),
             comparison.Failures,
-            limit);
+            limit,
+            withheld);
 
-        static ChangeBucketDescriptor ToBucket(Repository.SourceChangeBucket bucket) =>
-            new(bucket.Count, bucket.Sample);
+        static ChangeBucketDescriptor ToBucket(Repository.SourceChangeBucket bucket, bool withheld = false) =>
+            new(bucket.Count, withheld ? [] : bucket.Sample);
     }
 
     private SetDraftValidationResult ValidateSetDraft(ValidateSetDraftCommand command)

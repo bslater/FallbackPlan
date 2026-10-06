@@ -46,8 +46,12 @@ public sealed class SetChangeTests : IDisposable
         _harness.WriteSourceFile("added.txt", "a file the backup never saw");
         File.Delete(Path.Combine(_harness.SourceRoot, "photos", "sunset.jpg"));
 
+        // Named in full: the deleted file is a name only the backup holds, so
+        // the comparison is asked through a source unlocked with the
+        // passphrase (FR-WOR-007).
+        var source = (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId;
         Assert.IsInstanceOfType<SetChangePreviewResult>(
-            await handler.ExecuteAsync(new PreviewSetChangesCommand(null), _timeout.Token), out var preview);
+            await handler.ExecuteAsync(new PreviewSetChangesCommand(null, Source: source), _timeout.Token), out var preview);
 
         Assert.AreEqual("docs", preview.SetName);
         Assert.IsNotNull(preview.BaselineSnapshotId, "there is a last backup to compare with");

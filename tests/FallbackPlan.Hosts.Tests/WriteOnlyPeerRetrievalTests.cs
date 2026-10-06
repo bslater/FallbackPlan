@@ -126,10 +126,18 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
         await using var recovered = await StartWriteOnlyAsync(_siteOne);
         var handler = new ServiceCommandHandler(recovered, RemoteBindingState.Off);
 
-        // Structure over the wire, write bundle alone: the peer's replica
-        // opens, snapshots list, the tree browses — and content refuses
-        // honestly without a grant.
-        var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "site-b"), _timeout.Token);
+        // A person opens the peer's replica with the passphrase or not at all
+        // (FR-WOR-007).
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "site-b"), _timeout.Token),
+            out var ungranted);
+        Assert.AreEqual(ServiceErrorReason.Refused, ungranted.Reason);
+
+        // The service's own work — a drill — reads structure over the wire on
+        // the write bundle alone: the peer's replica opens, snapshots list,
+        // the tree browses, and content refuses honestly without a grant.
+        var own = new ServiceCommandHandler(recovered, RemoteBindingState.Off, CallerScope.Service);
+        var opened = await own.ExecuteAsync(new OpenRestoreSourceCommand("docs", "site-b"), _timeout.Token);
         if (opened is ServiceError refusal)
         {
             Assert.Fail($"peer source refused: {refusal.Reason}: {refusal.Message}");
@@ -138,21 +146,21 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(opened, out var structural);
         Assert.AreEqual(snapshotId, Assert.ContainsSingle(structural.Snapshots).SnapshotId);
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(
+            await own.ExecuteAsync(
                 new ListDirectoryCommand(snapshotId, null, Source: structural.SourceId), _timeout.Token),
             out var top);
         Assert.AreEqual("notes.txt", Assert.ContainsSingle(top.Entries).Name);
 
         var sealedOut = Path.Combine(_siteOne.WorkPath, "sealed-over-the-wire");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(
+            await own.ExecuteAsync(
                 new RunRestoreCommand(snapshotId, null, sealedOut, Source: structural.SourceId, InPlace: true),
                 _timeout.Token),
             out var withoutGrant);
         Assert.AreEqual(0, withoutGrant.Restored);
         Assert.IsTrue(withoutGrant.Failed > 0, "peer-held sealed content must not read without a grant");
         Assert.IsInstanceOfType<AcknowledgedResult>(
-            await handler.ExecuteAsync(new CloseRestoreSourceCommand(structural.SourceId), _timeout.Token));
+            await own.ExecuteAsync(new CloseRestoreSourceCommand(structural.SourceId), _timeout.Token));
 
         // The passphrase re-derives against the kit-recorded salt and
         // parameters; the grant arrives sealed; the bytes come back.

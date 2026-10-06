@@ -12,6 +12,8 @@ Restore the latest version · state at a chosen date and time · a named or tagg
 
 "Deleted files" is a first-class path rather than a special case, because it is one of the two things users actually come to a backup product for. The other is "the version from before I broke it", which is the individual-file-version path.
 
+Every path starts at the passphrase. A person sees a backup's file names — listing a snapshot, planning or running a restore, a run's changes and failures — only through a restore source opened under a grant (§4.3) derived from the set's passphrase, which serves the session that opened it and is asked for again at the next look ([ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The service's own drill reads without one.
+
 ## 2. Restore planning
 
 A plan is constructed **before** any transfer, and it is the mechanism by which the user finds out about problems while they are still cheap. It contains:
@@ -109,6 +111,8 @@ For a **peer replica** the descriptor sits behind the peer's attribution gate, w
 ### 4.3 Restore grants (format v2)
 
 On a write-only set the service cannot read file contents, so a guided restore ([ADR-0041](../adr/0041-guided-restore-and-peer-retrieval.md)) carries a **grant**: the admin client re-derives the sealing scalar from the passphrase where the person typed it, seals it end-to-end to the service's published recipient key (opaque to the browser and to every relay), and sends it on `open_restore_source`. The unsealed scalar lives only inside the source handle — zeroed on explicit close, the 30-minute idle sweep, or shutdown — and structure-plane verbs (browse, list, plan) never needed it at all. A restore attempted without a grant degrades honestly: each sealed read is reported as sealed in the receipt, never as damage. The installation's public derivation parameters ride `describe_service` (contract 1.28) so a client holding the passphrase can build the grant without holding an archive.
+
+Since [ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md) the grant is also the proof a person needs to see the structure plane at all. A person's open without one is refused. The structure-plane verbs need a source opened under one, held by the caller's session, so "never needed it" now holds only for the service's own drill. A grant-less run is what that drill does.
 
 ### 4.4 Lifecycle
 

@@ -71,7 +71,19 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(DeleteUserCommand), "delete_user")]
 [JsonDerivedType(typeof(ChangePasswordCommand), "change_password")]
 [JsonDerivedType(typeof(RestartServiceCommand), "restart_service")]
-public abstract record ServiceCommand;
+public abstract record ServiceCommand
+{
+    /// <summary>
+    /// Which signed-in session sent this, as the connection's gate knows it:
+    /// an opaque id derived from the session, never its token. A restore
+    /// source serves only the session that unlocked it (FR-WOR-007, ADR-0089),
+    /// and this is how the service tells. Never on the wire, so a client
+    /// cannot claim somebody else's session; null in process and where the
+    /// installation has no accounts yet.
+    /// </summary>
+    [JsonIgnore]
+    public string? SessionId { get; init; }
+}
 
 /// <summary>
 /// Restarts the service in place (contract 1.21; ADR-0049): the host tears
@@ -275,13 +287,21 @@ public sealed record ValidateSetDraftCommand(
 /// <param name="ExcludeRules">Draft exclude rules; null compares under the saved rules.</param>
 /// <param name="SampleLimit">The most paths any bucket carries; null takes 20, capped at 200.</param>
 /// <param name="Roots">Draft roots (ADR-0040); wins over <paramref name="Root"/> when present.</param>
+/// <param name="Source">
+/// A restore source of the set the caller unlocked with the passphrase
+/// (contract 1.56, FR-WOR-007): with one, the deleted and no-longer-included
+/// buckets name their files. Without one they are counted and their names
+/// withheld, because only the backup holds them; every other bucket names
+/// what is on disk now either way.
+/// </param>
 public sealed record PreviewSetChangesCommand(
     string? SetName,
     string? Root = null,
     IReadOnlyList<string>? IncludeRules = null,
     IReadOnlyList<string>? ExcludeRules = null,
     int? SampleLimit = null,
-    IReadOnlyList<BackupRootDescriptor>? Roots = null) : ServiceCommand;
+    IReadOnlyList<BackupRootDescriptor>? Roots = null,
+    string? Source = null) : ServiceCommand;
 
 /// <summary>
 /// Issues a one-time pairing invite (ADR-0030 Amendment 3): the code this
@@ -432,7 +452,11 @@ public sealed record ListJobsCommand(bool ActiveOnly, int? Limit = null) : Servi
 /// </summary>
 /// <param name="JobId">The journal row whose run is asked about.</param>
 /// <param name="SampleLimit">Paths per bucket; clamped by the service.</param>
-public sealed record JobChangesCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
+/// <param name="Source">
+/// A restore source of the run's set the caller unlocked with the passphrase
+/// (contract 1.56, FR-WOR-007). Required: the paths are the backup's.
+/// </param>
+public sealed record JobChangesCommand(string JobId, int? SampleLimit = null, string? Source = null) : ServiceCommand;
 
 /// <summary>
 /// What a completed run could not capture (contract 1.22, ADR-0050): the
@@ -441,7 +465,11 @@ public sealed record JobChangesCommand(string JobId, int? SampleLimit = null) : 
 /// </summary>
 /// <param name="JobId">The journal row whose run is asked about.</param>
 /// <param name="SampleLimit">Failures listed; clamped by the service.</param>
-public sealed record JobFailuresCommand(string JobId, int? SampleLimit = null) : ServiceCommand;
+/// <param name="Source">
+/// A restore source of the run's set the caller unlocked with the passphrase
+/// (contract 1.56, FR-WOR-007). Required: the paths are the backup's.
+/// </param>
+public sealed record JobFailuresCommand(string JobId, int? SampleLimit = null, string? Source = null) : ServiceCommand;
 
 /// <summary>Lists committed snapshots.</summary>
 public sealed record ListSnapshotsCommand : ServiceCommand;

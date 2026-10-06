@@ -493,6 +493,74 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheGatedVerbsSource_AndThePreviewsWithheldNames_WireNamesAndPre156Defaults()
+    {
+        // Contract 1.56 (FR-WOR-007, ADR-0089): a run's changes and failures,
+        // and a set's change preview, name the restore source the caller
+        // unlocked with the passphrase; the preview says when it left out the
+        // names only the backup holds.
+        ServiceCommand[] unlocked =
+        [
+            new JobChangesCommand("job-1", Source: "0123456789abcdef"),
+            new JobFailuresCommand("job-1", Source: "0123456789abcdef"),
+            new PreviewSetChangesCommand("docs", Source: "0123456789abcdef"),
+        ];
+        foreach (var command in unlocked)
+        {
+            var modern = JsonSerializer.Serialize(command, FrameCodec.SerializerOptions);
+            Assert.Contains("\"source\":\"0123456789abcdef\"", modern, StringComparison.Ordinal);
+
+            // A pre-1.56 frame names none: null, which the service answers
+            // as a caller who has not proved the passphrase.
+            var old = modern.Replace(",\"source\":\"0123456789abcdef\"", "", StringComparison.Ordinal);
+            Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+            var parsed = JsonSerializer.Deserialize<ServiceCommand>(old, FrameCodec.SerializerOptions)!;
+            Assert.IsNull(parsed switch
+            {
+                JobChangesCommand changes => changes.Source,
+                JobFailuresCommand failures => failures.Source,
+                PreviewSetChangesCommand comparison => comparison.Source,
+                _ => "unexpected",
+            });
+        }
+
+        var empty = new ChangeBucketDescriptor(0, []);
+        var withheld = JsonSerializer.Serialize<ServiceResult>(
+            new SetChangePreviewResult(
+                "docs", null, null, 0, empty, empty, empty, empty, new ChangeBucketDescriptor(4, []), empty, 0, 20,
+                NamesWithheld: true),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"names_withheld\":true", withheld, StringComparison.Ordinal);
+
+        var before = withheld.Replace(",\"names_withheld\":true", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(withheld, before, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsInstanceOfType<SetChangePreviewResult>(
+            JsonSerializer.Deserialize<ServiceResult>(before, FrameCodec.SerializerOptions), out var preview);
+        Assert.IsFalse(preview.NamesWithheld);
+    }
+
+    [TestMethod]
+    public void TheSessionACommandCameFrom_NeverCrossesTheWire()
+    {
+        // The session a command came from is the connection's gate's to say
+        // (FR-WOR-007): it decides whose unlocked source a command may use, so
+        // a frame that names one is not believed, and none is ever written.
+        var stamped = new ListDirectoryCommand(new string('e', 64), null, Source: "0123456789abcdef")
+        {
+            SessionId = "somebody-else",
+        };
+        var frame = JsonSerializer.Serialize<ServiceCommand>(stamped, FrameCodec.SerializerOptions);
+        Assert.DoesNotContain("somebody-else", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("session_id", frame, StringComparison.Ordinal);
+
+        var forged = frame.Replace(
+            "\"command\":\"list_directory\"", "\"command\":\"list_directory\",\"session_id\":\"somebody-else\"",
+            StringComparison.Ordinal);
+        Assert.AreNotEqual(frame, forged, "the forgery must have landed, or it proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<ServiceCommand>(forged, FrameCodec.SerializerOptions)!.SessionId);
+    }
+
+    [TestMethod]
     public void TheJobRowsRunStats_WireNamesAndPre122Defaults()
     {
         // Contract 1.22: the run's terminal numbers ride the job row. The

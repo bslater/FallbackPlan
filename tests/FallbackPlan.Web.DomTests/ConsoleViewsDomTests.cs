@@ -184,6 +184,7 @@ public sealed class ConsoleViewsDomTests
             DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
             ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
             ListSnapshotsCommand => new SnapshotsResult([Wire.Snapshot(now)]),
+            OpenRestoreSourceCommand => new RestoreSourceOpenedResult("src-1", "docs", "staging", [Wire.Snapshot(now)], []),
             ListDirectoryCommand => new DirectoryResult(
                 "",
                 [
@@ -204,9 +205,14 @@ public sealed class ConsoleViewsDomTests
         await Expect(page.Locator("#view-snapshots").GetByText("complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#view-snapshots").GetByText("live capture")).ToBeVisibleAsync();
 
+        // Browsing names the backup's files, so it takes the passphrase
+        // (FR-WOR-007); PassphraseGateDomTests walks that gate itself.
         await page.ClickAsync("[data-action=\"browse\"]");
+        await page.FillAsync("#gate-passphrase", Wire.Passphrase);
+        await page.ClickAsync("[data-action=\"gate-unlock\"]");
         var listed = await harness.ReceivedAsync<ListDirectoryCommand>();
         Assert.AreEqual("snap-1", listed.SnapshotId);
+        Assert.AreEqual("src-1", listed.Source);
 
         // The listing dialog: entries, the change badge, and deletion shown
         // as absence between snapshots.

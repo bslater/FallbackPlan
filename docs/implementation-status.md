@@ -4,7 +4,7 @@
 
 ---
 
-Eighty-eight decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Eighty-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -65,7 +65,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
-| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval — its targeted blob load is no longer what a restore uses ([0068](adr/0068-the-catalogue-directed-restore-read.md)) | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
+| [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval — its targeted blob load is no longer what a restore uses ([0068](adr/0068-the-catalogue-directed-restore-read.md)), and its passphrase gate is the service's, checked in the console against what the service publishes (Amendment 1, [0089](adr/0089-a-backups-file-names-need-the-passphrase.md)) | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
 | [0042](adr/0042-write-only-repositories.md) | Write-only repositories (format v2) — since 2026-09 the only format | Built | `Repository.Crypto/WriteOnlyDerivation` · `Repository.Crypto/RepositoryWriteCredential` · `Repository.Packing/SealedContentKey` · `Repository/RepositoryLifecycle` · `Agent/WriteOnlyServiceState` · [notes](#0042--the-hub-that-cannot-read-what-it-keeps) |
 | [0043](adr/0043-structured-logging-and-diagnostics.md) | Structured logging and client diagnostics; amended by [0081](adr/0081-diagnostic-bundle.md), the redacted rendering is fail-closed, and by [0082](adr/0082-the-recovery-tools-diagnostic-bundle.md), its rule lives in Domain and the recovery tool's bundle renders through it | Built | `Diagnostics/LogRing`, `Diagnostics/RollingFileSink`, `Diagnostics/LoggingComposition`, `Diagnostics/LogRecordRenderer`, `Domain/Diagnostics/LogLevels`, `Domain/Diagnostics/LogLabel`, `Agent/Log.cs` (and one per project), `Application/ClientConfiguration` (schema 4) · `Diagnostics.Tests`, `Application.Tests/LoggingConfigurationTests`, `ArchitectureTests/LoggingShapeTests`, `Repository.Tests/LogPrivacyTests`, `Repository.Tests/EnginePlaneLoggingTests`, `Replication.Tests/CopierLoggingTests`, `ArchitectureTests/TelemetrySilenceTests`, `Hosts.Tests/CommandTraceLoggingTests`, `Web.Tests/SetupCeremonyLoggingTests` · [notes](#0043--the-engine-logs-a-client-reads-it-and-every-declared-message-is-emitted) |
 | [0044](adr/0044-first-run-setup.md) | First-run setup and the installation passphrase | Built | `Domain/Configuration/PassphraseStrength` · `Agent/WriteOnlyServiceState` · `Agent/ServiceCommandHandler.Setup.cs` · `Web/ConsoleRestoreGate` · [notes](#0044--the-ceremony-that-two-requirements-have-been-waiting-for). The ceremony ends at the passphrase and the first account: the recovery-kit step, its confirmation and the public-parameters record that let a kit be rebuilt are withdrawn with the kit (ADR-0060), and the installation's public derivation parameters ride the describe verb (contract 1.28) from `Agent/ServiceCommandHandler` instead |
@@ -113,6 +113,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
 | [0087](adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md) | A restore writes back the extended attributes it may: each captured attribute of a file or a folder is written alone by its captured name, never through a link, after its owner and group and before its permissions, and one left is named in the item's detail. An ACL that names accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the security and trusted namespaces. Where an ACL does not come back the group gets no more than it gave. The plan declares each with counts | **Built** | `Domain/ExtendedAttributes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestorePlan` · `Restore/RestoreAccount` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreExtendedAttributesTests`, `Domain.Tests/ExtendedAttributesTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0087--extended-attributes) |
 | [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count, and the source-identity hints are written up to sixteen at once, all before the snapshot record. Amendment 1 makes two figures of it: a job's bar is its three stages over the plan's files (scanned, processed, backed up, contract 1.55), and each destination's circle is how many of the newest backup's files it holds, worked out from its ledger watermark at rest, counted live during a sync, with a live run folded in by the console; the set's circle is its least complete destination's | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Catalogue/Catalogue` · `Agent/DeliveredFiles` · `Agent/FileHoldingCounter` · `Agent/LiveHoldings` · `Agent/DestinationShipSink` · `Repository.Tests/BackedUpProgressTests`, `Hosts.Tests/DestinationFilesHeldTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
+| [0089](adr/0089-a-backups-file-names-need-the-passphrase.md) | A backup's file names need the passphrase: the service names a file a backup holds only through a restore source opened under a verified grant, held by the session that opened it and of the set asked about, refusing a snapshot's listing, a restore's plan and run, and a run's changes and failures without one; a change preview without one counts what only the backup names and leaves the names out (contract 1.56). The console derives a grant per set under the published facts and asks at every look, slowing a run of wrong passphrases per account; the CLI derives under `--passphrase-env` | **Built** | `Agent/ServiceCommandHandler` · `Agent/AuthenticatingService` · `Agent/RestoreSourceRegistry` · `Agent/RecoveryDrillJob` · `Api/ContractVersion` · `Web/ConsoleRestoreGate` · `Web/RestoreGateThrottle` · `Web/WebConsoleHost` · `Cli/GrantedSources` · `Cli/OperationGateway` · `Hosts.Tests/PassphraseGateTests`, `Web.Tests/RestoreGateTests`, `Web.DomTests/PassphraseGateDomTests`, `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsolePassphraseGateScriptTests`, `Api.Tests/ContractAdditiveFieldsTests` · [notes](#0089--the-names-behind-the-passphrase) |
 
 ---
 
@@ -1299,6 +1300,15 @@ a byte of payload. `LoadBlobsAsync(blobStoreKeys, …)` stays, and its callers
 are now the two that genuinely want a footer in hand —
 `Replication/ReplicaVerifier` and `Agent/CatalogueRebuild`.
 
+The gate this record put in the console process checked the passphrase against
+the archive on the console's own disk, so it worked only beside the service,
+and anywhere else it offered to continue unchecked; the service itself
+answered any signed-in caller. Amendment 1 moves the gate to the service
+([ADR-0089](adr/0089-a-backups-file-names-need-the-passphrase.md)). The
+wizard's check now reads the facts the service publishes and proves a grant
+per set against each set's sealing key, wherever the console runs, and there
+is no way past a passphrase it could not check.
+
 ### 0042 — the hub that cannot read what it keeps
 
 Built end to end. Repository format v2 severs writing from reading: one
@@ -2405,3 +2415,64 @@ only when two destinations lack different files. A destination whose last
 sync failed part-way is counted at what its watermark supports until a sync
 counts it again. The last percent of a job's bar still covers the finishing
 work whatever its length, with the count beside it.
+
+### 0089 — the names behind the passphrase
+
+The owner found that anyone signed in could read the name of every file a
+backup holds without knowing the passphrase: by browsing a snapshot, by
+opening a run's "what changed" or "failures", or by planning a restore. The
+restore wizard did ask for the passphrase, but it checked it against archive
+files on the console's own disk, and a console anywhere else offered to go on
+without the check. The service answered every signed-in caller.
+
+The service cannot be kept from the names. It reads the structure plane on
+the write bundle so that it can back up and apply retention with no one
+present, and its catalogue keeps paths in the clear. So the gate is a rule the
+service keeps: it names a file a backup holds only to a caller holding a
+restore source opened under a verified restore grant. That grant is the proof
+a restore already used, the set's sealing scalar derived where the passphrase
+was typed and checked by the service against the set's sealing key. Listing a
+snapshot, planning or running a restore, and a run's changes and failures are
+refused without such a source. Opening one without a grant is refused before a
+replica is opened or a peer dialled.
+
+A source serves only the session that opened it. The service's connection
+gate stamps every command with a digest of the session's token, which never
+crosses the wire, and the source records it. Another session naming the
+source is refused, even the same account signed in elsewhere, and closing
+another session's source closes nothing. One set's source proves nothing about
+another set, which matters for a set adopted from a destination under a
+different passphrase.
+
+The set editor's comparison was the one place a refusal would have broken
+something, because it asks at every tick of a rule. It now answers without a
+source, counting everything and naming what is on disk now, and leaves out
+only the names of deleted files and of files the rules stop capturing, saying
+that it did. The set's own "What changed?" asks for the passphrase and names
+everything.
+
+The console asks at every look, as the owner chose. A browse, a run's report,
+a comparison and a restore each open a source and close it when the look
+ends. The gate derives a grant per set under the facts the service publishes
+and proves each against that set's sealing key, so it works wherever the
+console runs, and nothing goes past a passphrase it could not check. A run of
+wrong passphrases from one account is slowed, three free and then one, two,
+four seconds and so on up to thirty, and never locked out. The count is the
+account's, so signing in again does not start it over, and the account's tries
+take turns, so a burst of them cannot all spend one free count. The CLI
+derives the same way under `--passphrase-env` for `ls --connect`,
+`jobs <id> --changes` and `--failures`, `changes` and `restore`.
+
+The recovery drill restores samples with no person present, so it runs in the
+service's own caller scope, which no listener builds, as backup and retention
+do.
+
+What remains is recorded rather than done, as
+[T-23](threat-model.md#t-23-a-signed-in-account-reads-a-backups-file-names).
+The gate is policy, so whoever controls the service account reads the
+catalogue directly. Any signed-in account can read a set's salt, cost and
+sealing key, and so can test guesses offline at Argon2id's cost per guess; the
+throttle slows only guesses made at the console. A grant taken from the page
+while a look is open is a bearer proof until the service's recipient key
+changes. And a damage notice still names a sample of the files the damage
+reaches, to anyone signed in.

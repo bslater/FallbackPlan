@@ -279,6 +279,45 @@ public static class CliApplication
             }
         }
 
+        // Several commands over one connection to the service, local or
+        // remote, for the verbs that unlock a restore source with the
+        // passphrase before they may name a backup's files (FR-WOR-007): the
+        // source serves the session that opened it, which every connection
+        // here presents alike.
+        async Task<TResult> WithServiceAsync<TResult>(
+            ParseResult parse, Func<IFallbackPlanClient, Task<TResult>> work, CancellationToken cancellationToken)
+        {
+            if (ResolveRemote(parse, direct: false) is { } target)
+            {
+                error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
+                await using var connection = await RemotePeer.ConnectAsync(
+                    target.Host, target.Port, target.State, target.Fingerprint, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+                return await work(connection.Client).ConfigureAwait(false);
+            }
+
+            var state = parse.GetValue(stateOption) is { Length: > 0 } named ? named : InstallationDefaults.StateDirectory;
+            LocalServiceClient client;
+            try
+            {
+                client = await LocalServiceClient.ConnectAsync(state, "fallbackplan-cli", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (ServiceConnectionException)
+            {
+                throw new CliFailureException(
+                    $"no service is listening for '{state}'. Start one (`fallbackplan-agent`), or name --repo "
+                    + "to read the repository directly.");
+            }
+
+            await using (client.ConfigureAwait(false))
+            {
+                await new SessionCache(state).PresentAsync(client, cancellationToken).ConfigureAwait(false);
+                error.WriteLine($"mode: service — the service holding the writer role for '{state}' answered this.");
+                return await work(client).ConfigureAwait(false);
+            }
+        }
+
         ValueTask<CliSession> OpenSessionAsync(ParseResult parse, CancellationToken cancellationToken) => CliSession.OpenAsync(
             Repo(parse), PassphraseEnv(parse), parse.GetValue(stateOption), cancellationToken, sessionLogger);
 
@@ -1146,23 +1185,35 @@ public static class CliApplication
 
                 if (wantChanges || wantFailures)
                 {
-                    async Task<TResult> AskAsync<TResult>(ServiceCommand detailCommand)
-                        where TResult : ServiceResult
-                    {
-                        if (ResolveRemote(parse, direct: false) is { } target)
+                    // A run's files are the backup's, so they are read through a
+                    // source of the run's set the passphrase unlocked
+                    // (FR-WOR-007), closed again once they are printed.
+                    async Task<TResult> AskUnlockedAsync<TResult>(string what, Func<string, ServiceCommand> detailCommand)
+                        where TResult : ServiceResult =>
+                        await WithServiceAsync(parse, async client =>
                         {
-                            error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
-                            return await QueryRemoteAsync<TResult>(target, detailCommand, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-
-                        return await QueryLocalServiceAsync<TResult>(
-                            parse.GetValue(stateOption), detailCommand, cancellationToken).ConfigureAwait(false);
-                    }
+                            var journal = await AskAsync<JobsResult>(
+                                client, new ListJobsCommand(ActiveOnly: false), cancellationToken).ConfigureAwait(false);
+                            var run = journal.Jobs.FirstOrDefault(row => row.Id == jobId)
+                                ?? throw new CliFailureException($"No job '{jobId}' is in the journal.");
+                            var source = await GrantedSources.OpenAsync(
+                                client, parse.GetValue(passphraseEnvOption), what,
+                                set => set.Id == run.BackupSetId, cancellationToken).ConfigureAwait(false);
+                            try
+                            {
+                                return await AskAsync<TResult>(client, detailCommand(source.SourceId), cancellationToken)
+                                    .ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                await GrantedSources.CloseAsync(client, source.SourceId).ConfigureAwait(false);
+                            }
+                        }, cancellationToken).ConfigureAwait(false);
 
                     if (wantChanges)
                     {
-                        var changes = await AskAsync<JobChangesResult>(new JobChangesCommand(jobId!)).ConfigureAwait(false);
+                        var changes = await AskUnlockedAsync<JobChangesResult>(
+                            "A run's changes", source => new JobChangesCommand(jobId!, Source: source)).ConfigureAwait(false);
                         output.WriteLine(changes.BaselineSnapshotId is null
                             ? "the set's first backup — everything is new"
                             : string.Create(CultureInfo.InvariantCulture,
@@ -1191,7 +1242,8 @@ public static class CliApplication
 
                     if (wantFailures)
                     {
-                        var failures = await AskAsync<JobFailuresResult>(new JobFailuresCommand(jobId!)).ConfigureAwait(false);
+                        var failures = await AskUnlockedAsync<JobFailuresResult>(
+                            "A run's failures", source => new JobFailuresCommand(jobId!, Source: source)).ConfigureAwait(false);
                         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"{failures.Failures} failure(s)"));
                         foreach (var failure in failures.Sample)
                         {
@@ -1321,13 +1373,28 @@ public static class CliApplication
 
             command.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
-                if (ResolveRemote(parse, direct: false) is { } target)
+                if (ResolveRemote(parse, direct: false) is not null)
                 {
-                    error.WriteLine($"mode: service (remote) — {target.Host}:{target.Port}");
-                    var result = await QueryRemoteAsync<DirectoryResult>(
-                        target,
-                        new ListDirectoryCommand(parse.GetValue(snapshotArgument)!, parse.GetValue(pathArgument)),
-                        cancellationToken).ConfigureAwait(false);
+                    // A snapshot's files are named only through a source the
+                    // passphrase unlocked (FR-WOR-007), closed once listed.
+                    var snapshot = parse.GetValue(snapshotArgument)!;
+                    var result = await WithServiceAsync(parse, async client =>
+                    {
+                        var source = await GrantedSources.OpenHoldingAsync(
+                            client, parse.GetValue(passphraseEnvOption), "Listing a snapshot", snapshot, cancellationToken)
+                            .ConfigureAwait(false);
+                        try
+                        {
+                            return await AskAsync<DirectoryResult>(
+                                client,
+                                new ListDirectoryCommand(snapshot, parse.GetValue(pathArgument), Source: source.SourceId),
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            await GrantedSources.CloseAsync(client, source.SourceId).ConfigureAwait(false);
+                        }
+                    }, cancellationToken).ConfigureAwait(false);
 
                     // The service names each entry by its leaf; a size is shown
                     // only for files, as on the local path.

@@ -24,6 +24,13 @@ public sealed record WebConsoleOptions
     /// <summary>The port to listen on; 0 asks the operating system for one.</summary>
     public int Port { get; init; }
 
+    /// <summary>
+    /// How the passphrase gate slows a run of wrong passphrases (FR-WOR-007);
+    /// null takes the real one. Not a command-line option: a test hands in one
+    /// that records its waits instead of sleeping them.
+    /// </summary>
+    public RestoreGateThrottle? RestoreGateThrottle { get; init; }
+
     /// <summary>Parses the command line, or says why it could not.</summary>
     /// <param name="args">The command line, as the process received it.</param>
     /// <param name="options">The parsed options, when parsing succeeded.</param>

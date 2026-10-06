@@ -12,10 +12,9 @@ namespace FallbackPlan.Web.Tests;
 /// <summary>
 /// The console's write-only ceremonies (ADR-0042 §4, §10; NFR-SEC-009 as
 /// amended): the setup endpoint derives in the console process and sends the
-/// service a sealed provisioning envelope — never the passphrase; the wizard
-/// gate verifies a v2 archive by derive-and-compare and mints the sealed
-/// restore grant the source open carries; and both refuse honestly — wrong
-/// passphrase, missing acknowledgement, foreign recipient.
+/// service a sealed provisioning envelope — never the passphrase — and
+/// refuses honestly: wrong passphrase, missing acknowledgement, foreign
+/// recipient. The restore grant's ceremony is <c>RestoreGateTests</c>'.
 /// </summary>
 [TestClass]
 public sealed class WriteOnlyCeremonyTests : IDisposable
@@ -116,94 +115,6 @@ public sealed class WriteOnlyCeremonyTests : IDisposable
             harness.Clients.Client.Received.All(command =>
                 command is DescribeServiceCommand or ListBackupSetsCommand or ProvisionWriteOnlySetCommand),
             "the ceremony speaks exactly three verbs");
-    }
-
-    [TestMethod]
-    public async Task Gate_AgainstAWriteOnlyArchive_VerifiesByDerivationAndMintsTheSealedGrant()
-    {
-        var archive = Path.Combine(_archives, _setId);
-        Directory.CreateDirectory(archive);
-        var store = new LocalFileSystemObjectStore(archive);
-        using (var passphrase = Passphrase.Create(PassphraseText))
-        {
-            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
-                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
-            repository.Dispose();
-            authority.Dispose();
-        }
-
-        var recipientScalar = RandomNumberGenerator.GetBytes(32);
-        var recipientHex = Convert.ToHexStringLower(ContentSealing.PublicKeyOf(recipientScalar));
-
-        await using var harness = await ConsoleHarness.StartAsync();
-        harness.Clients.Client.Respond = _ => new ServiceDescriptionResult(
-            "1.12", "test", "vm", "/state", false, 0,
-            ArchivesRoot: _archives, RestoreGrantRecipient: recipientHex);
-
-        using (var response = await harness.Http.SendAsync(Post(
-            harness, "/api/restore-gate", $$"""{"passphrase":"{{PassphraseText}}"}""")))
-        {
-            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
-            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.AreEqual("verified", body.RootElement.GetProperty("outcome").GetString());
-
-            // The grant is real: it opens with the recipient scalar and
-            // reproduces the archive's sealing public key.
-            var envelope = body.RootElement.GetProperty("envelope").GetString();
-            Assert.IsNotNull(envelope);
-            var granted = WriteOnlyProvisioning.OpenGrant(recipientScalar, Convert.FromHexString(envelope));
-            var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
-            Assert.IsTrue(
-                ContentSealing.PublicKeyOf(granted).AsSpan().SequenceEqual(descriptor.SealingPublicKey.Span),
-                "the sealed grant carries this repository's derived scalar");
-            System.Security.Cryptography.CryptographicOperations.ZeroMemory(granted);
-        }
-
-        using (var response = await harness.Http.SendAsync(Post(
-            harness, "/api/restore-gate", """{"passphrase":"not this repository's"}""")))
-        {
-            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.AreEqual("wrong", body.RootElement.GetProperty("outcome").GetString());
-            Assert.IsTrue(
-                body.RootElement.GetProperty("envelope").ValueKind is JsonValueKind.Null,
-                "a wrong passphrase mints nothing");
-        }
-
-        Assert.IsTrue(
-            harness.Clients.Client.Received.All(command => command is DescribeServiceCommand),
-            "the gate may ask the service only where the archives live and what to seal to");
-    }
-
-    [TestMethod]
-    public async Task Gate_AnUnusableRecipientKey_IsNamedNotBlamedOnTheArchive()
-    {
-        var archive = Path.Combine(_archives, _setId);
-        Directory.CreateDirectory(archive);
-        var store = new LocalFileSystemObjectStore(archive);
-        using (var passphrase = Passphrase.Create(PassphraseText))
-        {
-            var (repository, authority) = await RepositoryLifecycle.CreateFromPassphraseAsync(
-                store, passphrase, RepositoryCreationSettings.Default, 1_722_700_000_000UL, CancellationToken.None);
-            repository.Dispose();
-            authority.Dispose();
-        }
-
-        // A service publishing a non-hex or wrong-length recipient key is
-        // ITS OWN finding — pre-fix, the non-hex case was swallowed as "no
-        // archive could answer" and the short case escaped untyped.
-        foreach (var unusable in new[] { "this is not hex", "abcd" })
-        {
-            var answer = await ConsoleRestoreGate.VerifyAsync(
-                _archives, stateDirectory: null, PassphraseText, unusable, CancellationToken.None);
-            Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Unavailable, answer.Outcome, unusable);
-            Assert.Contains("grant-recipient", answer.Detail!, StringComparison.Ordinal);
-        }
-
-        // No recipient at all still verifies — it just mints no grant.
-        var verified = await ConsoleRestoreGate.VerifyAsync(
-            _archives, stateDirectory: null, PassphraseText, grantRecipientHex: null, CancellationToken.None);
-        Assert.AreEqual(ConsoleRestoreGate.GateOutcome.Verified, verified.Outcome);
-        Assert.IsNull(verified.GrantEnvelope);
     }
 
     [TestMethod]

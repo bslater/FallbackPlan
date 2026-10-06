@@ -200,8 +200,9 @@ public static class WebConsoleHost
         app.MapPost("/api/command", (HttpContext context) =>
             TimedAsync(context, log, "/api/command", () => ExchangeAsync(context, clients, auth, log)));
         app.MapGet("/api/events", (HttpContext context) => StreamEventsAsync(context, clients, auth, log));
+        var gateThrottle = options.RestoreGateThrottle ?? new RestoreGateThrottle();
         app.MapPost("/api/restore-gate", (HttpContext context) =>
-            TimedAsync(context, log, "/api/restore-gate", () => RestoreGateAsync(context, clients, auth)));
+            TimedAsync(context, log, "/api/restore-gate", () => RestoreGateAsync(context, clients, auth, gateThrottle)));
         app.MapPost("/api/provision-write-only", (HttpContext context) =>
             TimedAsync(context, log, "/api/provision-write-only", () => ProvisionWriteOnlyAsync(context, clients, auth)));
         app.MapPost("/api/adopt-archive", (HttpContext context) =>
@@ -327,28 +328,32 @@ public static class WebConsoleHost
     }
 
     /// <summary>What the restore-gate endpoint reads from the page.</summary>
-    /// <param name="Passphrase">The typed passphrase; verified locally, sent nowhere (ADR-0041).</param>
+    /// <param name="Passphrase">The typed passphrase; derived from here, sent nowhere (ADR-0042 §5).</param>
     private sealed record GateRequest(string? Passphrase);
 
     /// <summary>The gate's answer to the page.</summary>
     /// <param name="Outcome"><c>verified</c>, <c>wrong</c>, or <c>unavailable</c>.</param>
-    /// <param name="Detail">What an unavailable outcome met.</param>
-    /// <param name="Envelope">
-    /// A sealed restore grant for a write-only archive (ADR-0042 §5), hex —
-    /// opaque to the page, opened only by the service; the wizard passes it
-    /// into <c>open_restore_source</c>. Null on v1 archives.
+    /// <param name="Detail">Why not, when it was not verified.</param>
+    /// <param name="Grants">
+    /// One sealed restore grant per set the passphrase opens, hex, keyed by
+    /// set id (ADR-0042 §5) — opaque to the page, opened only by the service;
+    /// the page passes the set's grant into <c>open_restore_source</c>.
     /// </param>
-    private sealed record GateResponse(string Outcome, string? Detail, string? Envelope = null);
+    private sealed record GateResponse(
+        string Outcome, string? Detail, IReadOnlyDictionary<string, string>? Grants = null);
 
     /// <summary>
-    /// The restore wizard's passphrase gate (ADR-0041): the one endpoint that
-    /// handles a secret, and the secret goes no further than this process —
-    /// verification is <see cref="ConsoleRestoreGate"/> deriving against the
-    /// archive's key files on local disk. The service is consulted only for
-    /// WHERE the archives live (a path, not a secret), never given the
-    /// passphrase it already holds its own copy of.
+    /// The passphrase gate (FR-WOR-007, ADR-0089): the one endpoint every
+    /// look at a backup's files passes through first. The passphrase goes no
+    /// further than this process: it is derived here under the facts the
+    /// service publishes for each set, proved against each set's sealing key,
+    /// and what the page gets back is a grant per set it opens, sealed to the
+    /// service's recipient key. Nothing local is read, so a console on any
+    /// machine checks alike, and a passphrase that cannot be checked opens
+    /// nothing. A run of wrong ones is slowed per account, never locked.
     /// </summary>
-    private static async Task RestoreGateAsync(HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    private static async Task RestoreGateAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth, RestoreGateThrottle throttle)
     {
         if (!auth.Authorizes(context.Request))
         {
@@ -377,35 +382,61 @@ public static class WebConsoleHost
             return;
         }
 
-        string? archivesRoot = null;
-        string? stateDirectory = null;
-        string? grantRecipient = null;
+        ServiceDescriptionResult? description = null;
+        BackupSetsResult? sets = null;
         try
         {
             await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
-            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
-                is ServiceDescriptionResult description)
+            var session = context.Request.Headers[SessionHeader].ToString();
+            if (session.Length > 0)
             {
-                archivesRoot = description.ArchivesRoot;
-                stateDirectory = description.StateDirectory;
-                grantRecipient = description.RestoreGrantRecipient;
+                await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted).ConfigureAwait(false);
             }
+
+            description = await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted)
+                .ConfigureAwait(false) as ServiceDescriptionResult;
+            sets = await client.ExecuteAsync(new ListBackupSetsCommand(), context.RequestAborted)
+                .ConfigureAwait(false) as BackupSetsResult;
         }
         catch (ServiceConnectionException)
         {
-            // No service answering means no restore either; the gate's
-            // unavailable answer lets the page say so in one place.
+            // No service answering means nothing to derive under; the
+            // unavailable answer below says so in one place.
         }
 
-        var answer = await ConsoleRestoreGate.VerifyAsync(
-            archivesRoot, stateDirectory, passphrase, grantRecipient, context.RequestAborted).ConfigureAwait(false);
+        ConsoleRestoreGate.GrantsAnswer answer;
+        if (description is null || sets is null)
+        {
+            answer = new ConsoleRestoreGate.GrantsAnswer(
+                ConsoleRestoreGate.GateOutcome.Unavailable,
+                "The service did not say what to check the passphrase against.");
+        }
+        else
+        {
+            // Counted per account, as the service names who is signed in, so
+            // signing in again does not start the count over and one person's
+            // slips never slow another's; an installation with no accounts yet
+            // has one count. The account's tries take turns.
+            var account = description.SignedInUser ?? string.Empty;
+            using var turn = await throttle.TakeTurnAsync(account, context.RequestAborted).ConfigureAwait(false);
+            answer = ConsoleRestoreGate.BuildRestoreGrants(description, sets.Sets, passphrase);
+            switch (answer.Outcome)
+            {
+                case ConsoleRestoreGate.GateOutcome.Wrong:
+                    throttle.Wrong(account);
+                    break;
+                case ConsoleRestoreGate.GateOutcome.Verified:
+                    throttle.Opened(account);
+                    break;
+            }
+        }
 
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json; charset=utf-8";
         context.Response.Headers.CacheControl = "no-store";
         await JsonSerializer.SerializeAsync(
             context.Response.Body,
-            new GateResponse(answer.Outcome.ToString().ToLowerInvariant(), answer.Detail, answer.GrantEnvelope),
+            new GateResponse(answer.Outcome.ToString().ToLowerInvariant(), answer.Detail, answer.Grants),
             SerializerOptions,
             context.RequestAborted).ConfigureAwait(false);
     }

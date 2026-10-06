@@ -94,9 +94,10 @@ public sealed class MultiRootSetTests : IDisposable
         // listing's order is the catalogue's, not capture order.
         Assert.AreEqual(2, snapshots.Snapshots.Count);
         var latest = snapshots.Snapshots.Single(snapshot => snapshot.Files == 3);
+        var source = (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId;
 
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(new ListDirectoryCommand(latest.SnapshotId, null), _timeout.Token),
+            await handler.ExecuteAsync(new ListDirectoryCommand(latest.SnapshotId, null, Source: source), _timeout.Token),
             out var top);
         Assert.AreEqual(
             "media, source",
@@ -106,7 +107,7 @@ public sealed class MultiRootSetTests : IDisposable
 
         Assert.IsInstanceOfType<DirectoryResult>(
             await handler.ExecuteAsync(
-                new ListDirectoryCommand(latest.SnapshotId, "source/photos"), _timeout.Token),
+                new ListDirectoryCommand(latest.SnapshotId, "source/photos", Source: source), _timeout.Token),
             out var photos);
         Assert.AreEqual("beach.jpg", Assert.ContainsSingle(photos.Entries).Name,
             "the re-anchored exclude kept pruning what it always pruned");

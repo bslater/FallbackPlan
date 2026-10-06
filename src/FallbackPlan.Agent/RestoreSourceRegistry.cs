@@ -80,6 +80,13 @@ internal sealed class OpenRestoreSourceHandle : IAsyncDisposable
     /// </summary>
     public RepositoryReadAuthority? ReadAuthority { get; set; }
 
+    /// <summary>
+    /// The session that unlocked this source, as its connection's gate named
+    /// it (FR-WOR-007): the source serves that session and no other. Null when
+    /// it was opened in process, or where the installation has no accounts.
+    /// </summary>
+    public string? SessionId { get; set; }
+
     /// <summary>Unix ms of last use, for the idle sweep.</summary>
     public long LastTouchedMs;
 

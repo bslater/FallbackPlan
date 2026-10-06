@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.55
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.56
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.55 — 62 commands. One line each; parameters, results
+The register as of 1.56 — 62 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -91,7 +91,8 @@ for placement.
 1.24 with the run's terminal numbers on each row and an optional newest-N
 bound), `job_changes` / `job_failures` (since 1.24 — one run's diff against
 its predecessor and its capture failures, read from the repository on
-demand), `get_status` (the per-set, per-destination matrix — since 1.21
+demand; since 1.56 only through a `source` of the run's set unlocked with
+the passphrase), `get_status` (the per-set, per-destination matrix — since 1.21
 with each destination's baseline facts, since 1.24 with each demotion's
 machine cause and the set's `last_completed_at`, since 1.39 with the
 background window's state, since 1.43 with the byte-rate limits background
@@ -99,7 +100,11 @@ work is held to).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
-`close_restore_source` (ADR-0041). Since 1.53, `plan_restore` takes the run's
+`close_restore_source` (ADR-0041). Since 1.56 a person's `open_restore_source`
+carries a restore grant or is refused, and `list_directory`, `plan_restore`
+and `run_restore` read only through a source so opened, held by the caller's
+session ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md));
+`list_snapshots` names no file and needs none. Since 1.53, `plan_restore` takes the run's
 shape (`output_directory`, `target`, `existing`, `in_place`) and answers the
 room the run needs on each volume it writes to (`space`) and what its files
 write (`write_bytes`); `run_restore` refuses a run that will not fit before
@@ -208,3 +213,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.53 | The restore says whether it fits and what it will not write back ([ADR-0083](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md), FR-RST-003, FR-RST-004). `plan_restore` takes the run's shape — `output_directory`, `target`, `existing`, `in_place`, as `run_restore` takes them — and, with a folder or the original location named, `restore_plan` answers `space`: each volume the run would write to, with `directory`, `needed_bytes`, `available_bytes` (null where the platform will not say, never short) and `working` for the engine's working directory standing alone. A volume short of room is also a conflict line. `restore_plan` gains `write_bytes`, the logical bytes less a sparse file's holes, and its `degradations` now count each captured attribute the target will not get back, naming root or CAP_CHOWN for ownership. `run_restore` refuses a run that will not fit before writing anything, naming the space needed, the space free and where, unless `ignore_free_space` is true; and `restore` gains `not_applied`, one line an attribute with how many items it was left off. Additive: a pre-1.53 client names no folder and is planned as before; it never sends `ignore_free_space`, so its run that will not fit is refused |
 | 1.54 | A backup's percentage is what it has backed up ([ADR-0088](../../docs/adr/0088-a-backups-percentage-is-what-it-has-backed-up.md), FR-SVC-006). Each progress report carries `bytes_backed_up`: the plan's bytes the store has acknowledged at every destination the run writes to, and those it already held — what a client divides by `total_bytes` in place of files read. A run backs up its whole plan before its snapshot is published, so a client shows 99% until the job settles. While the run finishes, `hints_total` and `hints_written` count the source-identity hints it writes after its last content byte. The job row gains `bytes_backed_up`, how far a failed or cancelled run got. Additive: a pre-1.54 service sends none of them, and a client that sees null divides by files as before |
 | 1.55 | Two figures, kept apart ([ADR-0088](../../docs/adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) Amendment 1, FR-SVC-006, FR-DEST-004). A job's progress is three equal stages over its counted plan's files — scanned, processed, and backed up, which `JobProgress` and the job row now count as `files_backed_up`. How much of a backup a destination holds is a status row's: `files_held` and `files_total`, of the set's newest backup's files, how many have all their content there; `holds_newest`, whether it holds that backup whole, snapshot record included, the only thing that lets a client draw 100%; `in_run`, whether the set's live run writes to it; and `syncing`, whether a sync to it is under way, its count then being that sync's own. Additive: a pre-1.55 service sends none of them, and a client reads null `files_held` as not counted, never as none |
+| 1.56 | A backup's file names need the passphrase ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The proof is a restore source opened under a verified restore grant, serving only the session that opened it. `job_changes`, `job_failures` and `preview_set_changes` gain `source` to name one; `preview_set_changes` answers without one, counting deleted and no-longer-included files and leaving their names out, and says so in `names_withheld`. Not additive, as 1.42 was not: `open_restore_source` without an `envelope`, and `list_directory`, `plan_restore`, `run_restore`, `job_changes` and `job_failures` without such a source — or with another session's, or another set's — are refused by name. The console and the CLI ship with the service and unlock first. The session a command came from is the connection's gate's to say, never on the wire |

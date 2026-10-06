@@ -611,7 +611,7 @@ public sealed class ServiceTests : IDisposable
         Assert.IsInstanceOfType<SnapshotsResult>(await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var snapshots);
         var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
 
-        Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+        Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(new PlanRestoreCommand(snapshot.SnapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var plan);
 
         Assert.AreEqual(2, plan.Files);
         Assert.IsTrue(plan.Bytes > 0);
@@ -642,7 +642,7 @@ public sealed class ServiceTests : IDisposable
         var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
 
         Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(
-                new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+                new PlanRestoreCommand(snapshot.SnapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var plan);
 
         // The plan's whole purpose (its own comment says so): the objects it
         // needs and cannot find, before any byte moves. Asking the catalogue
@@ -680,7 +680,7 @@ public sealed class ServiceTests : IDisposable
         var snapshot = Assert.ContainsSingle(snapshots.Snapshots);
 
         Assert.IsInstanceOfType<RestorePlanResult>(await handler.ExecuteAsync(
-                new PlanRestoreCommand(snapshot.SnapshotId, null), _timeout.Token), out var plan);
+                new PlanRestoreCommand(snapshot.SnapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var plan);
 
         Assert.IsNotEmpty(plan.MissingObjects);
         Assert.Contains("notes.txt", plan.MissingObjects);
@@ -766,13 +766,15 @@ public sealed class ServiceTests : IDisposable
     public async Task Restore_SnapshotIsUnknown_ReportsNotFoundRatherThanEmpty()
     {
         await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
         _harness.WriteConfiguration("every 1h");
 
         await using var runtime = await StartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
 
         Assert.IsInstanceOfType<ServiceError>(await handler.ExecuteAsync(
-                new PlanRestoreCommand(new string('a', 32), null), _timeout.Token), out var error);
+                new PlanRestoreCommand(new string('a', 32), null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token), out var error);
 
         // An empty plan and an absent snapshot are different answers, and a
         // caller that cannot tell them apart cannot report either honestly.

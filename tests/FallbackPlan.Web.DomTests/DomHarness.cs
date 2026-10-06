@@ -215,17 +215,72 @@ internal static class Wire
     /// <summary>A device identity for kits and describes.</summary>
     public const string DeviceIdHex = "00112233445566778899aabbccddeeff";
 
+    /// <summary>The passphrase the installation the suites describe was set up with.</summary>
+    public const string Passphrase = "the right passphrase!!";
+
+    /// <summary>
+    /// The service's grant-recipient scalar: the suites' describe answers
+    /// publish its public half, and a test opens the grants the page sends
+    /// with it.
+    /// </summary>
+    public static readonly byte[] RecipientScalar = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+    /// <summary>
+    /// The facts a set-up installation publishes for deriving under its
+    /// passphrase (contract 1.28): the salt, the cost, and the sealing key the
+    /// derivation must reproduce. The cost is the least Argon2id takes, which
+    /// an opening derivation accepts as a stored fact, so the suites stay quick.
+    /// </summary>
+    public static readonly (string Salt, uint MemoryKib, uint Iterations, byte Parallelism, string SealingPublicKey) Facts =
+        DeriveFacts();
+
+    private static (string, uint, uint, byte, string) DeriveFacts()
+    {
+        var parameters = new FallbackPlan.Domain.Configuration.Argon2Parameters { MemoryKiB = 64, Iterations = 1, Parallelism = 1 };
+        var salt = Enumerable.Repeat((byte)0x5A, FallbackPlan.Repository.Crypto.KekDerivation.SaltLength).ToArray();
+        using var passphrase = FallbackPlan.Repository.Crypto.Passphrase.Create(Passphrase);
+        using var authority = FallbackPlan.Repository.Crypto.WriteOnlyDerivation.Derive(
+            passphrase, parameters, salt, FallbackPlan.Domain.Configuration.KdfValidationMode.OpenRepository);
+        return (System.Convert.ToHexStringLower(salt), parameters.MemoryKiB, parameters.Iterations, parameters.Parallelism,
+            System.Convert.ToHexStringLower(authority.Credential.SealingPublicKey));
+    }
+
     public static ServiceDescriptionResult Describe(
         string setupState, string? signedInUser = null, string? archivesRoot = "/archives") =>
         new(
             "1.18", "test", "vm", "/state", false, 0,
             ArchivesRoot: archivesRoot,
             RestoreGrantRecipient: System.Convert.ToHexStringLower(
-                FallbackPlan.Repository.Crypto.ContentSealing.PublicKeyOf(
-                    System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))),
+                FallbackPlan.Repository.Crypto.ContentSealing.PublicKeyOf(RecipientScalar)),
             SetupState: setupState,
             DeviceId: DeviceIdHex,
-            SignedInUser: signedInUser);
+            SignedInUser: signedInUser,
+            KdfSalt: Facts.Salt,
+            KdfMemoryKib: Facts.MemoryKib,
+            KdfIterations: Facts.Iterations,
+            KdfParallelism: Facts.Parallelism,
+            SealingPublicKey: Facts.SealingPublicKey);
+
+    /// <summary>Whether <paramref name="envelopeHex"/> is a grant of the suites' installation, sealed to its recipient.</summary>
+    public static bool IsTheInstallationsGrant(string? envelopeHex)
+    {
+        if (envelopeHex is null)
+        {
+            return false;
+        }
+
+        var scalar = FallbackPlan.Repository.Crypto.WriteOnlyProvisioning.OpenGrant(
+            RecipientScalar, System.Convert.FromHexString(envelopeHex));
+        try
+        {
+            return System.Convert.ToHexStringLower(FallbackPlan.Repository.Crypto.ContentSealing.PublicKeyOf(scalar))
+                == Facts.SealingPublicKey;
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(scalar);
+        }
+    }
 
     public static BackupSetDescriptor Set(string name = "docs", string? id = null) =>
         new(id ?? SetId, name, "/src", null, [], [], ["vault"]);
