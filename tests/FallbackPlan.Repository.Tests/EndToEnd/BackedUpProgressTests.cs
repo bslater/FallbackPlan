@@ -14,9 +14,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// bytes and files count only once the store has acknowledged their content,
 /// an unchanged file counts at once because its content is already stored, a
 /// file that failed is never counted, and the work a publication does after
-/// the last byte — one source-identity hint per new file version, written
-/// several at a time and all before the snapshot record — is counted as it
-/// lands.
+/// the last byte — the source-identity hints of its new file versions, one
+/// pack put before the snapshot record (ADR-0090) — is counted as it lands.
 /// </summary>
 /// <remarks>
 /// The store under the publication holds each data blob's put until the
@@ -238,29 +237,32 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task TreePublication_IdentityHints_AreWrittenSeveralAtATime_AndAllBeforeTheSnapshotRecord()
+    public async Task TreePublication_IdentityHints_AreOnePack_PutBeforeTheSnapshotRecord()
     {
-        // Each hint is one small object, so writing them one after another
-        // spends a store round trip per file — minutes on a first backup of
-        // a few thousand files. Several at once, bounded; and the snapshot
-        // record still waits for the last of them (06 §11).
+        // A hint per file cost a store round trip per file — minutes on a
+        // first backup of a few thousand files, and a request each on a store
+        // that charges by the request. One pack names them all (ADR-0090),
+        // and the snapshot record still waits for it (06 §11).
         var source = new FakeFileSystemSource();
         for (var i = 0; i < 48; i++)
         {
             source.AddFile($"docs/file-{i:d2}.bin", Incompressible(500, i));
         }
 
-        var store = new PacedHintStore(CreateStore(), TimeSpan.FromMilliseconds(20));
+        var store = new CountingObjectStore(CreateStore());
         using var keys = CreateKeys();
         using var credential = CreateCredential();
 
         await CreateOrchestrator(store, keys, credential, progress: null)
             .PublishAsync(Job(source, 0x31), CancellationToken.None);
 
-        Assert.AreEqual(48, store.HintsWritten);
-        Assert.IsGreaterThan(1, store.MostInFlight, "the hints were written one at a time");
-        Assert.IsLessThanOrEqualTo(ManifestBuilder.HintWritesInFlight, store.MostInFlight);
-        Assert.AreEqual(48, store.HintsWrittenWhenTheSnapshotWas, "the snapshot record went out before every hint had landed");
+        var puts = store.PutKeys.ToList();
+        var pack = Assert.ContainsSingle(puts.Where(key => key.StartsWith("hints/", StringComparison.Ordinal)));
+        Assert.IsTrue(pack.StartsWith("hints/identity-pack/", StringComparison.Ordinal), pack);
+        Assert.IsLessThan(
+            puts.FindIndex(key => key.StartsWith("snapshots/", StringComparison.Ordinal)),
+            puts.IndexOf(pack),
+            "the snapshot record went out before the hints");
     }
 
     /// <summary>Keeps every report, in order, and lets a test wait for one.</summary>
@@ -384,77 +386,6 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
             }
 
             return await inner.PutAsync(key, openContent, conditions, cancellationToken);
-        }
-
-        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
-            inner.GetMetadataAsync(key, cancellationToken);
-
-        public ValueTask<OpenReadResult> OpenReadAsync(
-            ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
-            inner.OpenReadAsync(key, range, cancellationToken);
-
-        public IAsyncEnumerable<ObjectEntry> ListAsync(
-            ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
-            inner.ListAsync(prefix, options, cancellationToken);
-
-        public ValueTask<DeleteResult> DeleteAsync(
-            ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
-            inner.DeleteAsync(key, conditions, cancellationToken);
-    }
-
-    /// <summary>
-    /// Gives every source-identity hint a store round trip of a fixed length,
-    /// and notes how many were in flight at once and how many had landed when
-    /// the snapshot record was put.
-    /// </summary>
-    private sealed class PacedHintStore(IObjectStore inner, TimeSpan roundTrip) : IObjectStore
-    {
-        private int _inFlight;
-        private int _mostInFlight;
-        private int _written;
-        private int _writtenAtSnapshot = -1;
-
-        public int MostInFlight => Volatile.Read(ref _mostInFlight);
-
-        public int HintsWritten => Volatile.Read(ref _written);
-
-        public int HintsWrittenWhenTheSnapshotWas => Volatile.Read(ref _writtenAtSnapshot);
-
-        public StoreCapabilities Capabilities => inner.Capabilities;
-
-        public async ValueTask<PutResult> PutAsync(
-            ObjectKey key,
-            Func<CancellationToken, ValueTask<Stream>> openContent,
-            PutConditions conditions,
-            CancellationToken cancellationToken)
-        {
-            if (key.Value.StartsWith("snapshots/", StringComparison.Ordinal))
-            {
-                Interlocked.CompareExchange(ref _writtenAtSnapshot, Volatile.Read(ref _written), -1);
-            }
-
-            if (!key.Value.StartsWith("hints/identity/", StringComparison.Ordinal))
-            {
-                return await inner.PutAsync(key, openContent, conditions, cancellationToken);
-            }
-
-            var now = Interlocked.Increment(ref _inFlight);
-            int most;
-            while (now > (most = Volatile.Read(ref _mostInFlight)) &&
-                   Interlocked.CompareExchange(ref _mostInFlight, now, most) != most)
-            {
-            }
-
-            try
-            {
-                await Task.Delay(roundTrip, cancellationToken);
-                return await inner.PutAsync(key, openContent, conditions, cancellationToken);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _inFlight);
-                Interlocked.Increment(ref _written);
-            }
         }
 
         public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>

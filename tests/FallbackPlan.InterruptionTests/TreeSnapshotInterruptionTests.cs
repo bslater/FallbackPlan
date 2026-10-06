@@ -284,15 +284,14 @@ public sealed class TreeSnapshotInterruptionTests : InterruptionHarness
     [DataRow(8)]
     [DataRow(9)]
     [DataRow(10)]
-    [DataRow(11)]
-    [DataRow(12)]
     public async Task PublishTree_TheStoreDiesAfterAnyPut_LeavesARecoverableRepository(int putBudget)
     {
         // The in-step rows of the matrix, tree path — the first time the
         // scanner-driven pipeline meets a fault store at every put boundary.
         // At concurrency 1 the put order is deterministic: intent; extension
-        // and blob per data blob; extension and metadata blob; delta; one
-        // hint per file; snapshot; retirement. Whatever put the budget kills,
+        // and blob per data blob; extension and metadata blob; delta; the
+        // hint pack; snapshot; retirement — eleven puts, so the budgets run to
+        // ten, which kills the last of them. Whatever put the budget kills,
         // the same universal claims must hold.
         var files = BuildSourceTree();
         var store = CreateStore();
