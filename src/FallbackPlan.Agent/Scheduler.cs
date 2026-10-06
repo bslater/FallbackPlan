@@ -277,7 +277,7 @@ public static class Scheduler
         var syncs = new List<Task>();
         foreach (var set in runtime.Configuration.BackupSets)
         {
-            if (!runtime.ArchiveExists(set.Id))
+            if (!await HoldsSnapshotAsync(runtime, set.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -316,7 +316,7 @@ public static class Scheduler
         var sweeps = new List<Task>();
         foreach (var set in runtime.Configuration.BackupSets)
         {
-            if (!runtime.ArchiveExists(set.Id))
+            if (!await HoldsSnapshotAsync(runtime, set.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -374,7 +374,7 @@ public static class Scheduler
 
         foreach (var set in runtime.Configuration.BackupSets)
         {
-            if (!runtime.ArchiveExists(set.Id))
+            if (!await HoldsSnapshotAsync(runtime, set.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -408,6 +408,30 @@ public static class Scheduler
                     // one destination's problem and never the pass's.
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Whether a set has anything for the transfer and drill phases to carry:
+    /// a snapshot, not merely an archive (ADR-0054 Amendment 5).
+    /// </summary>
+    /// <remarks>
+    /// A pass cancelled, or a service stopping, while it asks is answered no,
+    /// so the phase winds down without a word, as it did when the question was
+    /// whether a file existed.
+    /// </remarks>
+    private static async ValueTask<bool> HoldsSnapshotAsync(
+        ServiceRuntime runtime, string setId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await runtime.HasSnapshotAsync(setId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is OperationCanceledException or ObjectDisposedException
+            && (cancellationToken.IsCancellationRequested || runtime.IsStopping))
+        {
+            return false;
         }
     }
 
@@ -464,15 +488,7 @@ public static class Scheduler
 
         var interval = (ulong)(destination.DrillIntervalDays ?? RecoveryDrillJob.DefaultIntervalDays)
             * 24UL * 3_600_000UL;
-
-        // A drill that did not complete answered nothing about the replica, so
-        // it is retried on a back-off rather than left for the whole interval
-        // (ADR-0054 Amendment 4). One that completed, passing or failing, has
-        // answered and waits the interval.
-        var wait = record.ConsecutiveIncompleteDrills > 0
-            ? RecoveryDrillJob.IncompleteRetryMs(record.ConsecutiveIncompleteDrills, interval)
-            : interval;
-        return (ulong)now.ToUnixTimeMilliseconds() >= drilled + wait;
+        return (ulong)now.ToUnixTimeMilliseconds() >= drilled + RecoveryDrillJob.DrillWaitMs(record, interval);
     }
 
     /// <summary>Whether a journal state is finished — the one-run-per-set rule's input.</summary>

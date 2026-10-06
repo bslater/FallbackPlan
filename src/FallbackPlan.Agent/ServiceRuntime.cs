@@ -685,6 +685,41 @@ public sealed class ServiceRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Whether a set's archive holds a snapshot of it, which is what gives a
+    /// destination something to hold: the pass copies, sweeps and drills only
+    /// such a set (ADR-0054 Amendment 5). The archive exists from the moment
+    /// the set's first backup starts, and stays when that backup ends before
+    /// it commits, so its existence is not enough.
+    /// </summary>
+    /// <param name="setId">The set's 32-hex identity.</param>
+    /// <param name="cancellationToken">Cancels an open.</param>
+    /// <returns>
+    /// False when the set has no archive or its archive lists no snapshot of
+    /// it. True when the archive will not open either: whatever opens it next
+    /// meets the fault and reports it, as it did before this was asked.
+    /// </returns>
+    internal async ValueTask<bool> HasSnapshotAsync(string setId, CancellationToken cancellationToken)
+    {
+        if (!ArchiveExists(setId))
+        {
+            return false;
+        }
+
+        try
+        {
+            var archive = await ArchiveForAsync(setId, createIfMissing: false, cancellationToken).ConfigureAwait(false);
+            using var catalogue = archive.OpenReadCatalogue();
+            var id = Convert.FromHexString(setId);
+            return catalogue.EnumerateSnapshots().Any(row => row.BackupSetId.Span.SequenceEqual(id));
+        }
+        catch (Exception exception) when (
+            exception is RepositoryOpenException or IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Every configured set whose archive exists on disk — staging or
     /// direct-ship — with the archive open — the enumeration behind snapshots, status, verify and check.
     /// </summary>

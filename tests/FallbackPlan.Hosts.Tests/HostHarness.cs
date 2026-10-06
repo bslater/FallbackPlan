@@ -367,9 +367,11 @@ public sealed class HostHarness : IDisposable
             {
                 Directory.Delete(_scratch, recursive: true);
             }
-            catch (IOException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 // A scratch directory that outlives the test is noise, not a failure.
+                // On Windows the same condition, a pass's drill the test did not wait
+                // for still clearing its own scratch under this delete, is access denied.
             }
         }
     }

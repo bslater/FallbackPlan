@@ -34,11 +34,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_ThePassphraseGate_IsRecordedAtOneFiftySix()
+    public void ContractVersion_AwaitingTheFirstBackup_IsRecordedAtOneFiftySeven()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.56", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.57", ContractVersion.Current.ToString());
     }
 
     [TestMethod]

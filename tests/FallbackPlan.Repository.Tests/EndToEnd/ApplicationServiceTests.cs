@@ -331,7 +331,8 @@ public sealed class ApplicationServiceTests : IDisposable
             },
             lastCompletedAt: 5_000,
             nowUnixMilliseconds: 10_000,
-            deviceIdOf: path => (ulong)path.Length);
+            deviceIdOf: path => (ulong)path.Length,
+            hasSnapshot: true);
 
         var status = StatusDeriver.Derive(HealthyInputs() with { Destinations = [demoted] });
 

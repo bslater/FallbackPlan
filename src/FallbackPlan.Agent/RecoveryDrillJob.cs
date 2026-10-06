@@ -285,9 +285,46 @@ internal static class RecoveryDrillJob
     }
 
     /// <summary>
-    /// When a pair whose last drill did not complete is due again: an hour
-    /// after the first such drill, doubling with each one after it, and never
-    /// later than the pair's own interval (ADR-0054 Amendment 4).
+    /// How long after its last drill a pair is due another
+    /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
+    /// Amendments 4 and 5): sooner than its interval only when the last drill
+    /// left something a new one could answer differently.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A drill that did not complete answered nothing about the replica, so
+    /// it is retried on the back-off whatever has happened since.
+    /// </para>
+    /// <para>
+    /// A drill that failed answered about the replica it found. Once a sync
+    /// has succeeded since it, with no damage standing there, that replica may
+    /// have been put right, so the failure is checked again on the same
+    /// back-off. A sync in the drill's own pass ran before it, so the drill
+    /// saw what it copied, and a sync around damage the deep sweep found and
+    /// could not replace has put nothing right: either way the answer stands
+    /// for the interval, as does a drill that passed.
+    /// </para>
+    /// </remarks>
+    /// <param name="record">The pair's ledger row, with a drill on it.</param>
+    /// <param name="intervalMs">The pair's drill interval.</param>
+    /// <returns>How long after <see cref="DestinationSyncRecord.DrilledAt"/> the pair is due again.</returns>
+    internal static ulong DrillWaitMs(DestinationSyncRecord record, ulong intervalMs)
+    {
+        if (record.ConsecutiveIncompleteDrills > 0)
+        {
+            return RetryMs(record.ConsecutiveIncompleteDrills, intervalMs);
+        }
+
+        var changedSince = record.LastSuccessAt > record.DrilledAt && record.DamagedKeys is not { Count: > 0 };
+        return record.DrillFailure is not null && changedSince
+            ? RetryMs(Math.Max(1, record.ConsecutiveFailedDrills), intervalMs)
+            : intervalMs;
+    }
+
+    /// <summary>
+    /// The back-off a drill retry waits: an hour after the first drill of the
+    /// run, doubling with each one after it, and never later than the pair's
+    /// own interval.
     /// </summary>
     /// <remarks>
     /// Sooner than the interval, because there is no drill-now verb and a
@@ -295,17 +332,17 @@ internal static class RecoveryDrillJob
     /// month. Not every pass, because a fault that lasts would then drill
     /// every minute, and a peer's drill reads over somebody else's link.
     /// </remarks>
-    /// <param name="consecutiveIncomplete">Drills in a row that did not complete; one or more.</param>
+    /// <param name="inARow">Drills in the run so far; one or more.</param>
     /// <param name="intervalMs">The pair's drill interval.</param>
     /// <returns>How long after the last drill the pair is due again.</returns>
-    internal static ulong IncompleteRetryMs(int consecutiveIncomplete, ulong intervalMs)
+    internal static ulong RetryMs(int inARow, ulong intervalMs)
     {
-        var doublings = Math.Clamp(consecutiveIncomplete - 1, 0, 30);
-        return Math.Min(IncompleteRetryFirstMs << doublings, intervalMs);
+        var doublings = Math.Clamp(inARow - 1, 0, 30);
+        return Math.Min(RetryFirstMs << doublings, intervalMs);
     }
 
-    /// <summary>The first retry after a drill that did not complete: an hour.</summary>
-    private const ulong IncompleteRetryFirstMs = 3_600_000;
+    /// <summary>The first retry of a run: an hour.</summary>
+    private const ulong RetryFirstMs = 3_600_000;
 
     /// <summary>What a drill that states nothing returns: no files, no failure, no limit, and nothing recorded.</summary>
     private static DrillOutcome Unrecorded { get; } = new(0, 0, null);
