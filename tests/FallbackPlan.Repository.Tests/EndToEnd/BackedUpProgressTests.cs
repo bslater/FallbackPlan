@@ -122,11 +122,13 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
     {
         // Its content is already at the store, so an unchanged file is
         // backed up the moment the run decides to reuse it — while the one
-        // changed file's blob is still held.
+        // changed file's blob is still held. The changed file is walked
+        // first, so its blob is open before the unchanged files are reached:
+        // counted in archive order, they would wait behind it.
         var source = new FakeFileSystemSource();
+        source.AddFile("docs/a-changed.txt", Incompressible(2_000, 7));
         source.AddFile("docs/big.bin", Incompressible(300_000, 3));
         source.AddFile("docs/small.txt", Incompressible(500, 5));
-        source.AddFile("readme.md", Incompressible(2_000, 7));
 
         var plain = CreateStore();
         using var keys = CreateKeys();
@@ -137,7 +139,7 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
         await CreateOrchestrator(plain, keys, credential, progress: null, catalogue)
             .PublishAsync(Job(source, 0xA1), CancellationToken.None);
 
-        var changed = source.AddFile("readme.md", Incompressible(2_500, 9));
+        var changed = source.AddFile("docs/a-changed.txt", Incompressible(2_500, 9));
         changed.Metadata = changed.Metadata with { ModifiedAt = 1_722_700_000_000 };
 
         var store = new HeldUploadStore(plain);

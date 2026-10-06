@@ -82,6 +82,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     // second time. ADR-0029 §1 frees which duplicate wins, but not how many
     // records get written, and the reuse suites assert exact record counts.
     private readonly ConcurrentDictionary<ObjectId, byte> _writtenThisSession = [];
+    private const byte Claimed = 0;
+    private const byte Appended = 1;
     private BlobWriter? _writer;
     private bool _resumeAttempted;
 
@@ -146,6 +148,9 @@ public sealed class ArchiveSession : IAsyncDisposable
 
         _uploadWorkers = [.. Enumerable.Range(0, policy.Concurrency).Select(_ => Task.Run(UploadWorkerAsync))];
     }
+
+    /// <summary>How much of the run's counted plan this session has backed up (ADR-0088).</summary>
+    internal BackedUpTally BackedUp { get; } = new();
 
     /// <summary>Every blob sealed and uploaded by this session so far.</summary>
     /// <remarks>
@@ -412,7 +417,7 @@ public sealed class ArchiveSession : IAsyncDisposable
             // before compressing is what keeps the record count deterministic
             // when two identical segments are in flight at once.
             if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
-                !_writtenThisSession.TryAdd(objectId, 0))
+                !_writtenThisSession.TryAdd(objectId, Claimed))
             {
                 return Reused(segment, plaintext, contentId, objectId);
             }
@@ -576,6 +581,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 payload,
                 cancellationToken).ConfigureAwait(false);
 
+            _writtenThisSession[segment.ObjectId] = Appended;
+            BackedUp.RecordAppended(segment.ObjectId, segment.Length);
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
             EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
 
@@ -584,10 +591,18 @@ public sealed class ArchiveSession : IAsyncDisposable
                 await SealAndQueueAsync(cancellationToken).ConfigureAwait(false);
             }
         }
+        else
+        {
+            BackedUp.SegmentReused(segment.ObjectId, segment.Length, ClaimantPending(segment.ObjectId));
+        }
 
         references.Add(new SegmentReference(segment.Offset, segment.Length, segment.ObjectId));
         contentIds.Add(segment.ContentId);
     }
+
+    /// <summary>Whether another segment of this run claimed the record and has not yet appended it.</summary>
+    private bool ClaimantPending(ObjectId objectId) =>
+        _writtenThisSession.TryGetValue(objectId, out var state) && state == Claimed;
 
     /// <summary>A buffer big enough for any segment this policy can produce.</summary>
     private byte[] RentBuffer() =>
@@ -689,7 +704,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 var contentId = ContentHasher.Hash(plaintext.Span);
                 wholeFile.AppendData(plaintext.Span);
 
-                var objectId = await AppendSegmentRecordAsync(contentId, plaintext, cancellationToken).ConfigureAwait(false);
+                var objectId = await AppendSegmentRecordAsync(contentId, plaintext, planned: true, cancellationToken)
+                    .ConfigureAwait(false);
                 references.Add(new SegmentReference(position + segment.Offset, segment.Length, objectId));
                 contentIds.Add(contentId);
             }
@@ -749,7 +765,10 @@ public sealed class ArchiveSession : IAsyncDisposable
 
             var plaintext = segmentBuffer.AsMemory(0, length);
             var contentId = ContentHasher.Hash(plaintext.Span);
-            var objectId = await AppendSegmentRecordAsync(contentId, plaintext, cancellationToken).ConfigureAwait(false);
+            // An alternate stream is not in the plan, which counts each
+            // file's main content.
+            var objectId = await AppendSegmentRecordAsync(contentId, plaintext, planned: false, cancellationToken)
+                .ConfigureAwait(false);
             return new SingleSegmentRecord(objectId, contentId, (ulong)length);
         }
         finally
@@ -889,6 +908,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 // is built from these and validated on content, not sequence.
                 _blobs.Add(archived);
             }
+
+            BackedUp.BlobAcknowledged(sealedBlob.BlobId);
         }
     }
 
@@ -899,9 +920,10 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// without the staging.
     /// </summary>
     private async ValueTask<ObjectId> AppendSegmentRecordAsync(
-        ContentId contentId, ReadOnlyMemory<byte> plaintext, CancellationToken cancellationToken)
+        ContentId contentId, ReadOnlyMemory<byte> plaintext, bool planned, CancellationToken cancellationToken)
     {
         var objectId = _objectIdDeriver.Derive(ObjectType.SegmentRecord, contentId);
+        var plannedLength = planned ? plaintext.Length : 0;
 
         // Segment reuse by object identifier (specification 09 §6;
         // NFR-PERF-010): equal content derives an equal identifier, and an
@@ -909,8 +931,9 @@ public sealed class ArchiveSession : IAsyncDisposable
         // claimed — needs no new record. Keyed on the object id so the test
         // survives a catalogue rebuild.
         if (await MayReuseSegmentAsync(objectId, cancellationToken).ConfigureAwait(false) ||
-            !_writtenThisSession.TryAdd(objectId, 0))
+            !_writtenThisSession.TryAdd(objectId, Claimed))
         {
+            BackedUp.SegmentReused(objectId, plannedLength, ClaimantPending(objectId));
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "true"));
             return objectId;
         }
@@ -956,6 +979,8 @@ public sealed class ArchiveSession : IAsyncDisposable
                 payload,
                 cancellationToken).ConfigureAwait(false);
 
+            _writtenThisSession[objectId] = Appended;
+            BackedUp.RecordAppended(objectId, plannedLength);
             EngineDiagnostics.ArchiveSegments.Add(1, new KeyValuePair<string, object?>("reused", "false"));
             EngineDiagnostics.ArchiveBytesStored.Add(payload.Length);
 
@@ -982,6 +1007,8 @@ public sealed class ArchiveSession : IAsyncDisposable
     /// </summary>
     private BlobWriter OpenWriter()
     {
+        BackedUp.BlobOpened();
+
         // Once per session, and only when a blob is actually wanted — a
         // session that archives nothing leaves the spool for the next one
         // rather than discarding work it never looked at.
@@ -1068,7 +1095,7 @@ public sealed class ArchiveSession : IAsyncDisposable
         // publish two records where the manifest references one.
         foreach (var entry in writer.Entries)
         {
-            _writtenThisSession.TryAdd(entry.ObjectId, 0);
+            _writtenThisSession.TryAdd(entry.ObjectId, Appended);
         }
 
         // Nothing else needs rebuilding: the index entries for these records
@@ -1081,6 +1108,7 @@ public sealed class ArchiveSession : IAsyncDisposable
     private async ValueTask SealAndQueueAsync(CancellationToken cancellationToken)
     {
         var sealedBlob = await _writer!.SealAsync(cancellationToken).ConfigureAwait(false);
+        BackedUp.BlobSealed(sealedBlob.BlobId);
 
         await _writer.DisposeAsync().ConfigureAwait(false);
         _writer = null;

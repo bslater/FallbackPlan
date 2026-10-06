@@ -32,7 +32,7 @@ public sealed class BackupProgressDomTests
     private static JobProgress Finishing => new(
         "job-1", JobState.Publishing, FilesSeen: 100, FilesDone: 100, FilesReused: 0, FilesFailed: 0,
         BytesSeen: 100 * MiB, BytesStored: 100 * MiB, TotalFiles: 100, TotalBytes: 100 * MiB,
-        BytesBackedUp: 100 * MiB, HintsWritten: 6_347, HintsTotal: 9_190);
+        BytesBackedUp: 100 * MiB, HintsWritten: 347, HintsTotal: 912);
 
     private static Func<ServiceCommand, ServiceResult> Answers(ulong now) => command => command switch
     {
@@ -98,7 +98,7 @@ public sealed class BackupProgressDomTests
         var card = page.Locator(".job-live");
         await Expect(card.Locator(".meter > i")).ToHaveAttributeAsync("data-w", "99");
         await Expect(card).ToContainTextAsync("Finishing");
-        await Expect(card).ToContainTextAsync("6,347 of 9,190");
+        await Expect(card).ToContainTextAsync("347 of 912");
         await Expect(card).ToContainTextAsync("99%");
         await Expect(card).Not.ToContainTextAsync("100%");
     }
@@ -117,14 +117,23 @@ public sealed class BackupProgressDomTests
         var row = page.Locator(".set-live");
         await Expect(row).ToBeVisibleAsync();
 
+        // The card's glance line — what a collapsed card shows — and its live
+        // row say the same thing.
+        var glance = page.Locator(".set-live-mini");
+
         harness.Clients.Client.Emit(Storing);
         await Expect(row.Locator(".meter > i")).ToHaveAttributeAsync("data-w", "40");
         await Expect(row.Locator(".detail")).ToContainTextAsync("40.0 MiB of 100 MiB backed up · 40%");
+        await Expect(glance.Locator(".meter > i")).ToHaveAttributeAsync("data-w", "40");
+        await Expect(glance).ToContainTextAsync("40%");
 
         harness.Clients.Client.Emit(Finishing);
+        await Expect(glance.Locator(".meter > i")).ToHaveAttributeAsync("data-w", "99");
+        await Expect(glance).ToContainTextAsync("99%");
+        await Expect(page.Locator("details.set > summary")).ToContainTextAsync("Finishing");
         await Expect(row.Locator(".meter > i")).ToHaveAttributeAsync("data-w", "99");
         await Expect(row.Locator(".detail")).ToContainTextAsync("Finishing");
-        await Expect(row.Locator(".detail")).ToContainTextAsync("6,347 of 9,190");
+        await Expect(row.Locator(".detail")).ToContainTextAsync("347 of 912");
         await Expect(row.Locator(".detail")).ToContainTextAsync("99%");
         await Expect(row.Locator(".detail")).Not.ToContainTextAsync("100%");
     }

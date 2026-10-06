@@ -2235,7 +2235,8 @@ public sealed partial class ServiceCommandHandler(
             [.. jobs.Select(job => new JobDescriptor(
                 job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail,
                 job.Stats?.FilesSeen, job.Stats?.FilesDone, job.Stats?.FilesReused, job.Stats?.FilesFailed,
-                job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes))]);
+                job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes,
+                job.Stats?.BytesBackedUp))]);
     }
 
     /// <summary>The failure listing's default and ceiling (ADR-0050): counts stay exact; the listing is bounded well under the frame cap.</summary>

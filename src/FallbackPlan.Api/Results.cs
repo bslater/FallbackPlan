@@ -507,6 +507,10 @@ public sealed record JobAcceptedResult(string JobId) : ServiceResult;
 /// <param name="BytesStored">Bytes newly stored after reuse and compression. Contract 1.22.</param>
 /// <param name="TotalFiles">The counted plan, when the run fixed one (ADR-0048). Contract 1.22.</param>
 /// <param name="TotalBytes">The counted plan's bytes. Contract 1.22.</param>
+/// <param name="BytesBackedUp">
+/// Of the plan's bytes, how many the run had backed up when it settled
+/// (ADR-0088). Contract 1.54; null from an older service or a pre-1.54 row.
+/// </param>
 public sealed record JobDescriptor(
     string Id,
     string BackupSetId,
@@ -522,7 +526,8 @@ public sealed record JobDescriptor(
     long? BytesSeen = null,
     long? BytesStored = null,
     long? TotalFiles = null,
-    long? TotalBytes = null);
+    long? TotalBytes = null,
+    long? BytesBackedUp = null);
 
 /// <summary>The known jobs.</summary>
 /// <param name="Jobs">The jobs, oldest first.</param>

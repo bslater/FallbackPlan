@@ -21,6 +21,14 @@ namespace FallbackPlan.Repository;
 /// </summary>
 public sealed class ManifestBuilder : IAsyncDisposable
 {
+    /// <summary>
+    /// How many source-identity hints a publication has at the store at once
+    /// (ADR-0088). Enough to keep a store's round trips overlapped; few
+    /// enough that a finishing run is not a burst of small writes against a
+    /// disk someone is using.
+    /// </summary>
+    public const int HintWritesInFlight = 16;
+
     private readonly RepositoryId _repositoryId;
     private readonly WriterId _writerId;
     private readonly KeyGeneration _generation;
@@ -287,49 +295,83 @@ public sealed class ManifestBuilder : IAsyncDisposable
     /// uniqueness never rested on the counter — each object seals under a
     /// fresh 32-byte salt.
     /// </para>
+    /// <para>
+    /// Up to <see cref="HintWritesInFlight"/> at once (ADR-0088). Each hint
+    /// is one small object, so one after another is a store round trip per
+    /// new file version — four minutes for a first backup of nine thousand
+    /// files to a local disk, longer where a round trip is longer. Nothing
+    /// orders them among themselves; the return still waits for the last.
+    /// </para>
     /// </remarks>
+    public ValueTask WriteSourceIdentityHintsAsync(
+        IReadOnlyList<SourceIdentityHint> hints,
+        ulong intentSequence,
+        CancellationToken cancellationToken) =>
+        WriteSourceIdentityHintsAsync(hints, intentSequence, written: null, cancellationToken);
+
+    /// <summary>
+    /// Writes the hints as <see cref="WriteSourceIdentityHintsAsync(IReadOnlyList{SourceIdentityHint}, ulong, CancellationToken)"/>
+    /// does, saying as each one lands or is passed over.
+    /// </summary>
+    /// <param name="hints">The hints to publish; an empty list writes nothing.</param>
+    /// <param name="intentSequence">The publication's write-intent sequence number.</param>
+    /// <param name="written">Called once per hint, from whichever thread wrote it.</param>
+    /// <param name="cancellationToken">Cancels the writes.</param>
     public async ValueTask WriteSourceIdentityHintsAsync(
         IReadOnlyList<SourceIdentityHint> hints,
         ulong intentSequence,
+        Action? written,
         CancellationToken cancellationToken)
     {
         ThrowHelper.ThrowIfNull(hints);
 
-        foreach (var hint in hints)
+        var options = new ParallelOptions
         {
-            var encoded = SourceIdentityHintCodec.Encode(hint);
-            var contentId = ContentHasher.Hash(encoded);
-            var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityHint, contentId);
+            MaxDegreeOfParallelism = HintWritesInFlight,
+            CancellationToken = cancellationToken,
+        };
 
-            var sealedObject = StandaloneRecordCipher.Seal(
-                _repositoryId,
-                _metadataClassKey,
-                _generation,
-                _writerId,
-                intentSequence,
-                ObjectType.SourceIdentityHint,
-                objectId,
-                encoded);
+        await Parallel.ForEachAsync(hints, options, async (hint, token) =>
+        {
+            await WriteSourceIdentityHintAsync(hint, intentSequence, token).ConfigureAwait(false);
+            written?.Invoke();
+        }).ConfigureAwait(false);
+    }
 
-            try
-            {
-                await _store.PutAsync(
-                    MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
-                    _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
-                    PutConditions.IfNotExists,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (IOException)
-            {
-                // The advisory bargain, applied to faults as well as
-                // refusals: a hint the store would not take costs a later
-                // reader one rename optimisation, never the publication —
-                // whose blobs and deltas are already durable, and whose
-                // snapshot must still follow. Cancellation is not caught:
-                // stopping the job is the caller's command, not a store
-                // fault to shrug off.
-                continue;
-            }
+    private async ValueTask WriteSourceIdentityHintAsync(
+        SourceIdentityHint hint, ulong intentSequence, CancellationToken cancellationToken)
+    {
+        var encoded = SourceIdentityHintCodec.Encode(hint);
+        var contentId = ContentHasher.Hash(encoded);
+        var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityHint, contentId);
+
+        var sealedObject = StandaloneRecordCipher.Seal(
+            _repositoryId,
+            _metadataClassKey,
+            _generation,
+            _writerId,
+            intentSequence,
+            ObjectType.SourceIdentityHint,
+            objectId,
+            encoded);
+
+        try
+        {
+            await _store.PutAsync(
+                MetadataStoreKeys.SourceIdentityHint(hint.SourceKey.Span, hint.CapturedAt, hint.SnapshotId.Span),
+                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // The advisory bargain, applied to faults as well as
+            // refusals: a hint the store would not take costs a later
+            // reader one rename optimisation, never the publication —
+            // whose blobs and deltas are already durable, and whose
+            // snapshot must still follow. Cancellation is not caught:
+            // stopping the job is the caller's command, not a store
+            // fault to shrug off.
         }
     }
 
