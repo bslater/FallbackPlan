@@ -56,6 +56,13 @@ progress event" until the next file completed.
    rate rather than byte rate on purpose, because `bytes_seen` counts
    archived content only and a byte rate would promise hours for a
    mostly-unchanged run that reuses its way to done in seconds.
+
+   > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10-the-meter-divides-what-is-backed-up)).**
+   > A meter dividing files handled reached 100% while the run was still
+   > uploading and publishing. It now divides what is backed up — bytes the
+   > store has acknowledged, or already held — by the plan's bytes, holds at
+   > 99 until the job settles, and the estimate runs on that measure
+   > ([ADR-0088](0088-a-backups-percentage-is-what-it-has-backed-up.md)).
 3. **Progress production is bounded and coalesced.** The publication keeps
    incremental counters (fold-in of new files only — the O(n²) re-walk is
    gone) and emits at most one report per interval (64 files or 100 ms,
@@ -128,6 +135,21 @@ monotonic per hub, with replayed events carrying their original numbers.
   and already tore down correctly; it only needed the producer and the
   reaping fixed.
 
+## Amendment 1 (2026-10): the meter divides what is backed up
+
+§2 and §6 had the meter divide files handled by the plan, and the estimate
+run on files per second. A file is handled once the walk has packed it, which
+is before its blob has uploaded and long before the publication's own writes
+— so on a first backup of nine thousand files the meter sat at 100% for the
+last four and a half minutes of a nine-and-a-half-minute run.
+[ADR-0088](0088-a-backups-percentage-is-what-it-has-backed-up.md) replaces
+the measure: each report carries the plan's bytes backed up (contract 1.54),
+a client divides that by `total_bytes` and holds at 99 until the job
+settles, the finishing work is counted beside it, and the estimate runs on
+bytes backed up per second, which an unchanged file advances the moment it
+is reused. §1's counted plan, §3's coalescing, §4's replay and §5's reaping
+stand; a service without the measure is still divided by files.
+
 ## Status history
 
 | Date | Status | Note |
@@ -135,3 +157,4 @@ monotonic per hub, with replayed events carrying their original numbers.
 | 2026-08 | Accepted | Written from the owner's progress-visibility direction |
 | 2026-08 | Built | The counting pass and coalesced incremental reporting (`PublicationOrchestrator`), the plan on the wire (`JobProgress`, contract 1.20), latest-snapshot replay (`ProgressHub`), watch-path disconnect reaping and the session-carrying watch (`ServiceConnectionPump`, `LocalServiceClient`), and the console's plan-divided meters, estimate, overview row and tab-following stream — pinned by `Repository.Tests/SnapshotPublicationTests`, `Hosts.Tests/ProgressHubTests`, `Hosts.Tests/WatchSessionTests`, `Api.Tests/AbandonedCommandTests` and `Web.Tests/ConsoleProgressScriptTests` |
 | 2026-08 | Built (scenario sweep) | The subscription lifecycle pinned end to end at the owner's direction: bounded drop-oldest backpressure and replay/sequence coherence under concurrency (`Hosts.Tests/ProgressHubTests`), reconnect-with-replay, clean shutdown and the expired-session refusal over the real binding (`Hosts.Tests/WatchSessionTests`), the remote binding's watch driven over TCP+TLS for the first time (`Hosts.Tests/RemoteBindingTests`), the browser hang-up closing the upstream watch and two independent SSE streams (`Web.Tests/EventStreamTests`), and the 1.20 wire names and pre-1.20 defaults on the bytes (`Api.Tests/ContractAdditiveFieldsTests`) |
+| 2026-10 | Amended | §2's and §6's meters divide what is backed up rather than files handled, held at 99 until the job settles, with the estimate on the same measure — [ADR-0088](0088-a-backups-percentage-is-what-it-has-backed-up.md) |
