@@ -659,10 +659,15 @@ public static class Scheduler
     /// <param name="now">The clock.</param>
     /// <param name="userInitiated">Whether a person is waiting for it.</param>
     /// <param name="full">Whether to ignore prior versions and re-capture everything.</param>
+    /// <param name="followIfRunning">
+    /// Whether a run already under way for the set should be followed by
+    /// another under the settings current when it settles, rather than stand
+    /// in for this one: an edit's backup must capture the edit (FR-SVC-009).
+    /// </param>
     /// <returns>The job's outcome, when it finishes.</returns>
     public static Task<BackupOutcome> Enqueue(
         ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool userInitiated,
-        bool full = false)
+        bool full = false, bool followIfRunning = false)
     {
         ThrowHelper.ThrowIfNull(runtime);
         ThrowHelper.ThrowIfNull(set);
@@ -684,11 +689,22 @@ public static class Scheduler
             var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
             if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
             {
+                // Asked here, inside the gate, so the run cannot settle between
+                // the check and the request and leave nothing to answer it.
+                if (followIfRunning)
+                {
+                    runtime.SetSettings.RequestFollowUp(set.Id);
+                }
+
                 return Task.FromResult(new BackupOutcome(
                     set.Name, "already-running", $"job {latest.Id} is still queued or running"));
             }
 
             var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());
+
+            // The run captures the settings it was queued with, and so the
+            // generation current now (ADR-0038 Amendment 2).
+            var generation = runtime.SetSettings.CurrentOf(set.Id);
 
             // The run's suspension point (ADR-0047 Amendment 1): when a higher-priority
             // job needs the pool's last slot, the scheduler parks this run at a
@@ -718,7 +734,8 @@ public static class Scheduler
                     {
                         completion.SetResult(
                             await BackupRunner.RunAsync(
-                                    runtime, set, job.Id, now, userInitiated, full, gate, cancellationToken)
+                                    runtime, set, job.Id, now, userInitiated, full, gate, generation,
+                                    cancellationToken)
                                 .ConfigureAwait(false));
                     }
                     catch (Exception exception)
@@ -741,7 +758,9 @@ public static class Scheduler
                         CancelledBeforeStart);
                     runtime.Progress.Report(new JobProgress(job.Id, JobState.Cancelled, 0, 0, 0, 0, 0, 0));
                     completion.SetResult(new BackupOutcome(set.Name, "cancelled", CancelledBeforeStart));
-                }));
+                    FollowUp(runtime, set.Id);
+                },
+                OnSettled: () => FollowUp(runtime, set.Id)));
 
             if (!accepted)
             {
@@ -759,6 +778,55 @@ public static class Scheduler
         }
 
         return completion.Task;
+    }
+
+    /// <summary>
+    /// Queues a backup a person asked for, the set's fan-out to follow a run
+    /// that commits — the save of a new set, a material edit, and the run its
+    /// follow-up owes.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set to back up.</param>
+    /// <param name="now">The clock.</param>
+    /// <param name="followIfRunning">See <see cref="Enqueue"/>.</param>
+    /// <returns>The job's outcome, when it finishes.</returns>
+    internal static Task<BackupOutcome> EnqueueAndFanOut(
+        ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset now, bool followIfRunning = false)
+    {
+        var run = Enqueue(runtime, set, now, userInitiated: true, followIfRunning: followIfRunning);
+        _ = run.ContinueWith(
+            completed =>
+            {
+                if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
+                {
+                    FanOut.EnqueueAll(runtime, set, now, userInitiated: true);
+                }
+            },
+            TaskScheduler.Default);
+        return run;
+    }
+
+    /// <summary>
+    /// Answers a follow-up the set's settled run owed: a run under the
+    /// settings current now. Taken under the enqueue gate, so a request made
+    /// while the run was still under way is never missed.
+    /// </summary>
+    private static void FollowUp(ServiceRuntime runtime, string setId)
+    {
+        lock (runtime.BackupEnqueueGate)
+        {
+            if (!runtime.SetSettings.TakeFollowUp(setId))
+            {
+                return;
+            }
+        }
+
+        // A run some other trigger queued since the settling captured these
+        // settings too, so one already under way answers the request.
+        if (runtime.Configuration.BackupSets.FirstOrDefault(candidate => candidate.Id == setId) is { } current)
+        {
+            _ = EnqueueAndFanOut(runtime, current, DateTimeOffset.Now);
+        }
     }
 
     /// <summary>The identity of the job most recently begun for a set, if any.</summary>

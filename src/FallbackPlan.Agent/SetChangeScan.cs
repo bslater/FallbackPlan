@@ -74,11 +74,15 @@ internal static class SetChangeScan
     /// raises the set's notice with what it found — counts only; the paths
     /// come from the preview verb. A rescan that cannot read the source
     /// raises the same notice naming the error instead, because a vanished
-    /// new root is exactly the kind of edit this exists to catch.
+    /// new root is exactly the kind of edit this exists to catch. Either is
+    /// raised only while the edit's settings are current and uncaptured: the
+    /// backup the edit queued may finish first, and a later edit's rescan
+    /// speaks for the set (ADR-0038 Amendment 2).
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set as just saved.</param>
-    internal static void Enqueue(ServiceRuntime runtime, BackupSetConfiguration set)
+    /// <param name="generation">The generation of the set's settings the save made current.</param>
+    internal static void Enqueue(ServiceRuntime runtime, BackupSetConfiguration set, long generation)
     {
         runtime.Queue.Enqueue(new QueuedJob(
             $"rescan-{Guid.NewGuid():n}",
@@ -94,7 +98,9 @@ internal static class SetChangeScan
                         runtime, set, ScanRootsOf(set), set.IncludeRules, set.ExcludeRules,
                         sampleLimit: 0, cancellationToken).ConfigureAwait(false);
 
-                    runtime.Notices.Raise(NoticeKey(set.Id), Summarise(set.Name, comparison), nowMs);
+                    runtime.SetSettings.Found(
+                        set.Id, generation,
+                        () => runtime.Notices.Raise(NoticeKey(set.Id), Summarise(set.Name, comparison), nowMs));
                 }
                 catch (OperationCanceledException)
                 {
@@ -103,11 +109,13 @@ internal static class SetChangeScan
                 catch (Exception exception) when (
                     exception is IOException or UnauthorizedAccessException or ArgumentException)
                 {
-                    runtime.Notices.Raise(
-                        NoticeKey(set.Id),
-                        $"Backup set '{set.Name}' was reconfigured, but the rescan could not read the source: " +
-                        $"{exception.Message} The next backup will report the truth.",
-                        nowMs);
+                    runtime.SetSettings.Found(
+                        set.Id, generation,
+                        () => runtime.Notices.Raise(
+                            NoticeKey(set.Id),
+                            $"Backup set '{set.Name}' was reconfigured, but the rescan could not read the source: " +
+                            $"{exception.Message} The backup queued with the edit will report the truth.",
+                            nowMs));
                 }
             }));
     }
@@ -123,5 +131,6 @@ internal static class SetChangeScan
         $"({comparison.MetadataOnly.Count} metadata-only), {comparison.Moved.Count} moved, " +
         $"{comparison.Deleted.Count} deleted, {comparison.NoLongerIncluded.Count} no longer included" +
         (comparison.Failures > 0 ? $", {comparison.Failures} unreadable" : string.Empty) +
-        ". The next backup captures under the new settings; the 'changes' verb lists the paths.";
+        ". A backup under the new settings was queued with the edit, and this stands until one completes; "
+        + "the 'changes' verb lists the paths.";
 }

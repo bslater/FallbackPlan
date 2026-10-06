@@ -1769,16 +1769,19 @@ function renderSetSaveConfirm(saved, preview, previewError, { comparing = false 
 
 // The actual upsert — reached directly for non-material edits, and only
 // through the confirm step's Apply for material ones.
-async function applySetUpsert(payload) {
+async function applySetUpsert(payload, { material = false } = {}) {
   const result = await run(
     { command: "upsert_backup_set", set: payload }, { errToast: "The service refused the set" });
   if (result?.result === "configuration_change") {
-    // A material edit: the service says what it means and has queued a
-    // rescan whose finding lands under Notices (ADR-0038).
+    // The service says what the save did. A material edit has queued a
+    // backup under the new settings, and a rescan whose finding stands under
+    // Notices until that backup completes (ADR-0038 Amendment 2).
     const savedName = payload.name;
     closeDialog();
     reportDialog(`Backup set '${savedName}' saved`, result.lines,
-      "The next backup captures under the new settings.");
+      material
+        ? "A backup under the new settings has been queued; Jobs shows it."
+        : "What the service did with the save is listed above.");
     refreshConfigData(); refreshStatus();
   } else if (result) {
     toast("ok", E.isNew ? `Backup set '${payload.name}' created.` : `Backup set '${payload.name}' saved.`);
@@ -4685,7 +4688,7 @@ Object.assign(actions, {
     // The advisory walk yields the reader lane before the save queues the
     // authoritative rescan job onto it.
     endSourceScans();
-    await withBusy(el, () => applySetUpsert(payload));
+    await withBusy(el, () => applySetUpsert(payload, { material: true }));
   },
 
   "cfg-delete-set"(el) {

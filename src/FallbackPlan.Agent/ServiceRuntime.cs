@@ -293,6 +293,13 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// </summary>
     internal object BackupEnqueueGate { get; } = new();
 
+    /// <summary>
+    /// Each set's settings generation, and which a completed run captured
+    /// (FR-SVC-009, ADR-0038 Amendment 2): what decides whether a run may
+    /// resolve the set-changed notice and whether a rescan may raise it.
+    /// </summary>
+    internal SetSettingsGenerations SetSettings { get; } = new();
+
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
 
