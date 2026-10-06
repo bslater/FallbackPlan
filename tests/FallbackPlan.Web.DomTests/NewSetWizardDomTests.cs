@@ -14,9 +14,10 @@ namespace FallbackPlan.Web.DomTests;
 /// sends the one upsert carrying every step. The destinations step says the
 /// refusal a local destination on a root's drive would meet before anything
 /// is saved (FR-DEST-017), judged as the very set the save would create.
-/// The wizard keeps one size from its first step to its last, and its folder
-/// tree shows a folder nothing in which is captured a shade lighter rather
-/// than struck through, with toggles large enough to hit.
+/// The wizard keeps one size from its first step to its last, every control
+/// in it draws its whole focus ring, and its folder tree shows a folder
+/// nothing in which is captured a shade lighter rather than struck through,
+/// with toggles large enough to hit.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -375,6 +376,85 @@ public sealed class NewSetWizardDomTests
     }
 
     [TestMethod]
+    [DataRow(1000, DisplayName = "a window the wizard fits")]
+    [DataRow(600, DisplayName = "a window short enough that the steps scroll")]
+    public async Task EveryControlTheKeyboardReaches_DrawsItsWholeFocusRing_OnEveryStep(int windowHeight)
+    {
+        // The step's content scrolls, so it clips. A focus ring is drawn
+        // outside its control's box, and the name step's full-width field
+        // lost the ring's sides and its rounded corners to the clip. On a
+        // short window a control Tab scrolls into view stops at the edge of
+        // the clip, and its ring there is the one at risk.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service();
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+        await page.SetViewportSizeAsync(1280, windowHeight);
+        var step = page.Locator("#set-editor");
+        var reached = new List<string>();
+        var clipped = new List<string>();
+
+        // Tab is what draws a keyboard's focus ring on every kind of
+        // control, and a dialog's Tab order cycles, so a walk stops once a
+        // control of this step comes round again.
+        async Task WalkAsync(string key)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (var press = 0; press < 40; press++)
+            {
+                await page.Keyboard.PressAsync("Tab");
+                var ring = await page.EvaluateAsync<string?>(RingSpareScript);
+                if (ring is null)
+                {
+                    continue;
+                }
+
+                var (control, spare) = (ring[..ring.LastIndexOf('|')], double.Parse(
+                    ring[(ring.LastIndexOf('|') + 1)..], System.Globalization.CultureInfo.InvariantCulture));
+                if (!seen.Add(control))
+                {
+                    return;
+                }
+
+                reached.Add($"{key}: {control}");
+                if (spare < -0.5)
+                {
+                    clipped.Add($"{key}: {control} loses {-spare:0.#} px of its ring");
+                }
+            }
+        }
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "name");
+        await WalkAsync("name");
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "sources");
+        await Expect(page.Locator("input.mark[data-mark-path=\"/data\"]")).ToBeVisibleAsync();
+        await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
+        await WalkAsync("sources");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "destinations");
+        await page.CheckAsync("[data-dest-check=\"vault\"]");
+        await WalkAsync("destinations");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        foreach (var key in new[] { "exclusions", "retention", "other" })
+        {
+            await Expect(step).ToHaveAttributeAsync("data-section", key);
+            await WalkAsync(key);
+            if (key != "other")
+            {
+                await page.ClickAsync("[data-action=\"wiz-next\"]");
+            }
+        }
+
+        Assert.Contains("name: set-name", reached, string.Join("\n", reached));
+        Assert.IsEmpty(clipped, string.Join("\n", clipped));
+    }
+
+    [TestMethod]
     public async Task TheFolderTree_HasLargeToggles_AndShowsAFolderNothingInWhichIsCapturedLighter_NotStruckThrough()
     {
         // Strikethrough read as deleted. A folder nothing in which is captured
@@ -473,6 +553,47 @@ public sealed class NewSetWizardDomTests
         await add.ClickAsync();
         return page;
     }
+
+    /// <summary>
+    /// For the focused control, when it is in the wizard's step content: its
+    /// name, a bar, and the room its focus ring has inside every ancestor that
+    /// clips it, up to the step content, in pixels. Negative is how much of
+    /// the ring is cut away. Null when focus is anywhere else. A ring the
+    /// browser draws itself (<c>auto</c>) is taken as two pixels wide.
+    /// </summary>
+    private const string RingSpareScript =
+        """
+        () => {
+          const control = document.activeElement;
+          const body = document.querySelector("#set-editor .wiz-body");
+          if (!control || !body || !body.contains(control)) return null;
+          const style = getComputedStyle(control);
+          const width = style.outlineStyle === "none" ? 0
+            : style.outlineStyle === "auto" ? Math.max(2, parseFloat(style.outlineWidth) || 0)
+            : parseFloat(style.outlineWidth) || 0;
+          const reach = width === 0 ? 0 : width + (parseFloat(style.outlineOffset) || 0);
+          const box = control.getBoundingClientRect();
+          let spare = Number.MAX_VALUE;
+          for (let clip = control.parentElement; clip; clip = clip.parentElement) {
+            const clipStyle = getComputedStyle(clip);
+            if (clipStyle.overflowX !== "visible" || clipStyle.overflowY !== "visible") {
+              const outer = clip.getBoundingClientRect();
+              const left = outer.left + clip.clientLeft;
+              const top = outer.top + clip.clientTop;
+              spare = Math.min(
+                spare,
+                box.left - reach - left,
+                left + clip.clientWidth - (box.right + reach),
+                box.top - reach - top,
+                top + clip.clientHeight - (box.bottom + reach));
+            }
+            if (clip === body) break;
+          }
+          const name = control.id || control.dataset.action || control.dataset.destCheck
+            || control.dataset.markPath || control.name || control.outerHTML.slice(0, 60);
+          return `${name}|${spare}`;
+        }
+        """;
 
     /// <summary>What a colour token computes to on this page, in the form a computed colour takes.</summary>
     private static Task<string> ColourOfAsync(IPage page, string token) => page.EvaluateAsync<string>(
