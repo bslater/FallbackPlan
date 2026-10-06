@@ -13,6 +13,7 @@ using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 using FallbackPlan.Filesystem;
+using Counting = FallbackPlan.TestSupport.CountingObjectStore;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -93,7 +94,7 @@ public sealed class HintPackTests : ArchiveTestHarness
         return ObjectId.FromBytes(bytes);
     }
 
-    private static async Task<List<string>> KeysUnderAsync(IObjectStore store, string prefix)
+    private static async Task<List<string>> KeysUnderAsync(LocalFileSystemObjectStore store, string prefix)
     {
         var found = new List<string>();
         await foreach (var entry in store.ListAsync(ObjectPrefix.Parse(prefix), ListOptions.Default, CancellationToken.None))
@@ -136,7 +137,7 @@ public sealed class HintPackTests : ArchiveTestHarness
     /// type, key and body that writer used — so a test can stand on a
     /// repository an older installation left.
     /// </summary>
-    private static async Task RewriteAsPerFileHintsAsync(IObjectStore store, RepositoryKeySet keys)
+    private static async Task RewriteAsPerFileHintsAsync(LocalFileSystemObjectStore store, RepositoryKeySet keys)
     {
         using var deriver = new ObjectIdDeriver(keys.ContentIdKey);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, KeyGeneration.Zero);
@@ -367,7 +368,7 @@ public sealed class HintPackTests : ArchiveTestHarness
 
         // A source key is derived from its device, so another device's packs
         // can never answer this one's questions: they are not even read.
-        var counting = new CountingObjectStore(inner);
+        var counting = new Counting(inner);
         var index = await SourceIdentityPackIndex.LoadAsync(
             counting, Repo, keys, DeviceId, FirstCapture, CancellationToken.None);
 
@@ -440,7 +441,7 @@ public sealed class HintPackTests : ArchiveTestHarness
             source.AddFile($"new/file-{index:d3}.bin", Deterministic(1_500, (byte)(100 + index)), fileId: (ulong)(9_000 + index));
         }
 
-        var counting = new CountingObjectStore(inner);
+        var counting = new Counting(inner);
         var second = await CreateOrchestrator(counting, keys, credential, rebuilt)
             .PublishAsync(Job(source, 0xF2, now: FirstCapture + 1) with { PriorSnapshotId = SnapshotId(0xF1) }, CancellationToken.None);
 

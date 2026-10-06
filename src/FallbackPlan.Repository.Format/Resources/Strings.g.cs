@@ -702,6 +702,91 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, SourceIdentityHintCodec_SourceKeyExactlyBytes, arg0);
 
     /// <summary>
+    /// A device identifier is exactly 16 bytes.
+    /// </summary>
+    internal static string SourceIdentityPackCodec_DeviceIdentifierExactlyBytes => Get(nameof(SourceIdentityPackCodec_DeviceIdentifierExactlyBytes));
+
+    /// <summary>
+    /// A source-identity pack's entries ascend by source key and name each one once (specification 06 §11.5).
+    /// </summary>
+    internal static string SourceIdentityPackCodec_EntriesAscendBySourceKey => Get(nameof(SourceIdentityPackCodec_EntriesAscendBySourceKey));
+
+    /// <summary>
+    /// A source-identity pack names between 1 and {0} file versions; this one names {1}.
+    /// </summary>
+    private static string SourceIdentityPackCodec_EntryCountOutOfRange => Get(nameof(SourceIdentityPackCodec_EntryCountOutOfRange));
+
+    /// <summary>
+    /// A source-identity pack names between 1 and {0} file versions; this one names {1}.
+    /// </summary>
+    internal static string FormatSourceIdentityPackCodec_EntryCountOutOfRange(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, SourceIdentityPackCodec_EntryCountOutOfRange, arg0, arg1);
+
+    /// <summary>
+    /// A source-identity pack entry is a source key and an object identifier, and nothing else.
+    /// </summary>
+    internal static string SourceIdentityPackCodec_EntryIsSourceKeyAndObject => Get(nameof(SourceIdentityPackCodec_EntryIsSourceKeyAndObject));
+
+    /// <summary>
+    /// A snapshot identifier is exactly 16 bytes.
+    /// </summary>
+    internal static string SourceIdentityPackCodec_SnapshotIdentifierExactlyBytes => Get(nameof(SourceIdentityPackCodec_SnapshotIdentifierExactlyBytes));
+
+    /// <summary>
+    /// A source-identity pack carries exactly keys 1-6 (specification 06 §11.5).
+    /// </summary>
+    internal static string SourceIdentityPackCodec_SourceIdentityPackCarriesExactly => Get(nameof(SourceIdentityPackCodec_SourceIdentityPackCarriesExactly));
+
+    /// <summary>
+    /// A source-identity pack carries key {0} where key {1} belongs.
+    /// </summary>
+    private static string SourceIdentityPackCodec_SourceIdentityPackKeyOutOfPlace => Get(nameof(SourceIdentityPackCodec_SourceIdentityPackKeyOutOfPlace));
+
+    /// <summary>
+    /// A source-identity pack carries key {0} where key {1} belongs.
+    /// </summary>
+    internal static string FormatSourceIdentityPackCodec_SourceIdentityPackKeyOutOfPlace(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, SourceIdentityPackCodec_SourceIdentityPackKeyOutOfPlace, arg0, arg1);
+
+    /// <summary>
+    /// The source-identity pack is not canonical CBOR: {0}
+    /// </summary>
+    private static string SourceIdentityPackCodec_SourceIdentityPackNotCanonical => Get(nameof(SourceIdentityPackCodec_SourceIdentityPackNotCanonical));
+
+    /// <summary>
+    /// The source-identity pack is not canonical CBOR: {0}
+    /// </summary>
+    internal static string FormatSourceIdentityPackCodec_SourceIdentityPackNotCanonical(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SourceIdentityPackCodec_SourceIdentityPackNotCanonical, arg0);
+
+    /// <summary>
+    /// Source-identity pack schema {0} is unknown; this reader implements {1}.
+    /// </summary>
+    private static string SourceIdentityPackCodec_SourceIdentityPackSchemaUnknownReader => Get(nameof(SourceIdentityPackCodec_SourceIdentityPackSchemaUnknownReader));
+
+    /// <summary>
+    /// Source-identity pack schema {0} is unknown; this reader implements {1}.
+    /// </summary>
+    internal static string FormatSourceIdentityPackCodec_SourceIdentityPackSchemaUnknownReader(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, SourceIdentityPackCodec_SourceIdentityPackSchemaUnknownReader, arg0, arg1);
+
+    /// <summary>
+    /// A source key is exactly {0} bytes.
+    /// </summary>
+    private static string SourceIdentityPackCodec_SourceKeyExactlyBytes => Get(nameof(SourceIdentityPackCodec_SourceKeyExactlyBytes));
+
+    /// <summary>
+    /// A source key is exactly {0} bytes.
+    /// </summary>
+    internal static string FormatSourceIdentityPackCodec_SourceKeyExactlyBytes(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, SourceIdentityPackCodec_SourceKeyExactlyBytes, arg0);
+
+    /// <summary>
+    /// A source-identity pack names each source key once; this one names a key twice (specification 06 §11).
+    /// </summary>
+    internal static string SourceIdentityPackCodec_SourceKeyRepeated => Get(nameof(SourceIdentityPackCodec_SourceKeyRepeated));
+
+    /// <summary>
     /// The blob salt is exactly {0} bytes.
     /// </summary>
     private static string StandaloneRecordFraming_BlobSaltExactlyBytes => Get(nameof(StandaloneRecordFraming_BlobSaltExactlyBytes));

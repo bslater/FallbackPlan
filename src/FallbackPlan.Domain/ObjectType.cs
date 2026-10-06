@@ -61,6 +61,13 @@ public enum ObjectType : byte
     /// a destination holding it — and the service that wrote it — read nothing.
     /// </summary>
     SetConfiguration = 0x10,
+
+    /// <summary>
+    /// An advisory source-identity pack (specification 06 §11.5): one
+    /// publication's source-identity hints in one object, so a backup's hints
+    /// cost a request per backup rather than one per file version it created.
+    /// </summary>
+    SourceIdentityPack = 0x11,
 }
 
 /// <summary>
@@ -72,11 +79,11 @@ public static class ObjectTypes
     /// Returns whether <paramref name="value"/> is an assigned object type.
     /// Rejects zero, the reserved store-key domain separator <c>0x07</c> —
     /// which stays reserved forever (specification 02 §3.1) — and everything
-    /// unassigned above <c>0x10</c>: an unknown type in an object the reader
+    /// unassigned above <c>0x11</c>: an unknown type in an object the reader
     /// must interpret is refused, never guessed (specification 00 §3).
     /// </summary>
     public static bool IsValid(byte value) =>
-        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x10);
+        value is (>= 0x01 and <= 0x06) or (>= 0x08 and <= 0x11);
 
     /// <summary>
     /// Converts a byte read from untrusted input into an

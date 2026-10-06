@@ -58,6 +58,45 @@ public static class MetadataStoreKeys
         return ObjectPrefix.Parse($"hints/identity/{rendered[..ShardLength]}/{rendered}/");
     }
 
+    /// <summary>
+    /// A source-identity pack's key:
+    /// <c>hints/identity-pack/&lt;device&gt;/&lt;captured-at&gt;/&lt;snapshot&gt;/&lt;part&gt;</c>
+    /// (specification 06 §11.5).
+    /// </summary>
+    /// <remarks>
+    /// The <b>device</b> comes first because a source key is derived from
+    /// one, so a reader lists only the packs that could answer it. The
+    /// <b>capture time</b> follows as zero-padded decimal so that key order
+    /// within a device is chronological, which lets a reader stop at the first
+    /// pack past its bound. The <b>snapshot</b> separates two captures in one
+    /// millisecond, and the <b>part</b> numbers a publication's packs when it
+    /// created more versions than one holds. One child per publication rather
+    /// than per file, so the prefix needs no shard.
+    /// </remarks>
+    public static ObjectKey SourceIdentityPack(
+        ReadOnlySpan<byte> deviceId, ulong capturedAt, ReadOnlySpan<byte> snapshotId, uint part)
+    {
+        Require16(deviceId, nameof(deviceId));
+        Require16(snapshotId, nameof(snapshotId));
+
+        return ObjectKey.Parse(
+            $"hints/identity-pack/{Base32.Encode(deviceId.ToArray())}/{Decimal16(capturedAt)}/{Base32.Encode(snapshotId.ToArray())}/{Decimal16(part)}");
+    }
+
+    /// <summary>Every source-identity pack one device published, in capture order.</summary>
+    public static ObjectPrefix SourceIdentityPackPrefix(ReadOnlySpan<byte> deviceId)
+    {
+        Require16(deviceId, nameof(deviceId));
+        return ObjectPrefix.Parse($"hints/identity-pack/{Base32.Encode(deviceId.ToArray())}/");
+    }
+
+    /// <summary>
+    /// The prefix every per-file source-identity hint sits under, of every
+    /// source key (specification 06 §11): what a reader asks once to learn
+    /// whether any exist at all.
+    /// </summary>
+    public static ObjectPrefix SourceIdentityHintsPrefix { get; } = ObjectPrefix.Parse("hints/identity/");
+
     /// <summary>The shard is the first four base32 characters, as it is for blobs (specification 01 §2).</summary>
     private const int ShardLength = 4;
 

@@ -6,6 +6,7 @@ using FallbackPlan.Repository.Index;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.TestSupport;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using Counting = FallbackPlan.TestSupport.CountingObjectStore;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -249,7 +250,7 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
             source.AddFile($"docs/file-{i:d2}.bin", Incompressible(500, i));
         }
 
-        var store = new CountingObjectStore(CreateStore());
+        var store = new Counting(CreateStore());
         using var keys = CreateKeys();
         using var credential = CreateCredential();
 

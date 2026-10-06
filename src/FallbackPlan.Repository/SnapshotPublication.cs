@@ -382,7 +382,7 @@ public sealed partial class PublicationOrchestrator
 
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
-                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
+                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, job.DeviceId, bound) : null,
                 reader, _logger);
 
             // Steps 2–4 interleave by design: the scan streams, and each

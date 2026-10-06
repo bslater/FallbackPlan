@@ -8,6 +8,7 @@ using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 using FallbackPlan.Filesystem;
+using Counting = FallbackPlan.TestSupport.CountingObjectStore;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -118,7 +119,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             observer: null,
             catalogue);
 
-    private static Measured Tally(CountingObjectStore counting, PublishedTreeSnapshot published, int files, long contentBytes)
+    private static Measured Tally(Counting counting, PublishedTreeSnapshot published, int files, long contentBytes)
     {
         var puts = counting.PutKeys;
         return new Measured(
@@ -145,7 +146,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
 
     private async Task<Measured> MeasureFirstBackupAsync(string name, int files, int fileBytes)
     {
-        var counting = new CountingObjectStore(new LocalFileSystemObjectStore(Path.Combine(StoreRoot, name)));
+        var counting = new Counting(new LocalFileSystemObjectStore(Path.Combine(StoreRoot, name)));
         using var keys = CreateKeys();
         using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, $"{name}.db"), Repo);
@@ -218,7 +219,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
     public async Task AnIncremental_RequestsBesideItsBlobs_DoNotGrowWithTheFilesItChanges()
     {
         var inner = new LocalFileSystemObjectStore(Path.Combine(StoreRoot, "incremental"));
-        var counting = new CountingObjectStore(inner);
+        var counting = new Counting(inner);
         using var keys = CreateKeys();
         using var credential = CreateCredential();
         using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "incremental.db"), Repo);

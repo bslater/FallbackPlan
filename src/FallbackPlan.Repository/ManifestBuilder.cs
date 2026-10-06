@@ -375,6 +375,115 @@ public sealed class ManifestBuilder : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Writes one publication's source-identity hints as packs (specification
+    /// 06 §11.5): one object for every <see cref="SourceIdentityPack.MaxEntries"/>
+    /// file versions it created, sealed under the same standalone framing as
+    /// the snapshot object.
+    /// </summary>
+    /// <param name="deviceId">The device whose source keys the entries are, 16 bytes.</param>
+    /// <param name="snapshotId">The snapshot that created the versions, 16 bytes.</param>
+    /// <param name="capturedAt">The snapshot's capture time, epoch milliseconds.</param>
+    /// <param name="entries">The versions the publication created; an empty list writes nothing.</param>
+    /// <param name="intentSequence">
+    /// The publication's write-intent sequence number, which every pack
+    /// carries (ADR-0022 §Decision 7).
+    /// </param>
+    /// <param name="written">Called with each part's entry count once that part has landed or been passed over.</param>
+    /// <param name="cancellationToken">Cancels the writes.</param>
+    /// <remarks>
+    /// <para>
+    /// A request per publication rather than one per new file version, which
+    /// on a store that charges by the request was most of what a first backup
+    /// cost (NFR-PERF-008, ADR-0090). The entries are sorted once and split in
+    /// order, so the parts together ascend by source key as each one does.
+    /// </para>
+    /// <para>
+    /// Advisory, as the per-file hint was: a store that refuses or faults a
+    /// put costs a later reader the renames that part would have answered,
+    /// never the publication. Cancellation is not caught. Written
+    /// <em>before</em> the snapshot object, for the reason 06 §11 gives: a
+    /// hint that becomes visible after the snapshot that needs it is missing
+    /// exactly when it is wanted.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">Two entries name one source key.</exception>
+    public async ValueTask WriteSourceIdentityPacksAsync(
+        ReadOnlyMemory<byte> deviceId,
+        ReadOnlyMemory<byte> snapshotId,
+        ulong capturedAt,
+        IReadOnlyList<SourceIdentityPackEntry> entries,
+        ulong intentSequence,
+        Action<int>? written,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        var ordered = entries.ToArray();
+        Array.Sort(ordered, static (left, right) => left.SourceKey.Span.SequenceCompareTo(right.SourceKey.Span));
+        for (var index = 1; index < ordered.Length; index++)
+        {
+            if (ordered[index - 1].SourceKey.Span.SequenceEqual(ordered[index].SourceKey.Span))
+            {
+                throw new ArgumentException(Strings.ManifestBuilder_SourceKeyNamedTwice, nameof(entries));
+            }
+        }
+
+        var part = 0u;
+        for (var start = 0; start < ordered.Length; start += SourceIdentityPack.MaxEntries, part++)
+        {
+            var count = Math.Min(SourceIdentityPack.MaxEntries, ordered.Length - start);
+            var pack = new SourceIdentityPack
+            {
+                DeviceId = deviceId,
+                SnapshotId = snapshotId,
+                CapturedAt = capturedAt,
+                Part = part,
+                Entries = new ArraySegment<SourceIdentityPackEntry>(ordered, start, count),
+            };
+
+            await WriteSourceIdentityPackAsync(pack, intentSequence, cancellationToken).ConfigureAwait(false);
+            written?.Invoke(count);
+        }
+    }
+
+    private async ValueTask WriteSourceIdentityPackAsync(
+        SourceIdentityPack pack, ulong intentSequence, CancellationToken cancellationToken)
+    {
+        var encoded = SourceIdentityPackCodec.Encode(pack);
+        var contentId = ContentHasher.Hash(encoded);
+        var objectId = _objectIdDeriver.Derive(ObjectType.SourceIdentityPack, contentId);
+
+        var sealedObject = StandaloneRecordCipher.Seal(
+            _repositoryId,
+            _metadataClassKey,
+            _generation,
+            _writerId,
+            intentSequence,
+            ObjectType.SourceIdentityPack,
+            objectId,
+            encoded);
+
+        try
+        {
+            await _store.PutAsync(
+                MetadataStoreKeys.SourceIdentityPack(pack.DeviceId.Span, pack.CapturedAt, pack.SnapshotId.Span, pack.Part),
+                _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
+                PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // The advisory bargain, as for the per-file hint: a pack the store
+            // would not take costs a later reader the renames it would have
+            // answered, never the publication.
+        }
+    }
+
     private async ValueTask SealAndUploadAsync(CancellationToken cancellationToken)
     {
         var sealedBlob = await _writer!.SealAsync(cancellationToken).ConfigureAwait(false);
