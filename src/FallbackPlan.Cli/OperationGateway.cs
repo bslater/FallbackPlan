@@ -160,6 +160,18 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Cancels the verification.</param>
     ValueTask<OperationReport> VerifyDestinationAsync(
         string? setName, string? destinationName, bool full, bool probe, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs the restore drill of each matching (set, destination) pair now
+    /// (FR-DRL-003). Only a service can serve this: the drill's answer is
+    /// recorded on its ledger and raises or clears its notice, so direct mode
+    /// refuses with directions.
+    /// </summary>
+    /// <param name="setName">The set to drill; null takes every configured set.</param>
+    /// <param name="destinationName">The destination to drill; null takes each set's every destination.</param>
+    /// <param name="cancellationToken">Ends the wait; the drill itself is the service's and finishes.</param>
+    /// <returns>A line per pair; not ok unless every pair asked about was drilled and restored.</returns>
+    ValueTask<OperationReport> DrillAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -579,6 +591,18 @@ internal sealed class ServiceGateway(
         // Unlike a sync, this one CAN fail: damaged objects are a finding, and
         // the exit code must carry that without anyone parsing the prose.
         return new OperationReport(result.Damaged == 0, result.Lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> DrillAsync(
+        string? setName, string? destinationName, CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<DrillResult>(
+            new RunDrillCommand(setName, destinationName), "a restore drill", cancellationToken).ConfigureAwait(false);
+
+        // A pair nothing was drilled at has proved nothing, so it is not a
+        // success either; the counts say so without anyone parsing the prose.
+        return new OperationReport(result.Failed == 0 && result.NotDrilled == 0, result.Lines);
     }
 
     public async ValueTask<OperationReport> SyncAsync(
@@ -1269,6 +1293,14 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // stamp live in the service's ledger, so a direct-mode pass would read
         // the same objects forever and never record that it had.
         throw new CliFailureException(Strings.DirectGateway_VerifyDestinationNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> DrillAsync(
+        string? setName, string? destinationName, CancellationToken cancellationToken) =>
+        // A drill's answer belongs on the service's ledger, beside the
+        // schedule's, and raises or clears the service's notice; a drill run
+        // here would prove something nobody else ever learns.
+        throw new CliFailureException(Strings.DirectGateway_DrillNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> PreviewSetChangesAsync(

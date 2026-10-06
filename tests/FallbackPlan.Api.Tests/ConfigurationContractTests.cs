@@ -34,11 +34,45 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AwaitingTheFirstBackup_IsRecordedAtOneFiftySeven()
+    public void ContractVersion_DrillNow_IsRecordedAtOneFiftyEight()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.57", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.58", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void RunDrillCommand_CrossesUnderItsWireNames_AndItsAnswerComesBackAsItself()
+    {
+        // FR-DRL-003: a drill on request names its pair the way sync and
+        // verify_destination do, and either name left out means every one.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new RunDrillCommand("docs", "vault"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"run_drill\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"backup_set_name\":\"docs\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"destination_name\":\"vault\"", asked, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RunDrillCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>("""{"command":"run_drill"}""", FrameCodec.SerializerOptions),
+            out var every);
+        Assert.IsNull(every.BackupSetName);
+        Assert.IsNull(every.DestinationName);
+
+        // The counts cross beside the lines, so an exit code never has to be
+        // recovered by parsing prose.
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new DrillResult(["docs -> vault: could not restore — the replica would not open"], Failed: 1, NotDrilled: 2),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"drill\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"failed\":1", answered, StringComparison.Ordinal);
+        Assert.Contains("\"not_drilled\":2", answered, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<DrillResult>(
+            JsonSerializer.Deserialize<ServiceResult>(answered, FrameCodec.SerializerOptions), out var back);
+        Assert.AreEqual(1, back.Failed);
+        Assert.AreEqual(2, back.NotDrilled);
+        Assert.ContainsSingle(back.Lines);
     }
 
     [TestMethod]

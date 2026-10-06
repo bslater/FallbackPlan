@@ -190,6 +190,7 @@ public sealed class AgentHostTests : IDisposable
     [DataRow("run")]
     [DataRow("sync")]
     [DataRow("verify-destination")]
+    [DataRow("drill")]
     public async Task AgentHost_AVerbThatHoldsNoPassphrase_RefusesTheFlagNamingWhereItBelongs(string verb)
     {
         // The service never holds the passphrase (ADR-0042 §5). A flag that

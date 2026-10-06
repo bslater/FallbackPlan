@@ -14,7 +14,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// when no service is running.
 /// Establishes FR-SVC-008, the CLI half of FR-SVC-021, the CLI half of
 /// FR-VER-003's report of a circuit, the CLI half of FR-GC-008's granted
-/// collection run, and the CLI half of FR-GC-013's snapshot deletion.
+/// collection run, the CLI half of FR-GC-013's snapshot deletion, and the
+/// CLI half of FR-DRL-003's drill on request.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -267,6 +268,41 @@ public sealed class ClientModeTests : IDisposable
                 $"sweep:ok@{DateTimeOffset.FromUnixTimeMilliseconds((long)closed.Value):yyyy-MM-dd}"),
             after.All,
             StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Drill_WithAServiceRunning_IsRunByTheService_AndRecordedOnItsLedger()
+    {
+        // FR-DRL-003 end to end: the verb crosses the local binding, the
+        // service drills the pair from its own replica, and the answer and
+        // the exit code come back from the service's count.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        _harness.WriteConfiguration("every 1h");
+        Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        // The configured set's own backup, run by the service: a drill asks
+        // the set's archive for a snapshot of that set. The run's fan-out
+        // copies it to the vault, and the drill needs it there.
+        var backedUp = await ServiceCliAsync("backup", "--set", "docs", "--state", _harness.StateDirectory);
+        Assert.AreEqual(0, backedUp.ExitCode, backedUp.All);
+        var setId = runtime.Configuration.BackupSets.Single().Id;
+        while (runtime.DestinationSync.Find(setId, "vault")?.LastSuccessAt is null)
+        {
+            await Task.Delay(50, _timeout.Token);
+        }
+
+        var drilled = await ServiceCliAsync("drill", "--set", "docs", "--destination", "vault", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, drilled.ExitCode, drilled.All);
+        Assert.Contains("docs -> vault", drilled.All, StringComparison.Ordinal);
+        var record = runtime.DestinationSync.Find(setId, "vault");
+        Assert.IsNotNull(record?.DrilledAt, drilled.All);
+        Assert.IsNull(record.DrillFailure, record.DrillFailure);
     }
 
     [TestMethod]

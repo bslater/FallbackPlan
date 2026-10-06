@@ -960,7 +960,9 @@ function renderSetCard(set) {
         ${bytesHeld == null ? "" : `<div><span class="detail">Bytes held</span><span>${esc(fmtBytes(d.heldBytes))} of ${esc(fmtBytes(d.owedBytes))} it keeps · ${bytesHeld}%</span></div>`}
         <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
         <div><span class="detail">Possession</span><span>${esc(d.verification)}${verificationTiers(d)}</span></div>
-        <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
+        <div><span class="detail">Restore drill</span><span>${drillLabel(d)}
+          <button type="button" class="btn small" data-action="drill" data-set="${esc(set.setName)}" data-destination="${esc(d.name)}"
+            title="Restore a sample of files from this destination's own copy now, and record the answer here">Run restore drill</button></span></div>
         ${sweep ? `<div><span class="detail">Deep verify</span><span>${sweep}</span></div>` : ""}
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
@@ -2549,6 +2551,24 @@ const actions = {
           Number(result.damaged) === 0 ? "Destination verification — clean" : `Destination verification — ${fmtCount(result.damaged)} damaged`,
           result.lines);
       }
+    });
+  },
+
+  // A destination's drill, now (FR-DRL-003, contract 1.58). The service
+  // records it where the schedule records it and raises or clears the drill
+  // notice, so the page shows its answer and reads the row again.
+  async "drill"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "run_drill", backupSetName: el.dataset.set, destinationName: el.dataset.destination },
+        { errToast: "Restore drill refused" });
+      if (result?.result === "drill") {
+        reportDialog(
+          Number(result.failed) > 0 ? "Restore drill — could not restore" : "Restore drill",
+          result.lines,
+          "A drill restores a sample of files from the destination's own copy, opened the way a stranger would open it, and records the answer on the destination's row.");
+      }
+      refreshStatus();
     });
   },
 

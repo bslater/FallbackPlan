@@ -1608,6 +1608,33 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // ---------------------------------------------------------------- drill
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Drill only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Drill only this declared destination; each set's every destination otherwise.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "drill",
+                "Run a restore drill now, outside its cadence (FR-DRL-003): restore a sample of files from each "
+                + "destination's own copy, the way a stranger would open it, and record the answer where the "
+                + "scheduled drill records it. Exits non-zero unless every pair asked about was drilled and restored."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.DrillAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------------ retention
 
         {

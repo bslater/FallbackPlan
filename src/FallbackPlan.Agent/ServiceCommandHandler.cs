@@ -630,6 +630,7 @@ public sealed partial class ServiceCommandHandler(
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
+        RunDrillCommand drill => await RunDrillAsync(drill, cancellationToken).ConfigureAwait(false),
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
@@ -2185,6 +2186,108 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new SyncResult(lines);
+    }
+
+    /// <summary>
+    /// Runs the restore drill of each matching pair now (FR-DRL-003, ADR-0054
+    /// Amendment 6), one pair at a time as the schedule's drill phase does,
+    /// and answers once each has been recorded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not on a lane, for the drill's own reason: the verbs it calls queue
+    /// themselves on the reader lane, whose one worker a drill holding it
+    /// would wait on for ever.
+    /// </para>
+    /// <para>
+    /// A pair with nothing there to restore is said and counted apart, and
+    /// nothing is recorded against it: a set with no snapshot yet, a
+    /// destination nothing has been copied to, one no longer declared, or a
+    /// kind nothing serves. Drilling those would record a failure about an
+    /// absence that is correct.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<ServiceResult> RunDrillAsync(RunDrillCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+
+        IReadOnlyList<BackupSetConfiguration> sets;
+        if (command.BackupSetName is null)
+        {
+            sets = configuration.BackupSets;
+        }
+        else if (configuration.FindSet(command.BackupSetName) is { } found)
+        {
+            sets = [found];
+        }
+        else
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.BackupSetName}' is configured.");
+        }
+
+        if (command.DestinationName is not null && configuration.FindDestination(command.DestinationName) is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+        }
+
+        var lines = new List<string>();
+        var failed = 0;
+        var notDrilled = 0;
+        var matched = false;
+        foreach (var set in sets)
+        {
+            bool? holdsSnapshot = null;
+            foreach (var reference in set.Destinations)
+            {
+                if (command.DestinationName is not null
+                    && !string.Equals(reference.Ref, command.DestinationName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matched = true;
+                holdsSnapshot ??= await runtime.HasSnapshotAsync(set.Id, cancellationToken).ConfigureAwait(false);
+                var nothing = holdsSnapshot.Value
+                    ? RecoveryDrillJob.NothingToDrill(runtime, set, reference.Ref)
+                    : "the set has no backup yet, so there is nothing there to restore";
+                if (nothing is not null)
+                {
+                    lines.Add($"{set.Name} -> {reference.Ref}: not drilled — {nothing}");
+                    notDrilled++;
+                    continue;
+                }
+
+                var outcome = await RecoveryDrillJob.RunOnRequestAsync(
+                    runtime, set, reference.Ref, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    cancellationToken).ConfigureAwait(false);
+                if (!outcome.Recorded)
+                {
+                    // The service is stopping: the drill states nothing, and
+                    // neither may its answer.
+                    return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+                }
+
+                if (outcome.Failure is not null)
+                {
+                    failed++;
+                }
+
+                lines.Add($"{set.Name} -> {reference.Ref}: {RecoveryDrillJob.Describe(outcome)}");
+            }
+        }
+
+        if (!matched)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                command.DestinationName is null
+                    ? "No backup set declares a destination."
+                    : $"No matching set declares destination '{command.DestinationName}'.");
+        }
+
+        return new DrillResult(lines, failed, notDrilled);
     }
 
     private static string DescribeSync(DestinationSyncRecord? record) => record?.State switch

@@ -239,6 +239,11 @@ internal static class Strings
     internal static string DirectGateway_VerifyDestinationNeedsTheService => Get(nameof(DirectGateway_VerifyDestinationNeedsTheService));
 
     /// <summary>
+    /// A restore drill runs on the hub — its answer is recorded on the service's ledger, where it raises or clears the drill notice, so a direct-mode drill would prove something nobody else ever learns. Connect to it with --connect, or run `fallbackplan-agent drill` on the hub when no service is running.
+    /// </summary>
+    internal static string DirectGateway_DrillNeedsTheService => Get(nameof(DirectGateway_DrillNeedsTheService));
+
+    /// <summary>
     /// Syncing destinations is the service's job — its scheduler, ledger and per-set archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
     /// </summary>
     internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));

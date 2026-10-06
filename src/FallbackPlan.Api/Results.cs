@@ -55,6 +55,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DeleteSnapshotsResult), "snapshots_deleted")]
 [JsonDerivedType(typeof(SyncResult), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationResult), "verify_destination")]
+[JsonDerivedType(typeof(DrillResult), "drill")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -907,6 +908,23 @@ public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
 /// from the lines because an exit code must not be recovered by parsing prose.
 /// </param>
 public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long Damaged) : ServiceResult;
+
+/// <summary>
+/// What drills run on request found, one line per <c>(set, destination)</c>
+/// pair (FR-DRL-003): what each restored, why it could not, or why the pair
+/// was not drilled.
+/// </summary>
+/// <param name="Lines">The per-pair report.</param>
+/// <param name="Failed">
+/// Drills that could not restore. Separate from the lines because an exit
+/// code must not be recovered by parsing prose.
+/// </param>
+/// <param name="NotDrilled">
+/// Pairs asked about and not drilled, because there was nothing there to
+/// restore. Counted apart from a failure: nothing was recorded against them
+/// and no notice raised, but nothing was proved either.
+/// </param>
+public sealed record DrillResult(IReadOnlyList<string> Lines, int Failed, int NotDrilled) : ServiceResult;
 
 /// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
 /// <param name="Name">The destination's declared name.</param>

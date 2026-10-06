@@ -58,6 +58,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(DeleteSnapshotsCommand), "delete_snapshots")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
+[JsonDerivedType(typeof(RunDrillCommand), "run_drill")]
 [JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
 [JsonDerivedType(typeof(UpgradeSetFormatCommand), "upgrade_set_format")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
@@ -946,6 +947,21 @@ public sealed record SyncCommand(string? BackupSetName, string? DestinationName)
 /// </param>
 public sealed record VerifyDestinationCommand(
     string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
+
+/// <summary>
+/// Runs a restore drill now, outside the cadence (FR-DRL-003, ADR-0054
+/// Amendment 6): the drill the schedule runs, for each matching
+/// <c>(set, destination)</c> pair, answered once each has been recorded.
+/// </summary>
+/// <remarks>
+/// A pair already being drilled is joined rather than drilled twice, and the
+/// drill belongs to the service, so a caller who stops waiting does not cut it
+/// short. A pair with nothing there to restore — a set with no snapshot yet, a
+/// destination nothing has been copied to — is said and not drilled.
+/// </remarks>
+/// <param name="BackupSetName">The set to drill; null drills every configured set.</param>
+/// <param name="DestinationName">The destination to drill; null drills each set's every destination.</param>
+public sealed record RunDrillCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
 
 /// <summary>
 /// Retires a direct-ship set's staging archive (ADR-0046, contract 1.18):

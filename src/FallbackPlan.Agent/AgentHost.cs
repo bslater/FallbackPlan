@@ -74,6 +74,8 @@ public static class AgentHost
                                             [--set <name>] [--destination <name>]
                   fallbackplan-agent verify-destination --archives <root> --state <dir>
                                             [--set <name>] [--destination <name>] [--probe | --full]
+                  fallbackplan-agent drill  --archives <root> --state <dir>
+                                            [--set <name>] [--destination <name>]
                   fallbackplan-agent retention --archives <root> --state <dir> [--passphrase-env <VAR>] [--apply]
                   fallbackplan-agent notices --state <dir> [--ack <id>]
                   fallbackplan-agent receipts --state <dir> [--kind deletion|replication] [--set <name>]
@@ -237,10 +239,10 @@ public static class AgentHost
             return 1;
         }
 
-        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "acknowledge-claim" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination"))
+        if (args[0] is not ("run" or "setup" or "pair" or "pairings" or "unpair" or "reattribute" or "acknowledge-claim" or "install" or "sync" or "notices" or "receipts" or "retention" or "upgrade-format" or "verify-destination" or "drill"))
         {
             error.WriteLine(
-                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `acknowledge-claim`, `install`, `sync`, `verify-destination`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
+                "error: usage is `run`, `setup`, `pair`, `pairings`, `unpair`, `reattribute`, `acknowledge-claim`, `install`, `sync`, `verify-destination`, `drill`, `notices`, `receipts`, `retention`, or `upgrade-format` — no other verb exists.");
             return 1;
         }
 
@@ -408,7 +410,7 @@ public static class AgentHost
             return string.IsNullOrEmpty(value) ? null : value;
         }
 
-        if (passphraseVariable is not null && args[0] is "run" or "sync" or "verify-destination")
+        if (passphraseVariable is not null && args[0] is "run" or "sync" or "verify-destination" or "drill")
         {
             // Not ignored: a flag that used to mean "hold this passphrase for
             // the run" and now means nothing would let an operator believe
@@ -444,7 +446,8 @@ public static class AgentHost
         // unhandled stack trace is never the answer to a held lock.
         async Task<int> ServiceVerbAsync(
             Func<ServiceRuntime, Api.ServiceCommand?> commandFor,
-            Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines)
+            Func<Api.ServiceResult, IReadOnlyList<string>?> reportLines,
+            Func<Api.ServiceResult, bool>? succeeded = null)
         {
             try
             {
@@ -473,7 +476,7 @@ public static class AgentHost
                         output.WriteLine(line);
                     }
 
-                    return 0;
+                    return succeeded is null || succeeded(result) ? 0 : 1;
                 }
 
                 if (result is Api.ServiceError failure)
@@ -806,6 +809,20 @@ public static class AgentHost
                 _ => new Api.VerifyDestinationCommand(
                     Get("--set"), Get("--destination"), args.Contains("--full"), args.Contains("--probe")),
                 result => (result as Api.VerifyDestinationResult)?.Lines).ConfigureAwait(false);
+        }
+
+        // `drill [--set] [--destination]` runs the restore drill of each
+        // matching pair now (FR-DRL-003), through the same command surface a
+        // console uses: recorded on the pair's row, and the drill-failed
+        // notice raised or cleared, exactly as the schedule's drill does.
+        // Exits non-zero unless every pair asked about was drilled and
+        // restored.
+        if (args[0] == "drill")
+        {
+            return await ServiceVerbAsync(
+                _ => new Api.RunDrillCommand(Get("--set"), Get("--destination")),
+                result => (result as Api.DrillResult)?.Lines,
+                result => result is Api.DrillResult { Failed: 0, NotDrilled: 0 }).ConfigureAwait(false);
         }
 
         // `sync [--set] [--destination]` converges declared destinations now,

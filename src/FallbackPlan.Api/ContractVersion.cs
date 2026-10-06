@@ -586,8 +586,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// client that does not know the value shows the row's `detail`, which
     /// says the same in words.
     /// </para>
+    /// <para>
+    /// 1.58 adds `run_drill` (FR-DRL-003, ADR-0054 Amendment 6): a person
+    /// runs a destination's restore drill now, outside its cadence. It names
+    /// its pair as `sync` does, `backup_set_name` and `destination_name`, and
+    /// either left out means every one. The answer, `drill`, carries a line
+    /// per pair and two counts, `failed` and `not_drilled`, so an exit code is
+    /// never read from the prose. The drill is recorded on the pair's row and
+    /// raises or clears its notice exactly as a scheduled one does. Additive:
+    /// a pre-1.58 client never sends the command.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 57);
+    public static ContractVersion Current { get; } = new(1, 58);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

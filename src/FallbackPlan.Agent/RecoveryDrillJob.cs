@@ -84,7 +84,16 @@ internal static class RecoveryDrillJob
     /// <param name="Bytes">What they amounted to; zero under a limit, since nothing was written.</param>
     /// <param name="Failure">Why it did not work, or null when it did.</param>
     /// <param name="Limit">What a passing drill could not prove, or null when it proved everything.</param>
-    public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null);
+    public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null)
+    {
+        /// <summary>
+        /// Whether the drill stated anything. False for a drill the service
+        /// stopping cut short, which records nothing and raises nothing
+        /// (ADR-0054 Amendments 1 and 4), so whoever asked for it is answered
+        /// cancelled rather than told it passed.
+        /// </summary>
+        public bool Recorded { get; init; } = true;
+    }
 
     /// <summary>
     /// The limit a drill states on a write-only set (ADR-0054 Amendment 2):
@@ -119,6 +128,73 @@ internal static class RecoveryDrillJob
             : null;
         return RunAsync(runtime, set, destinationName, nowMs, budget, cancellationToken);
     }
+
+    /// <summary>
+    /// Drills one pair because a person asked (FR-DRL-003, ADR-0054
+    /// Amendment 6), as the scheduler would, under the budget the
+    /// destination's kind implies and through no transfer limit.
+    /// </summary>
+    /// <remarks>
+    /// The drill runs on the service's lifetime, not the asker's: a person
+    /// who stops waiting is answered cancelled, and the drill they started
+    /// finishes and is recorded, as an on-demand sync does. Only the service
+    /// stopping cuts it short, and then it states nothing.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Ends the wait for the answer, never the drill.</param>
+    public static Task<DrillOutcome> RunOnRequestAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        CancellationToken cancellationToken) =>
+        RunAsync(runtime, set, destinationName, nowMs, userInitiated: true, runtime.Queue.StoppingToken)
+            .WaitAsync(cancellationToken);
+
+    /// <summary>
+    /// Why a person's ask finds nothing at a pair to drill, beyond the set
+    /// having no snapshot, which the asker settles first: null when there is
+    /// something there to restore.
+    /// </summary>
+    /// <remarks>
+    /// The scheduler's rule for a pair nothing has reached holds for a
+    /// person's ask too: drilling would record a failure about an absence
+    /// that is correct. Its cadence rule does not: a peer with no stated
+    /// cadence is drilled when a person asks, because one drill somebody
+    /// chose is not a standing cost on the peer's link.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set asked about.</param>
+    /// <param name="destinationName">The destination asked about.</param>
+    internal static string? NothingToDrill(ServiceRuntime runtime, BackupSetConfiguration set, string destinationName)
+    {
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination)
+        {
+            return "the destination is no longer declared";
+        }
+
+        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer))
+        {
+            return $"a {destination.Kind} destination is not served yet";
+        }
+
+        return runtime.DestinationSync.Find(set.Id, destinationName)?.LastSuccessAt is null
+            ? "nothing has been copied there yet, so there is nothing there to restore"
+            : null;
+    }
+
+    /// <summary>What a drill found, as the clause a person's report gives it.</summary>
+    /// <param name="outcome">A drill's recorded outcome.</param>
+    internal static string Describe(DrillOutcome outcome) => outcome switch
+    {
+        { Failure: { } failure } => $"could not restore — {failure}",
+        { Limit: { } limit } => $"passed, {outcome.Files} file(s) proved — {limit}",
+        { Files: > 0 } => $"restored {outcome.Files} file(s) from its replica",
+        _ => "passed — its newest snapshot holds no file to restore",
+    };
 
     /// <summary>
     /// Drills one pair as the scheduler does, under the budget the
@@ -205,7 +281,9 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// Drills one (set, destination) pair through the service it is handed —
     /// a test's way to put one fault between the drill and the verbs it
-    /// calls, so that the fault is all that differs from a clean drill.
+    /// calls, so that the fault is all that differs from a clean drill. A
+    /// drill of the pair already under way is joined rather than started
+    /// again, whoever started it (FR-DRL-003).
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="handler">The verbs the drill calls.</param>
@@ -215,7 +293,21 @@ internal static class RecoveryDrillJob
     /// <param name="budget">What the sample may read, or null for no cap.</param>
     /// <param name="draw">Chooses among the entries the descent is offered at each step.</param>
     /// <param name="cancellationToken">Cancels the drill.</param>
-    internal static async Task<DrillOutcome> RunAsync(
+    internal static Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        IFallbackPlanService handler,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        SampleBudget? budget,
+        Random draw,
+        CancellationToken cancellationToken) =>
+        runtime.Drills.RunOrJoin(
+            set.Id,
+            destinationName,
+            () => DrillAndRecordAsync(runtime, handler, set, destinationName, nowMs, budget, draw, cancellationToken));
+
+    private static async Task<DrillOutcome> DrillAndRecordAsync(
         ServiceRuntime runtime,
         IFallbackPlanService handler,
         BackupSetConfiguration set,
@@ -327,10 +419,12 @@ internal static class RecoveryDrillJob
     /// own interval.
     /// </summary>
     /// <remarks>
-    /// Sooner than the interval, because there is no drill-now verb and a
-    /// fault that passed in a minute should not stand as a failed drill for a
-    /// month. Not every pass, because a fault that lasts would then drill
-    /// every minute, and a peer's drill reads over somebody else's link.
+    /// Sooner than the interval, because a fault that passed in a minute
+    /// should not stand as a failed drill for a month on an installation
+    /// nobody is watching. A person can drill at once (FR-DRL-003), and the
+    /// schedule must not depend on one doing so. Not every pass, because a
+    /// fault that lasts would then drill every minute, and a peer's drill
+    /// reads over somebody else's link.
     /// </remarks>
     /// <param name="inARow">Drills in the run so far; one or more.</param>
     /// <param name="intervalMs">The pair's drill interval.</param>
@@ -345,7 +439,7 @@ internal static class RecoveryDrillJob
     private const ulong RetryFirstMs = 3_600_000;
 
     /// <summary>What a drill that states nothing returns: no files, no failure, no limit, and nothing recorded.</summary>
-    private static DrillOutcome Unrecorded { get; } = new(0, 0, null);
+    private static DrillOutcome Unrecorded { get; } = new(0, 0, null) { Recorded = false };
 
     /// <summary>
     /// Whether the service is stopping, which is the only thing that makes a
