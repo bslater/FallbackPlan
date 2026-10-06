@@ -57,7 +57,7 @@ public sealed class DestinationStatusTests
         // snapshot has not crossed is the lie the demotion exists to stop.
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
     }
@@ -73,7 +73,7 @@ public sealed class DestinationStatusTests
         // self-healing catch-up window rather than a fault.
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
         Assert.AreEqual(SyncCause.CatchingUp, input.Cause);
@@ -87,7 +87,7 @@ public sealed class DestinationStatusTests
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot,
             Row(DestinationSyncState.InSync) with { NeedsFull = true },
-            lastCompletedAt: 0, Now, DistinctDevice);
+            lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(SyncCause.AwaitingSeed, input.Cause);
         Assert.Contains("full backup", input.Detail!, StringComparison.Ordinal);
@@ -97,7 +97,7 @@ public sealed class DestinationStatusTests
     public void Describe_NeverAttempted_SaysNoSyncHasEverRun()
     {
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(SyncCause.NeverSynced, input.Cause);
         Assert.Contains("never", input.Detail!, StringComparison.Ordinal);
@@ -114,10 +114,59 @@ public sealed class DestinationStatusTests
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot,
             Row(DestinationSyncState.InSync) with { NeedsFull = true },
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
         Assert.AreEqual(SyncCause.AwaitingSeed, input.Cause);
+    }
+
+    [TestMethod]
+    public void Describe_ASetWithNoSnapshotYet_IsAwaitingItsFirstBackup_WhateverACopyOfItRecorded()
+    {
+        // ADR-0050 Amendment 2. A set that has never committed a snapshot has
+        // nothing a destination could hold. A copy taken of its archive before
+        // the first snapshot landed recorded a success, and the row read
+        // "in sync" for a set that had never backed up.
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 9_000),
+            lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: false);
+
+        Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
+        Assert.AreEqual(SyncCause.AwaitingFirstBackup, input.Cause);
+        Assert.Contains("first backup", input.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Describe_ASetWithNoSnapshotYet_ReadsAwaitingItsFirstBackup_RatherThanNeverSyncedOrOwedASeed()
+    {
+        // Both of those are true of such a pair, and neither says why: there
+        // is nothing to copy or seed until the set's first backup commits.
+        var never = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: false);
+        var owed = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync) with { NeedsFull = true },
+            lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: false);
+
+        Assert.AreEqual(DestinationSyncState.Behind, never.Sync);
+        Assert.AreEqual(SyncCause.AwaitingFirstBackup, never.Cause);
+        Assert.AreEqual(DestinationSyncState.Behind, owed.Sync);
+        Assert.AreEqual(SyncCause.AwaitingFirstBackup, owed.Cause);
+    }
+
+    [TestMethod]
+    public void Describe_ASetWithNoSnapshotYet_KeepsAFailedPairsOwnWords()
+    {
+        // A first backup that could not reach a destination said why on the
+        // ledger. That is worth more than "waiting", because this wait does
+        // not end by itself.
+        var record = Row(DestinationSyncState.Unavailable) with { LastError = "the drive at /mnt/vault is not mounted" };
+
+        var input = DestinationStatus.Describe(
+            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: false);
+
+        Assert.AreEqual(DestinationSyncState.Unavailable, input.Sync);
+        Assert.AreEqual(SyncCause.Reported, input.Cause);
+        Assert.AreEqual(record.LastError, input.Detail);
     }
 
     [TestMethod]
@@ -131,7 +180,7 @@ public sealed class DestinationStatusTests
         };
 
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(SyncCause.Reported, input.Cause);
         Assert.AreEqual(record.LastError, input.Detail);
@@ -142,7 +191,7 @@ public sealed class DestinationStatusTests
     {
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 5_000),
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(SyncCause.None, input.Cause);
         Assert.IsNull(input.Detail, "a healthy row must not invent a complaint");
@@ -153,7 +202,7 @@ public sealed class DestinationStatusTests
     {
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 5_000),
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.InSync, input.Sync);
     }
@@ -170,7 +219,7 @@ public sealed class DestinationStatusTests
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot,
             Row(DestinationSyncState.InSync) with { NeedsFull = true },
-            lastCompletedAt: 0, Now, DistinctDevice);
+            lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
     }
@@ -179,7 +228,7 @@ public sealed class DestinationStatusTests
     public void Describe_NeverAttempted_IsBehindRatherThanInvented()
     {
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationSyncState.Behind, input.Sync);
         Assert.IsNull(input.LastSuccessAt);
@@ -208,7 +257,7 @@ public sealed class DestinationStatusTests
                 LastAttemptAt = 1_000,
                 LastError = "the 's3' kind is reserved and not yet served",
             },
-            lastCompletedAt: 5_000, Now, DistinctDevice);
+            lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(DestinationKind.S3, input.Kind);
         Assert.AreEqual(DestinationSyncState.NotSupported, input.Sync);
@@ -224,7 +273,7 @@ public sealed class DestinationStatusTests
         // defect beside the ledger facts rather than throwing or hiding it.
         var input = DestinationStatus.Describe(
             "vault", LocalPath("relative/vault"), SetRoot,
-            Row(DestinationSyncState.Failed), lastCompletedAt: 0, Now, DistinctDevice);
+            Row(DestinationSyncState.Failed), lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.IsNotNull(input.AddressDefect);
         Assert.Contains("relative", input.AddressDefect, StringComparison.Ordinal);
@@ -238,7 +287,7 @@ public sealed class DestinationStatusTests
         // running service. The conservative domain matters: an undeclarable
         // destination must not count toward protection.
         var input = DestinationStatus.Describe(
-            "ghost", declared: null, SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
+            "ghost", declared: null, SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual("ghost", input.Name);
         Assert.AreEqual(DestinationSyncState.Failed, input.Sync);
@@ -359,7 +408,7 @@ public sealed class DestinationStatusTests
         };
 
         var input = DestinationStatus.Describe(
-            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice);
+            "vault", LocalPath(), SetRoot, record, lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.AreEqual(42UL, input.SyncedSequence);
         Assert.AreEqual(6_000UL, input.VerifiedAt);
@@ -445,7 +494,7 @@ public sealed class DestinationStatusTests
     {
         var input = DestinationStatus.Describe(
             "vault", LocalPath(), SetRoot, Row(DestinationSyncState.InSync, lastSuccessAt: 1_000),
-            lastCompletedAt: 1_000, Day(400), DistinctDevice);
+            lastCompletedAt: 1_000, Day(400), DistinctDevice, hasSnapshot: true);
 
         Assert.IsNull(input.VerificationAgeDays);
         Assert.IsFalse(input.VerificationOverdue);
@@ -459,7 +508,7 @@ public sealed class DestinationStatusTests
     {
         Assert.IsNull(
             DestinationStatus.Describe(
-                "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice)
+                "vault", LocalPath(), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true)
                 .AddressDefect);
 
         Assert.IsNull(Peer().AddressDefect);
@@ -469,7 +518,7 @@ public sealed class DestinationStatusTests
     public void Describe_ARelativeLocalPath_IsNamedRatherThanResolvedAgainstWhereverTheServiceStarted()
     {
         var input = DestinationStatus.Describe(
-            "vault", LocalPath("backups/vault"), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
+            "vault", LocalPath("backups/vault"), SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
         Assert.IsNotNull(input.AddressDefect);
         Assert.Contains("absolute", input.AddressDefect, StringComparison.Ordinal);
@@ -510,7 +559,7 @@ public sealed class DestinationStatusTests
                 Id = new string('2', 32), Name = "friend", Kind = DestinationKind.Peer,
                 Fingerprint = fingerprint, Endpoint = endpoint,
             },
-            SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice);
+            SetRoot, record: null, lastCompletedAt: 0, Now, DistinctDevice, hasSnapshot: true);
 
     private static ulong Day(int index) => 1_754_000_000_000UL + ((ulong)index * 86_400_000UL);
 
@@ -536,6 +585,6 @@ public sealed class DestinationStatusTests
         };
 
         return DestinationStatus.Describe(
-            declared.Name, declared, SetRoot, record, lastCompletedAt: verifiedAt, now, DistinctDevice);
+            declared.Name, declared, SetRoot, record, lastCompletedAt: verifiedAt, now, DistinctDevice, hasSnapshot: true);
     }
 }
