@@ -601,10 +601,17 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
    size its sources step takes with the folder tree at full height. Between
    the fixed steps and buttons, only the step's own content scrolls, and the
    tree takes the room the sources step has, so expanding a folder moves
-   nothing either. */
+   nothing either. Scrolling makes the step's content clip, and a focus
+   ring is drawn up to three pixels outside its control: the content keeps
+   four pixels of room on every side, its margin giving the sides back so
+   nothing moves, and a control scrolled into view stops as far short of
+   the edge. */
 .dialog.wizard { height: min(80vh, 692px); }
 .dialog.wizard #set-editor { display: flex; flex-direction: column; height: 100%; }
-.dialog.wizard .wiz-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.dialog.wizard .wiz-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+  padding: 0 4px 4px; margin: 0 -4px; scroll-padding: 4px;
+}
 .dialog.wizard .wiz-body > * { flex: none; }
 .dialog.wizard .wiz-body > #sel-tree { flex: 1 1 auto; min-height: 120px; max-height: none; }
 #sel-summary .warnings { margin-top: 6px; }

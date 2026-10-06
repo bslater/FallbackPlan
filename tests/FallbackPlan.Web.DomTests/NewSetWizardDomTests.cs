@@ -376,16 +376,20 @@ public sealed class NewSetWizardDomTests
     }
 
     [TestMethod]
-    public async Task EveryControlTheKeyboardReaches_DrawsItsWholeFocusRing_OnEveryStep()
+    [DataRow(1000, DisplayName = "a window the wizard fits")]
+    [DataRow(600, DisplayName = "a window short enough that the steps scroll")]
+    public async Task EveryControlTheKeyboardReaches_DrawsItsWholeFocusRing_OnEveryStep(int windowHeight)
     {
         // The step's content scrolls, so it clips. A focus ring is drawn
         // outside its control's box, and the name step's full-width field
-        // lost the ring's sides and its rounded corners to the clip.
+        // lost the ring's sides and its rounded corners to the clip. On a
+        // short window a control Tab scrolls into view stops at the edge of
+        // the clip, and its ring there is the one at risk.
         await using var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = Service();
         await using var context = await BrowserSession.NewContextAsync();
         var page = await OpenWizardAsync(harness, context);
-        await page.SetViewportSizeAsync(1280, 1000);
+        await page.SetViewportSizeAsync(1280, windowHeight);
         var step = page.Locator("#set-editor");
         var reached = new List<string>();
         var clipped = new List<string>();
