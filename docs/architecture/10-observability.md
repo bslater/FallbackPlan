@@ -56,7 +56,7 @@ The status vocabulary is normative, because collapsing any two of these is how a
 | Row state | Meaning |
 |-----------|---------|
 | `in-sync` | Held everything the archive held, as of the last attempt |
-| `behind` | The archive has moved on since this destination's last success. Carries a reason: `catching-up` (a backup completed after its last sync — the self-healing window, rendered as a `syncing` chip), `awaiting-seed`, `never-synced`, or `reported` (the ledger's own words) |
+| `behind` | The archive has moved on since this destination's last success. Carries a reason: `catching-up` (a backup completed after its last sync — the self-healing window, rendered as a `syncing` chip), `awaiting-seed`, `never-synced`, `awaiting-first-backup` (the set has no snapshot yet, so there is nothing to hold — rendered as a neutral `waiting for first backup` chip; [ADR-0050](../adr/0050-completed-run-record-and-drill-down.md) Amendment 2), or `reported` (the ledger's own words) |
 | `awaiting seed` | Owed its first full backup (`needs_full` — [ADR-0047 §5](../adr/0047-backup-pool-and-priorities.md)): deliberately skipped by incrementals and being seeded by catch-up. Not `behind` — nothing it was ever sent is missing — and not `degraded` |
 | `unavailable` | Could not be reached — a gap that closes itself when it returns (FR-DEST-003) |
 | `failed` | Reached, and the attempt failed anyway |

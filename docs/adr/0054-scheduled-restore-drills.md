@@ -372,6 +372,12 @@ time.
   backs off instead of drilling every pass. A drill that completed and found
   damage still waits its full interval: drilling a broken replica every hour
   would repeat the notice, not add evidence.
+
+  > **Amended (2026-10):** that holds while the replica is the one the drill
+  > answered about. Once a sync has succeeded since the drill, with no damage
+  > the deep sweep recorded still standing there, the failure is checked
+  > again on this back-off — see
+  > [Amendment 5](#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10).
 - **A listing answered as cancelled is not an empty folder.** Read as one,
   it ended every descent of the sample, and the drill blamed the snapshot
   for having nothing it could sample, both at a stop and while the service
@@ -383,6 +389,56 @@ carries the count, in ledger schema 5, and `Agent/Scheduler` reads it.
 `Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the
 service it talks to, so a fault is all that differs from a clean drill.
 
+## Amendment 5 — a set with no snapshot is not drilled, and a failed drill is checked again once its replica has synced (2026-10)
+
+A set's archive exists from the moment its first backup starts, and stays
+when that backup ends before it commits. The scheduler pass took the
+archive's existence for something to carry. A pass during that window copied
+an archive that held no snapshot and recorded the copy as a success, with a
+baseline and a possession proof, so the destination read in sync. The drill
+that followed found no replica of the set and raised `drill-failed`. Its
+notice stood for the pair's whole interval, thirty days by default, because
+there is no drill-now verb, and the sync that soon carried the first
+snapshot changed nothing about that.
+
+**Decision.**
+
+- **A set with no snapshot gives a destination nothing to carry.** The pass
+  copies, sweeps and drills a set only when its archive's catalogue lists a
+  snapshot of it. The archive answers rather than the job journal, because
+  an adopted set's archive is older than its journal. An archive that will
+  not open is answered yes, so the work that opens it next meets the fault
+  and reports it as before. A pass cancelled, or a service stopping, while it
+  asks is answered no, and winds down without a word as Amendments 1 and 4
+  require. What the status says of such a pair is
+  [ADR-0050 Amendment 2](0050-completed-run-record-and-drill-down.md#amendment-2-2026-10--a-set-with-no-snapshot-yet-gives-its-destinations-nothing-to-hold)'s.
+- **A failed drill is checked again once its replica has synced.** A drill
+  that completed and failed answered about the replica it found. Once a sync
+  has succeeded since it, that replica may have been put right, so the pair
+  is due again on Amendment 4's back-off: an hour after the drill, then two,
+  four and so on while the failures go on, never later than the interval.
+  The ledger counts failed drills in a row, in schema 10. A drill that
+  passes ends the count. One that did not complete answered nothing, so it
+  neither adds to the count nor ends it.
+- **Not while the damage it may have found still stands.** A sync in the
+  drill's own pass ran before the drill, so the drill saw what it copied. A
+  sync that went on around damage the deep sweep recorded and could not
+  replace has put nothing right. Either way the answer stands for the
+  interval, as §4 had it: drilling a known-broken replica every hour would
+  repeat the notice, not add evidence.
+
+A false notice an older service raised this way clears within the hour of
+the next sync. One a real fault raised clears soon after the fault is put
+right, rather than a month later.
+
+`Agent/ServiceRuntime` answers whether a set holds a snapshot, and
+`Agent/Scheduler` asks it before each phase. `Agent/RecoveryDrillJob` holds
+the wait in one function, and `Application/DestinationSyncStore` carries the
+count. `Hosts.Tests/RecoveryDrillTests` creates a set's archive the way a
+first backup does and runs a pass over it, for a direct-ship set and a
+staging one. It also arranges the false notice and the sync that clears it,
+and pins the wait as a function of the ledger row.
+
 ## Status history
 
 | Date | Status | Note |
@@ -393,3 +449,4 @@ service it talks to, so a fault is all that differs from a clean drill.
 | 2026-09 | Amended | [Amendment 2](#amendment-2--a-drill-on-a-write-only-set-proves-the-road-as-far-as-the-sealed-content-2026-09): on a write-only set the scheduled drill proves the road back as far as the sealed content and states that limit as a pass, never as a failure. `Agent/RecoveryDrillJob` recognises a sealed-only refusal and confirms the plan finds every segment; `Application/DestinationSyncStore` and contract 1.27 carry `drill_limit`; `Hosts.Tests/RecoveryDrillTests` runs on a set-up installation |
 | 2026-09 | Amended (kit withdrawn) | The requirements this record carries are FR-DRL-001/002, the drills re-homed from FR-KIT-006/007 by [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md); §5's first "does not exercise" bullet is moot because there is no kit file, and `eng/recovery-drill.sh` is rewritten passphrase-only |
 | 2026-09 | Amended | [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09): a drill states nothing only when the service is stopping or its pass is cancelled; any other ending is a drill that did not complete, recorded as a failure and retried on a back-off from an hour, never later than the interval. `Agent/RecoveryDrillJob` decides silence from the stopping state of `Agent/ServiceRuntime`; `Application/DestinationSyncStore` counts the drills that did not complete; `Agent/Scheduler` backs off; `Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the service |
+| 2026-10 | Amended | [Amendment 5](#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10): the pass copies, sweeps and drills only a set whose archive holds a snapshot, and a failed drill is checked again on the back-off once a sync has succeeded since it with no damage standing there. `Agent/ServiceRuntime` and `Agent/Scheduler` gate the phases; `Agent/RecoveryDrillJob` holds the wait; `Application/DestinationSyncStore` counts failed drills in schema 10; `Hosts.Tests/RecoveryDrillTests` runs a pass over an archive with no snapshot and clears a false notice |

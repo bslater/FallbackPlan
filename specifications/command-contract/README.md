@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.56
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.57
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.56 — 62 commands. One line each; parameters, results
+The register as of 1.57 — 62 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -214,3 +214,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.54 | A backup's percentage is what it has backed up ([ADR-0088](../../docs/adr/0088-a-backups-percentage-is-what-it-has-backed-up.md), FR-SVC-006). Each progress report carries `bytes_backed_up`: the plan's bytes the store has acknowledged at every destination the run writes to, and those it already held — what a client divides by `total_bytes` in place of files read. A run backs up its whole plan before its snapshot is published, so a client shows 99% until the job settles. While the run finishes, `hints_total` and `hints_written` count the source-identity hints it writes after its last content byte. The job row gains `bytes_backed_up`, how far a failed or cancelled run got. Additive: a pre-1.54 service sends none of them, and a client that sees null divides by files as before |
 | 1.55 | Two figures, kept apart ([ADR-0088](../../docs/adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) Amendment 1, FR-SVC-006, FR-DEST-004). A job's progress is three equal stages over its counted plan's files — scanned, processed, and backed up, which `JobProgress` and the job row now count as `files_backed_up`. How much of a backup a destination holds is a status row's: `files_held` and `files_total`, of the set's newest backup's files, how many have all their content there; `holds_newest`, whether it holds that backup whole, snapshot record included, the only thing that lets a client draw 100%; `in_run`, whether the set's live run writes to it; and `syncing`, whether a sync to it is under way, its count then being that sync's own. Additive: a pre-1.55 service sends none of them, and a client reads null `files_held` as not counted, never as none |
 | 1.56 | A backup's file names need the passphrase ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The proof is a restore source opened under a verified restore grant, serving only the session that opened it. `job_changes`, `job_failures` and `preview_set_changes` gain `source` to name one; `preview_set_changes` answers without one, counting deleted and no-longer-included files and leaving their names out, and says so in `names_withheld`. Not additive, as 1.42 was not: `open_restore_source` without an `envelope`, and `list_directory`, `plan_restore`, `run_restore`, `job_changes` and `job_failures` without such a source — or with another session's, or another set's — are refused by name. The console and the CLI ship with the service and unlock first. The session a command came from is the connection's gate's to say, never on the wire |
+| 1.57 | A set with no snapshot yet gives its destinations nothing to hold ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md) Amendment 2, FR-DEST-004). A destination row's `reason` may be `awaiting-first-backup`, on a row that reads `behind`, whatever the ledger row says, unless the ledger reported a fault in its own words. Additive: a pre-1.57 client that does not know the value shows the row's `detail`, which says the same in words |

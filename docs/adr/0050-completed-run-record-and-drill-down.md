@@ -115,6 +115,10 @@ neither operand of the comparison was on the wire. ADR-0027 §4's own
    self-healing transient the next sync pass clears unaided (ADR-0035
    §8's warning semantics), not a fault.
 
+   > **Amended (2026-10):** the vocabulary gains `awaiting-first-backup`, for
+   > a pair of a set with no snapshot yet, which outranks `never-synced` and
+   > `awaiting-seed` — see [Amendment 2](#amendment-2-2026-10--a-set-with-no-snapshot-yet-gives-its-destinations-nothing-to-hold).
+
 ### Amendment (2026-08): the held copy keeps its word
 
 Carrying the reason was necessary and not sufficient: the badge itself
@@ -209,6 +213,35 @@ reason, never re-derived.
   console renders what the service answered, never a state derived in the
   page (ADR-0028 §8); the service knows why it demoted and now says so.
 
+## Amendment 2 (2026-10) — a set with no snapshot yet gives its destinations nothing to hold
+
+Decision 5 explains every behind, and the owed seed and the never-synced pair
+were both causes it could name. Neither fits a set that has never committed a
+snapshot. Both are true of its pairs and neither says why: there is nothing to
+copy or seed until the first backup commits. Worse, the scheduler pass copied
+such a set's archive, which exists from the moment its first backup starts,
+and recorded the copy as a success. The pair then read `in-sync` for a set that
+had never backed up
+([ADR-0054 Amendment 5](0054-scheduled-restore-drills.md#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10)
+stops the copy).
+
+**Decision.** `DestinationStatus.Describe` is told whether the set's archive
+holds a snapshot. Without one, a pair reads behind with the cause
+`awaiting-first-backup` and says so in words, whatever its ledger row says.
+That covers no row, a row owed its seed, and a row an older service left in
+sync after copying the empty archive. A fault the ledger reported in its own
+words, such as unavailable or failed, keeps those words: a first backup that
+could not reach the destination will not finish waiting by itself. The
+archive answers, not the job journal, because an adopted set's archive is
+older than its journal.
+
+Contract 1.57 carries the reason on the destination row, additively. A client
+that does not know the value shows the row's detail, which says the same in
+words. The console renders it as a neutral "waiting for first backup" chip,
+keyed off the wire reason as `catching-up` is. The set's own badge needed no
+change, because a set with no snapshot already derives as never backed up
+whatever its destinations say.
+
 ## Status history
 
 | Date | Status | Note |
@@ -217,3 +250,4 @@ reason, never re-derived.
 | 2026-08 | Amended | The catch-up window keeps the badge: a held previous backup still earns Captured/Protected, owed seeds classify as awaiting-seed even under a completed set, and the console chip reads syncing — pinned by `Repository.Tests/ApplicationServiceTests`, `Application.Tests/DestinationStatusTests`, `Web.Tests/ConsoleProgressScriptTests` |
 | 2026-08 | Built | The run record at every terminal site (`JobStateStore`, `BackupRunner`), the drill-down pair and bounded `list_jobs` (contract 1.22, `ServiceCommandHandler`), the decoder bound (`ErrorManifestCodec`), the carried behind-reason (`StatusModel`), the current-file feed (`SnapshotPublication`), the console's clickable history with its report and detail dialogs and the destination reason line, and the CLI `jobs` verb — pinned by `Application.Tests/JobRunRecordTests`, `Application.Tests/DestinationStatusTests`, `Repository.Tests/PartialBackupHonestyTests`, `Repository.Tests/SnapshotPublicationTests`, `Repository.Tests/ManifestCodecTests`, `Hosts.Tests/JobDrilldownTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/ConsoleJobsScriptTests`, `Web.Tests/CommandRelayTests` and `Cli.Tests/JobsVerbTests` |
 | 2026-10 | Amended | [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): `job_changes` and `job_failures` name the backup's paths only through a source of the run's set unlocked with the passphrase and held by the caller's session (contract 1.56); the live feed's current file stays, a name on disk now. `Agent/ServiceCommandHandler`; `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/JobDrilldownTests`, `Web.DomTests/PassphraseGateDomTests` |
+| 2026-10 | Amended | [Amendment 2](#amendment-2-2026-10--a-set-with-no-snapshot-yet-gives-its-destinations-nothing-to-hold): a pair of a set with no snapshot yet reads behind with the reason `awaiting-first-backup` (contract 1.57), never in sync, whatever its ledger row says, unless the ledger reports a fault in its own words. `Application/StatusModel` derives it from the archive, `Agent/ServiceCommandHandler` and `Cli/CliApplication` pass the fact, and the console renders a waiting chip; `Application.Tests/DestinationStatusTests`, `Hosts.Tests/RecoveryDrillTests`, `Web.Tests/ConsoleProgressScriptTests` |
