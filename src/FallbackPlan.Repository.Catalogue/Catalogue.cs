@@ -1181,12 +1181,15 @@ public sealed class Catalogue : IDisposable
                 var blobBytes = (byte[])reader.GetValue(2);
                 var blobId = BlobId.FromBytes(blobBytes);
 
-                // A blob whose store key the catalogue never learned carries
-                // its own id in that column; a reader derives the real one.
+                // A blob the catalogue knows only as a placeholder carries its
+                // own id as its store key and no class; a reader derives the
+                // key, and file content is only ever in data blobs.
                 StoreBlobKey? storeKey = reader.IsDBNull(3) || ((byte[])reader.GetValue(3)).AsSpan().SequenceEqual(blobBytes)
                     ? null
                     : StoreBlobKey.FromBytes((byte[])reader.GetValue(3));
-                var blobClass = reader.IsDBNull(4) ? BlobClass.Data : (BlobClass)reader.GetInt64(4);
+                var blobClass = !reader.IsDBNull(4) && (BlobClass)reader.GetInt64(4) == BlobClass.Metadata
+                    ? BlobClass.Metadata
+                    : BlobClass.Data;
                 var generation = (ulong)reader.GetInt64(5);
                 var writer = (byte[])reader.GetValue(6);
                 var sequence = (ulong)reader.GetInt64(7);

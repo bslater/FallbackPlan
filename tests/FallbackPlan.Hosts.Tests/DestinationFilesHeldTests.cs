@@ -213,6 +213,41 @@ public sealed class DestinationFilesHeldTests : IDisposable
         Assert.AreEqual(3L, vault.FilesHeld);
     }
 
+    [TestMethod]
+    public async Task ASync_WhoseCatalogueCannotSayWhatTheFilesNeed_GoesOnUncounted()
+    {
+        // The live count is a display. A catalogue row it cannot read costs
+        // the count, never the sync it rides: starting it answers "nothing
+        // to count", and nothing is published as live.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        WriteThreeFiles();
+
+        await using var runtime = await StartAsync();
+        await BackUpAsync(runtime, DateTimeOffset.Now);
+
+        var catalogue = Assert.ContainsSingle(Directory.GetFiles(_harness.StateDirectory, "catalogue-*.db"));
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = catalogue, Pooling = false }.ToString()))
+        {
+            connection.Open();
+            using var corrupt = connection.CreateCommand();
+            corrupt.CommandText = """
+                UPDATE blobs SET store_blob_key = x'01'
+                WHERE blob_id IN (SELECT l.blob_id FROM object_locations l
+                                  JOIN version_contents c ON c.object_id = l.object_id LIMIT 1);
+                """;
+            Assert.AreEqual(1, corrupt.ExecuteNonQuery(), "the corruption must land, or the test proves nothing");
+        }
+
+        var set = runtime.Configuration.BackupSets.Single();
+        var archive = await runtime.ExistingArchiveAsync(set.Id, Timeout);
+        Assert.IsNotNull(archive);
+
+        Assert.IsNull(SyncCount.Start(runtime, set, "vault", archive));
+        Assert.IsNull(runtime.Holdings.Find(set.Id, "vault"), "nothing is counted live that could not be counted");
+    }
+
     private void WriteThreeFiles()
     {
         _harness.WriteSourceFile("docs/a.txt", "alpha");

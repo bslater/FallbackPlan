@@ -1,4 +1,5 @@
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Diagnostics;
 using FallbackPlan.Repository.Catalogue;
 
 namespace FallbackPlan.Agent;
@@ -96,13 +97,30 @@ internal sealed class SyncCount : IDisposable
 
     /// <summary>
     /// Starts counting, or returns null when the set has no backup yet and so
-    /// nothing to count against.
+    /// nothing to count against, or when its catalogue cannot say what the
+    /// backup's files need: the count is a display, and the sync goes on
+    /// without it.
     /// </summary>
     /// <param name="runtime">Where the count is published.</param>
     /// <param name="set">The set being synced.</param>
     /// <param name="destination">The destination being filled.</param>
     /// <param name="archive">The set's archive, whose catalogue says what each file needs.</param>
     public static SyncCount? Start(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive)
+    {
+        try
+        {
+            return Build(runtime, set, destination, archive);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            Log.SyncCountUnavailable(
+                runtime.LoggerFor<SyncCount>(), new LogLabel(set.Name), new LogLabel(destination), exception.Message);
+            return null;
+        }
+    }
+
+    private static SyncCount? Build(
         ServiceRuntime runtime, BackupSetConfiguration set, string destination, ArchiveHandle archive)
     {
         using var catalogue = archive.OpenReadCatalogue();
