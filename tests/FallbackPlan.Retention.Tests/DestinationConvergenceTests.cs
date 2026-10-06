@@ -505,19 +505,25 @@ public sealed class DestinationConvergenceTests : IDisposable
         // perfectly but was handed null every pass would look identical from
         // inside the sampler and cover the same sixteen objects forever.
         //
-        // The archive has to be big enough that one budget cannot swallow it,
-        // or every pass would honestly report a closed circuit and the cursor
-        // would never be anything but null.
+        // The archive has to hold more objects than two passes sample, or a
+        // pass could honestly close the circuit and leave the cursor null.
+        // Files no longer add an object each — a backup's source-identity
+        // hints are one pack (ADR-0090) — so it is backups that grow it:
+        // nine objects each here, and four make more than two budgets.
         SeedWideArchive(files: 24, bytesEach: 512 * 1024);
         var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
-        await BackUpAsync(day1);
+        for (var day = 0; day < 4; day++)
+        {
+            File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), $"day {day + 1} content");
+            await BackUpAsync(day1.AddDays(day));
+        }
 
         var first = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
         Assert.IsNotNull(
             first.SampleCursor, "an archive larger than one budget leaves the rotation part-way round");
 
-        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
-        await BackUpAsync(day1.AddDays(1));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day five content");
+        await BackUpAsync(day1.AddDays(4));
 
         var second = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
         Assert.IsNotNull(second.SampleCursor);
