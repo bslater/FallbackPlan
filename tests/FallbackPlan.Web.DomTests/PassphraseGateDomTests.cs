@@ -150,13 +150,39 @@ public sealed class PassphraseGateDomTests
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
         await page.GotoAsync(harness.TokenedUrl);
-        await page.ClickAsync("details.set[data-set=\"docs\"] > summary");
-        await page.ClickAsync("[data-action=\"what-changed\"]");
+
+        // A lone set's card opens by itself.
+        await page.ClickAsync("details.set[data-set=\"docs\"] [data-action=\"what-changed\"]");
 
         await UnlockAsync(page, Wire.Passphrase);
         await Expect(page.Locator("#dialog").GetByText("gone.txt")).ToBeVisibleAsync();
         var asked = await harness.ReceivedAsync<PreviewSetChangesCommand>();
         Assert.AreEqual("docs", asked.SetName);
         Assert.AreEqual("src-1", asked.Source);
+    }
+
+    [TestMethod]
+    public async Task ASnapshotOfASetNotConfiguredHere_SaysSo_AndAsksForNoPassphrase()
+    {
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        var answer = Answers(now);
+
+        // The snapshot's set is gone from the configuration, so no grant can
+        // be derived for it and no source of it opened: asking for the
+        // passphrase would only call the right one wrong.
+        harness.Clients.Client.Respond = command => command is ListBackupSetsCommand
+            ? new BackupSetsResult([])
+            : answer(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"browse\"]");
+
+        await Expect(page.Locator("#toasts")).ToContainTextAsync("not configured here");
+        await Expect(page.Locator("#gate-passphrase")).ToHaveCountAsync(0);
+        Assert.AreEqual(0, Count<OpenRestoreSourceCommand>(harness));
+        Assert.AreEqual(0, Count<ListDirectoryCommand>(harness));
     }
 }

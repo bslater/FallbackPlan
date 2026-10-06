@@ -202,8 +202,10 @@ public sealed class PassphraseGateTests : IDisposable
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         _ = await RunBackupAsync(runtime, handler, "docs");
 
-        File.Delete(Path.Combine(_harness.SourceRoot, "gone.txt"));
+        // Arrival before deletion: the other way round, the new file can take
+        // the deleted one's inode and read as a move.
         _harness.WriteSourceFile("fresh.txt", "newly arrived");
+        File.Delete(Path.Combine(_harness.SourceRoot, "gone.txt"));
 
         // The set editor asks this as rules are ticked, so it is answered
         // without the passphrase: the counts, and the names on disk now,

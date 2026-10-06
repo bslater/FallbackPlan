@@ -215,7 +215,7 @@ public sealed class RestoreGateTests
     }
 
     [TestMethod]
-    public async Task Gate_ARunOfWrongPassphrases_IsSlowedPerSession_AndTheRightOneForgivesIt()
+    public async Task Gate_ARunOfWrongPassphrases_IsSlowedPerAccount_AndTheRightOneForgivesIt()
     {
         var (description, sets, _) = Installation();
         var waits = new List<TimeSpan>();
@@ -230,7 +230,13 @@ public sealed class RestoreGateTests
         });
         await using var harness = await ConsoleHarness.StartAsync(
             configure: options => options with { RestoreGateThrottle = throttle });
-        harness.Clients.Client.Respond = Answering(description, sets);
+        harness.Clients.Client.Respond = SignedIn(
+            description, sets, new Dictionary<string, string>
+            {
+                ["amy-first-sign-in"] = "amy",
+                ["amy-second-sign-in"] = "amy",
+                ["ben-sign-in"] = "ben",
+            });
 
         async Task<string?> TryAsync(string passphrase, string session)
         {
@@ -242,19 +248,108 @@ public sealed class RestoreGateTests
 
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            Assert.AreEqual("wrong", await TryAsync("a guess", "session-of-amy"));
+            Assert.AreEqual("wrong", await TryAsync("a guess", "amy-first-sign-in"));
         }
 
-        // Another person's session has its own count.
-        Assert.AreEqual("verified", await TryAsync(Right, "session-of-ben"));
+        // Signing in again does not start the count over: it is the account's.
+        Assert.AreEqual("wrong", await TryAsync("another guess", "amy-second-sign-in"));
+
+        // Another person's account has its own count.
+        Assert.AreEqual("verified", await TryAsync(Right, "ben-sign-in"));
 
         // The right passphrase still opens after the run — later, never not.
-        Assert.AreEqual("verified", await TryAsync(Right, "session-of-amy"));
-        Assert.AreEqual("wrong", await TryAsync("a slip", "session-of-amy"));
+        Assert.AreEqual("verified", await TryAsync(Right, "amy-first-sign-in"));
+        Assert.AreEqual("wrong", await TryAsync("a slip", "amy-second-sign-in"));
+
+        CollectionAssert.AreEqual(
+            new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8) },
+            waits,
+            "the fourth to sixth guesses waited, the right one after them waited its turn, and nothing after it");
+    }
+
+    [TestMethod]
+    public async Task Gate_TriesFromOneAccount_TakeTurns_SoABurstCannotShareAFreeCount()
+    {
+        var (description, sets, _) = Installation();
+        var waits = new List<TimeSpan>();
+        var firstWaitHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var throttle = new RestoreGateThrottle(async (delay, cancellationToken) =>
+        {
+            lock (waits)
+            {
+                waits.Add(delay);
+            }
+
+            await firstWaitHeld.Task.WaitAsync(cancellationToken);
+        });
+        await using var harness = await ConsoleHarness.StartAsync(
+            configure: options => options with { RestoreGateThrottle = throttle });
+        var answer = SignedIn(description, sets, new Dictionary<string, string> { ["amy-sign-in"] = "amy" });
+        var listed = 0;
+        var burstArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Clients.Client.Respond = command =>
+        {
+            if (command is ListBackupSetsCommand && Interlocked.Increment(ref listed) == 6)
+            {
+                burstArrived.TrySetResult();
+            }
+
+            return answer(command);
+        };
+
+        async Task<string?> TryAsync(string passphrase)
+        {
+            using var response = await harness.Http.SendAsync(
+                Gate(harness, JsonSerializer.Serialize(new { passphrase }), session: "amy-sign-in"));
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return body.RootElement.GetProperty("outcome").GetString();
+        }
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            Assert.AreEqual("wrong", await TryAsync("a slip"));
+        }
+
+        // Three guesses at once, after the free three. Were each to read the
+        // count before any was counted, all three would wait one second;
+        // taking turns, each waits as long as the guesses before it earn.
+        var burst = new[] { TryAsync("guess one"), TryAsync("guess two"), TryAsync("guess three") };
+        await burstArrived.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        firstWaitHeld.SetResult();
+        foreach (var outcome in await Task.WhenAll(burst))
+        {
+            Assert.AreEqual("wrong", outcome);
+        }
 
         CollectionAssert.AreEqual(
             new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) },
             waits,
-            "the fourth and fifth guesses waited, the right one after them waited its turn, and nothing after it");
+            "each guess in the burst waited its turn behind the one before it");
+    }
+
+    /// <summary>
+    /// Answers as <see cref="Answering"/> does, and says who is signed in by
+    /// the session the console last resumed, as the service's describe does.
+    /// </summary>
+    private static Func<ServiceCommand, ServiceResult> SignedIn(
+        ServiceDescriptionResult description, BackupSetsResult sets, IReadOnlyDictionary<string, string> accounts)
+    {
+        string? resumed = null;
+        return command =>
+        {
+            switch (command)
+            {
+                case ResumeSessionCommand resume:
+                    Volatile.Write(ref resumed, resume.Token);
+                    return new AcknowledgedResult();
+                case DescribeServiceCommand:
+                    return description with
+                    {
+                        SignedInUser = Volatile.Read(ref resumed) is { } token ? accounts.GetValueOrDefault(token) : null,
+                    };
+                default:
+                    return Answering(description, sets)(command);
+            }
+        };
     }
 }

@@ -617,7 +617,8 @@ public sealed class RecoveryDrillTests : IDisposable
         ServiceRuntime runtime, DateTimeOffset at, Func<ServiceCommand, bool> picks,
         Func<ValueTask<ServiceResult>> fault, CancellationToken? pass = null, bool once = true) =>
         RecoveryDrillJob.RunAsync(
-            runtime, new Interposed(new ServiceCommandHandler(runtime, RemoteBindingState.Off), picks, fault, once),
+            runtime,
+            new Interposed(new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service), picks, fault, once),
             runtime.Configuration.BackupSets[0], "vault", (ulong)at.ToUnixTimeMilliseconds(),
             budget: null, Random.Shared, pass ?? Timeout);
 
