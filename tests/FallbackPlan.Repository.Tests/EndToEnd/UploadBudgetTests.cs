@@ -17,7 +17,8 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// data blobs and 20 requests per GB in all, at the object-store blob profile.
 /// Every request a backup makes is counted by the kind of object it was for,
 /// for a first backup and for an incremental, and the per-GiB figure is built
-/// from what was measured.
+/// from what was measured. What keeps the figure down is NFR-PERF-006's
+/// packing: segments into blobs, and a backup's hints into one pack.
 /// </summary>
 /// <remarks>
 /// <para>
