@@ -364,6 +364,7 @@ public sealed partial class PublicationOrchestrator
             _policy.BlobWriteProfile, _repositoryFormatVersion, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
+        reporter.Track(session.BackedUp);
         await using (builder.ConfigureAwait(false))
         await using (session.ConfigureAwait(false))
         {
@@ -554,8 +555,10 @@ public sealed partial class PublicationOrchestrator
             // by the advisory source-identity hints, so a hint the next
             // publication wants is never published after the snapshot that
             // makes it findable (06 §11).
+            var hints = walker.SourceIdentities;
+            reporter.HintsOwed(hints.Count);
             await builder.WriteSourceIdentityHintsAsync(
-                walker.SourceIdentities, intentSequence, cancellationToken).ConfigureAwait(false);
+                hints, intentSequence, reporter.HintWritten, cancellationToken).ConfigureAwait(false);
 
             // The standalone copy rides under the intent's sequence,
             // hint-style (ADR-0022 §Decision 7) — see the single-stream path
@@ -819,7 +822,19 @@ public sealed partial class PublicationOrchestrator
                         break;
                     }
 
-                    await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
+                    // The plan counted this leaf at this length, so this is
+                    // what it contributes to what the run has backed up,
+                    // however it is published or fails (ADR-0088).
+                    session.BackedUp.BeginFile(leaf.Entry.Length);
+                    try
+                    {
+                        await PublishLeafAsync(leaf.Entry, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        session.BackedUp.EndFile();
+                    }
+
                     break;
 
                 case ScanEvent.Failure failure:
@@ -905,6 +920,7 @@ public sealed partial class PublicationOrchestrator
                     entry.RelativePath, entry.NameBytes, prior.ObjectId, EntryKind.File, Archive: null,
                     prior.ModifiedAt, prior.IdentityDevice, prior.IdentityFileId, Reused: true,
                     HasAlternateStreams: prior.HasAlternateStreams));
+                session.BackedUp.RestAlreadyStored();
                 return;
             }
 
@@ -921,6 +937,7 @@ public sealed partial class PublicationOrchestrator
             {
                 await PublishInheritedAsync(entry, prior, inherited, metadataDigest, cancellationToken)
                     .ConfigureAwait(false);
+                session.BackedUp.RestAlreadyStored();
                 return;
             }
 
@@ -1406,6 +1423,9 @@ public sealed partial class PublicationOrchestrator
         private const int EmitEveryFiles = 64;
         private static readonly TimeSpan EmitEvery = TimeSpan.FromMilliseconds(100);
 
+        // Reports come from the walk, from upload workers when a blob lands,
+        // and from the hint writers; one gate keeps each report whole.
+        private readonly Lock _gate = new();
         private readonly string _jobId = Convert.ToHexString(snapshotId.Span).ToLowerInvariant();
         private long _folded;
         private long _reused;
@@ -1416,12 +1436,29 @@ public sealed partial class PublicationOrchestrator
         private long _lastEmittedFiles;
         private long _lastEmittedAt;
         private JobState _lastState = (JobState)(-1);
+        private long _files;
+        private int _failures;
         private string? _currentFile;
+        private BackedUpTally? _backedUp;
+        private long? _hintsWritten;
+        private long? _hintsTotal;
 
-        public void Enter(JobState state) => Emit(state, files: 0, failures: 0, force: state != _lastState);
+        public void Enter(JobState state)
+        {
+            lock (_gate)
+            {
+                Emit(state, files: 0, failures: 0, force: state != _lastState);
+            }
+        }
 
         /// <summary>The counting pass's running tally, before the plan is fixed.</summary>
-        public void Counting(long counted) => Emit(JobState.Scanning, counted, failures: 0, force: false);
+        public void Counting(long counted)
+        {
+            lock (_gate)
+            {
+                Emit(JobState.Scanning, counted, failures: 0, force: false);
+            }
+        }
 
         /// <summary>
         /// Fixes the plan: every report from here on carries the counted
@@ -1429,45 +1466,95 @@ public sealed partial class PublicationOrchestrator
         /// </summary>
         public void PlanFixed(long totalFiles, long totalBytes)
         {
-            _totalFiles = totalFiles;
-            _totalBytes = totalBytes;
-            Emit(JobState.Scanning, totalFiles, failures: 0, force: true);
+            lock (_gate)
+            {
+                _totalFiles = totalFiles;
+                _totalBytes = totalBytes;
+                Emit(JobState.Scanning, totalFiles, failures: 0, force: true);
+            }
+        }
+
+        /// <summary>
+        /// Reports what the session has backed up from here on, and again
+        /// each time an acknowledged blob moves it — a few times a minute at
+        /// production blob sizes, so each is reported rather than coalesced.
+        /// </summary>
+        public void Track(BackedUpTally backedUp)
+        {
+            lock (_gate)
+            {
+                _backedUp = backedUp;
+            }
+
+            backedUp.Advanced = () =>
+            {
+                lock (_gate)
+                {
+                    Emit(_lastState, _files, _failures, force: true);
+                }
+            };
         }
 
         public void Observe(JobState state, List<PublishedFileVersion> files, int failures)
         {
-            // Incremental on purpose: the list is append-only, so folding
-            // only the entries added since the last call keeps a whole run's
-            // aggregation O(n) where re-walking the list per file was O(n²).
-            for (var index = (int)_folded; index < files.Count; index++)
+            lock (_gate)
             {
-                var file = files[index];
-                if (file.Reused)
+                // Incremental on purpose: the list is append-only, so folding
+                // only the entries added since the last call keeps a whole run's
+                // aggregation O(n) where re-walking the list per file was O(n²).
+                for (var index = (int)_folded; index < files.Count; index++)
                 {
-                    _reused++;
-                }
-
-                if (file.Archive is { } archive)
-                {
-                    _seen += archive.LogicalLength;
-                    foreach (var blob in archive.Blobs)
+                    var file = files[index];
+                    if (file.Reused)
                     {
-                        _stored += blob.Length;
+                        _reused++;
+                    }
+
+                    if (file.Archive is { } archive)
+                    {
+                        _seen += archive.LogicalLength;
+                        foreach (var blob in archive.Blobs)
+                        {
+                            _stored += blob.Length;
+                        }
                     }
                 }
-            }
 
-            _folded = files.Count;
-            if (files.Count > 0)
+                _folded = files.Count;
+                if (files.Count > 0)
+                {
+                    _currentFile = files[^1].RelativePath;
+                }
+
+                Emit(state, files.Count, failures, force: state != _lastState);
+            }
+        }
+
+        /// <summary>The run starts writing its source-identity hints: the finishing count appears.</summary>
+        public void HintsOwed(int total)
+        {
+            lock (_gate)
             {
-                _currentFile = files[^1].RelativePath;
+                _hintsTotal = total;
+                _hintsWritten = 0;
+                Emit(_lastState, _files, _failures, force: true);
             }
+        }
 
-            Emit(state, files.Count, failures, force: state != _lastState);
+        /// <summary>One hint landed, or was refused and passed over; the last one always reports.</summary>
+        public void HintWritten()
+        {
+            lock (_gate)
+            {
+                _hintsWritten = (_hintsWritten ?? 0) + 1;
+                Emit(_lastState, _files, _failures, force: _hintsWritten >= _hintsTotal);
+            }
         }
 
         private void Emit(JobState state, long files, int failures, bool force)
         {
+            _files = files;
+            _failures = failures;
             if (reporter is null)
             {
                 return;
@@ -1485,7 +1572,7 @@ public sealed partial class PublicationOrchestrator
             _lastEmittedAt = Stopwatch.GetTimestamp();
             reporter.Report(new JobProgress(
                 _jobId, state, files, _folded, _reused, failures, _seen, _stored, _totalFiles, _totalBytes,
-                _currentFile));
+                _currentFile, _backedUp?.BackedUp, _hintsWritten, _hintsTotal));
         }
     }
 }

@@ -49,6 +49,25 @@ namespace FallbackPlan.Domain.Jobs;
 /// from producers that do not name one (contract pre-1.22, the counting
 /// pass, verification sweeps).
 /// </param>
+/// <param name="BytesBackedUp">
+/// The plan's logical bytes backed up so far (ADR-0088): content the store
+/// has acknowledged at every destination the run writes to, and content it
+/// already held. It, not anything read, is what a client's percentage
+/// divides by <paramref name="TotalBytes"/>; a run reaches the whole plan
+/// before its snapshot is published, so 100% waits for the job's terminal
+/// state. Null from producers that do not measure it (contract pre-1.54,
+/// the counting pass, verification sweeps).
+/// </param>
+/// <param name="HintsWritten">
+/// Of <paramref name="HintsTotal"/>, how many source-identity hints have
+/// landed. Null until the run is writing them.
+/// </param>
+/// <param name="HintsTotal">
+/// The source-identity hints the run writes after its last content byte and
+/// before its snapshot record, one per new file version (specification 06
+/// §11): the count a client shows while the run finishes. Null until the
+/// run starts writing them.
+/// </param>
 public sealed record JobProgress(
     string JobId,
     JobState State,
@@ -60,7 +79,10 @@ public sealed record JobProgress(
     long BytesStored,
     long? TotalFiles = null,
     long? TotalBytes = null,
-    string? CurrentFile = null);
+    string? CurrentFile = null,
+    long? BytesBackedUp = null,
+    long? HintsWritten = null,
+    long? HintsTotal = null);
 
 /// <summary>
 /// Where a running job reports progress. Distinct from

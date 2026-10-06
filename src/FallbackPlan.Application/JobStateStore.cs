@@ -90,6 +90,14 @@ public sealed record JobRunStats
     /// <summary>The counted plan's bytes, when the run fixed one.</summary>
     [JsonPropertyName("total_bytes")]
     public long? TotalBytes { get; init; }
+
+    /// <summary>
+    /// Of the plan's bytes, how many the run had backed up (ADR-0088): all of
+    /// them for a committed run, and for a failed or cancelled one how far it
+    /// got. Absent from a row written before the measure existed.
+    /// </summary>
+    [JsonPropertyName("bytes_backed_up")]
+    public long? BytesBackedUp { get; init; }
 }
 
 /// <summary>One job's durable record.</summary>

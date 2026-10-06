@@ -1258,6 +1258,13 @@ public static class CliApplication
                             $"files          {row.FilesDone ?? 0}{planned} ({row.FilesReused ?? 0} unchanged, {row.FilesFailed ?? 0} failed)"));
                         report.Add(string.Create(CultureInfo.InvariantCulture,
                             $"bytes          {row.BytesSeen ?? 0} read, {row.BytesStored ?? 0} newly stored"));
+                        if (row.BytesBackedUp is { } backedUp)
+                        {
+                            report.Add(row.TotalBytes is { } plannedBytes
+                                ? string.Create(CultureInfo.InvariantCulture,
+                                    $"backed up      {backedUp} of {plannedBytes} planned bytes")
+                                : string.Create(CultureInfo.InvariantCulture, $"backed up      {backedUp} bytes"));
+                        }
                     }
                     else
                     {

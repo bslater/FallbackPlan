@@ -2,8 +2,10 @@ namespace FallbackPlan.Web.Tests;
 
 /// <summary>
 /// The console's live-progress arithmetic and lifecycle, pinned structurally
-/// (FR-SVC-006): the meter divides by the run's counted plan, the estimate
-/// is derived and displayed, the overview shows a live job, and the event
+/// (FR-SVC-006): the meter divides what the run has backed up by its counted
+/// plan and holds below 100 while the run is live (ADR-0088), the estimate
+/// is derived on the meter's measure and displayed, the overview shows a
+/// live job, and the event
 /// stream sleeps with the tab so a backgrounded console holds no service
 /// subscription its own pollers have abandoned.
 /// </summary>
@@ -51,16 +53,24 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
-    public void TheJobMeter_DividesTheHandledCountByTheCountedPlan()
+    public void TheJobMeter_DividesWhatIsBackedUpByTheCountedPlan_AndHoldsBelowAHundred()
     {
         var script = AppJs();
-        var card = FunctionBody(script, "renderLiveJob");
+        Assert.Contains("liveMeter(", FunctionBody(script, "renderLiveJob"), StringComparison.Ordinal,
+            "the jobs card and the overview share one meter");
 
-        Assert.Contains("totalFiles", card, StringComparison.Ordinal,
-            "the meter's denominator is the run's counted plan, not a moving tally");
+        var meter = FunctionBody(script, "liveMeter");
+        Assert.Contains("progress?.bytesBackedUp", meter, StringComparison.Ordinal,
+            "the meter is what is backed up, not what has been read");
+        Assert.Contains("backedUp / totalBytes", meter, StringComparison.Ordinal,
+            "what is backed up is divided by the plan's bytes");
+        Assert.Contains("Math.min(99", meter, StringComparison.Ordinal,
+            "100% is a published snapshot, which a live job is not");
+        Assert.Contains("totalFiles", meter, StringComparison.Ordinal,
+            "a service without the measure is still divided by the run's counted plan, not a moving tally");
         Assert.Contains(
             "const handled = (progress?.filesDone ?? 0) + (progress?.filesFailed ?? 0)",
-            card,
+            meter,
             StringComparison.Ordinal,
             "handled is done plus failed — reused is a subset of done and must not be added again");
     }
@@ -97,8 +107,10 @@ public sealed class ConsoleProgressScriptTests
         var script = AppJs();
         var estimator = FunctionBody(script, "jobEta");
 
-        Assert.Contains("totalFiles", estimator, StringComparison.Ordinal,
-            "the estimate needs the plan for a remaining-work figure");
+        Assert.Contains("liveMeter(", estimator, StringComparison.Ordinal,
+            "the estimate runs on the meter's own measure and plan, so it says when the bar fills");
+        Assert.Contains("backedUpRate", estimator, StringComparison.Ordinal,
+            "with the backed-up measure, the rate is bytes backed up");
         Assert.Contains("jobEta(", FunctionBody(script, "renderLiveJob"), StringComparison.Ordinal,
             "the jobs card shows the estimate");
     }

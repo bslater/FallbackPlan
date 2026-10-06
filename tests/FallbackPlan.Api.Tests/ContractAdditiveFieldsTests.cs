@@ -20,8 +20,9 @@ namespace FallbackPlan.Api.Tests;
 /// FR-SVC-021, 1.46's deep sweep on each destination row, the wire half
 /// of FR-VER-003's report of a circuit, 1.47's observed clock skew on
 /// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot",
-/// and 1.48's implausible capture time on each snapshot, the wire half of
-/// FR-GC-012's "the snapshot list says which are flagged and why".
+/// 1.48's implausible capture time on each snapshot, the wire half of
+/// FR-GC-012's "the snapshot list says which are flagged and why", and
+/// 1.54's bytes backed up and finishing count on the progress surface.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -389,6 +390,37 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.IsNull(parsed.TotalFiles);
         Assert.IsNull(parsed.TotalBytes);
         Assert.AreEqual(10, parsed.FilesSeen);
+    }
+
+    [TestMethod]
+    public void TheBackedUpMeasure_WireNamesAndPre154Defaults()
+    {
+        // Contract 1.54 (FR-SVC-006, ADR-0088): what the run has backed up,
+        // and the finishing work's count, on the bytes. An old service's
+        // frame never mentions them and reads as null, which is what tells a
+        // client to keep dividing by files.
+        var modern = JsonSerializer.Serialize(
+            new FallbackPlan.Domain.Jobs.JobProgress(
+                "job-1", FallbackPlan.Domain.Jobs.JobState.Publishing, 10, 10, 1, 0, 4096, 2048,
+                TotalFiles: 10, TotalBytes: 4096, BytesBackedUp: 4096, HintsWritten: 6, HintsTotal: 9),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"bytes_backed_up\":4096", modern, StringComparison.Ordinal);
+        Assert.Contains("\"hints_written\":6", modern, StringComparison.Ordinal);
+        Assert.Contains("\"hints_total\":9", modern, StringComparison.Ordinal);
+
+        var old = modern
+            .Replace(",\"bytes_backed_up\":4096", "", StringComparison.Ordinal)
+            .Replace(",\"hints_written\":6", "", StringComparison.Ordinal)
+            .Replace(",\"hints_total\":9", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var parsed = JsonSerializer.Deserialize<FallbackPlan.Domain.Jobs.JobProgress>(
+            old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(parsed.BytesBackedUp);
+        Assert.IsNull(parsed.HintsWritten);
+        Assert.IsNull(parsed.HintsTotal);
+        Assert.AreEqual(4096L, parsed.TotalBytes);
     }
 
     [TestMethod]

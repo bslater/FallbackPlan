@@ -529,8 +529,21 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// sends `ignore_free_space`, so its restore that will not fit is
     /// refused, as it should be.
     /// </para>
+    /// <para>
+    /// 1.54 makes a backup's percentage what it has backed up (FR-SVC-006,
+    /// ADR-0088). `JobProgress` gains `bytes_backed_up`: the plan's bytes the
+    /// store has acknowledged at every destination the run writes to, and
+    /// those it already held, which a client divides by `total_bytes` in
+    /// place of files read. A run backs up its whole plan before its snapshot
+    /// is published, so a client shows 99% until the job settles. While the
+    /// run finishes, `hints_total` and `hints_written` count the
+    /// source-identity hints it writes after its last content byte. The job
+    /// row gains `bytes_backed_up` too: how far a failed or cancelled run
+    /// got. Additive: a pre-1.54 service sends none of them, and a client
+    /// that sees null divides by files as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 53);
+    public static ContractVersion Current { get; } = new(1, 54);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>
