@@ -11,11 +11,12 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 
 /// <summary>
 /// What a backup says it has backed up (FR-SVC-006, ADR-0088): the plan's
-/// bytes count only once the store has acknowledged them, an unchanged file
-/// counts at once because its content is already stored, and the work a
-/// publication does after the last byte — one source-identity hint per new
-/// file version, written several at a time and all before the snapshot
-/// record — is counted as it lands.
+/// bytes and files count only once the store has acknowledged their content,
+/// an unchanged file counts at once because its content is already stored, a
+/// file that failed is never counted, and the work a publication does after
+/// the last byte — one source-identity hint per new file version, written
+/// several at a time and all before the snapshot record — is counted as it
+/// lands.
 /// </summary>
 /// <remarks>
 /// The store under the publication holds each data blob's put until the
@@ -101,6 +102,7 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
         Assert.AreEqual(100L, read.FilesDone);
         Assert.AreEqual(100L * FileBytes, read.TotalBytes);
         Assert.AreEqual(0L, read.BytesBackedUp, "content read but not acknowledged by the store is not backed up");
+        Assert.AreEqual(0L, read.FilesBackedUp, "a file read but not acknowledged by the store is not backed up");
 
         // The first blob lands; the second is still held. What it carried
         // counts, and nothing past it: whole files here, since each 4 KiB
@@ -112,9 +114,14 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
         Assert.AreEqual(0L, partly.BytesBackedUp.Value % FileBytes, "a one-segment file is counted whole or not at all");
         Assert.AreEqual(JobState.Uploading, partly.State);
 
+        // The files the landed blob carried, and only those: each is one
+        // segment of 4 KiB, so the two measures name the same files.
+        Assert.AreEqual(partly.BytesBackedUp.Value / FileBytes, partly.FilesBackedUp, "the same files, counted twice over");
+
         store.ReleaseAll();
         await run;
         Assert.AreEqual(100L * FileBytes, reporter.Reports[^1].BytesBackedUp, "a published run has backed up its whole plan");
+        Assert.AreEqual(100L, reporter.Reports[^1].FilesBackedUp, "a published run has backed up every file it planned");
     }
 
     [TestMethod]
@@ -157,10 +164,42 @@ public sealed class BackedUpProgressTests : ArchiveTestHarness
         Assert.AreEqual(2L, flushing.FilesReused);
         Assert.AreEqual(303_000L, flushing.TotalBytes);
         Assert.AreEqual(300_500L, flushing.BytesBackedUp, "the two unchanged files, and not the changed one");
+        Assert.AreEqual(2L, flushing.FilesBackedUp, "the two unchanged files, and not the changed one");
 
         store.ReleaseAll();
         await run;
         Assert.AreEqual(303_000L, reporter.Reports[^1].BytesBackedUp);
+        Assert.AreEqual(3L, reporter.Reports[^1].FilesBackedUp);
+    }
+
+    [TestMethod]
+    public async Task TreePublication_AFileThatFailed_IsNeverCountedAsBackedUp()
+    {
+        // Nothing of it reached the store, so it is not backed up — and
+        // its planned bytes still count where it ended, which is what keeps
+        // the bytes measure, and the estimate run on it, reaching the plan.
+        var source = new FakeFileSystemSource();
+        for (var i = 0; i < 5; i++)
+        {
+            source.AddFile($"docs/file-{i}.bin", Incompressible(FileBytes, i));
+        }
+
+        source.AddFile("docs/locked.bin", Incompressible(FileBytes, 99)).OpenFailure =
+            new IOException("Injected fault: the file is locked.");
+
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var reporter = new RecordingReporter();
+
+        await CreateOrchestrator(store, keys, credential, reporter)
+            .PublishAsync(Job(source, 0x41), CancellationToken.None);
+
+        var last = reporter.Reports[^1];
+        Assert.AreEqual(6L, last.TotalFiles);
+        Assert.AreEqual(1L, last.FilesFailed);
+        Assert.AreEqual(5L, last.FilesBackedUp, "a file that could not be read is not backed up");
+        Assert.AreEqual(6L * FileBytes, last.BytesBackedUp);
     }
 
     [TestMethod]
