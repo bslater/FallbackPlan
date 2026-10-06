@@ -2,12 +2,13 @@ namespace FallbackPlan.Web.Tests;
 
 /// <summary>
 /// The console's live-progress arithmetic and lifecycle, pinned structurally
-/// (FR-SVC-006): the meter divides what the run has backed up by its counted
-/// plan and holds below 100 while the run is live (ADR-0088), the estimate
-/// is derived on the meter's measure and displayed, the overview shows a
-/// live job, and the event
-/// stream sleeps with the tab so a backgrounded console holds no service
-/// subscription its own pollers have abandoned.
+/// (FR-SVC-006): the job's meter is three equal stages over its counted plan's
+/// files and holds below 100 while the run is live (ADR-0088 and its
+/// Amendment 1), a destination's circle is what it holds rather than the
+/// job's meter, the estimate runs on the bytes backed up and is displayed,
+/// the overview shows a live job, and the event stream sleeps with the tab so
+/// a backgrounded console holds no service subscription its own pollers have
+/// abandoned.
 /// </summary>
 /// <remarks>
 /// Like <see cref="SetupWizardScriptTests"/>: no browser, just the script's
@@ -53,21 +54,23 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
-    public void TheJobMeter_DividesWhatIsBackedUpByTheCountedPlan_AndHoldsBelowAHundred()
+    public void TheJobMeter_IsThreeEqualStagesOverTheCountedPlansFiles_AndHoldsBelowAHundred()
     {
         var script = AppJs();
         Assert.Contains("liveMeter(", FunctionBody(script, "renderLiveJob"), StringComparison.Ordinal,
             "the jobs card and the overview share one meter");
 
         var meter = FunctionBody(script, "liveMeter");
+        Assert.Contains("progress?.filesBackedUp", meter, StringComparison.Ordinal,
+            "the third stage is the files stored at every destination the run writes to, not what has been read");
+        Assert.Contains("3 * total", meter, StringComparison.Ordinal,
+            "scanned, processed and stored are three equal stages over the plan's files");
         Assert.Contains("progress?.bytesBackedUp", meter, StringComparison.Ordinal,
-            "the meter is what is backed up, not what has been read");
-        Assert.Contains("backedUp / totalBytes", meter, StringComparison.Ordinal,
-            "what is backed up is divided by the plan's bytes");
+            "a 1.54 service's bytes backed up stand in for the files it does not count");
         Assert.Contains("Math.min(99", meter, StringComparison.Ordinal,
             "100% is a published snapshot, which a live job is not");
         Assert.Contains("totalFiles", meter, StringComparison.Ordinal,
-            "a service without the measure is still divided by the run's counted plan, not a moving tally");
+            "the stages are divided by the run's counted plan, not a moving tally");
         Assert.Contains(
             "const handled = (progress?.filesDone ?? 0) + (progress?.filesFailed ?? 0)",
             meter,
@@ -93,12 +96,31 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
-    public void TheCountingPhase_IsNamedWhileThePlanIsStillOpen()
+    public void TheScanningStage_IsNamedWhileThePlanIsStillOpen()
     {
         // Before the totals land the run is walking the source to count it;
         // the card says so instead of showing a meaningless bar.
         var card = FunctionBody(AppJs(), "renderLiveJob");
-        Assert.Contains("Counting files", card, StringComparison.Ordinal);
+        Assert.Contains("Scanning for files", card, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ADestinationsCircle_IsWhatItHolds_NeverTheJobsMeter()
+    {
+        var script = AppJs();
+        var card = FunctionBody(script, "renderSetCard");
+        Assert.Contains("destHolding(", card, StringComparison.Ordinal,
+            "each destination's circle is the share of the backup it holds");
+        Assert.DoesNotContain("lm.ratio : destCompletion", card, StringComparison.Ordinal,
+            "a destination's circle showed the job's meter, which moves while every file stays held");
+
+        var holding = FunctionBody(script, "destHolding");
+        Assert.Contains("d.inRun", holding, StringComparison.Ordinal,
+            "only a destination the run writes to gains what the run stores");
+        Assert.Contains("filesReused", holding, StringComparison.Ordinal,
+            "a destination the run does not write to still holds what the run found unchanged");
+        Assert.Contains("d.holdsNewest", holding, StringComparison.Ordinal,
+            "100% needs the newest backup whole, its snapshot record included");
     }
 
     [TestMethod]

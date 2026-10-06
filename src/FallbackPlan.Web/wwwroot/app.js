@@ -556,28 +556,25 @@ function trackEta(progress) {
   track.handled = handled;
 }
 
-// A running backup's meter (FR-SVC-006, ADR-0088): what it has backed up —
-// the plan's bytes the store has acknowledged at every destination the run
-// writes to — against the plan's bytes. Every byte is backed up before the
-// snapshot is published, and 100% is for a published snapshot, which a live
-// job is not: the meter holds at 99 while the run finishes, and the words
-// beside it say what it is doing. A service without the measure (pre-1.54)
-// is divided by files handled against the planned files, as it always was.
+// A running job's meter (FR-SVC-006, ADR-0088 and its Amendment 1): three
+// equal stages over the counted plan's files — scanned, processed, and stored
+// at every destination the run writes to. Scanning has no total until it
+// ends, so until then there is no percentage. 100% is for a published
+// snapshot, which a live job is not: the meter holds at 99 while the run
+// finishes, and the words beside it say what it is doing. A 1.54 service
+// counts no files stored, and its bytes backed up stand in for them; an older
+// one's files processed do.
 function liveMeter(progress) {
   const finishing = progress?.state === "Publishing";
   const handled = (progress?.filesDone ?? 0) + (progress?.filesFailed ?? 0);
-  const backedUp = progress?.bytesBackedUp;
-  const totalBytes = progress?.totalBytes;
-  if (backedUp != null && totalBytes > 0) {
-    const ratio = Math.min(99, Math.floor(backedUp / totalBytes * 100));
-    return { determinate: true, measure: "bytes", ratio, backedUp, totalBytes, handled, finishing };
-  }
   const total = progress?.totalFiles;
-  if (total > 0) {
-    const ratio = Math.min(99, Math.floor(handled / total * 100));
-    return { determinate: true, measure: "files", ratio, handled, total, finishing };
-  }
-  return { determinate: false, measure: null, ratio: 0, handled, finishing };
+  if (total == null) return { determinate: false, ratio: 0, handled, finishing };
+  const stored = progress?.filesBackedUp
+    ?? (progress?.bytesBackedUp != null && progress?.totalBytes > 0
+      ? Math.floor(total * Math.min(1, progress.bytesBackedUp / progress.totalBytes))
+      : handled);
+  const ratio = total > 0 ? Math.min(99, Math.floor((total + handled + stored) / (3 * total) * 100)) : 99;
+  return { determinate: true, ratio, total, handled, stored, finishing };
 }
 
 // What a finishing run is doing, with the source-identity hints' count once
@@ -599,18 +596,21 @@ function jobRate(progress) {
   return "";
 }
 
-// The remaining-time estimate for one job's progress, on the meter's own
-// measure, or "" when there is no plan or the run is finishing (the step and
-// its count say how far through it is). Held back until the rate has
-// settled: an estimate from the first two events is a random number with a
-// unit.
+// The remaining-time estimate for one job's progress, or "" when there is no
+// plan or the run is finishing (the step and its count say how far through it
+// is). It runs on the bytes backed up where the service counts them, since the
+// storing stage ends the job and bytes say how long it takes better than files
+// of any size do; an older service's estimate runs on files processed. Held
+// back until the rate has settled: an estimate from the first two events is a
+// random number with a unit.
 function jobEta(progress) {
   const meter = liveMeter(progress);
   if (!meter.determinate || meter.finishing) return "";
   const track = S.eta.get(progress.jobId);
-  const rate = meter.measure === "bytes" ? track?.backedUpRate : track?.rate;
+  const byBytes = progress.bytesBackedUp != null && progress.totalBytes > 0;
+  const rate = byBytes ? track?.backedUpRate : track?.rate;
   if (!track || performance.now() - track.t0 < 5000 || !(rate > 0)) return "estimating…";
-  const remaining = meter.measure === "bytes" ? meter.totalBytes - meter.backedUp : meter.total - meter.handled;
+  const remaining = byBytes ? progress.totalBytes - progress.bytesBackedUp : meter.total - meter.handled;
   const seconds = Math.max(0, remaining) / rate;
   if (seconds < 5) return "almost done";
   if (seconds < 90) return `~${Math.round(seconds)}s left`;
@@ -732,6 +732,40 @@ function destCompletion(d) {
   return Math.max(0, Math.min(100, Math.round(d.heldBytes / d.owedBytes * 100)));
 }
 
+// What a destination holds of the set's newest backup, as a share of its files
+// (contract 1.55, ADR-0088 Amendment 1): its circle. While the set's run is
+// live, the newest backup is the one the run is making. Of the files it has
+// scanned, a destination holds those the run has stored there, when it writes
+// there (d.inRun); those it found unchanged, which the destination already
+// held at the share it held the last backup; and, of the files not reached
+// yet, that same share. Otherwise it is the service's count, a sync's live one
+// included. It reads 100 only when the destination holds the newest published
+// backup whole, and never while a run has stored anything new there that is
+// not yet published. Null is not counted, which the circle draws as unknown.
+function destHolding(d, progress) {
+  const total = progress?.totalFiles;
+  if (total > 0) {
+    const shareBefore = d.filesTotal == null ? 0 : d.filesHeld == null ? null
+      : d.filesTotal > 0 ? d.filesHeld / d.filesTotal : 1;
+    if (shareBefore == null) return { percent: null };
+    const handled = (progress.filesDone ?? 0) + (progress.filesFailed ?? 0);
+    const reused = progress.filesReused ?? 0;
+    const stored = liveMeter(progress).stored;
+    const walked = d.inRun ? stored : reused * shareBefore;
+    const held = Math.min(total, Math.floor(walked + Math.max(0, total - handled) * shareBefore));
+    const whole = d.holdsNewest && !(d.inRun && stored > reused) && held >= total;
+    const percent = Math.floor(held / total * 100);
+    return { percent: whole ? percent : Math.min(99, percent), held, total, missing: total - held };
+  }
+  if (d.filesHeld == null) return { percent: null };
+  if (!(d.filesTotal > 0)) return { percent: d.holdsNewest ? 100 : null, held: 0, total: 0, missing: 0 };
+  const percent = Math.floor(d.filesHeld / d.filesTotal * 100);
+  return {
+    percent: d.holdsNewest ? percent : Math.min(99, percent),
+    held: d.filesHeld, total: d.filesTotal, missing: d.filesTotal - d.filesHeld,
+  };
+}
+
 // What the last restore drill found (contract 1.25). Three states, and the
 // console must keep all three apart: never drilled, drilled and passed,
 // drilled and failed. The first and the third both mean "this has not been
@@ -835,8 +869,8 @@ function renderSetCard(set) {
   const liveJob = config ? S.jobs.find(j => j.backupSetId === config.id && !SETTLED.has(j.state)) : null;
   const running = !!liveJob;
 
-  // The live run's meter, right on the overview: what is backed up against
-  // the counted plan (liveMeter), indeterminate while counting.
+  // The live job in detail, right on the overview: its three stages over the
+  // counted plan (liveMeter), indeterminate while scanning.
   const lp = liveJob ? S.progress.get(liveJob.id) : null;
   const lm = liveMeter(lp);
   const lpEta = lp ? jobEta(lp) : "";
@@ -847,12 +881,10 @@ function renderSetCard(set) {
       <span class="detail">${!lp
         ? "Backup starting…"
         : !lm.determinate
-          ? (lp.state === "Scanning" ? `Counting files… ${fmtCount(lp.filesSeen)} found` : "Backing up…")
+          ? (lp.state === "Scanning" ? `Scanning for files… ${fmtCount(lp.filesSeen)} found` : "Backing up…")
           : lm.finishing
             ? `${finishingHtml(lp)} · ${lm.ratio}%`
-            : lm.measure === "bytes"
-              ? `${fmtBytes(lm.backedUp)} of ${fmtBytes(lm.totalBytes)} backed up · ${lm.ratio}%${lpTail}`
-              : `${fmtCount(lm.handled)} of ${fmtCount(lm.total)} files · ${lm.ratio}%${lpTail}`}</span>
+            : `${fmtCount(lm.handled)} processed · ${fmtCount(lm.stored)} of ${fmtCount(lm.total)} files stored · ${lm.ratio}%${lpTail}`}</span>
     </div>` : "";
   const verification = set.status.verification
     ? `<span class="chip" title="Verification coverage and age — never a bare tick">
@@ -889,27 +921,24 @@ function renderSetCard(set) {
     const pr = destPriority(d.name);
     const sweep = sweepLabel(d);
 
-    // The card's one caption line. While this set's run is live AND it ships
-    // straight to its destinations, the run's own progress IS this
-    // destination's progress — what it has backed up is what the
-    // destinations it writes to have acknowledged — so it is shown here with
-    // its estimate. A staging set's live job is a capture rather than a
-    // transfer, and putting it on a destination card would attribute the
-    // wrong work to it.
-    const percent = running && config?.directShip && lm.determinate ? lm.ratio : destCompletion(d);
-    const caption = running && config?.directShip
-      ? (!lm.determinate
-          ? "shipping…"
-          : lm.finishing
-            ? `shipping · ${finishingHtml(lp)}`
-            : lm.measure === "bytes"
-              ? `shipping · ${fmtBytes(lm.backedUp)} of ${fmtBytes(lm.totalBytes)} backed up${lpTail}`
-              : `shipping · ${fmtCount(lm.handled)} of ${fmtCount(lm.total)} files${lpTail}`)
-      : d.measuredAt == null
-        ? "not counted yet — no pass has reached it"
-        : d.owedBytes > 0 && d.heldBytes < d.owedBytes
-          ? `${fmtBytes(d.heldBytes)} of ${fmtBytes(d.owedBytes)} · last synced ${esc(rel(d.lastSuccessAt))}`
-          : `holds every byte it is owed · last synced ${esc(rel(d.lastSuccessAt))}`;
+    // The card's one caption line: the circle in words, then, while
+    // something is moving files here, what — never the job's own counts,
+    // which the live row below shows in full. Whether the run writes here is
+    // the service's answer (in_run): a staging set's run, and a peer or a
+    // destination left out of a direct-ship run, gain nothing from it.
+    const holding = destHolding(d, running && lm.determinate ? lp : null);
+    const percent = holding.percent;
+    const doing = running
+      ? (d.inRun ? (lm.finishing ? "finishing" : "backing up") : "syncs once this backup is published")
+      : d.syncing ? "syncing" : null;
+    const caption = percent == null
+      ? (d.filesTotal == null && !running ? "nothing backed up yet" : "not counted yet — no pass has reached it")
+      : doing
+        ? `${percent}% of ${fmtCount(holding.total)} files backed up${holding.missing > 0 ? ` · ${fmtCount(holding.missing)} missing` : ""} — ${doing}`
+        : percent === 100
+          ? `holds all ${fmtCount(holding.total)} files · last synced ${esc(rel(d.lastSuccessAt))}`
+          : `${fmtCount(holding.held)} of ${fmtCount(holding.total)} files · last synced ${esc(rel(d.lastSuccessAt))}`;
+    const bytesHeld = destCompletion(d);
 
     return `<details class="dest" data-dest="${esc(key)}" ${S.openDests.has(key) ? "open" : ""}>
       <summary>
@@ -924,6 +953,7 @@ function renderSetCard(set) {
       </summary>
       <div class="dest-body">
         <div><span class="detail">Full backup</span><span>${baseline}</span></div>
+        ${bytesHeld == null ? "" : `<div><span class="detail">Bytes held</span><span>${esc(fmtBytes(d.heldBytes))} of ${esc(fmtBytes(d.owedBytes))} it keeps · ${bytesHeld}%</span></div>`}
         <div><span class="detail">Failure domain</span><span>${esc(d.failureDomain)}</span></div>
         <div><span class="detail">Possession</span><span>${esc(d.verification)}${verificationTiers(d)}</span></div>
         <div><span class="detail">Restore drill</span><span>${drillLabel(d)}</span></div>
@@ -943,9 +973,15 @@ function renderSetCard(set) {
   // the precise derived state included, waits behind the expand. Open state
   // is remembered across the frequent overview re-renders.
   const glance = GLANCE[set.status.state] ?? { cls: "", icon: "?", label: set.status.state };
+
+  // The set's own circle: files backed up across all its destinations, the
+  // least complete one's figure, and not counted while any one is not.
+  const holdings = ordered.map(d => destHolding(d, running && lm.determinate ? lp : null).percent);
+  const setPercent = holdings.length && holdings.every(p => p != null) ? Math.min(...holdings) : null;
   return `<details class="set" data-set="${esc(set.setName)}" ${S.openSets.has(set.setName) ? "open" : ""}>
     <summary>
       <b>${esc(set.setName)}</b>
+      ${holdings.length ? `<span class="set-ring" title="Files backed up across all destinations">${ring(setPercent)}</span>` : ""}
       ${running
         ? `${badge({ cls: "accent", icon: "◐" }, lm.finishing ? "Finishing" : "Backing up")}<span class="set-live-mini"><span class="meter ${lm.determinate ? "" : "indeterminate"}"><i data-w="${lm.ratio}"></i></span><span class="detail">${lm.determinate ? lm.ratio + "%" : "…"}</span></span>`
         : badge(glance, glance.label)}
@@ -1155,7 +1191,7 @@ function renderLiveJob(job) {
   const meta = cancelling
     ? { cls: "warn", label: "Cancelling…" }
     : JOBSTATE[paused ? "Paused" : (progress?.state ?? job.state)] ?? { cls: "accent", label: job.state };
-  // The meter is what is backed up against the counted plan (liveMeter).
+  // The meter is the job's three stages over the counted plan (liveMeter).
   // Reused files are a subset of done, so files handled are done plus
   // failed — never reused added on top.
   const meter = liveMeter(progress);
@@ -1176,16 +1212,14 @@ function renderLiveJob(job) {
     <div class="meter ${scanning ? "indeterminate" : ""}"><i data-w="${meter.ratio}"></i></div>
     ${progress ? `<div class="job-stats">
         ${counting
-          ? `<span>Counting files… <b>${fmtCount(progress.filesSeen)}</b> found</span>`
+          ? `<span>Scanning for files… <b>${fmtCount(progress.filesSeen)}</b> found</span>`
           : meter.determinate && meter.finishing
             ? `<span>${finishingHtml(progress)} · <b>${meter.ratio}%</b></span>`
-            : meter.measure === "bytes"
-              ? `<span><b>${fmtBytes(meter.backedUp)}</b> of <b>${fmtBytes(meter.totalBytes)}</b> backed up · <b>${meter.ratio}%</b></span>`
-              : meter.measure === "files"
-                ? `<span><b>${fmtCount(handled)}</b> of <b>${fmtCount(total)}</b> files · <b>${meter.ratio}%</b></span>`
-                : `<span><b>${fmtCount(handled)}</b> file(s) so far</span>`}
-        ${meter.measure === "bytes" && total != null
-          ? `<span><b>${fmtCount(handled)}</b> of <b>${fmtCount(total)}</b> files processed</span>`
+            : meter.determinate
+              ? `<span><b>${meter.ratio}%</b> · scanned <b>${fmtCount(total)}</b> · processed <b>${fmtCount(handled)}</b> · stored <b>${fmtCount(meter.stored)}</b> of <b>${fmtCount(total)}</b> files</span>`
+              : `<span><b>${fmtCount(handled)}</b> file(s) so far</span>`}
+        ${progress.bytesBackedUp != null && progress.totalBytes > 0 && !meter.finishing
+          ? `<span><b>${fmtBytes(progress.bytesBackedUp)}</b> of <b>${fmtBytes(progress.totalBytes)}</b> stored</span>`
           : ""}
         ${eta ? `<span>${esc(eta)}</span>` : ""}
         ${rate ? `<span><b>${esc(rate)}</b></span>` : ""}

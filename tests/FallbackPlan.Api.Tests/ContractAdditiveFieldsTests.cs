@@ -424,6 +424,75 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
     }
 
     [TestMethod]
+    public void TheFilesBackedUp_WireNamesAndPre155Defaults()
+    {
+        // Contract 1.55 (FR-SVC-006, ADR-0088 Amendment 1): the files the run
+        // has backed up, the third of a job's three stages, on the live report
+        // and on the job row. An old service's frames never mention it and
+        // read as null, which tells a client to stand the bytes in for it.
+        var modern = JsonSerializer.Serialize(
+            new FallbackPlan.Domain.Jobs.JobProgress(
+                "job-1", FallbackPlan.Domain.Jobs.JobState.Packing, 10, 6, 1, 0, 4096, 2048,
+                TotalFiles: 10, TotalBytes: 4096, BytesBackedUp: 2048, FilesBackedUp: 4),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"files_backed_up\":4", modern, StringComparison.Ordinal);
+
+        var old = modern.Replace(",\"files_backed_up\":4", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+        var parsed = JsonSerializer.Deserialize<FallbackPlan.Domain.Jobs.JobProgress>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(parsed.FilesBackedUp);
+        Assert.AreEqual(2048L, parsed.BytesBackedUp);
+
+        var row = JsonSerializer.Serialize(
+            new JobDescriptor(
+                "job-1", new string('a', 32), FallbackPlan.Domain.Jobs.JobState.Complete, 1_000, 2_000,
+                SnapshotId: null, Detail: null, TotalFiles: 10, BytesBackedUp: 4096, FilesBackedUp: 9),
+            FrameCodec.SerializerOptions);
+        Assert.Contains("\"files_backed_up\":9", row, StringComparison.Ordinal);
+
+        var oldRow = row.Replace(",\"files_backed_up\":9", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(row, oldRow, "the strip must have removed the field, or the old frame proves nothing");
+        Assert.IsNull(JsonSerializer.Deserialize<JobDescriptor>(oldRow, FrameCodec.SerializerOptions)!.FilesBackedUp);
+    }
+
+    [TestMethod]
+    public void TheDestinationsFiles_WireNamesAndPre155Defaults()
+    {
+        // Contract 1.55 (FR-SVC-006, ADR-0088 Amendment 1): how many of the
+        // set's newest backup's files each destination holds, whether it holds
+        // that backup whole, whether the set's live run writes to it, and
+        // whether a sync to it is under way, which makes the count a live one.
+        var modern = JsonSerializer.Serialize(
+            new DestinationStatusDescriptor(
+                "vault", "local-path", "in-sync", LastSuccessAt: 1_000, Detail: null, "other-drive", "proven",
+                FilesHeld: 3_676, FilesTotal: 9_190, HoldsNewest: false, InRun: true, Syncing: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"files_held\":3676", modern, StringComparison.Ordinal);
+        Assert.Contains("\"files_total\":9190", modern, StringComparison.Ordinal);
+        Assert.Contains("\"holds_newest\":false", modern, StringComparison.Ordinal);
+        Assert.Contains("\"in_run\":true", modern, StringComparison.Ordinal);
+        Assert.Contains("\"syncing\":true", modern, StringComparison.Ordinal);
+
+        // A pre-1.55 frame counts no files: null, which a client draws as not
+        // counted rather than as holding none, and nothing live.
+        var old = modern
+            .Replace(",\"files_held\":3676", "", StringComparison.Ordinal)
+            .Replace(",\"files_total\":9190", "", StringComparison.Ordinal)
+            .Replace(",\"holds_newest\":false", "", StringComparison.Ordinal)
+            .Replace(",\"in_run\":true", "", StringComparison.Ordinal)
+            .Replace(",\"syncing\":true", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+
+        var row = JsonSerializer.Deserialize<DestinationStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(row.FilesHeld);
+        Assert.IsNull(row.FilesTotal);
+        Assert.IsFalse(row.HoldsNewest);
+        Assert.IsFalse(row.InRun);
+        Assert.IsFalse(row.Syncing);
+    }
+
+    [TestMethod]
     public void TheJobRowsRunStats_WireNamesAndPre122Defaults()
     {
         // Contract 1.22: the run's terminal numbers ride the job row. The

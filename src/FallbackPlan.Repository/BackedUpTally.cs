@@ -3,9 +3,10 @@ using FallbackPlan.Domain.Identifiers;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// How much of a run's counted plan is backed up (FR-SVC-006, ADR-0088):
-/// content the store has acknowledged, and content the run did not write
-/// because the store already holds it.
+/// How much of a run's counted plan is backed up (FR-SVC-006, ADR-0088 and
+/// its Amendment 1), in bytes and in files: content the store has
+/// acknowledged, and content the run did not write because the store already
+/// holds it.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,17 +29,28 @@ namespace FallbackPlan.Repository;
 /// counts where that claimant is appended, never ahead of the blob that will
 /// hold it.
 /// </para>
+/// <para>
+/// A file counts once everything archived up to its end has been
+/// acknowledged, measured in records rather than bytes: a record the plan
+/// does not count, such as an alternate stream's, still waits for its blob.
+/// An unchanged or renamed file counts at once, and a file that failed never
+/// does, since none of it reached the store.
+/// </para>
 /// </remarks>
 internal sealed class BackedUpTally
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<BlobId, long> _uploading = [];
+    private readonly Dictionary<BlobId, Position> _uploading = [];
     private readonly Dictionary<ObjectId, long> _awaitingClaimant = [];
+    private readonly Queue<long> _fileEnds = new();
     private long _archived;
+    private long _records;
     private long _alreadyStored;
-    private long? _openStart;
+    private Position? _openStart;
     private long _fileBudget;
     private long _fileCounted;
+    private bool _fileAlreadyStored;
+    private long _filesBackedUp;
 
     /// <summary>
     /// Called after an acknowledgement moves the count forward, outside the
@@ -47,28 +59,37 @@ internal sealed class BackedUpTally
     public Action? Advanced { get; set; }
 
     /// <summary>The plan's bytes backed up so far.</summary>
-    public long BackedUp
+    public long BackedUp => Read().Bytes;
+
+    /// <summary>The plan's files backed up so far.</summary>
+    public long FilesBackedUp => Read().Files;
+
+    /// <summary>Both measures, taken together so a report never pairs two moments.</summary>
+    public (long Bytes, long Files) Read()
     {
-        get
+        lock (_gate)
         {
-            lock (_gate)
+            var bytes = _archived;
+            var records = _records;
+            if (_openStart is { } open)
             {
-                var floor = _archived;
-                if (_openStart is { } open && open < floor)
-                {
-                    floor = open;
-                }
-
-                foreach (var start in _uploading.Values)
-                {
-                    if (start < floor)
-                    {
-                        floor = start;
-                    }
-                }
-
-                return floor + _alreadyStored;
+                bytes = Math.Min(bytes, open.Bytes);
+                records = Math.Min(records, open.Records);
             }
+
+            foreach (var start in _uploading.Values)
+            {
+                bytes = Math.Min(bytes, start.Bytes);
+                records = Math.Min(records, start.Records);
+            }
+
+            while (_fileEnds.TryPeek(out var end) && end <= records)
+            {
+                _fileEnds.Dequeue();
+                _filesBackedUp++;
+            }
+
+            return (bytes + _alreadyStored, _filesBackedUp);
         }
     }
 
@@ -80,6 +101,7 @@ internal sealed class BackedUpTally
         {
             _fileBudget = Math.Max(0, plannedBytes);
             _fileCounted = 0;
+            _fileAlreadyStored = false;
         }
     }
 
@@ -93,15 +115,25 @@ internal sealed class BackedUpTally
         {
             _alreadyStored += _fileBudget - _fileCounted;
             _fileCounted = _fileBudget;
+            _fileAlreadyStored = true;
         }
     }
 
     /// <summary>The current file ends: whatever its segments did not cover counts here.</summary>
-    public void EndFile()
+    /// <param name="published">Whether the file made it into the snapshot, rather than failing.</param>
+    public void EndFile(bool published)
     {
         lock (_gate)
         {
             _archived += _fileBudget - _fileCounted;
+            if (published && _fileAlreadyStored)
+            {
+                _filesBackedUp++;
+            }
+            else if (published)
+            {
+                _fileEnds.Enqueue(_records);
+            }
 
             // A claimant still unappended when its file ends never will be:
             // the file failed between claiming and appending.
@@ -121,7 +153,7 @@ internal sealed class BackedUpTally
     {
         lock (_gate)
         {
-            _openStart = _archived;
+            _openStart = new Position(_archived, _records);
         }
     }
 
@@ -164,6 +196,7 @@ internal sealed class BackedUpTally
         lock (_gate)
         {
             _archived += Counted(length);
+            _records++;
             if (_awaitingClaimant.Remove(objectId, out var waiting))
             {
                 _archived += waiting;
@@ -200,4 +233,7 @@ internal sealed class BackedUpTally
         _fileCounted += counted;
         return counted;
     }
+
+    /// <summary>A point in the archive order: the plan's bytes archived, and records appended, before it.</summary>
+    private readonly record struct Position(long Bytes, long Records);
 }

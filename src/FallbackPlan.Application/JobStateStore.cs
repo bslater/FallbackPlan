@@ -98,6 +98,15 @@ public sealed record JobRunStats
     /// </summary>
     [JsonPropertyName("bytes_backed_up")]
     public long? BytesBackedUp { get; init; }
+
+    /// <summary>
+    /// Of the plan's files, how many the run had backed up (ADR-0088
+    /// Amendment 1): every file it published, for a committed run, and how far
+    /// it got for a failed or cancelled one. A file that failed is not among
+    /// them. Absent from a row written before the measure existed.
+    /// </summary>
+    [JsonPropertyName("files_backed_up")]
+    public long? FilesBackedUp { get; init; }
 }
 
 /// <summary>One job's durable record.</summary>

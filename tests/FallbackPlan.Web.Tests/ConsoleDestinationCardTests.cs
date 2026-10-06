@@ -158,15 +158,22 @@ public sealed class ConsoleDestinationCardTests
     }
 
     [TestMethod]
-    public void Card_TheLiveOverlay_IsOnlyForSetsThatShipStraightToDestinations()
+    public void Card_ARunsStoredFiles_CountOnlyWhereTheServiceSaysItWrites()
     {
-        var body = FunctionBody(AppJs(), "renderSetCard");
+        var script = AppJs();
 
-        // A staging set's live job is a capture, not a transfer. Showing its
-        // progress on a destination card would credit that destination with
-        // work that has not started reaching it.
-        Assert.Contains("config?.directShip", body, StringComparison.Ordinal);
-        Assert.Contains("destCompletion(d)", body, StringComparison.Ordinal);
+        // A staging set's live job is a capture, not a transfer, and a peer
+        // or a destination a direct-ship run left out gains nothing from the
+        // run either. Crediting any of them with what the run stored would
+        // claim work that has not started reaching it: whether the run
+        // writes to a destination is the service's answer (contract 1.55).
+        Assert.Contains("d.inRun ? stored", FunctionBody(script, "destHolding"), StringComparison.Ordinal);
+
+        var card = FunctionBody(script, "renderSetCard");
+        Assert.DoesNotContain("config?.directShip", card, StringComparison.Ordinal,
+            "the set's configuration cannot say which destinations a run reached");
+        Assert.Contains("destCompletion(d)", card, StringComparison.Ordinal,
+            "the bytes a destination holds of its own keep-set are still shown, as detail");
     }
 
     [TestMethod]

@@ -455,6 +455,11 @@ details.dest > summary::before { padding-top: 12px; }
 }
 .ring-label i { font-style: normal; font-size: 8px; opacity: .75; margin-left: 1px; }
 .ring.unknown .ring-label { color: var(--muted); font-weight: 500; }
+/* The set's circle rides its summary line, so it is drawn smaller than a
+   destination's; the arc keeps its proportions because the SVG scales. */
+.set-ring .ring, .set-ring .ring svg { width: 30px; height: 30px; }
+.set-ring .ring-label { font-size: 9.5px; }
+.set-ring .ring-label i { font-size: 7px; }
 @keyframes slide { from { margin-left: 0; } to { margin-left: 70%; } }
 
 /* A drill that could not bring a file back is the loudest thing a

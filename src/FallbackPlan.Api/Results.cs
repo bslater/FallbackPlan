@@ -511,6 +511,11 @@ public sealed record JobAcceptedResult(string JobId) : ServiceResult;
 /// Of the plan's bytes, how many the run had backed up when it settled
 /// (ADR-0088). Contract 1.54; null from an older service or a pre-1.54 row.
 /// </param>
+/// <param name="FilesBackedUp">
+/// Of the plan's files, how many the run had backed up when it settled
+/// (ADR-0088 Amendment 1); a file that failed is not among them. Contract
+/// 1.55; null from an older service or a pre-1.55 row.
+/// </param>
 public sealed record JobDescriptor(
     string Id,
     string BackupSetId,
@@ -527,7 +532,8 @@ public sealed record JobDescriptor(
     long? BytesStored = null,
     long? TotalFiles = null,
     long? TotalBytes = null,
-    long? BytesBackedUp = null);
+    long? BytesBackedUp = null,
+    long? FilesBackedUp = null);
 
 /// <summary>The known jobs.</summary>
 /// <param name="Jobs">The jobs, oldest first.</param>
@@ -994,6 +1000,34 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// client draws nothing for it, and a sweep that has not run is a descriptor
 /// with nothing closed.
 /// </param>
+/// <param name="FilesHeld">
+/// Of the set's newest backup's files, how many have all their content at
+/// this destination (contract 1.55, ADR-0088 Amendment 1): what a client's
+/// circle shows. Worked out from what the ledger says the destination was
+/// last delivered, or counted as a sync under way lands its content. Null
+/// when nothing has ever been delivered there and no sync is counting it,
+/// and when the set has no backup yet. Null is not zero: a client draws it as
+/// not counted, never as holding none.
+/// </param>
+/// <param name="FilesTotal">
+/// The newest backup's files: the denominator of <paramref name="FilesHeld"/>.
+/// Null when the set has no backup yet.
+/// </param>
+/// <param name="HoldsNewest">
+/// Whether the destination holds the newest backup whole, snapshot record
+/// included. A copy sends that record last, so a destination can hold every
+/// file's content and not yet the backup: only this lets a client draw 100%.
+/// </param>
+/// <param name="InRun">
+/// Whether the set's live backup writes to this destination: the run's
+/// stored files are gaining here as it goes, which a client folds into the
+/// circle from the run's own progress.
+/// </param>
+/// <param name="Syncing">
+/// Whether a sync to this destination is under way, so that
+/// <paramref name="FilesHeld"/> and <paramref name="FilesTotal"/> are that
+/// sync's own live count.
+/// </param>
 public sealed record DestinationStatusDescriptor(
     string Name,
     string Kind,
@@ -1015,7 +1049,12 @@ public sealed record DestinationStatusDescriptor(
     int VerifiedSealed = 0,
     int VerifiedDigest = 0,
     int VerifiedChunk = 0,
-    DeepSweepDescriptor? DeepSweep = null);
+    DeepSweepDescriptor? DeepSweep = null,
+    long? FilesHeld = null,
+    long? FilesTotal = null,
+    bool HoldsNewest = false,
+    bool InRun = false,
+    bool Syncing = false);
 
 /// <summary>
 /// A destination's deep sweep as its status row reports it (contract 1.46,

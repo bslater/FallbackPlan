@@ -234,6 +234,16 @@ internal static partial class Log
     internal static partial void DiagnosticBundleBuilt(
         ILogger logger, CallerScope scope, int records, int leftOut, bool includesPaths);
 
+    // A sync's live count of a destination's files is a display (ADR-0088
+    // Amendment 1): a catalogue that cannot answer for it costs the circle its
+    // live count, never the sync.
+    [LoggerMessage(
+        EventId = 3792, Level = LogLevel.Warning,
+        Message = "The files {Destination} holds of set {Set}'s newest backup could not be counted for this sync: "
+            + "{Reason}. The sync goes on, and the status shows what the ledger supports")]
+    internal static partial void SyncCountUnavailable(
+        ILogger logger, LogLabel set, LogLabel destination, string reason);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

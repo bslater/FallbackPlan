@@ -139,6 +139,23 @@ public sealed class DestinationShipSink : IObjectStore
     }
 
     /// <summary>
+    /// The destinations the run under way writes to, by name: those still in
+    /// scope, without any dropped mid-run. Empty outside a run. The status
+    /// marks them, because that run's stored files are gaining there as it
+    /// goes (ADR-0088 Amendment 1).
+    /// </summary>
+    public IReadOnlyCollection<string> DestinationsThisRun
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _runActive ? [.. _inScope.Select(shipment => shipment.Name)] : [];
+            }
+        }
+    }
+
+    /// <summary>
     /// Resolves this run's write targets and seeds each with the repository's
     /// descriptor and keys. In scope: the set's defect-free local-path
     /// destinations whose directory exists and that hold a baseline — or all

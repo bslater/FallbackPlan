@@ -346,5 +346,6 @@ public static class BackupRunner
         TotalFiles = latest.TotalFiles,
         TotalBytes = latest.TotalBytes,
         BytesBackedUp = latest.BytesBackedUp,
+        FilesBackedUp = latest.FilesBackedUp,
     };
 }

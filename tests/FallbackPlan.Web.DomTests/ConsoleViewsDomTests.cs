@@ -393,14 +393,17 @@ public sealed class ConsoleViewsDomTests
         //
         // The denominator is the run's counted plan (TotalFiles, contract
         // 1.20), not the files seen so far, and reused files are a subset of
-        // done rather than a separate tally to add on: 40 done of a 100-file
-        // plan is 40%. Before the plan existed the meter divided by a moving
+        // done rather than a separate tally to add on. The job's three stages
+        // (ADR-0088 Amendment 1) over a 100-file plan: scanned 100, processed
+        // 40, and from a service that counts nothing stored, processed
+        // standing in for stored — 180 of 300, 60%. Adding the reused ten
+        // would read 66. Before the plan existed the meter divided by a moving
         // denominator, so a run could show 90% and then fall back.
         harness.Clients.Client.Emit(
             new JobProgress("job-1", JobState.Packing, 100, 40, 10, 0, 1024, 512, TotalFiles: 100));
 
         await Expect(page.Locator(".job-live").GetByText("Packing")).ToBeVisibleAsync();
-        await Expect(page.Locator(".job-live .meter > i")).ToHaveAttributeAsync("data-w", "40");
+        await Expect(page.Locator(".job-live .meter > i")).ToHaveAttributeAsync("data-w", "60");
         await Expect(page.GetByText("512 B")).ToBeVisibleAsync();
     }
 }

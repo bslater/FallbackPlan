@@ -274,6 +274,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>Where progress goes.</summary>
     public ProgressHub Progress { get; }
 
+    /// <summary>What each sync under way has delivered so far, in files (ADR-0088 Amendment 1).</summary>
+    public LiveHoldings Holdings { get; } = new();
+
+    /// <summary>What each destination holds of its set's newest backup, at rest (ADR-0088 Amendment 1).</summary>
+    public DeliveredFiles Delivered { get; } = new();
+
     /// <summary>What is running and what is waiting.</summary>
     public JobScheduler Queue { get; }
 

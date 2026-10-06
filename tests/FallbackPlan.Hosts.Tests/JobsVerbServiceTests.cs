@@ -58,6 +58,8 @@ public sealed class JobsVerbServiceTests : IDisposable
         // and its row says so in those terms.
         Assert.IsNotNull(second.BytesBackedUp);
         Assert.AreEqual(second.TotalBytes, second.BytesBackedUp);
+        Assert.IsNotNull(second.FilesBackedUp, "the row says how many of its files a run stored (contract 1.55)");
+        Assert.AreEqual(second.TotalFiles, second.FilesBackedUp);
 
         // One run's report, in the words and numbers of its own row.
         var report = await JobsAsync(second.Id);
@@ -69,6 +71,7 @@ public sealed class JobsVerbServiceTests : IDisposable
             Invariant($"files          {second.FilesDone ?? 0}{planned} ({second.FilesReused ?? 0} unchanged, {second.FilesFailed ?? 0} failed)"),
             Invariant($"bytes          {second.BytesSeen ?? 0} read, {second.BytesStored ?? 0} newly stored"),
             Invariant($"backed up      {second.BytesBackedUp} of {second.TotalBytes} planned bytes"),
+            Invariant($"stored         {second.FilesBackedUp} of {second.TotalFiles} planned files"),
             Invariant($"snapshot       {second.SnapshotId}"),
             Invariant($"detail         {second.Detail}"),
         })

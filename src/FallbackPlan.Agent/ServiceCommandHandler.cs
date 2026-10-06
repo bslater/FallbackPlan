@@ -2236,7 +2236,7 @@ public sealed partial class ServiceCommandHandler(
                 job.Id, job.BackupSetId, job.State, job.StartedAt, job.UpdatedAt, job.SnapshotId, job.Detail,
                 job.Stats?.FilesSeen, job.Stats?.FilesDone, job.Stats?.FilesReused, job.Stats?.FilesFailed,
                 job.Stats?.BytesSeen, job.Stats?.BytesStored, job.Stats?.TotalFiles, job.Stats?.TotalBytes,
-                job.Stats?.BytesBackedUp))]);
+                job.Stats?.BytesBackedUp, job.Stats?.FilesBackedUp))]);
     }
 
     /// <summary>The failure listing's default and ceiling (ADR-0050): counts stay exact; the listing is bounded well under the frame cap.</summary>
@@ -2798,16 +2798,26 @@ public sealed partial class ServiceCommandHandler(
             // by honest absence rather than by error.
             Repository.Catalogue.CatalogueSnapshot? latest = null;
             var findings = 0;
+            var files = new Dictionary<string, FilesFigure>(StringComparer.Ordinal);
             if (await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false) is { } archive)
             {
                 using var catalogue = archive.OpenReadCatalogue();
                 var setId = Convert.FromHexString(set.Id);
+
+                // Newest capture first, so the first of this set's is the one
+                // a status describes.
                 latest = catalogue.EnumerateSnapshots()
-                    .LastOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
+                    .FirstOrDefault(row => row.BackupSetId.Span.SequenceEqual(setId));
                 findings = catalogue.Findings().Count;
+
+                var writing = archive.ShipSink?.DestinationsThisRun ?? [];
+                foreach (var reference in set.Destinations)
+                {
+                    files[reference.Ref] = FilesFigureOf(set, reference.Ref, catalogue, latest, writing);
+                }
             }
 
-            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set);
+            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set, files);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
@@ -2875,7 +2885,9 @@ public sealed partial class ServiceCommandHandler(
     /// the client's rows, built together so they cannot disagree.
     /// </summary>
     private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows, ulong LastCompleted)
-        DescribeDestinations(ClientConfiguration configuration, BackupSetConfiguration set)
+        DescribeDestinations(
+            ClientConfiguration configuration, BackupSetConfiguration set,
+            IReadOnlyDictionary<string, FilesFigure>? files = null)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
         var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -2891,6 +2903,7 @@ public sealed partial class ServiceCommandHandler(
                 ledger, lastCompleted, nowMs, runtime.VolumeIdOf);
 
             inputs.Add(input);
+            var figure = files?.GetValueOrDefault(reference.Ref) ?? default;
             rows.Add(new DestinationStatusDescriptor(
                 input.Name, destination is null ? "?" : KindLabel(input.Kind), StateLabel(input.Sync),
                 input.LastSuccessAt, input.Detail, StatusDeriver.DomainLabel(input.Domain),
@@ -2908,11 +2921,52 @@ public sealed partial class ServiceCommandHandler(
                 VerifiedSealed: ledger?.VerifiedSealed ?? 0,
                 VerifiedDigest: ledger?.VerifiedDigest ?? 0,
                 VerifiedChunk: ledger?.VerifiedChunk ?? 0,
-                DeepSweep: DescribeSweep(destination, ledger)));
+                DeepSweep: DescribeSweep(destination, ledger),
+                FilesHeld: figure.Held,
+                FilesTotal: figure.Total,
+                HoldsNewest: figure.Whole,
+                InRun: figure.InRun,
+                Syncing: figure.Syncing));
         }
 
         return (inputs, rows, lastCompleted);
     }
+
+    /// <summary>
+    /// What one destination holds of the set's newest backup (ADR-0088
+    /// Amendment 1): a sync's own live count while one is filling it,
+    /// otherwise worked out from the ledger's watermark, and not counted at
+    /// all where nothing has ever been delivered.
+    /// </summary>
+    private FilesFigure FilesFigureOf(
+        BackupSetConfiguration set, string destination, Repository.Catalogue.Catalogue catalogue,
+        Repository.Catalogue.CatalogueSnapshot? newest, IReadOnlyCollection<string> writing)
+    {
+        var inRun = writing.Contains(destination, StringComparer.Ordinal);
+        if (runtime.Holdings.Find(set.Id, destination) is { } live)
+        {
+            return new FilesFigure(live.Held, live.Total, Whole: false, inRun, Syncing: true);
+        }
+
+        if (newest is null)
+        {
+            return new FilesFigure(null, null, Whole: false, inRun, Syncing: false);
+        }
+
+        var synced = runtime.DestinationSync.Find(set.Id, destination)?.SyncedSequence ?? 0;
+        if (synced == 0)
+        {
+            return new FilesFigure(null, catalogue.CountFiles(newest.SnapshotId.Span), Whole: false, inRun, Syncing: false);
+        }
+
+        var delivered = runtime.Delivered.Get(
+            set.Id, destination, Convert.ToHexStringLower(newest.SnapshotId.Span), synced,
+            () => catalogue.FilesDeliveredThrough(newest.SnapshotId.Span, runtime.Writer, synced));
+        return new FilesFigure(delivered.Held, delivered.Total, delivered.Whole, inRun, Syncing: false);
+    }
+
+    /// <summary>One destination's files of the newest backup, as its status row carries them.</summary>
+    private readonly record struct FilesFigure(long? Held, long? Total, bool Whole, bool InRun, bool Syncing);
 
     /// <summary>
     /// A destination's deep sweep for its status row (contract 1.46, ADR-0035
