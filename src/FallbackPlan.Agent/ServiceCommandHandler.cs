@@ -759,7 +759,7 @@ public sealed partial class ServiceCommandHandler(
         try
         {
             using var catalogue = context.OpenCatalogue();
-            var target = RestoreTargetProfile.ForLocalPlatform();
+            var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, runtime.State.DeviceId);
             var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
 
             if (plan.Items.Count == 0)
@@ -953,7 +953,6 @@ public sealed partial class ServiceCommandHandler(
             return invalidShape;
         }
 
-        var target = RestoreTargetProfile.ForLocalPlatform();
         var (context, error) = await ResolveRestoreContextAsync(
             command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
         if (context is null)
@@ -969,6 +968,7 @@ public sealed partial class ServiceCommandHandler(
         try
         {
             using var catalogue = context.OpenCatalogue();
+            var target = RestoreTargetProfile.ForLocalPlatform(catalogue, snapshotId, runtime.State.DeviceId);
             var plan = RestorePlanner.Plan(catalogue, snapshotId, PrefixesOf(command.Paths, command.Path), target);
             if (plan.Items.Count == 0)
             {
