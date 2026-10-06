@@ -557,8 +557,28 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// is then that sync's own. Additive: a pre-1.55 service sends none of
     /// them. A client reads null `files_held` as not counted, never as none.
     /// </para>
+    /// <para>
+    /// 1.56 names a backup's files only to a caller who proved its set's
+    /// passphrase for the action at hand (FR-WOR-007, ADR-0089). The proof is
+    /// a restore source opened under a verified grant, and it serves only the
+    /// session that opened it. `job_changes`, `job_failures` and
+    /// `preview_set_changes` gain `source` to name one. `preview_set_changes`
+    /// answers without one, counting deleted and no-longer-included files and
+    /// leaving out their names, and `names_withheld` says so.
+    ///
+    /// The rest is not additive, as 1.42's refusal was not. `open_restore_source`
+    /// without an `envelope` is refused. `list_directory`, `plan_restore`,
+    /// `run_restore`, `job_changes` and `job_failures` without such a source
+    /// are refused. So is a source another session unlocked, and one of
+    /// another set. A pre-1.56 client that browsed, planned or read a run's
+    /// files on its sign-in alone is refused, by name, rather than shown names
+    /// nobody proved the passphrase for: that is the behaviour FR-WOR-007
+    /// exists to end. The console and the CLI ship with the service and
+    /// unlock first. The session a command came from is the connection's
+    /// gate's to say, so it is never on the wire.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 55);
+    public static ContractVersion Current { get; } = new(1, 56);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

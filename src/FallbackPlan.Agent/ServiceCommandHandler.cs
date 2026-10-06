@@ -744,6 +744,11 @@ public sealed partial class ServiceCommandHandler(
             return invalid!;
         }
 
+        if (RefuseUnproved(command.Source, command.SessionId, setId: null, "Planning a restore") is { } unproved)
+        {
+            return unproved;
+        }
+
         var (context, error) = await ResolveRestoreContextAsync(
             command.Source, snapshotId, command.SnapshotId, cancellationToken).ConfigureAwait(false);
         if (context is null)
@@ -951,6 +956,11 @@ public sealed partial class ServiceCommandHandler(
         if (invalidShape is not null)
         {
             return invalidShape;
+        }
+
+        if (RefuseUnproved(command.Source, command.SessionId, setId: null, "A restore") is { } unproved)
+        {
+            return unproved;
         }
 
         var (context, error) = await ResolveRestoreContextAsync(
@@ -2324,6 +2334,11 @@ public sealed partial class ServiceCommandHandler(
             return error;
         }
 
+        if (RefuseUnproved(command.Source, command.SessionId, job!.BackupSetId, "A run's changes") is { } unproved)
+        {
+            return unproved;
+        }
+
         var sampleLimit = Math.Clamp(
             command.SampleLimit ?? SetChangeScan.DefaultSampleLimit, 1, SetChangeScan.MaxSampleLimit);
 
@@ -2403,7 +2418,8 @@ public sealed partial class ServiceCommandHandler(
     /// <summary>
     /// The failure listing (ADR-0050): the snapshot's error manifest read
     /// back on demand — path, typed reason, and the scanner's own words.
-    /// Paths flow to any authenticated caller, the list_directory precedent;
+    /// Paths flow only to a caller who unlocked the run's set with the
+    /// passphrase (FR-WOR-007), as the listing's do;
     /// the raw name bytes stay in the manifest and the rendering substitutes
     /// where they have no faithful decoding. Reader lane: it opens the
     /// repository's blob footers to reach two records.
@@ -2415,6 +2431,11 @@ public sealed partial class ServiceCommandHandler(
         if (error is not null)
         {
             return error;
+        }
+
+        if (RefuseUnproved(command.Source, command.SessionId, job!.BackupSetId, "A run's failures") is { } unproved)
+        {
+            return unproved;
         }
 
         var sampleLimit = Math.Clamp(
@@ -2656,6 +2677,11 @@ public sealed partial class ServiceCommandHandler(
         {
             return new ServiceError(
                 ServiceErrorReason.InvalidArgument, $"'{command.SnapshotId}' is not a hex snapshot identifier.");
+        }
+
+        if (RefuseUnproved(command.Source, command.SessionId, setId: null, "Listing a snapshot") is { } unproved)
+        {
+            return unproved;
         }
 
         var (context, contextError) = await ResolveRestoreContextAsync(
@@ -3075,6 +3101,14 @@ public enum CallerScope
 
     /// <summary>Over the remote binding — a paired device elsewhere (ADR-0028 §6).</summary>
     Remote,
+
+    /// <summary>
+    /// The service's own work — a recovery drill — with no person behind it.
+    /// It reads the structure plane on the write bundle alone, as backup and
+    /// retention do (FR-WOR-003), so the passphrase gate does not apply to it
+    /// (FR-WOR-007); no listener ever builds a handler in this scope.
+    /// </summary>
+    Service,
 
 }
 

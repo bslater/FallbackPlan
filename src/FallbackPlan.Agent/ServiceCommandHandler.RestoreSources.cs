@@ -10,14 +10,77 @@ namespace FallbackPlan.Agent;
 /// <summary>
 /// The restore-source surface (ADR-0041): opening a per-set repository —
 /// staging archive, local-path replica, or a peer's replica — as a handle
-/// the source-aware restore verbs read through, and closing it again. The
-/// open carries no passphrase: the runtime unlocks sources with the secret
-/// it already holds (NFR-SEC-009 — nothing passphrase-shaped crosses the
-/// contract), and the wizard's operator gate is the console's own local
-/// verification.
+/// the source-aware restore verbs read through, and closing it again. A
+/// person opens one only under a restore grant derived from the set's
+/// passphrase (ADR-0042 §5), and a source so opened is the proof every verb
+/// that names a backup's files asks for (FR-WOR-007, ADR-0089). Nothing
+/// passphrase-shaped crosses the contract but the sealed grant (NFR-SEC-009).
 /// </summary>
 public sealed partial class ServiceCommandHandler
 {
+    /// <summary>
+    /// Whether this caller must prove the passphrase before a backup's file
+    /// names are shown it (FR-WOR-007): every caller but the service's own work,
+    /// which reads the structure plane on the write bundle alone (FR-WOR-003).
+    /// </summary>
+    private bool NamesNeedThePassphrase => Scope != CallerScope.Service;
+
+    /// <summary>The refusal a caller meets who has not proved the passphrase for what it asks.</summary>
+    /// <param name="what">What was asked, as a sentence's subject.</param>
+    private static ServiceError PassphraseNeeded(string what) => new(
+        ServiceErrorReason.Refused,
+        $"{what} names the files a backup holds, so it needs the set's passphrase: open a restore source "
+        + "under a restore grant derived from it, and name that source (FR-WOR-007).");
+
+    /// <summary>
+    /// The source a command names as its proof of the passphrase, or why it
+    /// is not one (FR-WOR-007): none named, expired, opened without a grant,
+    /// unlocked by another session, or another set's. Null for the service's
+    /// own work, which needs no proof.
+    /// </summary>
+    /// <param name="sourceId">The source the command names.</param>
+    /// <param name="sessionId">The session the command came from.</param>
+    /// <param name="setId">The set whose files the command names, when one set's; null when the source decides.</param>
+    /// <param name="what">What was asked, for the refusal.</param>
+    private ServiceError? RefuseUnproved(string? sourceId, string? sessionId, string? setId, string what)
+    {
+        if (!NamesNeedThePassphrase)
+        {
+            return null;
+        }
+
+        if (sourceId is null)
+        {
+            return PassphraseNeeded(what);
+        }
+
+        var handle = runtime.RestoreSources.Find(sourceId);
+        if (handle is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, "This restore source has expired — unlock it again.");
+        }
+
+        if (handle.ReadAuthority is null)
+        {
+            return PassphraseNeeded(what);
+        }
+
+        if (!string.Equals(handle.SessionId, sessionId, StringComparison.Ordinal))
+        {
+            return new ServiceError(
+                ServiceErrorReason.Refused,
+                "This restore source was unlocked by another session, and serves only that one — unlock it again "
+                + "with the passphrase (FR-WOR-007).");
+        }
+
+        return setId is null || string.Equals(handle.SetId, setId, StringComparison.Ordinal)
+            ? null
+            : new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"This restore source unlocks set '{handle.SetName}', not set '{SetNameOf(setId)}': each set "
+                + "answers to its own passphrase, so open a source of that set (FR-WOR-007).");
+    }
     /// <summary>
     /// What a restore verb reads through: either an open source handle or
     /// the legacy staging lookup, reduced to one shape so the plan probe and
@@ -145,6 +208,11 @@ public sealed partial class ServiceCommandHandler
                     + (directShip ? "metadata store" : "staging archive") + " does not exist.");
             }
 
+            if (command.Envelope is null && NamesNeedThePassphrase)
+            {
+                return PassphraseNeeded("Opening a backup to browse or restore");
+            }
+
             handle = new OpenRestoreSourceHandle
             {
                 SourceId = sourceId,
@@ -168,6 +236,13 @@ public sealed partial class ServiceCommandHandler
             {
                 return new ServiceError(
                     ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+            }
+
+            // Before the replica is opened, which is a catalogue rebuild and,
+            // at a peer, a dial: a person with no grant gets nothing of it.
+            if (command.Envelope is null && NamesNeedThePassphrase)
+            {
+                return PassphraseNeeded("Opening a backup to browse or restore");
             }
 
             switch (destination.Kind)
@@ -232,6 +307,7 @@ public sealed partial class ServiceCommandHandler
             }
         }
 
+        handle.SessionId = command.SessionId;
         runtime.RestoreSources.Add(handle);
         return new RestoreSourceOpenedResult(sourceId, set.Name, handle.Location, snapshots, warnings);
     }
@@ -566,10 +642,19 @@ public sealed partial class ServiceCommandHandler
         }
     }
 
-    /// <summary>Closes a source. Idempotent: closing the closed acknowledges.</summary>
+    /// <summary>
+    /// Closes a source. Idempotent: closing the closed acknowledges, and so
+    /// does closing a source another session unlocked, which closes nothing.
+    /// </summary>
     private async ValueTask<ServiceResult> CloseRestoreSourceAsync(CloseRestoreSourceCommand command)
     {
-        await runtime.RestoreSources.CloseAsync(command.SourceId).ConfigureAwait(false);
+        if (!NamesNeedThePassphrase
+            || runtime.RestoreSources.Find(command.SourceId) is not { } held
+            || string.Equals(held.SessionId, command.SessionId, StringComparison.Ordinal))
+        {
+            await runtime.RestoreSources.CloseAsync(command.SourceId).ConfigureAwait(false);
+        }
+
         await runtime.RestoreSources.SweepAsync().ConfigureAwait(false);
         return new AcknowledgedResult();
     }

@@ -526,13 +526,12 @@ internal sealed class ServiceGateway(
     {
         ThrowHelper.ThrowIfNull(request);
 
-        // A set-up installation holds no content key (ADR-0042 §7): a
-        // restore reads sealed content under a grant, and the grant is
-        // derived here — where the passphrase is — from the parameters the
-        // service publishes (contract 1.28), proved against its sealing
-        // public key before anything is sent, and handed over sealed to its
-        // recipient key. The console's ceremony, at the shell.
-        var source = await OpenGrantedSourceAsync(request.SnapshotId, cancellationToken).ConfigureAwait(false);
+        // A set-up installation holds no content key (ADR-0042 §7), and a
+        // restore names the backup's files (FR-WOR-007): it reads through a
+        // source opened under a grant derived here, where the passphrase is.
+        var source = (await GrantedSources.OpenHoldingAsync(
+            client, passphraseEnvironmentVariable, "A restore", request.SnapshotId, cancellationToken)
+            .ConfigureAwait(false)).SourceId;
         try
         {
             var result = await SendAsync<RestoreResult>(
@@ -565,121 +564,8 @@ internal sealed class ServiceGateway(
         }
         finally
         {
-            if (source is not null)
-            {
-                await client.ExecuteAsync(new CloseRestoreSourceCommand(source), CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
+            await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
         }
-    }
-
-    /// <summary>
-    /// Opens a restore source under a derived grant when the service is a
-    /// set-up installation; null when it holds its own keys, in which case
-    /// the restore runs against the set's archive as before.
-    /// </summary>
-    private async ValueTask<string?> OpenGrantedSourceAsync(string snapshotId, CancellationToken cancellationToken)
-    {
-        var description = await SendAsync<ServiceDescriptionResult>(
-            new DescribeServiceCommand(), "a description of the service", cancellationToken).ConfigureAwait(false);
-
-        if (description is not
-            {
-                RestoreGrantRecipient.Length: > 0,
-                KdfSalt.Length: > 0,
-                KdfMemoryKib: { } memoryKib,
-                KdfIterations: { } iterations,
-                KdfParallelism: { } parallelism,
-                SealingPublicKey.Length: > 0,
-            })
-        {
-            return null;
-        }
-
-        if (passphraseEnvironmentVariable is null)
-        {
-            throw new CliFailureException(
-                "this service is a set-up installation, and restoring reads sealed content: name "
-                + "--passphrase-env <VAR> so the restore grant can be derived here (ADR-0042).");
-        }
-
-        // A restore source is opened by set, and the snapshot names no set
-        // a client can rely on — a snapshot a direct-mode backup wrote
-        // carries the archive's own identity, not the configured set's — so
-        // the sets are tried in order and the first whose archive lists the
-        // snapshot is the one. Every other source opened on the way is
-        // closed again.
-        //
-        // The grant is derived PER SET (contract 1.30): a set's archive
-        // normally shares the installation's salt, but one adopted from a
-        // destination (ADR-0061) keeps the salt it was born under, and only a
-        // grant derived under that salt reproduces its sealing key. One
-        // derivation per distinct salt, so the ordinary installation still
-        // runs Argon2id once.
-        var sets = await SendAsync<BackupSetsResult>(
-            new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
-        var envelopesBySalt = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        var recipient = Convert.FromHexString(description.RestoreGrantRecipient);
-        using var passphrase = CliSession.ReadPassphrase(passphraseEnvironmentVariable);
-
-        string? EnvelopeFor(string saltHex, Argon2Parameters parameters, string sealingPublicKeyHex)
-        {
-            if (envelopesBySalt.TryGetValue(saltHex, out var known))
-            {
-                return known;
-            }
-
-            using var authority = WriteOnlyDerivation.Derive(
-                passphrase, parameters, Convert.FromHexString(saltHex), KdfValidationMode.OpenRepository);
-            var envelope = authority.Credential.SealingPublicKey.SequenceEqual(Convert.FromHexString(sealingPublicKeyHex))
-                ? Convert.ToHexStringLower(WriteOnlyProvisioning.SealGrant(recipient, authority.SealingPrivateKey))
-                : null;
-            envelopesBySalt[saltHex] = envelope;
-            return envelope;
-        }
-
-        foreach (var set in sets.Sets)
-        {
-            var envelope = set is { KdfSalt.Length: > 0, KdfMemoryKib: { } setMemory, KdfIterations: { } setIterations, KdfParallelism: { } setLanes, SealingPublicKey.Length: > 0 }
-                ? EnvelopeFor(
-                    set.KdfSalt,
-                    new Argon2Parameters { MemoryKiB = setMemory, Iterations = setIterations, Parallelism = setLanes },
-                    set.SealingPublicKey)
-                : EnvelopeFor(
-                    description.KdfSalt,
-                    new Argon2Parameters { MemoryKiB = memoryKib, Iterations = iterations, Parallelism = parallelism },
-                    description.SealingPublicKey);
-            if (envelope is null)
-            {
-                // Not this set's passphrase; the next set may be adopted from
-                // elsewhere and answer to it.
-                continue;
-            }
-
-            if (await client.ExecuteAsync(
-                    new OpenRestoreSourceCommand(set.Name, Envelope: envelope), cancellationToken).ConfigureAwait(false)
-                is not RestoreSourceOpenedResult opened)
-            {
-                continue;
-            }
-
-            if (opened.Snapshots.Any(
-                candidate => string.Equals(candidate.SnapshotId, snapshotId, StringComparison.OrdinalIgnoreCase)))
-            {
-                return opened.SourceId;
-            }
-
-            await client.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-
-        if (envelopesBySalt.Count > 0 && envelopesBySalt.Values.All(envelope => envelope is null))
-        {
-            throw new CliFailureException(
-                "the passphrase does not reproduce this installation's credential — nothing was sent.");
-        }
-
-        throw new CliFailureException($"no configured set's archive holds snapshot '{snapshotId}'.");
     }
 
     /// <inheritdoc/>
@@ -708,9 +594,39 @@ internal sealed class ServiceGateway(
     public async ValueTask<OperationReport> PreviewSetChangesAsync(
         string? setName, int? sampleLimit, CancellationToken cancellationToken)
     {
-        var result = await SendAsync<SetChangePreviewResult>(
-            new PreviewSetChangesCommand(setName, SampleLimit: sampleLimit), "a change preview", cancellationToken)
-            .ConfigureAwait(false);
+        // A deleted file, and one the rules stop capturing, is named by the
+        // backup alone, so the comparison names those only through a source
+        // the passphrase unlocked (FR-WOR-007); without one it counts them.
+        string? source = null;
+        if (passphraseEnvironmentVariable is not null)
+        {
+            var name = setName;
+            if (name is null)
+            {
+                var sets = await SendAsync<BackupSetsResult>(
+                    new ListBackupSetsCommand(), "listing the backup sets", cancellationToken).ConfigureAwait(false);
+                name = sets.Sets.Count > 0 ? sets.Sets[0].Name : null;
+            }
+
+            source = (await GrantedSources.OpenAsync(
+                client, passphraseEnvironmentVariable, "A comparison", set => set.Name == name, cancellationToken)
+                .ConfigureAwait(false)).SourceId;
+        }
+
+        SetChangePreviewResult result;
+        try
+        {
+            result = await SendAsync<SetChangePreviewResult>(
+                new PreviewSetChangesCommand(setName, SampleLimit: sampleLimit, Source: source), "a change preview",
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (source is not null)
+            {
+                await GrantedSources.CloseAsync(client, source).ConfigureAwait(false);
+            }
+        }
 
         var lines = new List<string>
         {
@@ -725,8 +641,8 @@ internal sealed class ServiceGateway(
         AppendBucket(lines, "updated", result.Updated);
         AppendBucket(lines, "metadata-only", result.MetadataOnly);
         AppendBucket(lines, "moved", result.Moved);
-        AppendBucket(lines, "deleted", result.Deleted);
-        AppendBucket(lines, "no longer included by the rules", result.NoLongerIncluded);
+        AppendBucket(lines, "deleted", result.Deleted, result.NamesWithheld);
+        AppendBucket(lines, "no longer included by the rules", result.NoLongerIncluded, result.NamesWithheld);
         if (result.Failures > 0)
         {
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"{result.Failures} unreadable"));
@@ -734,10 +650,17 @@ internal sealed class ServiceGateway(
 
         return new OperationReport(true, lines);
 
-        static void AppendBucket(List<string> lines, string label, ChangeBucketDescriptor bucket)
+        static void AppendBucket(List<string> lines, string label, ChangeBucketDescriptor bucket, bool withheld = false)
         {
             if (bucket.Count == 0)
             {
+                return;
+            }
+
+            if (withheld)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{bucket.Count} {label} — named only with --passphrase-env"));
                 return;
             }
 

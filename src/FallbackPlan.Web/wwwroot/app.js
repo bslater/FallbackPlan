@@ -1111,7 +1111,7 @@ function renderSnapshots() {
                   ${clockSkew(s.observedClockSkewMs)}</td>
               <td>${(s.destinations ?? []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ") || "<span class='detail'>—</span>"}</td>
               <td>
-                <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}">Browse</button>
+                <button type="button" class="btn small" data-action="browse" data-snapshot="${esc(s.snapshotId)}" data-set-id="${esc(s.backupSetId)}">Browse</button>
                 <button type="button" class="btn small" data-action="restore" data-snapshot="${esc(s.snapshotId)}" data-path="">Restore…</button>
                 <button type="button" class="btn small danger" data-action="delete-snapshot" data-snapshot="${esc(s.snapshotId)}" data-set="${esc(s.backupSetId)}">Delete…</button>
               </td>
@@ -1582,6 +1582,10 @@ function closeDialog() {
     if (W.source) run({ command: "close_restore_source", sourceId: W.source.sourceId });
     W = null;
   }
+  // A look at a backup's files ends with its dialog: the source the
+  // passphrase unlocked for it closes, and the next look asks again.
+  if (B) { run({ command: "close_restore_source", sourceId: B.source }); B = null; }
+  if (G) { const pending = G; G = null; pending.resolve(null); }
 }
 
 // A shown dialog is modal: its own buttons are the only exits. The browser's
@@ -1610,7 +1614,13 @@ function comparisonReport(result) {
   const baseline = result.baselineSnapshotId
     ? `vs the last backup: ${result.unchanged} unchanged`
     : "never backed up — everything is new";
+  // A deleted file, and one the rules stop capturing, is named by the
+  // backup alone: without the passphrase the service counts them and keeps
+  // their names back (FR-WOR-007), and the report says so rather than
+  // pretending to show a sample.
+  const withheld = new Set(result.namesWithheld ? ["deleted", "no longer included by these rules"] : []);
   const detail = buckets.map(([label, bucket]) => {
+    if (withheld.has(label)) return `${bucket.count} ${label} — named only with the passphrase`;
     const more = bucket.count > bucket.sample.length
       ? `\n  … and ${bucket.count - bucket.sample.length} more` : "";
     return `${bucket.count} ${label}\n` + bucket.sample.map(path => `  ${path}`).join("\n") + more;
@@ -2713,25 +2723,67 @@ const actions = {
     }
   },
 
-  async "browse"(el) { await openBrowser(el.dataset.snapshot, ""); },
+  async "browse"(el) {
+    const source = await unlockSource(() => setById(el.dataset.setId), "Browsing a snapshot");
+    if (!source) return;
+    B = { source };
+    await openBrowser(el.dataset.snapshot, "");
+  },
 
   async "browse-to"(el) { await openBrowser(el.dataset.snapshot, el.dataset.path); },
 
   "restore"(el) {
+    // The wizard unlocks its own source: the browser's closes, and the
+    // passphrase is asked for again (FR-WOR-007).
+    if (B) { run({ command: "close_restore_source", sourceId: B.source }); B = null; }
     openRestoreWizard({ snapshotId: el.dataset.snapshot, path: el.dataset.path ?? "" });
   },
 
-  async "what-changed"(el) {
+  async "gate-unlock"(el) {
+    if (!G) return;
+    const passphrase = document.getElementById("gate-passphrase")?.value ?? "";
+    if (!passphrase) { toast("warn", "Enter the passphrase."); return; }
     await withBusy(el, async () => {
+      const answer = await gateGrants(passphrase);
+      if (!G) return; // closed while the passphrase was being checked
+      const grant = answer.grants?.[G.set.id];
+      if (answer.outcome !== "verified" || !grant) {
+        G.said = answer.outcome === "unavailable"
+          ? `The passphrase cannot be checked${answer.detail ? ` — ${answer.detail}` : ""}. Nothing can be shown without it.`
+          : "That passphrase does not open this backup.";
+        gateRender();
+        return;
+      }
+      const opened = await run(
+        { command: "open_restore_source", setName: G.set.name, envelope: grant },
+        { errToast: "The backup would not open" });
+      if (!G) {
+        if (opened?.result === "restore_source") run({ command: "close_restore_source", sourceId: opened.sourceId });
+        return;
+      }
+      if (opened?.result !== "restore_source") { G.said = "The backup would not open — see the message above."; gateRender(); return; }
+      const pending = G;
+      G = null;
+      pending.resolve(opened.sourceId);
+    });
+  },
+
+  async "what-changed"(el) {
+    const name = el.dataset.set;
+    const source = await unlockSource(() => S.sets.find(s => s.name === name) ?? null, "Comparing with the last backup");
+    if (!source) return;
+    try {
       const result = await run(
-        { command: "preview_set_changes", setName: el.dataset.set },
+        { command: "preview_set_changes", setName: name, source },
         { errToast: "The service could not compare" });
-      if (result?.result !== "set_change_preview") return;
+      if (result?.result !== "set_change_preview") { closeDialog(); return; }
       const report = comparisonReport(result);
-      reportDialog(`What changed under '${el.dataset.set}'`,
+      reportDialog(`What changed under '${name}'`,
         [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
         "Compared with the last backup — a dry scan; nothing was captured.");
-    });
+    } finally {
+      run({ command: "close_restore_source", sourceId: source });
+    }
   },
 
   "job-details"(el) {
@@ -2750,30 +2802,38 @@ const actions = {
         ${job.snapshotId ? `
           <button type="button" class="btn" data-action="job-changes" data-job="${esc(job.id)}">What changed</button>
           <button type="button" class="btn" data-action="job-failures" data-job="${esc(job.id)}">Failures</button>
-          <button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}">Browse snapshot</button>` : ""}
+          <button type="button" class="btn" data-action="browse" data-snapshot="${esc(job.snapshotId)}" data-set-id="${esc(job.backupSetId)}">Browse snapshot</button>` : ""}
         <button type="button" class="btn primary" data-action="close-dialog">Close</button>
       </div>`);
   },
 
   async "job-changes"(el) {
-    await withBusy(el, async () => {
+    const job = S.jobs.find(j => j.id === el.dataset.job);
+    const source = await unlockSource(() => setById(job?.backupSetId), "What a run changed");
+    if (!source) return;
+    try {
       const result = await run(
-        { command: "job_changes", jobId: el.dataset.job },
+        { command: "job_changes", jobId: el.dataset.job, source },
         { errToast: "The service could not diff this run" });
-      if (result?.result !== "job_changes") return;
+      if (result?.result !== "job_changes") { closeDialog(); return; }
       const report = jobChangesReport(result);
       reportDialog(`What this run changed under '${result.setName}'`,
         [report.summary, "", ...(report.detail ? report.detail.split("\n") : [])],
         "Against the set's previous snapshot, from the repository's own record.");
-    });
+    } finally {
+      run({ command: "close_restore_source", sourceId: source });
+    }
   },
 
   async "job-failures"(el) {
-    await withBusy(el, async () => {
+    const job = S.jobs.find(j => j.id === el.dataset.job);
+    const source = await unlockSource(() => setById(job?.backupSetId), "What a run could not capture");
+    if (!source) return;
+    try {
       const result = await run(
-        { command: "job_failures", jobId: el.dataset.job },
+        { command: "job_failures", jobId: el.dataset.job, source },
         { errToast: "The service could not read the failure record" });
-      if (result?.result !== "job_failures") return;
+      if (result?.result !== "job_failures") { closeDialog(); return; }
       const lines = result.failures === 0
         ? ["nothing failed — every file the run saw was captured"]
         : result.sample.map(f => `${f.path}\n  ${f.reason} — ${f.detail}`);
@@ -2782,7 +2842,9 @@ const actions = {
       reportDialog(`Failures of this run under '${result.setName}'`,
         [`${result.failures} failure(s)`, "", ...lines, ...more],
         "From the snapshot's error manifest — each path with its typed reason.");
-    });
+    } finally {
+      run({ command: "close_restore_source", sourceId: source });
+    }
   },
 
   "backup-full"(el) {
@@ -5121,10 +5183,84 @@ async function renderFolderPicker(browserId, inputId, path) {
     </div>`;
 }
 
+/* ----- the passphrase gate (FR-WOR-007, ADR-0089) ----- */
+//
+// Every look at a backup's files — a snapshot's listing, a run's changes or
+// failures, a set's comparison — first opens a restore source under a grant
+// the passphrase derives, and the next look asks again. The passphrase goes
+// to this console process and no further: it is derived there under the
+// facts the service publishes for each set, and what the service gets is a
+// grant sealed to it, for a source that serves only this session.
+
+let G = null; // a pending unlock: { set, why, resolve, said }
+let B = null; // the open snapshot browser: { source }
+
+/** Asks the console process for a grant per set the passphrase opens. */
+async function gateGrants(passphrase) {
+  let response;
+  try {
+    response = await fetch("/api/restore-gate", {
+      method: "POST",
+      headers: session
+        ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+        : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify({ passphrase }),
+    });
+  } catch {
+    return { outcome: "unavailable", detail: "the console process stopped answering" };
+  }
+  const body = await safeJson(response);
+  if (!response.ok) return { outcome: "unavailable", detail: body?.message ?? "the gate refused" };
+  return { outcome: body?.outcome ?? "unavailable", detail: body?.detail ?? null, grants: body?.grants ?? {} };
+}
+
+/**
+ * Asks for the passphrase, then opens a source of the set `find` names under
+ * its grant. Resolves with the source's id, or null when the person stops or
+ * the set is not configured here — a grant is derived per configured set, so
+ * no passphrase could open one that is not.
+ */
+async function unlockSource(find, why) {
+  let set = find();
+  if (!set) { await refreshSets(); set = find(); }
+  if (!set) {
+    toast("warn", "That backup's set is not configured here, so there is nothing to unlock it with.");
+    return null;
+  }
+  if (G) { const pending = G; G = null; pending.resolve(null); }
+  return new Promise(resolve => {
+    G = { set, why, resolve, said: null };
+    gateRender();
+  });
+}
+
+function gateRender() {
+  openDialog(`
+    <h3>Enter the passphrase</h3>
+    <p class="dlg-sub">${esc(G.why)} shows the names of files in <b>${esc(G.set.name)}</b>, so it
+    needs the passphrase the backup was set up with. It is checked here, in this console process, and goes no
+    further; it is asked for again next time.</p>
+    <label class="field" for="gate-passphrase">Passphrase</label>
+    <input type="password" id="gate-passphrase" autocomplete="off">
+    ${G.said ? `<ul class="warnings"><li>${esc(G.said)}</li></ul>` : ""}
+    <div class="dlg-actions">
+      <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+      <button type="button" class="btn primary" data-action="gate-unlock">Unlock</button>
+    </div>`);
+  document.getElementById("gate-passphrase")?.focus();
+}
+
+/** The set a snapshot or run belongs to, by id. */
+function setById(backupSetId) {
+  return S.sets.find(s => s.id === backupSetId) ?? null;
+}
+
 /* ----- snapshot browser ----- */
 
 async function openBrowser(snapshotId, path) {
-  const result = await run({ command: "list_directory", snapshotId, path: path || null }, { errToast: "Listing refused" });
+  if (!B) return;
+  const result = await run(
+    { command: "list_directory", snapshotId, path: path || null, source: B.source }, { errToast: "Listing refused" });
   if (result?.result !== "directory") return;
 
   const parts = path ? path.split("/") : [];
@@ -5193,10 +5329,11 @@ async function openBrowser(snapshotId, path) {
 /* ----- the guided restore wizard (ADR-0041) ----- */
 //
 // Six steps: unlock -> source -> effective date -> files -> target ->
-// review/run. The passphrase is verified by the CONSOLE PROCESS against the
-// archive's key files on this machine (/api/restore-gate) and never sent to
-// the service; the restore itself reads through a server-side source handle
-// — the staging archive, a local replica, or a peer's replica over the wire.
+// review/run. The passphrase is checked by the CONSOLE PROCESS against the
+// key the service publishes for each set (/api/restore-gate) and never sent
+// to the service, which gets a grant sealed to it; the restore itself reads
+// through a server-side source handle opened under that grant — the staging
+// archive, a local replica, or a peer's replica over the wire (FR-WOR-007).
 
 let W = null;
 
@@ -5206,8 +5343,7 @@ function openRestoreWizard(prefill) {
     passphrase: "",
     gate: null,               // null | "verified" | "wrong" | "unavailable"
     gateDetail: null,
-    gateAck: false,
-    grantEnvelope: null,      // sealed restore grant for a write-only set (ADR-0042); opaque hex
+    grants: null,             // sealed restore grant per set id (ADR-0042); opaque hex
     sets: [], dests: [],
     setName: null, destinationName: null,
     source: null,             // RestoreSourceOpenedResult
@@ -5256,15 +5392,13 @@ function rstRender() {
 function rstStep1() {
   return `
     <p class="dlg-sub">Enter the repository passphrase. It is checked by <b>this console process</b> against the
-    archive's own key files on this machine and sent nowhere — not even to the service.</p>
+    key the service publishes for each backup set and sent nowhere — the service receives only a grant sealed to it.</p>
     <label class="field" for="rst-passphrase">Passphrase</label>
     <input type="password" id="rst-passphrase" autocomplete="off" value="${esc(W.passphrase)}">
     ${W.gate === "wrong" ? `<ul class="warnings"><li>That passphrase does not open the repository.</li></ul>` : ""}
     ${W.gate === "unavailable" ? `
-      <ul class="warnings"><li>The passphrase cannot be verified from here${W.gateDetail ? ` — ${esc(W.gateDetail)}` : ""}.
-      You can continue; the service still decrypts with its own keys.</li></ul>
-      <label class="check-row"><input type="checkbox" id="rst-gate-ack" ${W.gateAck ? "checked" : ""}>
-        Continue without local verification</label>` : ""}
+      <ul class="warnings"><li>The passphrase cannot be checked${W.gateDetail ? ` — ${esc(W.gateDetail)}` : ""}.
+      Nothing can be shown or restored without it.</li></ul>` : ""}
     ${rstNav()}`;
 }
 
@@ -5551,31 +5685,14 @@ function rstStep6() {
 async function rstGateCheck() {
   W.passphrase = document.getElementById("rst-passphrase")?.value ?? W.passphrase;
   if (!W.passphrase) { toast("warn", "Enter the passphrase."); return false; }
-  let response;
-  try {
-    response = await fetch("/api/restore-gate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-      body: JSON.stringify({ passphrase: W.passphrase }),
-    });
-  } catch {
-    toast("warn", "The console process stopped answering.");
-    return false;
-  }
-  const body = await safeJson(response);
-  if (!response.ok) { toast("bad", body?.message ?? "The gate refused."); return false; }
-  W.gate = body?.outcome ?? "unavailable";
-  W.gateDetail = body?.detail ?? null;
-  // A write-only archive's gate answers with a sealed restore grant
-  // (ADR-0042): opaque here, opened only by the service; it rides the
-  // source open at step 2. v1 archives answer none.
-  W.grantEnvelope = body?.envelope ?? null;
-  if (W.gate === "verified") return true;
-  if (W.gate === "unavailable") {
-    W.gateAck = document.getElementById("rst-gate-ack")?.checked ?? false;
-    return W.gateAck;
-  }
-  return false;
+  const answer = await gateGrants(W.passphrase);
+  W.gate = answer.outcome;
+  W.gateDetail = answer.detail;
+  // One sealed grant per set the passphrase opens (ADR-0042): opaque here,
+  // opened only by the service; the chosen set's rides the source open at
+  // step 2. A passphrase that could not be checked opens nothing.
+  W.grants = answer.outcome === "verified" ? answer.grants : null;
+  return W.gate === "verified";
 }
 
 async function rstOpenSource() {
@@ -5589,11 +5706,17 @@ async function rstOpenSource() {
     W.source = null;
   }
 
+  const grant = W.grants?.[W.sets.find(set => set.name === W.setName)?.id];
+  if (!grant) {
+    W.sourceError = `That passphrase does not open set '${W.setName}' — each set answers to its own.`;
+    return false;
+  }
+
   const result = await run({
     command: "open_restore_source",
     setName: W.setName,
     destinationName: W.destinationName,
-    envelope: W.grantEnvelope ?? undefined,
+    envelope: grant,
   }, { errToast: "The source would not open" });
   if (result?.result !== "restore_source") {
     W.sourceError = "The source did not open — see the message above.";
@@ -5610,9 +5733,6 @@ async function rstOpenSource() {
 
 const rstActions = {
   async continue1() {
-    // Collect ack state before the check so an already-shown warning's tick
-    // counts on this click.
-    W.gateAck = document.getElementById("rst-gate-ack")?.checked ?? W.gateAck;
     if (!await rstGateCheck()) { rstRender(); return; }
     // The wizard fetches its own data: S.sets/S.destinations belong to
     // other views and may be stale or empty.

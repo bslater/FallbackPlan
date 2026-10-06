@@ -190,8 +190,24 @@ public sealed class AuthenticatingService : IFallbackPlanService
                 + "setup — the first account is the owner — and acknowledge the claim as that account.");
         }
 
+        // A restore source unlocked with the passphrase serves the session
+        // that unlocked it and no other (FR-WOR-007), and only this
+        // connection knows which session is speaking.
+        if (Current is { } speaking)
+        {
+            command = command with { SessionId = SessionIdOf(speaking) };
+        }
+
         return await _inner.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The id a session's commands carry: a digest of its token, so the
+    /// token itself goes no further than the registry that checks it.
+    /// </summary>
+    private static string SessionIdOf(Session session) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(session.Token)))[..32];
 
     /// <inheritdoc />
     public IAsyncEnumerable<JobProgressEvent> WatchAsync(CancellationToken cancellationToken)
