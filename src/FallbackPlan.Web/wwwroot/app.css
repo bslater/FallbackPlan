@@ -575,17 +575,38 @@ input.num { width: 72px; padding: 5px 8px; border: 1px solid var(--border); bord
   margin-bottom: 10px;
   font-size: 13px;
 }
-.tree-row { display: flex; align-items: center; gap: 6px; padding: 2.5px 2px; border-radius: 6px; }
+.tree-row { display: flex; align-items: center; gap: 6px; padding: 1px 2px; border-radius: 6px; }
 .tree-row:hover { background: color-mix(in srgb, var(--panel) 70%, transparent); }
-.tree-row.off .tree-name { color: var(--faint); text-decoration: line-through; }
-.tree-row .indent { width: 18px; flex: none; }
-.tree .twist { width: 18px; flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 11px; display: inline-block; }
+/* Nothing in the row is captured, or restored: a shade lighter, and never
+   struck through, which reads as deleted. Its checkbox says which way it
+   is, so the colour carries no meaning alone (NFR-UX-001). */
+.tree-row.off .tree-name { color: var(--muted); }
+.tree-row .indent { width: 24px; flex: none; }
+.tree .twist {
+  width: 24px; height: 24px; flex: none; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tree button.twist:hover { background: var(--neutral-soft); color: var(--text); }
+.tree .twist svg { width: 16px; height: 16px; fill: currentColor; }
+.tree .twist[aria-expanded="true"] svg { transform: rotate(90deg); }
 .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-actions { margin-left: auto; display: none; gap: 4px; flex: none; }
 .tree-row:hover .tree-actions { display: inline-flex; }
 .tree .subtle { margin: 2px 0; }
 .tree .mark { flex: none; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 #sel-summary { margin-bottom: 10px; }
+
+/* The new-set wizard keeps one size from its first step to its last: the
+   size its sources step takes with the folder tree at full height. Between
+   the fixed steps and buttons, only the step's own content scrolls, and the
+   tree takes the room the sources step has, so expanding a folder moves
+   nothing either. */
+.dialog.wizard { height: min(80vh, 692px); }
+.dialog.wizard #set-editor { display: flex; flex-direction: column; height: 100%; }
+.dialog.wizard .wiz-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.dialog.wizard .wiz-body > * { flex: none; }
+.dialog.wizard .wiz-body > #sel-tree { flex: 1 1 auto; min-height: 120px; max-height: none; }
 #sel-summary .warnings { margin-top: 6px; }
 
 /* restore wizard */

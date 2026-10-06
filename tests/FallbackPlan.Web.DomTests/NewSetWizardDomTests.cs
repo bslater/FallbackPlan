@@ -14,6 +14,9 @@ namespace FallbackPlan.Web.DomTests;
 /// sends the one upsert carrying every step. The destinations step says the
 /// refusal a local destination on a root's drive would meet before anything
 /// is saved (FR-DEST-017), judged as the very set the save would create.
+/// The wizard keeps one size from its first step to its last, and its folder
+/// tree shows a folder nothing in which is captured a shade lighter rather
+/// than struck through, with toggles large enough to hit.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -298,6 +301,125 @@ public sealed class NewSetWizardDomTests
     }
 
     [TestMethod]
+    public async Task EveryStep_KeepsOneSize_TheSourcesStepWithItsFolderTreeAtFullHeight()
+    {
+        // 780 by 692 is the size the sources step takes with its folder tree
+        // at its full 300 px. Every step keeps it, so neither the dialog nor
+        // its buttons move as the walk goes on.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service();
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+        await page.SetViewportSizeAsync(1280, 1000);
+        var step = page.Locator("#set-editor");
+        var sizes = new List<(string Step, LocatorBoundingBoxResult Box)>();
+        async Task MeasureAsync(string label) => sizes.Add((label, (await page.Locator("#dialog").BoundingBoxAsync())!));
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "name");
+        await MeasureAsync("name");
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "sources");
+        await Expect(page.Locator("input.mark[data-mark-path=\"/data\"]")).ToBeVisibleAsync();
+        await MeasureAsync("sources, closed");
+        await page.ClickAsync("[data-action=\"sel-open\"][data-path=\"/data\"]");
+        await Expect(page.Locator("#sel-tree")).ToContainTextAsync("(empty)");
+        await MeasureAsync("sources, a folder open");
+        await page.CheckAsync("input.mark[data-mark-path=\"/data\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        await Expect(step).ToHaveAttributeAsync("data-section", "destinations");
+        await MeasureAsync("destinations");
+        await page.CheckAsync("[data-dest-check=\"vault\"]");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+
+        foreach (var key in new[] { "exclusions", "retention", "other" })
+        {
+            await Expect(step).ToHaveAttributeAsync("data-section", key);
+            await MeasureAsync(key);
+            if (key != "other")
+            {
+                await page.ClickAsync("[data-action=\"wiz-next\"]");
+            }
+        }
+
+        foreach (var (label, box) in sizes)
+        {
+            Assert.AreEqual(780, box.Width, 0.5, label);
+            Assert.AreEqual(692, box.Height, 0.5, label);
+        }
+    }
+
+    [TestMethod]
+    public async Task OnAWindowTooShortForIt_TheWizardTakesFourFifthsOfIt_AndKeepsItsButtonsInView()
+    {
+        // Only the step's own content scrolls. A dialog that scrolled whole
+        // would carry its buttons out of sight on a short window.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service();
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+        await page.SetViewportSizeAsync(1280, 600);
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await Expect(page.Locator("#set-editor")).ToHaveAttributeAsync("data-section", "sources");
+        await Expect(page.Locator("input.mark[data-mark-path=\"/data\"]")).ToBeVisibleAsync();
+
+        var dialog = (await page.Locator("#dialog").BoundingBoxAsync())!;
+        Assert.AreEqual(480, dialog.Height, 0.5, "four fifths of a 600 px window");
+        var next = (await page.Locator("[data-action=\"wiz-next\"]").BoundingBoxAsync())!;
+        Assert.IsTrue(
+            next.Y + next.Height <= dialog.Y + dialog.Height && next.Y + next.Height <= 600,
+            $"Next ends at {next.Y + next.Height}, below the dialog's {dialog.Y + dialog.Height}");
+    }
+
+    [TestMethod]
+    public async Task TheFolderTree_HasLargeToggles_AndShowsAFolderNothingInWhichIsCapturedLighter_NotStruckThrough()
+    {
+        // Strikethrough read as deleted. A folder nothing in which is captured
+        // is now a shade lighter; one with anything captured in it is in the
+        // text colour, a partly captured folder among them. The checkbox says
+        // which way each row is, so the colour carries no meaning alone.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(browse: browse => browse.Path switch
+        {
+            null => new FolderListingResult(null, null, [new FolderDescriptor("data", "/data", false, false)], []),
+            "/data" => new FolderListingResult(
+                "/data", null,
+                [new FolderDescriptor("docs", "/data/docs", false, false), new FolderDescriptor("media", "/data/media", false, false)],
+                []),
+            _ => new FolderListingResult(browse.Path, "/data", [], []),
+        });
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await OpenWizardAsync(harness, context);
+        await page.FillAsync("#set-name", "docs");
+        await page.ClickAsync("[data-action=\"wiz-next\"]");
+        await Expect(page.Locator("input.mark[data-mark-path=\"/data\"]")).ToBeVisibleAsync();
+        var text = await ColourOfAsync(page, "--text");
+        var muted = await ColourOfAsync(page, "--muted");
+
+        var toggle = page.Locator("[data-action=\"sel-open\"][data-path=\"/data\"]");
+        var box = (await toggle.BoundingBoxAsync())!;
+        Assert.IsTrue(box.Width >= 24 && box.Height >= 24, $"the toggle is {box.Width} by {box.Height}");
+        var icon = (await toggle.Locator("svg").BoundingBoxAsync())!;
+        Assert.IsTrue(icon.Height >= 16, $"the toggle's icon is {icon.Height} px tall");
+        await Expect(toggle).ToHaveAttributeAsync("aria-expanded", "false");
+
+        Assert.AreEqual("none", await NameStyleAsync(page, "/data", "textDecorationLine"));
+        Assert.AreEqual(muted, await NameStyleAsync(page, "/data", "color"), "nothing in it is captured");
+
+        await toggle.ClickAsync();
+        await Expect(toggle).ToHaveAttributeAsync("aria-expanded", "true");
+        await page.CheckAsync("input.mark[data-mark-path=\"/data/docs\"]");
+
+        Assert.AreEqual(text, await NameStyleAsync(page, "/data/docs", "color"), "captured");
+        Assert.AreEqual(text, await NameStyleAsync(page, "/data", "color"), "partly captured");
+        Assert.AreEqual(muted, await NameStyleAsync(page, "/data/media", "color"), "left out");
+        Assert.AreEqual("none", await NameStyleAsync(page, "/data/media", "textDecorationLine"));
+    }
+
+    [TestMethod]
     public async Task AnExistingSet_StillOpensOnItsSummary()
     {
         // The steps are for making a set. Changing one is a single setting
@@ -325,11 +447,13 @@ public sealed class NewSetWizardDomTests
     private static Func<ServiceCommand, ServiceResult> Service(
         IReadOnlyList<BackupSetDescriptor>? sets = null,
         IReadOnlyList<DestinationDescriptor>? destinations = null,
-        Func<ValidateSetDraftCommand, SetDraftValidationResult>? validate = null) => command => command switch
+        Func<ValidateSetDraftCommand, SetDraftValidationResult>? validate = null,
+        Func<BrowseFoldersCommand, FolderListingResult>? browse = null) => command => command switch
     {
         DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
         ListDestinationsCommand => new DestinationsResult(destinations ?? [Vault]),
         ListBackupSetsCommand => new BackupSetsResult(sets ?? []),
+        BrowseFoldersCommand folders when browse is not null => browse(folders),
         BrowseFoldersCommand { Path: null } => new FolderListingResult(
             null, null, [new FolderDescriptor("data", "/data", false, false)], []),
         BrowseFoldersCommand => new FolderListingResult("/data", null, [], []),
@@ -349,6 +473,25 @@ public sealed class NewSetWizardDomTests
         await add.ClickAsync();
         return page;
     }
+
+    /// <summary>What a colour token computes to on this page, in the form a computed colour takes.</summary>
+    private static Task<string> ColourOfAsync(IPage page, string token) => page.EvaluateAsync<string>(
+        """
+        token => {
+          const probe = document.createElement("span");
+          probe.style.color = `var(${token})`;
+          document.body.append(probe);
+          const colour = getComputedStyle(probe).color;
+          probe.remove();
+          return colour;
+        }
+        """,
+        token);
+
+    /// <summary>A computed style of the name in the folder tree's row for <paramref name="path"/>.</summary>
+    private static Task<string> NameStyleAsync(IPage page, string path, string property) =>
+        page.Locator($"#sel-tree .tree-row:has(input[data-mark-path=\"{path}\"]) .tree-name")
+            .EvaluateAsync<string>("(name, property) => getComputedStyle(name)[property]", property);
 
     private static int UpsertsSent(DomHarness harness)
     {

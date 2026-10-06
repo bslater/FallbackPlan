@@ -1469,6 +1469,7 @@ function renderReceiptsCard() {
 const dialog = document.getElementById("dialog");
 
 function openDialog(html) {
+  dialog.classList.remove("wizard"); // the new-set wizard's fixed size is its own
   dialog.innerHTML = html;
   if (!dialog.open) dialog.showModal();
 }
@@ -1476,7 +1477,7 @@ function openDialog(html) {
 function closeDialog() {
   dialog.close();
   dialog.innerHTML = "";
-  dialog.classList.remove("wide");
+  dialog.classList.remove("wide", "wizard");
   E = null;
   A = null; // an adoption's passphrase, held from its preview to its confirmation, dies here
   endSourceScans(); // a walk for an editor that no longer exists stops now, not in ten minutes
@@ -3371,12 +3372,15 @@ function renderSetWizard() {
       : `<span class="rst-step ${state}"${at === index ? ` aria-current="step"` : ""}>${esc(label)}</span>`;
   }).join("");
 
+  // One size from the first step to the last, the steps and the buttons
+  // fixed and only the step between them scrolling, so nothing moves as the
+  // walk goes on.
   const rest = canCreate && !last ? wizardRest(index) : "";
   openDialog(`
     <div id="set-editor" data-section="${step.key}">
     <h3>New backup set</h3>
     <div class="rst-steps">${steps}</div>
-    ${wizardStepHtml(step.key)}
+    <div class="wiz-body">${wizardStepHtml(step.key)}</div>
     ${rest ? `<p class="subtle" id="wiz-rest">${esc(rest)}</p>` : ""}
     <div class="dlg-actions">
       <button type="button" class="btn" data-action="set-cancel-all">Cancel</button>
@@ -3385,7 +3389,7 @@ function renderSetWizard() {
       ${canCreate ? `<button type="button" class="btn primary" data-action="wiz-create">Create set</button>` : ""}
     </div>
     </div>`);
-  dialog.classList.add("wide");
+  dialog.classList.add("wide", "wizard");
 
   if (step.key === "name") document.getElementById("set-name")?.focus();
   if (step.key === "sources") {
@@ -3949,6 +3953,16 @@ function renderTree() {
   }
 }
 
+// A folder's open-or-closed toggle, shared by the selection tree and the
+// restore wizard's: a triangle large enough to hit that turns down when the
+// folder is open, and says which to a screen reader.
+const TWIST_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5 2.5 12.5 8 5 13.5z"/></svg>`;
+
+function twistHtml(action, path, name, open) {
+  return `<button type="button" class="twist" data-action="${action}" data-path="${esc(path)}"
+    aria-expanded="${open}" aria-label="${open ? "Collapse" : "Expand"} ${esc(name)}">${TWIST_ICON}</button>`;
+}
+
 function renderTreeDir(fullPath, depth) {
   const node = E.tree.get(fullPath);
   if (!node) {
@@ -3964,10 +3978,12 @@ function renderTreeDir(fullPath, depth) {
     const excludedHere = E.marks.get(folder.path) === "off" && state === "off";
     const child = E.tree.get(folder.path);
 
+    // A shade lighter only when nothing in it is captured: a folder with a
+    // ticked child is part of the set.
     rows.push(`
-      <div class="tree-row ${state === "off" ? "off" : ""}">
+      <div class="tree-row ${state === "off" && !capturedWithin(folder.path) ? "off" : ""}">
         ${"<span class='indent'></span>".repeat(depth)}
-        <button type="button" class="twist" data-action="sel-open" data-path="${esc(folder.path)}">${child?.open ? "▾" : "▸"}</button>
+        ${twistHtml("sel-open", folder.path, folder.name, Boolean(child?.open))}
         <input type="checkbox" class="mark" data-mark-path="${esc(folder.path)}" ${state === "on" ? "checked" : ""}
                aria-label="Capture ${esc(folder.name)}">
         <span class="kind-ico">📁</span>
@@ -3998,6 +4014,11 @@ function renderTreeDir(fullPath, depth) {
 
 function nearestOnAbove(path) {
   return [...E.marks].some(([key, state]) => state === "on" && isUnder(path, key));
+}
+
+// Whether anything inside the folder at path is ticked.
+function capturedWithin(path) {
+  return [...E.marks].some(([key, state]) => state === "on" && isUnder(key, path));
 }
 
 function toggleMark(path) {
@@ -5262,12 +5283,11 @@ function rstRenderDir(path, depth) {
     const childPath = path ? path + "/" + entry.name : entry.name;
     const state = rstEffective(childPath);
     const isDir = entry.kind === "directory";
+    const chosenWithin = isDir && [...W.marks].some(([key, mark]) => mark === "on" && rstIsUnder(key, childPath));
     rows.push(`
-      <div class="tree-row ${state === "off" ? "off" : ""}">
+      <div class="tree-row ${state === "off" && !chosenWithin ? "off" : ""}">
         ${"<span class='indent'></span>".repeat(depth)}
-        ${isDir
-          ? `<button type="button" class="twist" data-action="rst-open" data-path="${esc(childPath)}">${W.open.has(childPath) ? "▾" : "▸"}</button>`
-          : `<span class="twist"></span>`}
+        ${isDir ? twistHtml("rst-open", childPath, entry.name, W.open.has(childPath)) : `<span class="twist"></span>`}
         <input type="checkbox" class="mark" data-rst-mark="${esc(childPath)}" ${state === "on" ? "checked" : ""}
                aria-label="Restore ${esc(entry.name)}">
         <span class="kind-ico">${isDir ? "📁" : entry.kind === "symlink" ? "🔗" : "📄"}</span>
