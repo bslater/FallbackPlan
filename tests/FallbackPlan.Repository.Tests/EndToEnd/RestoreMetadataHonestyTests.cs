@@ -31,9 +31,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// the target and the account running the restore may give them (ADR-0085):
 /// root, or CAP_CHOWN, may give a file to anyone, and any other account
 /// keeps a file as its own and gives it a group it is in. The plan
-/// predicts that per file. Security descriptors, extended attributes and
-/// file attributes are captured and recorded, not yet written back, and a
-/// symlink is created with none of its own.
+/// predicts that per file. Extended attributes are written back where the
+/// target writes them (ADR-0087). Security descriptors and file attributes
+/// are captured and recorded, not yet written back, and a symlink is created
+/// with none of its own.
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -80,11 +81,12 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
             FileAttributes = 0x20,
         };
 
-        // A target that sets no creation times, and an owner and group no
-        // machine has, so the list is one list on every platform and under
-        // any account; the tests below hold the others.
+        // A target that sets no creation times and writes no extended
+        // attributes, and an owner and group no machine has, so the list is
+        // one list on every platform and under any account; the tests below,
+        // and RestoreExtendedAttributesTests, hold the others.
         var (receipt, output) = await PublishAndRestoreAsync(
-            source, 0xC1, RestoreTargetProfile.ForLocalPlatform() with { SupportsCreationTimes = false });
+            source, 0xC1, RestoreTargetProfile.ForLocalPlatform() with { SupportsCreationTimes = false, SupportsExtendedAttributes = false });
 
         var item = receipt.Items.Single(candidate => candidate.Path == "data/owned.bin");
         Assert.AreEqual("restored", item.Outcome, "metadata alone does not change what the content achieved");
