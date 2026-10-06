@@ -9,7 +9,8 @@ namespace FallbackPlan.Hosts.Tests;
 
 /// <summary>
 /// The <c>jobs</c> verb against a running service (FR-SVC-018; ADR-0050): the
-/// history newest first, one run's report read off its journal row, and
+/// history newest first, one run's report read off its journal row — how
+/// much of its plan it backed up included (FR-SVC-006, ADR-0088) — and
 /// <c>jobs &lt;id&gt; --changes --failures</c> printing exactly what the
 /// drill-down verbs answer — the requirement's "answers the same from the
 /// CLI", held to the service's own answer rather than to a description of it.
@@ -53,6 +54,11 @@ public sealed class JobsVerbServiceTests : IDisposable
         Assert.IsTrue(newer >= 0 && older >= 0, $"both runs belong in the history: {history.Output}");
         Assert.IsTrue(newer < older, $"the history reads newest first: {history.Output}");
 
+        // A committed run backed up its whole plan (FR-SVC-006, ADR-0088),
+        // and its row says so in those terms.
+        Assert.IsNotNull(second.BytesBackedUp);
+        Assert.AreEqual(second.TotalBytes, second.BytesBackedUp);
+
         // One run's report, in the words and numbers of its own row.
         var report = await JobsAsync(second.Id);
         Assert.AreEqual(0, report.ExitCode, report.All);
@@ -62,6 +68,7 @@ public sealed class JobsVerbServiceTests : IDisposable
             Invariant($"state          {second.State}"),
             Invariant($"files          {second.FilesDone ?? 0}{planned} ({second.FilesReused ?? 0} unchanged, {second.FilesFailed ?? 0} failed)"),
             Invariant($"bytes          {second.BytesSeen ?? 0} read, {second.BytesStored ?? 0} newly stored"),
+            Invariant($"backed up      {second.BytesBackedUp} of {second.TotalBytes} planned bytes"),
             Invariant($"snapshot       {second.SnapshotId}"),
             Invariant($"detail         {second.Detail}"),
         })
