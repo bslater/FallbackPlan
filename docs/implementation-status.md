@@ -4,7 +4,7 @@
 
 ---
 
-Eighty-two decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Eighty-seven decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -111,6 +111,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) | A restore writes back the times it can set, and records what each write did: access times everywhere, and creation times on Windows and macOS through a call that refuses where it cannot set one rather than writing the modification time in its place. Each attribute is written on its own after the content, so a write the platform refuses, or a time no file can carry, is listed as not applied and neither fails the item nor ends the run. Receipt schema 6 keeps its shape, and its list now says what landed | **Built** | `Domain/FileTimes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/FileTimesTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0084--the-receipt-says-what-landed) |
 | [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart. Amendment 1: a quarantine restore keeps set-id bits as any restore does, a decision documented rather than a change | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
 | [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
+| [0087](adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md) | A restore writes back the extended attributes it may: each captured attribute of a file or a folder is written alone by its captured name, never through a link, after its owner and group and before its permissions, and one left is named in the item's detail. An ACL that names accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the security and trusted namespaces. Where an ACL does not come back the group gets no more than it gave. The plan declares each with counts | **Built** | `Domain/ExtendedAttributes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestorePlan` · `Restore/RestoreAccount` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreExtendedAttributesTests`, `Domain.Tests/ExtendedAttributesTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0087--extended-attributes) |
 
 ---
 
@@ -2183,9 +2184,9 @@ the slice, and has since landed
 metadata was neither written back nor named in its receipt item, which is a
 silent drop architecture 06 §3 rules out; writing it had to wait until the
 directory's children had landed, and has since landed too
-([0086](#0086--a-folders-own)). A symlink's own metadata, extended
-attributes, Windows attribute bits, security descriptors and alternate
-streams are still listed. The recovery tool and the CLI's `restore-file`
+([0086](#0086--a-folders-own)). A symlink's own metadata, Windows
+attribute bits, security descriptors and alternate streams are still listed;
+extended attributes have since landed ([0087](#0087--extended-attributes)). The recovery tool and the CLI's `restore-file`
 write no metadata at all.
 
 ### 0085 — whose file it is
@@ -2279,6 +2280,52 @@ its contents, into the folder the restore writes into, and that folder keeps
 its own metadata; the plan does not declare the root's. The run writes by
 path, so an account that can change the tree while it runs can still redirect
 a write in the moment between a check and the write it guards. The threat
-model now says so. A symlink's own metadata, extended attributes, Windows
-attribute bits, security descriptors and alternate streams are still listed,
-for folders as for files.
+model now says so. A symlink's own metadata, Windows attribute bits, security
+descriptors and alternate streams are still listed, for folders as for files;
+extended attributes have since landed ([0087](#0087--extended-attributes)).
+
+### 0087 — extended attributes
+
+Capture has always recorded every extended attribute a file or folder carries
+on Linux and macOS: a Linux file's ACL and a folder's default ACL, SELinux
+labels and file capabilities, and macOS's quarantine flag, Finder information
+and resource forks. No restore wrote one back. Each was listed as not applied.
+
+Each is now written back alone, by its captured name and never through a link,
+after the owner and group and before the permissions. After the owner, because
+giving a file away strips its capabilities. Before the permissions, because a
+mode that takes away the owner's write bit would refuse the owner's own
+attributes, and because an ACL sets the mode's group bits that the permissions
+then set as captured. One the account may not write or the volume refuses is
+listed, and the item's detail names it and why. The rest still land.
+
+Three rules keep some back, and the plan declares each with counts. An ACL
+names accounts by number, and a number names the account it meant only on the
+machine that captured it, so an ACL that names one comes back only where this
+installation captured the snapshot. The service and the CLI compare the device
+a snapshot names with their own; that device is attribution by claim, which
+the threat model notes under T-18. macOS keeps no POSIX ACLs, so none is
+written there as an attribute that would grant nothing. And on Linux a restore
+that is not root leaves the security and trusted namespaces, as its plan says,
+even where a security policy would let a label through.
+
+Writing that rule down turned up a widening older than the slice. While a file
+has an ACL its mode's group bits are the mask, which bounds every account the
+ACL names. Every earlier restore wrote that mode back without the ACL, so a
+file shared with one account for writing came back writable by its whole
+group. Wherever an ACL does not come back now, the group gets only what the ACL
+gave it, and the permissions are listed.
+
+The proof is split by privilege, as ownership's is. A container running as
+root proves the capability surviving the ownership write, the trusted
+namespace written, and the rule that withholds what root could write. CI's
+unprivileged runners prove the refusal and the read-only mode. macOS's leg
+proves the macOS rules. Each ordering and rule was broken in turn to see its
+test fail.
+
+What remains is recorded rather than done. An ACL's entries are captured as
+numbers; capturing their names would let one come back on any machine where
+the names resolve, and is owed. macOS's own access lists are not captured,
+Windows security descriptors are not applied, and Windows keeps no extended
+attributes a restore writes. A symlink's own metadata is still owed, and the
+recovery tool and the CLI's `restore-file` still write no metadata.
