@@ -1,6 +1,6 @@
 # ADR-0041 — The guided restore: a passphrase gate, restore sources including a peer's replica, and honest run options
 
-**Status:** Accepted
+**Status:** Accepted, amended (Amendment 1, 2026-10)
 **Date:** 2026-08
 **Requirements:** FR-RST-001, FR-RST-003, FR-RST-004, FR-RST-006, NFR-SEC-009
 **Related:** [ADR-0040](0040-multi-root-backup-sets.md), [ADR-0036](0036-local-web-console.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0028](0028-service-boundary-and-deployment-topologies.md), [peer-protocol 07](../../specifications/peer-protocol/07-retrieval.md)
@@ -46,6 +46,12 @@ the client contract and nothing below it (ADR-0036's client posture).
    still fenced to the contract, asserted per type. A console with nothing
    local to check (a remote console, a fresh machine) says `unavailable`
    honestly, and the wizard proceeds only past an explicit acknowledgement.
+
+   > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--the-gate-is-the-services-and-checks-what-the-service-publishes), [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md)).**
+   > The gate no longer reads local key files and has no acknowledged way
+   > through. It derives a grant per set under the facts the service
+   > publishes and proves each against the set's sealing key, wherever the
+   > console runs, and "unavailable" stops the wizard.
 2. **Restore sources are server-side handles.** `open_restore_source
    {setName, destinationName?}` resolves a per-set repository — the staging
    archive (borrowing the runtime's open), a local-path destination's
@@ -58,6 +64,11 @@ the client contract and nothing below it (ADR-0036's client posture).
    The open carries **no passphrase**: the runtime unlocks replicas with the
    secret it holds — which is also the genuine authorisation, since a
    replica that is not this repository's will not unwrap.
+
+   > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--the-gate-is-the-services-and-checks-what-the-service-publishes)).**
+   > A person's open now carries a restore grant or is refused, and the
+   > source it opens is the proof every verb that names the backup's files
+   > asks for. Only the service's own work opens one without.
 
    > **Amended 2026-09 ([ADR-0075](0075-a-restore-reads-around-damage.md)).**
    > The set's own archive — the staging handle, or a direct-ship set's
@@ -124,7 +135,8 @@ touching NFR-SEC-009's wall.
 
 **Negative** — the gate is real only where the archives are readable: a
 remote console gets `unavailable` plus an acknowledgement, which is honesty,
-not verification. Opening a non-staging source costs a catalogue rebuild
+not verification. (Amendment 1 removes this: the gate checks against what the
+service publishes, so it is real wherever the console runs.) Opening a non-staging source costs a catalogue rebuild
 (metadata reads over the wire for a peer). The retrieval feature hands the
 destination read-pattern knowledge. And the console now links the
 repository and local-store assemblies for one class — a boundary bend,
@@ -156,6 +168,33 @@ round.
   inside the executor's containment logic, which is exactly where surprise
   is most expensive. The handler slices; the executor stays literal.
 
+## Amendment 1 (2026-10) — the gate is the service's, and checks what the service publishes
+
+The wizard's gate could be passed in two ways. Where the console did not run
+beside the service it offered "Continue without local verification". And the
+service answered any signed-in caller's listing, plan and restore whether or
+not a passphrase had been typed anywhere. The owner directed that viewing or
+restoring a backup must ask for the passphrase and check it first.
+[ADR-0089](0089-a-backups-file-names-need-the-passphrase.md) records the rule
+and the service's half. For this record:
+
+- **The check.** `ConsoleRestoreGate` no longer reads a local descriptor. It
+  derives a grant per set under the salt, cost and sealing key the service
+  publishes (contract 1.28 and 1.30), proves each against its set's key, and
+  answers `verified` with the grants, `wrong`, or `unavailable` when nothing
+  is published to derive under. The console's dependency exception narrows
+  to the provisioning ceremony, the one that still reads a local descriptor.
+- **No way through.** The acknowledgement is gone. A passphrase the console
+  could not check opens nothing.
+- **Step 2 opens under the chosen set's grant.** A set the passphrase does not
+  open is named rather than opened, because an adopted set may answer to
+  another passphrase.
+- **The service enforces it.** The open without a grant is refused, as are
+  listing, planning and running without a source opened under one. The
+  source serves only the session that opened it. Every look asks again.
+- **Wrong passphrases are slowed.** Per account, three free, then doubling to
+  thirty seconds, one try at a time, never locked.
+
 ## Status history
 
 | Date | Status | Note |
@@ -163,3 +202,4 @@ round.
 | 2026-08 | Proposed | Written with the wizard's six steps agreed and the two walls (key confinement, console dependency) identified as the design's fixed points |
 | 2026-08 | Accepted | Built end to end: engine policies and multi-prefix plans, contract 1.11, source handles over staging/replica/peer, peer-protocol 07 implemented both sides, the console gate and wizard — proven by service-level drills including a total-staging-loss restore over the wire, and a live Playwright walk of all six steps |
 | 2026-09 | Accepted (amended) | [ADR-0075](0075-a-restore-reads-around-damage.md) amends §2: a restore of the set's own archive reads around damage from the set's other copies, and a destination opened by name is still read alone. `Agent/ServiceCommandHandler`; `Hosts.Tests/RestoreReadAroundTests` |
+| 2026-10 | Accepted (amended) | Amendment 1, with [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): the gate derives per set under the published facts with no way past an unchecked passphrase, and the service refuses a person's open without a grant and any listing, plan or run without a source opened under one. `Web/ConsoleRestoreGate`, `Agent/ServiceCommandHandler`; `Web.Tests/RestoreGateTests`, `Web.DomTests/RestoreWizardDomTests`, `Hosts.Tests/PassphraseGateTests` |

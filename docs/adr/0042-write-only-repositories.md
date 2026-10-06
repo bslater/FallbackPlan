@@ -97,6 +97,13 @@ are untouched, remain fully supported, and never convert implicitly.
    against a v2 source without a grant do exactly what the write bundle
    allows (list, browse, plan structure) and name the grant when asked
    for content.
+
+   > **Amended 2026-10 ([ADR-0089](0089-a-backups-file-names-need-the-passphrase.md)).**
+   > What the write bundle allows is now the service's own work. A person's
+   > open needs the grant, and the source opened under it is the proof every
+   > verb that names the backup's files asks for: listing, planning and
+   > restoring, and a run's changes and failures. The source serves only the
+   > session that opened it (FR-WOR-007).
 6. **NFR-SEC-009 is amended, not breached.** The wall's substance
    stands: no raw or unsealed key material on the command surface, in
    either direction, ever. The amendment admits precisely one shape —
@@ -254,3 +261,4 @@ reader of the derivation should not have to infer it.
 | 2026-09 | Amended | Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)): the opt-in is gone and this derivation is the only format. `init --write-only` became `init`; the service's passphrase mode, which existed to open format-1 archives, went with it, and every set opens with the stored credential. Decision 7's device-domain rule became the default ([ADR-0006](0006-object-identifiers-and-dedup-trust-domains.md) amended) |
 | 2026-08 | Amended | This record's device-trust posture is generalised by [ADR-0046](0046-direct-to-destination-publication.md) §6: direct-ship sets run `device` trust on any format version — not because the private key is absent, as here, but because verify-on-reuse through the sink would pay a destination round trip per reuse — with the destination presence probe as the stale-catalogue guard in both cases. "Each set's staging archive is then created from it" reads "each set's repository" now that a direct-ship set's is a metadata store plus destinations; the derivation is indifferent to which. |
 | 2026-09 | Amended (kit withdrawn) | Item 8 of the decision describes a kit that no longer exists ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the archive descriptor carries what it carried, and the recovery tool opens from the passphrase and the descriptor |
+| 2026-10 | Amended | Decision 5, by [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): the grant is no longer only content's key but the proof a person needs to see a backup's file names at all; a person's grant-less open is refused, and only the service's own work reads the structure plane without one (FR-WOR-003, FR-WOR-007). `Agent/ServiceCommandHandler`; `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/WriteOnlySetTests` |
