@@ -2843,7 +2843,7 @@ public sealed partial class ServiceCommandHandler(
                 }
             }
 
-            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set, files);
+            var (inputs, rows, lastCompleted) = DescribeDestinations(configuration, set, latest is not null, files);
             var status = StatusDeriver.Derive(new StatusInputs
             {
                 LatestSnapshotAt = latest?.CapturedAt,
@@ -2912,7 +2912,7 @@ public sealed partial class ServiceCommandHandler(
     /// </summary>
     private (IReadOnlyList<DestinationStatusInput> Inputs, IReadOnlyList<DestinationStatusDescriptor> Rows, ulong LastCompleted)
         DescribeDestinations(
-            ClientConfiguration configuration, BackupSetConfiguration set,
+            ClientConfiguration configuration, BackupSetConfiguration set, bool hasSnapshot,
             IReadOnlyDictionary<string, FilesFigure>? files = null)
     {
         var lastCompleted = runtime.Jobs.LastCompleted(set.Id)?.UpdatedAt ?? 0;
@@ -2926,7 +2926,7 @@ public sealed partial class ServiceCommandHandler(
             var ledger = runtime.DestinationSync.Find(set.Id, reference.Ref);
             var input = DestinationStatus.Describe(
                 reference.Ref, destination, [.. set.Roots.Select(root => root.Path)],
-                ledger, lastCompleted, nowMs, runtime.VolumeIdOf);
+                ledger, lastCompleted, nowMs, runtime.VolumeIdOf, hasSnapshot);
 
             inputs.Add(input);
             var figure = files?.GetValueOrDefault(reference.Ref) ?? default;
@@ -3021,6 +3021,7 @@ public sealed partial class ServiceCommandHandler(
         SyncCause.AwaitingSeed => "awaiting-seed",
         SyncCause.NeverSynced => "never-synced",
         SyncCause.Reported => "reported",
+        SyncCause.AwaitingFirstBackup => "awaiting-first-backup",
         _ => null,
     };
 

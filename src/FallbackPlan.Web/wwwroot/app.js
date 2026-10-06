@@ -903,12 +903,16 @@ function renderSetCard(set) {
     return pb - pa || a.name.localeCompare(b.name);
   });
   const destinations = ordered.length ? `<div class="dest-stack">${ordered.map(d => {
-    // The catch-up window is activity, not alarm (ADR-0050 amendment): the
-    // chip keys off the wire reason — rendering the service's answer, never
-    // re-deriving (ADR-0028 §8). Any other behind keeps the warn chip.
+    // The catch-up window is activity, not alarm (ADR-0050 amendment), and
+    // a set with no snapshot yet gives the destination nothing to hold, so
+    // it waits rather than falls behind (Amendment 2): the chip keys off the
+    // wire reason — rendering the service's answer, never re-deriving
+    // (ADR-0028 §8). Any other behind keeps the warn chip.
     const ds = d.reason === "catching-up"
       ? { cls: "accent", icon: "↻", label: "syncing" }
-      : DEST_STATE[d.state] ?? { cls: "", icon: "?" };
+      : d.reason === "awaiting-first-backup"
+        ? { cls: "", icon: "○", label: "waiting for first backup" }
+        : DEST_STATE[d.state] ?? { cls: "", icon: "?" };
     // The ledger's two full-backup facts (contract 1.19): a pair owed
     // its seed says so — "behind" alone under-describes a destination
     // incrementals will skip until its full backup lands.

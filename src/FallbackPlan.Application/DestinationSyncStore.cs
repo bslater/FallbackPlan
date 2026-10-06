@@ -429,6 +429,23 @@ public sealed record DestinationSyncRecord
     public int ConsecutiveIncompleteDrills { get; init; }
 
     /// <summary>
+    /// How many drills in a row have completed and failed; zero once one
+    /// passes (schema 10,
+    /// [ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md) Amendment 5).
+    /// A drill that did not complete answered nothing about the replica, so it
+    /// neither adds to the run nor ends it.
+    /// </summary>
+    /// <remarks>
+    /// A failed drill is checked again once the replica has synced since it,
+    /// with no damage standing there, an hour on and then on the back-off
+    /// this count doubles, so a failure that was put right clears the same
+    /// day and one that lasts is not drilled after every sync.
+    /// </remarks>
+    [JsonPropertyName("consecutive_failed_drills")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int ConsecutiveFailedDrills { get; init; }
+
+    /// <summary>
     /// The peer's clock minus this one's, as the latest verified receipt from
     /// this destination read it (schema 8, NFR-TIME-002,
     /// [ADR-0077](../../docs/adr/0077-observed-clock-skew.md)); null where no
@@ -508,7 +525,7 @@ internal sealed record LedgerFile
 public sealed class DestinationSyncStore
 {
     /// <summary>The shape this build writes.</summary>
-    private const int CurrentSchemaVersion = 9;
+    private const int CurrentSchemaVersion = 10;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -643,7 +660,10 @@ public sealed class DestinationSyncStore
         // row because nothing had read one. Schema 9 added the sequence the
         // last converge with a deletion pending began at, zero on an older row
         // because none had run: a pending deletion then waits for one, which is
-        // the cautious reading. Only 1 → 2 changes a row, below.
+        // the cautious reading. Schema 10 added the count of failed drills in a
+        // row, zero on an older row because nothing counted them: a failure
+        // standing there is taken as the first of its run. Only 1 → 2 changes a
+        // row, below.
         var rows = file.Destinations ?? [];
         if (file.SchemaVersion >= 2)
         {
@@ -867,6 +887,7 @@ public sealed class DestinationSyncStore
             DrillFailure = failure,
             DrillLimit = limit,
             ConsecutiveIncompleteDrills = 0,
+            ConsecutiveFailedDrills = failure is null ? 0 : (previous?.ConsecutiveFailedDrills ?? 0) + 1,
         });
     }
 
