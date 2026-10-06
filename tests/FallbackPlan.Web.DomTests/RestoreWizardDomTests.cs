@@ -21,7 +21,9 @@ namespace FallbackPlan.Web.DomTests;
 /// asked with the run's shape, so it shows the room the run needs where it
 /// will write, and a plan that will not fit arms the restore only when the
 /// person chooses to restore anyway (ADR-0083). The result says which
-/// captured metadata the files came back without (FR-RST-004).
+/// captured metadata the files came back without (FR-RST-004). Its file tree
+/// shows what will not be restored a shade lighter rather than struck
+/// through, with toggles large enough to hit, as the backup wizard's does.
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -181,6 +183,44 @@ public sealed class RestoreWizardDomTests
         await page.ClickAsync("#dialog [data-action=\"close-dialog\"]");
         var closed = await harness.ReceivedAsync<CloseRestoreSourceCommand>();
         Assert.AreEqual("src-1", closed.SourceId);
+    }
+
+    [TestMethod]
+    public async Task Wizard_TheFileTree_HasLargeToggles_AndShowsWhatIsNotChosenLighter_NotStruckThrough()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = WizardFakes(now, _archives);
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+        await page.ClickAsync("[data-action=\"restore\"]");
+        await page.FillAsync("#rst-passphrase", RightPassphrase);
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("#rst-set")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("#rst-date")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("input[data-rst-mark=\"notes.txt\"]")).ToBeVisibleAsync();
+        var text = await page.EvaluateAsync<string>("() => getComputedStyle(document.getElementById('dialog')).color");
+
+        var toggle = page.Locator("[data-action=\"rst-open\"][data-path=\"photos\"]");
+        var box = (await toggle.BoundingBoxAsync())!;
+        Assert.IsTrue(box.Width >= 24 && box.Height >= 24, $"the toggle is {box.Width} by {box.Height}");
+        Assert.IsTrue((await toggle.Locator("svg").BoundingBoxAsync())!.Height >= 16, "the toggle's icon is too small");
+        await Expect(toggle).ToHaveAttributeAsync("aria-expanded", "false");
+
+        Assert.AreEqual("none", await EntryStyleAsync(page, "notes.txt", "textDecorationLine"));
+        Assert.AreNotEqual(text, await EntryStyleAsync(page, "notes.txt", "color"), "not chosen is a shade lighter");
+
+        await toggle.ClickAsync();
+        await Expect(toggle).ToHaveAttributeAsync("aria-expanded", "true");
+        await page.CheckAsync("input[data-rst-mark=\"photos/notes.txt\"]");
+        await page.CheckAsync("input[data-rst-mark=\"notes.txt\"]");
+
+        Assert.AreEqual(text, await EntryStyleAsync(page, "notes.txt", "color"), "chosen");
+        Assert.AreEqual(text, await EntryStyleAsync(page, "photos", "color"), "partly chosen");
+        Assert.AreNotEqual(text, await EntryStyleAsync(page, "photos/photos", "color"), "not chosen");
     }
 
     [TestMethod]
@@ -452,4 +492,9 @@ public sealed class RestoreWizardDomTests
             }
         }
     }
+
+    /// <summary>A computed style of the name in the file tree's row for <paramref name="path"/>.</summary>
+    private static Task<string> EntryStyleAsync(IPage page, string path, string property) =>
+        page.Locator($"#rst-tree .tree-row:has(input[data-rst-mark=\"{path}\"]) .tree-name")
+            .EvaluateAsync<string>("(name, property) => getComputedStyle(name)[property]", property);
 }
