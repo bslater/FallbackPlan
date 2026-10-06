@@ -209,7 +209,8 @@ public sealed record BackupSetDescriptor(
 /// One declared destination, as the configuration surface sees it
 /// (ADR-0037). Which fields apply depends on <paramref name="Kind"/>:
 /// <c>local-path</c> takes a path; <c>peer</c> takes a fingerprint and an
-/// endpoint; the schema-reserved cloud kinds take neither yet.
+/// endpoint; <c>s3</c> takes an endpoint URL, a bucket, a region and a prefix
+/// (contract 1.60); the other schema-reserved cloud kinds take none yet.
 /// </summary>
 /// <param name="Id">The destination's 32-hex identity; null on an upsert declares a new one.</param>
 /// <param name="Name">Its unique name — what sets reference.</param>
@@ -240,6 +241,15 @@ public sealed record BackupSetDescriptor(
 /// never for a peer. On an upsert, null preserves what the declaration has and
 /// zero removes the cadence.
 /// </param>
+/// <param name="Bucket">The bucket, for <c>s3</c> (contract 1.60, ADR-0091).</param>
+/// <param name="Region">The region its signatures are scoped to, for <c>s3</c>; null means the API's default.</param>
+/// <param name="Prefix">Where in the bucket it writes, for <c>s3</c>; null means the bucket's top.</param>
+/// <param name="Addressing">How requests name the bucket, <c>path</c> or <c>virtual-host</c>, for <c>s3</c>.</param>
+/// <param name="AccessKeyStored">
+/// Whether the service holds an access key for it, for <c>s3</c>; the key
+/// itself never crosses back. Ignored on an upsert: <c>set_destination_credentials</c>
+/// is how a key arrives.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -252,7 +262,12 @@ public sealed record DestinationDescriptor(
     string? AddressDefect = null,
     int? Priority = null,
     string? TransferLimit = null,
-    int? DrillIntervalDays = null);
+    int? DrillIntervalDays = null,
+    string? Bucket = null,
+    string? Region = null,
+    string? Prefix = null,
+    string? Addressing = null,
+    bool? AccessKeyStored = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>

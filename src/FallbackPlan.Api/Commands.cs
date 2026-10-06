@@ -24,6 +24,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
 [JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
 [JsonDerivedType(typeof(NoticeNamesCommand), "notice_names")]
+[JsonDerivedType(typeof(SetDestinationCredentialsCommand), "set_destination_credentials")]
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
 [JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
@@ -368,6 +369,21 @@ public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
 /// none.
 /// </param>
 public sealed record NoticeNamesCommand(string NoticeId, string? Source = null) : ServiceCommand;
+
+/// <summary>
+/// Stores the access key an S3-compatible destination's requests are signed
+/// with (contract 1.60, ADR-0091). The secret arrives only as an envelope
+/// sealed to the service's published recipient key, where it was typed, as
+/// every secret that crosses this surface does (NFR-SEC-009); the service
+/// opens it into its own state directory, owner-only, and never into the
+/// configuration file, an export, a diagnostic bundle or a log (NFR-SEC-006,
+/// NFR-SEC-012). Nothing ever answers it back.
+/// </summary>
+/// <param name="DestinationName">The <c>s3</c> destination, by name.</param>
+/// <param name="AccessKeyId">The access key id the store knows the key by, which every request carries in clear.</param>
+/// <param name="Envelope">The secret access key, sealed to the service's recipient key, as hex.</param>
+public sealed record SetDestinationCredentialsCommand(
+    string DestinationName, string AccessKeyId, string Envelope) : ServiceCommand;
 
 /// <summary>
 /// Ends a pairing (ADR-0030 Amendment 2): announces the termination to the

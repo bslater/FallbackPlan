@@ -53,8 +53,9 @@ public sealed class ClockSkewMarginTests
     {
         // Unknown fields are refused, so a file carrying the margin is a
         // compatibility event for any build that cannot read it, and the
-        // version has to say so.
-        Assert.AreEqual(8, ClientConfiguration.CurrentSchemaVersion);
+        // version has to say so. Schema 8 carried it first; 9 moved on for
+        // the S3 fields (ADR-0091), and nothing may move it back.
+        Assert.IsGreaterThanOrEqualTo(8, ClientConfiguration.CurrentSchemaVersion);
     }
 
     [TestMethod]

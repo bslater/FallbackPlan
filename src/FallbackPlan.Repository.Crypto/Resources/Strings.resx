@@ -118,4 +118,7 @@
   <data name="ReclaimAuthority_RootExactlyBytes" xml:space="preserve">
     <value>A reclaim sub-root is exactly {0} bytes.</value>
   </data>
+  <data name="WriteOnlyProvisioning_AccessKeySecretMalformed" xml:space="preserve">
+    <value>A secret access key is 1 to {0} characters with no control characters in it.</value>
+  </data>
 </root>

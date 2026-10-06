@@ -34,11 +34,52 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_NoticeNamesBehindThePassphrase_IsRecordedAtOneFiftyNine()
+    public void ContractVersion_AnS3CompatibleDestination_IsRecordedAtOneSixty()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.59", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.60", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void AnS3Destination_CrossesWithItsAddress_AndWhetherItsAccessKeyIsHeld()
+    {
+        // ADR-0091, FR-DEST-005: an S3-compatible destination is declared over
+        // the wire like any other, with the fields that address it. Whether the
+        // service holds its access key crosses; the key never does.
+        var declared = JsonSerializer.Serialize(
+            new DestinationDescriptor(
+                null, "cloud", "s3", Path: null, Fingerprint: null, Endpoint: "https://objects.example.net",
+                Bucket: "family-backups", Region: "eu-test-1", Prefix: "site-a", Addressing: "virtual-host",
+                AccessKeyStored: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"bucket\":\"family-backups\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"region\":\"eu-test-1\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"prefix\":\"site-a\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"addressing\":\"virtual-host\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"access_key_stored\":true", declared, StringComparison.Ordinal);
+
+        // A pre-1.60 descriptor names none of them and reads as before.
+        var old = JsonSerializer.Deserialize<DestinationDescriptor>(
+            """{"id":null,"name":"usb","kind":"local-path","path":"/mnt/vault","fingerprint":null,"endpoint":null}""",
+            FrameCodec.SerializerOptions)!;
+        Assert.IsNull(old.Bucket);
+        Assert.IsNull(old.AccessKeyStored);
+    }
+
+    [TestMethod]
+    public void SetDestinationCredentials_CrossesUnderItsWireNames_WithTheSecretOnlyAsAnEnvelope()
+    {
+        // NFR-SEC-009: the secret access key crosses only sealed, as hex, in
+        // the field every sealed secret on this surface takes.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new SetDestinationCredentialsCommand("cloud", "AKIDCLOUD0001", "00ff"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"set_destination_credentials\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"destination_name\":\"cloud\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"access_key_id\":\"AKIDCLOUD0001\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"envelope\":\"00ff\"", asked, StringComparison.Ordinal);
     }
 
     [TestMethod]

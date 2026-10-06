@@ -12,10 +12,11 @@ namespace FallbackPlan.ArchitectureTests;
 ///
 /// The claim has two halves and they are proved differently. This file is the
 /// structural half: the product contains no MEANS of transmitting — no HTTP
-/// client, no exporter, no analytics package, and the outbound-capable types
-/// confined to the five assemblies that are the peer protocol and the
-/// loopback IPC. The other half — that a default run in fact transmits
-/// nothing — is observed rather than argued, in Hosts.Tests.
+/// client outside the one provider that speaks the S3 API to an endpoint a
+/// person declared (ADR-0091), no exporter, no analytics package, and the
+/// outbound-capable types confined to the five assemblies that are the peer
+/// protocol and the loopback IPC. The other half — that a default run in fact
+/// transmits nothing — is observed rather than argued, in Hosts.Tests.
 ///
 /// Neither half is sufficient alone, and saying so is the point. An
 /// in-process capture sees one run of one process; a build whose package list
@@ -63,6 +64,35 @@ public sealed class TelemetrySilenceTests
     ];
 
     /// <summary>
+    /// The one assembly allowed an HTTP client: the S3-compatible provider
+    /// (ADR-0091). It is not a network owner — it opens no socket of its own
+    /// and names no address type — because the platform's HTTP stack does the
+    /// dialling for it, to the endpoint the destination declares.
+    /// </summary>
+    private static Assembly[] HttpClientOwners => [typeof(Storage.S3.AssemblyMarker).Assembly];
+
+    /// <summary>
+    /// The allowance is not left standing after its reason goes. An allowlist
+    /// entry for an assembly that no longer speaks HTTP is a hole waiting for
+    /// the next one to, so the entry has to be earned by a reference.
+    /// </summary>
+    [TestMethod]
+    public void Telemetry_TheHttpAllowance_IsEarnedByTheProviderThatHasIt()
+    {
+        foreach (var assembly in HttpClientOwners)
+        {
+            Assert.IsFalse(
+                Types.InAssembly(assembly)
+                    .ShouldNot()
+                    .HaveDependencyOn("System.Net.Http")
+                    .GetResult()
+                    .IsSuccessful,
+                $"{assembly.GetName().Name} is allowed an HTTP client and no longer uses one: take it off "
+                + "the allowlist (ADR-0091).");
+        }
+    }
+
+    /// <summary>
     /// Every package any src project references. Twelve names, not one of
     /// which is an exporter, an HTTP library or an analytics SDK.
     ///
@@ -104,11 +134,26 @@ public sealed class TelemetrySilenceTests
     /// legitimate HTTP client in this product, so the rule needs no allowlist
     /// — and an allowlist is what would have to be edited, visibly, if that
     /// ever stopped being true.
+    ///
+    /// <para>
+    /// <b>Amended 2026-10 (ADR-0091).</b> It stopped being true, and this is
+    /// the visible edit. An S3-compatible destination is spoken to over HTTPS,
+    /// so <c>FallbackPlan.Storage.S3</c> holds an HTTP client — and it is the
+    /// only assembly that does. The allowance is an allowlist of one, by
+    /// assembly, for the reason the cryptography allowlist is: adding to it
+    /// takes an argument. What keeps it from becoming a telemetry path is
+    /// what the other rules here say about that one assembly: it reaches no
+    /// socket namespace of its own, its closure is the store contract alone
+    /// (<c>DependencyRuleTests</c>), only the service composes it, and every
+    /// request it makes goes to the endpoint a person declared for a
+    /// destination, with nothing in it but the objects that destination is
+    /// owed.
+    /// </para>
     /// </summary>
     [TestMethod]
-    public void Telemetry_EverySourceAssembly_ReachesForNoHttpClient()
+    public void Telemetry_EverySourceAssemblyButTheS3Provider_ReachesForNoHttpClient()
     {
-        foreach (var assembly in DependencyRuleTests.AllSourceAssemblies)
+        foreach (var assembly in DependencyRuleTests.AllSourceAssemblies.Where(a => !HttpClientOwners.Contains(a)))
         {
             DependencyRuleTests.AssertPasses(
                 Types.InAssembly(assembly)

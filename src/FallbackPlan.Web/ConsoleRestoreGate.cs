@@ -15,7 +15,9 @@ namespace FallbackPlan.Web;
 /// derivation against that set's sealing key before it seals a grant, so a
 /// console on any machine checks a passphrase alike and nothing passes a
 /// passphrase that did not check out. The same posture as key export
-/// (ADR-0028 §9): passphrase work runs where the person typed it.
+/// (ADR-0028 §9): passphrase work runs where the person typed it. An
+/// S3-compatible destination's secret access key is sealed here too, for the
+/// same reason and with no derivation (ADR-0091).
 /// </summary>
 /// <remarks>
 /// This is the one class in the console permitted to reach below the client
@@ -246,6 +248,44 @@ public static class ConsoleRestoreGate
             GateOutcome.Verified,
             Envelope: Convert.ToHexStringLower(
                 WriteOnlyProvisioning.SealProvision(recipient!, authority, salt, parameters)));
+    }
+
+    /// <summary>
+    /// Seals an S3-compatible destination's secret access key to the
+    /// service's recipient key, for the one destination and key id it was
+    /// typed for (ADR-0091). Nothing is derived and nothing is proved: the
+    /// store is what will say whether the key is right.
+    /// </summary>
+    /// <param name="destinationName">The destination the key is for.</param>
+    /// <param name="accessKeyId">The access key id.</param>
+    /// <param name="secretAccessKey">The typed secret; sealed and released.</param>
+    /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
+    /// <returns>The envelope, or why it could not be made.</returns>
+    public static SetupAnswer SealAccessKey(
+        string destinationName, string accessKeyId, string secretAccessKey, string grantRecipientHex)
+    {
+        ThrowHelper.ThrowIfNull(secretAccessKey);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
+
+        if (!TryParseRecipient(grantRecipientHex, out var recipient))
+        {
+            return new SetupAnswer(
+                GateOutcome.Unavailable,
+                "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
+                + "and try again (ADR-0091).");
+        }
+
+        try
+        {
+            return new SetupAnswer(
+                GateOutcome.Verified,
+                Envelope: Convert.ToHexStringLower(WriteOnlyProvisioning.SealAccessKeySecret(
+                    recipient!, destinationName, accessKeyId, secretAccessKey)));
+        }
+        catch (ArgumentException malformed)
+        {
+            return new SetupAnswer(GateOutcome.Wrong, malformed.Message);
+        }
     }
 
     /// <summary>

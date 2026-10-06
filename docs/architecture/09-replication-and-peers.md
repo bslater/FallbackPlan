@@ -142,8 +142,13 @@ Snapshot policy-compliant when:
 Snapshot healthy when:
   - a local-path destination: verified within 7 days,  and
   - a peer destination:       verified within 30 days, and
-  - a cloud destination:      durable within 24 hours (reserved; no cloud kind is served)
+  - an s3 destination:        verified within 7 days, as a local path is
+  - another cloud destination: durable within 24 hours (reserved; not served)
 ```
+
+An `s3` destination is read back by the hub at every sync, as a local path
+is, so it is held to the local bound
+([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).
 
 The verification bounds are no longer an illustration. They are the values the
 status derivation compares each destination's proof against

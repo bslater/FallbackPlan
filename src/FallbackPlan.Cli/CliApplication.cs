@@ -2058,6 +2058,85 @@ public static class CliApplication
                 return 0;
             }));
         }
+
+        {
+            // The access key an S3-compatible destination's requests are
+            // signed with (contract 1.60, ADR-0091). The secret is read from
+            // a named environment variable, never an argument a process
+            // listing or a shell history keeps, and leaves this process only
+            // sealed to the service's recipient key for this destination and
+            // key id (NFR-SEC-009).
+            var storeName = new Argument<string>("name")
+            {
+                Description = "The s3 destination, by the name its declaration gives it.",
+            };
+            var storeState = new Option<string?>("--state")
+            {
+                Description = "The service's state directory; the machine-wide installation when absent.",
+            };
+            var accessKeyIdOption = new Option<string>("--access-key-id")
+            {
+                Description = "The access key id the store knows the key by.",
+                Required = true,
+            };
+            var secretEnvOption = new Option<string>("--secret-env")
+            {
+                Description = "The environment variable holding the secret access key. Read here, sealed to the "
+                    + "service, and never printed.",
+                Required = true,
+            };
+            var destinationCredentials = new Command(
+                "destination-credentials",
+                "Store the access key an s3 destination's requests are signed with.");
+            destinationCredentials.Arguments.Add(storeName);
+            destinationCredentials.Options.Add(storeState);
+            destinationCredentials.Options.Add(accessKeyIdOption);
+            destinationCredentials.Options.Add(secretEnvOption);
+            root.Subcommands.Add(destinationCredentials);
+
+            destinationCredentials.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var name = parse.GetValue(storeName)!;
+                var state = parse.GetValue(storeState);
+                var accessKeyId = parse.GetValue(accessKeyIdOption)!;
+                var secretVariable = parse.GetValue(secretEnvOption)!;
+                if (Environment.GetEnvironmentVariable(secretVariable) is not { Length: > 0 } secret)
+                {
+                    throw new CliFailureException(
+                        $"the environment variable '{secretVariable}' holds no secret access key; set it to the "
+                        + "secret the provider issued for this key id.");
+                }
+
+                var description = await QueryLocalServiceAsync<ServiceDescriptionResult>(
+                    state, new DescribeServiceCommand(), cancellationToken).ConfigureAwait(false);
+                if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex)
+                {
+                    throw new CliFailureException(
+                        "the service does not publish a recipient key to seal to; run first-run setup first.");
+                }
+
+                string envelope;
+                try
+                {
+                    envelope = Convert.ToHexStringLower(WriteOnlyProvisioning.SealAccessKeySecret(
+                        Convert.FromHexString(recipientHex), name, accessKeyId, secret));
+                }
+                catch (ArgumentException malformed)
+                {
+                    throw new CliFailureException(malformed.Message);
+                }
+
+                var stored = await QueryLocalServiceAsync<ConfigurationChangeResult>(
+                    state, new SetDestinationCredentialsCommand(name, accessKeyId, envelope), cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var line in stored.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
+                return 0;
+            }));
+        }
         {
             // Not a session verb: pairing needs no repository or passphrase,
             // only the console's own state directory to hold its identity and

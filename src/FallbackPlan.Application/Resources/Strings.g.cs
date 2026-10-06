@@ -226,12 +226,12 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationFieldNotForKind, arg0, arg1);
 
     /// <summary>
-    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket it writes to, and excusing the check costs the staging trim its licence to reclaim space.
     /// </summary>
     private static string ClientConfiguration_DestinationCannotDeclineVerification => Get(nameof(ClientConfiguration_DestinationCannotDeclineVerification));
 
     /// <summary>
-    /// Destination '{0}' is 'local-path' and cannot declare verification 'acknowledged-none': the hub can always read a directory it owns, and excusing the check costs the staging trim its licence to reclaim space.
+    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket it writes to, and excusing the check costs the staging trim its licence to reclaim space.
     /// </summary>
     internal static string FormatClientConfiguration_DestinationCannotDeclineVerification(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationCannotDeclineVerification, arg0);
@@ -290,6 +290,17 @@ internal static class Strings
     /// </summary>
     internal static string FormatClientConfiguration_DestinationNeedsPath(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsPath, arg0);
+
+    /// <summary>
+    /// Destination '{0}' is 's3' and must name an endpoint and a bucket.
+    /// </summary>
+    private static string ClientConfiguration_DestinationNeedsBucket => Get(nameof(ClientConfiguration_DestinationNeedsBucket));
+
+    /// <summary>
+    /// Destination '{0}' is 's3' and must name an endpoint and a bucket.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationNeedsBucket(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsBucket, arg0);
 
     /// <summary>
     /// Destination '{0}' is 'peer' and must name a fingerprint and an endpoint.

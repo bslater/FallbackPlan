@@ -211,6 +211,18 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
+            if (destination.Kind == DestinationKind.S3)
+            {
+                // A run writes through the destinations that keep up with a
+                // capture as it goes; an S3-compatible store is filled by the
+                // sync that follows the run, from what the run shipped
+                // (ADR-0091). Behind, never failed: the destination did
+                // nothing wrong, and a behind row syncs at once.
+                skipped.Add((destination.Name, DestinationSyncState.Behind,
+                    "an s3 destination is filled by the sync that follows the run, from what the run shipped"));
+                continue;
+            }
+
             if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer))
             {
                 // The reserved cloud kinds (FR-DEST-005): configuration models

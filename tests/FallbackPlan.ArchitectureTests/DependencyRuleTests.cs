@@ -41,6 +41,7 @@ public sealed class DependencyRuleTests
     private static Assembly RepositoryRootAssembly => typeof(Repository.AssemblyMarker).Assembly;
     private static Assembly StorageAbstractions => typeof(Storage.Abstractions.AssemblyMarker).Assembly;
     private static Assembly StorageLocal => typeof(Storage.Local.AssemblyMarker).Assembly;
+    private static Assembly StorageS3 => typeof(Storage.S3.AssemblyMarker).Assembly;
     private static Assembly ImportAbstractions => typeof(Import.Abstractions.AssemblyMarker).Assembly;
     private static Assembly Filesystem => typeof(FallbackPlan.Filesystem.AssemblyMarker).Assembly;
     private static Assembly FilesystemLocal => typeof(FallbackPlan.Filesystem.Local.AssemblyMarker).Assembly;
@@ -97,7 +98,7 @@ public sealed class DependencyRuleTests
     /// </summary>
     internal static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
-         RepositoryRootAssembly, StorageAbstractions, StorageLocal, ImportAbstractions,
+         RepositoryRootAssembly, StorageAbstractions, StorageLocal, StorageS3, ImportAbstractions,
          Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web,
          Diagnostics, Replication, Retention];
 
@@ -213,6 +214,60 @@ public sealed class DependencyRuleTests
                     "Amazon.S3")
                 .GetResult(),
             "Storage.Abstractions must not depend on any concrete provider.");
+    }
+
+    /// <summary>
+    /// A provider depends on the store contract, never the reverse, and never
+    /// on what is stored (11 §2, ADR-0012). The S3-compatible provider moves
+    /// sealed objects it cannot read under keys it did not choose (ADR-0091):
+    /// it must not reach the engine that could decode them, the use-case
+    /// layer, the contract, or another provider. It is also the one assembly
+    /// allowed an HTTP client (<c>TelemetrySilenceTests</c>), which makes a
+    /// narrow closure here part of what keeps that allowance narrow.
+    /// </summary>
+    [TestMethod]
+    public void StorageS3_DependencyClosure_KnowsOnlyTheStoreContract()
+    {
+        AssertPasses(
+            Types.InAssembly(StorageS3)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage.Local",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Api",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite")
+                .GetResult(),
+            "FallbackPlan.Storage.S3 must depend only on the store contract and Domain (ADR-0091; 11 §2).");
+    }
+
+    /// <summary>
+    /// Only the service composes an S3-compatible store (ADR-0091): it is the
+    /// one process that holds a destination's access key, and the requests it
+    /// makes go to the endpoint a person declared. The CLI and the console
+    /// seal a key to the service and never dial the store themselves; the
+    /// recovery tool reads a copy brought to local disk (08 §5). A project
+    /// reference anywhere else would be a second process able to speak HTTP
+    /// to a provider, which is a decision to take in the open.
+    /// </summary>
+    [TestMethod]
+    public void StorageS3_ProjectFileCanary_ComposedOnlyByTheService()
+    {
+        var composers = Directory.EnumerateFiles(
+                Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories)
+            .Where(project => File.ReadAllText(project)
+                .Contains("FallbackPlan.Storage.S3.csproj", StringComparison.Ordinal))
+            .Select(Path.GetFileNameWithoutExtension)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        SequenceAssert.AreEqual(["FallbackPlan.Agent"], composers);
     }
 
     /// <summary>
@@ -896,9 +951,11 @@ public sealed class DependencyRuleTests
         // ONE deliberate exception (ADR-0041): ConsoleRestoreGate verifies a
         // restore passphrase locally — descriptor and wrapped key objects
         // read off local disk, KEK derived where the person typed — so the
-        // passphrase never crosses the contract (NFR-SEC-009). It is scoped
-        // by name: every other console type must still reach only the
-        // contract, or the console stops being a client (11 §2, ADR-0036).
+        // passphrase never crosses the contract (NFR-SEC-009). It seals an
+        // S3-compatible destination's access key the same way (ADR-0091),
+        // which is why the console host calls it rather than the crypto. It
+        // is scoped by name: every other console type must still reach only
+        // the contract, or the console stops being a client (11 §2, ADR-0036).
         AssertPasses(
             Types.InAssembly(Web)
                 .That()

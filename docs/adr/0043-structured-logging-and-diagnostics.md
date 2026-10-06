@@ -502,7 +502,13 @@ at all.
 `ArchitectureTests/TelemetrySilenceTests` closes that (2026-09): no `src`
 assembly references an HTTP client, and outbound capability is confined to the
 five that are the peer protocol and the loopback IPC — `Diagnostics` is not
-among them. The same commit found and closed a gap in the guard beside it:
+among them.
+
+> **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md)).**
+> One `src` assembly now references an HTTP client, by name: `Storage.S3`,
+> the S3-compatible provider. `Diagnostics` is still not among those that
+> may, so a sink still cannot post anywhere.
+ The same commit found and closed a gap in the guard beside it:
 `DependencyRuleTests.AllSourceAssemblies`, which the cryptography and
 recurrence containment rules iterate, named twenty-one of the twenty-four
 projects under `src/` and omitted `Diagnostics`, `Replication` and `Retention`
@@ -530,3 +536,4 @@ and a retention drill over an applied pass.
 | 2026-09 | Amended (event 3100) | The recovery tool's event 3100 records the archive descriptor read — repository id and format — rather than the recovery kit read, because there is no kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); 3101 and 3102 are unchanged, and the 1.14 numbering note above stays as history |
 | 2026-09 | Amended | §1's division extended to the network: no sink may reach for an HTTP client, which needs no package reference and so escaped `ArchitectureTests/LoggingShapeTests` (`ArchitectureTests/TelemetrySilenceTests`; reasoning at [ADR-0027](0027-services-scheduling-status-telemetry.md) §3's 2026-09 amendment) |
 | 2026-09 | Accepted | Built: a trace tier at the two seams a conversation crosses, restored after the merge at 9fb5ab6 lost it — the merge dropped the service's, whose ids collided, and 38c4df3 removed the console's once its call sites were gone. Every verb crossing the service's command seam leaves one line naming the command, the result and the time (3784), and the provisioning verb says how it classified the ceremony (3785); the merged line's ids for these, 3758 and 3760, were already this branch's. The console keeps the merged line's ids: the request line (4110), the setup outcome (4111), the command relay (4113) and the static asset (4114). 4112 was the recovery-kit rebuild's outcome and stays unused ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)). Both tiers are asserted arriving through real dispatch, as the amendment above requires: `Hosts.Tests/CommandTraceLoggingTests`, `Web.Tests/SetupCeremonyLoggingTests` |
+| 2026-10 | Amended | One `src` assembly may reference an HTTP client, `Storage.S3`, by an allowlist of one ([ADR-0091](0091-an-s3-compatible-destination.md)); `Diagnostics` still may not |

@@ -351,6 +351,16 @@ because the thing being defended against has no pattern: an update check, a
 crash reporter and a usage beacon share no name, only the fact that somebody
 added a dependency.
 
+> **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md)).**
+> The first rule now has an allowlist of one: `Storage.S3`, which speaks the
+> S3 API to the endpoint a person declares for a destination, over the
+> platform's HTTP client. The rule changed visibly, as it said it would have
+> to. What keeps the allowance narrow is in the same file: the assembly opens
+> no socket of its own, depends on the store contract alone, is composed only
+> by the service, and loses its place when it stops using HTTP. The default
+> run below is unchanged; it backs up to a local path and makes no HTTP
+> request.
+
 **And a default run transmits nothing.** `Hosts.Tests/DefaultBuildSilenceTests`
 puts a default installation through setup, a backup to a local path, status,
 snapshots, a restore and a retention pass — driven through the transport an
@@ -433,3 +443,4 @@ for that reason.
 | 2026-08 | Amended (Consequences) | The peer-host model superseded: peers are destinations under ADR-0030's pairing, not a second service shape |
 | 2026-08 | Amended (§4) | The vocabulary standardised: never-emitted `Replicated` and `PolicyCompliant` retired with their wire numbers reserved, and the console gained the five-word glance layer over the derived states — both normative at 10 §1.1, NFR-OPS-002 amended to match, pinned by `Domain.Tests/ProtectionStateTests` and the console vocabulary pins |
 | 2026-09 | Amended (§3) | "Exporters deferred" became a property of the build: no HTTP client in any `src` assembly, the network confined to five named owners, no `MeterListener` or `ActivityListener`, and the shipped package set pinned whole (`ArchitectureTests/TelemetrySilenceTests`); a default run is captured transmitting nothing (`Hosts.Tests/DefaultBuildSilenceTests`), which is NFR-PRIV-001's own acceptance criterion run rather than argued |
+| 2026-10 | Amended (§3) | The HTTP rule gains an allowlist of one, `Storage.S3`, for the S3-compatible destination ([ADR-0091](0091-an-s3-compatible-destination.md)); the other three rules and the captured default run are unchanged |

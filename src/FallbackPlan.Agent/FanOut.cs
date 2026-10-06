@@ -314,7 +314,7 @@ public static class FanOut
         await foreach (var _ in store
             .ListAsync(
                 Storage.Abstractions.ObjectPrefix.Parse(prefix),
-                Storage.Abstractions.ListOptions.Default,
+                new Storage.Abstractions.ListOptions { PageSizeHint = 1 },
                 cancellationToken)
             .ConfigureAwait(false))
         {
@@ -380,6 +380,12 @@ public static class FanOut
 
                 case DestinationKind.Peer:
                     await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, limiter: limiter)
+                        .ConfigureAwait(false);
+                    return;
+
+                case DestinationKind.S3:
+                    await CopyToS3Async(
+                            runtime, set, destination, archive, nowMs, limiter, userInitiated, cancellationToken)
                         .ConfigureAwait(false);
                     return;
 
@@ -967,358 +973,455 @@ public static class FanOut
             var replicaRootMissing = !Directory.Exists(replicaRoot);
             Directory.CreateDirectory(replicaRoot);
 
-            // Read before this pass writes over it: "did we believe this
-            // destination held our data a moment ago" is the question the
-            // shortfall check rests on, and the rotation cursor below is the
-            // other half of the same before-picture.
-            var previous = ledger.Find(set.Id, destination.Name);
-            var priorSuccess = previous?.LastSuccessAt is not null;
-
             // Paced for a background sync, both ways: the copy's writes and the
             // read-back's reads are the bytes the destination's limit governs.
-            var replica = PacedObjectStore.Over(new LocalFileSystemObjectStore(replicaRoot), limiter);
-
-            // The destination as the rollback witness (ADR-0062). A state
-            // directory restored from an older copy rolls the catalogue, the
-            // sequence file, this ledger and a direct-ship set's metadata
-            // store back together, so nothing local can notice — but the
-            // destination still holds what was published, and its journal
-            // keys carry this writer's sequence in the clear. The allocator
-            // is the detector: numbers are handed out before anything is
-            // written, so a destination attesting a number the writer has
-            // not yet allocated is a rollback of the allocation state and
-            // nothing else. Per writer, so a second device writing the same
-            // repository never reads as this one's rollback. Asked before
-            // the gate below, which reads a ledger that rolled back too.
-            var rolledBack = false;
-            if (!replicaRootMissing)
-            {
-                var attested = await ObservedHead.JournalHeadAsync(replica, runtime.Writer, cancellationToken)
-                    .ConfigureAwait(false);
-                var ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
-                rolledBack = ahead is not null;
-
-                // The heal: the destination's metadata copied back — and,
-                // for a staging set, the content the newer history needs,
-                // blobs before the manifests that reference them — the
-                // catalogue rebuilt in place, the writer moved past what the
-                // healed archive attests. Triggered by the metadata plane
-                // rather than by the allocator, so a heal that failed is
-                // retried on every pass until it succeeds — the sequence
-                // moved durably the first time and would never ask again.
-                // It runs before the keep-set is computed, which is what
-                // keeps a converging pass from trimming the destination to a
-                // history the archive has not yet got back (ADR-0062
-                // Amendment 2).
-                ServiceRuntime.HealOutcome? heal = null;
-                if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
-                        .ConfigureAwait(false))
-                {
-                    heal = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
-                        .ConfigureAwait(false);
-                    LogHeal(runtime, set, destination, archive, heal);
-                }
-
-                if (ahead is not null)
-                {
-                    ReportDestinationAhead(
-                        runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
-                        peer: false);
-                }
-
-                if (heal?.Failure is { } healFailure)
-                {
-                    // Nothing at the destination is touched and the ledger is
-                    // not advanced: the next pass finds the archive still
-                    // behind and heals again.
-                    ledger.RecordFailure(
-                        set.Id, destination.Name, DestinationSyncState.Failed,
-                        HealFailureForLedger(archive, healFailure), nowMs);
-                    return;
-                }
-            }
-
-            // The sequence is read BEFORE the copy starts — and after the
-            // heal, so it is the healed archive's: a success then proves the
-            // destination holds everything published at or before it, which
-            // is what the replication gate compares snapshots to (FR-GC-009).
-            // A snapshot publishing mid-copy may or may not have crossed, so
-            // the claim stops at the pre-copy sequence.
-            var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            await CopyToReplicaAsync(
+                    runtime, set, destination, archive,
+                    PacedObjectStore.Over(new LocalFileSystemObjectStore(replicaRoot), limiter),
+                    replicaRootMissing,
+                    () => DestinationCapacity.FloorShortfall(replicaRoot, AvailableBytesOn(replicaRoot)),
+                    nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
-
-            // Filling a destination volume to zero is a harm to the machine,
-            // not just to this backup: logs stop, temp files fail, and on the
-            // source's own volume the next capture cannot even stage. The copy
-            // is held off before it starts rather than after it has taken the
-            // last of the space.
-            if (DestinationCapacity.FloorShortfall(replicaRoot, AvailableBytesOn(replicaRoot)) is { } shortOfSpace)
-            {
-                // Unavailable, not Failed: deleting something frees the space
-                // and the next pass simply succeeds (FR-DEST-003). Nothing
-                // here needs a human's decision, only room.
-                ledger.RecordFailure(
-                    set.Id, destination.Name, DestinationSyncState.Unavailable, shortOfSpace, nowMs);
-                return;
-            }
-
-            // A destination under a retention policy holds exactly its
-            // keep-set's closure, converged in one operation with the copy so
-            // fan-out and retention cannot disagree (FR-GC-010). One without a
-            // policy gets the conservative whole copy — and so does a pass
-            // whose staging graph will not walk, but that second case is a
-            // fault rather than a choice and now says so.
-            var effective = set.Destinations
-                .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
-                ?.Retention ?? set.Retention;
-            Func<string, bool>? keeps = null;
-
-            // "Keeps everything" is a keep-set and has a rendering of its own:
-            // null would mean "nobody computed one", which is what the ledger
-            // carries forward rather than compares (ADR-0056).
-            // A keep-set computed from rolled-back metadata would converge
-            // the destination down to the history the rollback can see,
-            // deleting the newest backup from the only place that holds it.
-            // The detecting pass therefore keeps everything: CopyAsync never
-            // deletes, only ConvergeAsync does, and no keeps means no
-            // converge (and no spares, which only a keep-set needs).
-            var keepFingerprint = KeepsEverything;
-
-            // A person's deletion converges a destination with no rules too
-            // (FR-GC-013): its whole copy would otherwise keep the snapshot,
-            // and staging holds the snapshot until every copy has let it go.
-            // With no rule the keep-set is everything but what was requested.
-            // The journal head is read before the keep-set, so the converge
-            // recorded below began after every request it was computed from.
-            var deletion = rolledBack ? null : await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false);
-            if (!rolledBack && (Retention.DestinationConvergence.HasRules(effective) || deletion is not null))
-            {
-                var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
-                    archive.Store, archive.Repository, effective ?? new RetentionConfiguration(),
-                    DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
-                    runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
-                keeps = convergence.Keeps;
-                keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
-                ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
-                ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
-            }
-
-            var convergedAt = keeps is not null ? deletion : null;
-
-            // What this pass has to do, decided before it reads anything
-            // (ADR-0056). A pair the last pass left level, with nothing
-            // published since and its keep-set unmoved, is one this pass can
-            // answer from what that pass wrote down — and the reading-through
-            // it wrote down expires, so the answer cannot go stale for ever.
-            // A migrating direct-ship set keeps its staging archive until
-            // retirement, and the ledger cannot speak for the history only
-            // that archive holds: its runs record success for what they
-            // shipped (ADR-0046 §3). Until the archive is gone, every pass
-            // reads through — which is what seeds the destination and what
-            // lets retirement establish that nothing would be lost.
-            var stagingRemains = archive.ShipSink is not null
-                && File.Exists(Path.Combine(
-                    runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
-
-            // The gate's ledger rolled back with everything else, so its
-            // "nothing to look at" would be the rollback's own opinion of
-            // itself: a detecting pass reads through.
-            var scope = rolledBack
-                ? SyncScope.Reconcile
-                : ReconciliationGate.Decide(
-                    previous, syncedSequence, keepFingerprint, nowMs,
-                    ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
-
-            // Samples come from the pre-copy listing, filtered like the copy
-            // itself: everything sampled is carried by the copy below, so a
-            // mismatch afterwards is the replica's fault, never a race with a
-            // publication that had not crossed yet.
-            //
-            // The rotation resumes after the last passed challenge, so
-            // coverage accumulates across syncs (FR-VER-002). No reservoir
-            // share here: this hub reads the replica's bytes off its own disk,
-            // so there is nobody on the other side who could arrange to hold
-            // only the objects it expects to be asked about.
-            var plan = await VerificationSampler.SampleAsync(
-                archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
-                VerificationSampler.DefaultBudget, reservoirShare: 0,
-                Protocol.VerificationChallenge.MaximumLength, cancellationToken)
-                .ConfigureAwait(false);
-
-            // The converge spare (FR-GC-009's direct-ship shape): under
-            // direct-ship the replicas are the only holders, so before this
-            // destination's policy may drop anything, the closure of every
-            // snapshot a sibling is still owed is set aside — a narrow
-            // override must not delete the last copy of history a wide
-            // sibling has not received yet. A staging set needs none of
-            // this: the gate holds the staging copy until every entitled
-            // destination provably has its own (FR-GC-009), so a trimmed
-            // replica is re-seedable from staging.
-            Func<string, bool>? spares = null;
-            if (keeps is not null && archive.ShipSink is not null)
-            {
-                var sparePlan = await Retention.DestinationConvergence.ComputeSparesAsync(
-                    archive.Store, archive.Repository, set.Destinations, set.Retention,
-                    name => ledger.Find(set.Id, name), nowMs, cancellationToken,
-                    runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
-                spares = sparePlan.Spares;
-
-                // Folded into the fingerprint the gate compares, because a
-                // spare set moves when a sibling catches up and nothing about
-                // that is published: a pass that skipped over it would keep
-                // holding copies whose only reason to exist had been
-                // delivered (ADR-0056).
-                keepFingerprint = $"{keepFingerprint}/{sparePlan.Fingerprint}";
-            }
-
-            // Held against owed, in bytes, as the copy discovers it. Kept
-            // here rather than returned by the copier because the figure
-            // matters most when the pass does NOT finish: a drive pulled
-            // halfway leaves a destination genuinely part-full, and a number
-            // that only survived success could never say so. Recorded below
-            // on every exit, which is why it is captured and not written as
-            // it arrives — a ledger write per object would be thousands.
-            CopyProgress? completeness = null;
-            var counting = new Progress<CopyProgress>(latest => completeness = latest);
-
-            long copied = 0;
-            long alreadyHeld = 0;
-
-            // The newest backup's files at this destination, counted as the
-            // copy lands their content and read by the status while it runs
-            // (ADR-0088 Amendment 1). The ledger's figure moves only once the
-            // pass has succeeded, so the count stands until then.
-            using var count = scope == SyncScope.Skip
-                ? null
-                : await SyncCount.StartAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
-                    .ConfigureAwait(false);
-
-            if (scope == SyncScope.Skip)
-            {
-                // Nothing published since this pair was last read through, its
-                // keep-set has not moved, and the reading-through is still
-                // good: there is nothing a listing could discover, so the pass
-                // costs the sequence read that established it. The completeness
-                // figures and the shortfall check both belong to a pass that
-                // counted something, and this one counted nothing.
-                var skipLog = runtime.LoggerFor(typeof(FanOut));
-                Log.SyncSkipped(skipLog, new LogLabel(set.Name), new LogLabel(destination.Name), syncedSequence);
-                alreadyHeld = previous?.Objects ?? 0;
-            }
-            else
-            {
-                var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
-                try
-                {
-                    if (keeps is not null)
-                    {
-                        var converged = await StoreToStoreCopier.ConvergeAsync(
-                            archive.Store, replica, keeps, cancellationToken,
-                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                            spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
-                        copied = converged.Copied;
-                        alreadyHeld = converged.AlreadyHeld;
-                    }
-                    else
-                    {
-                        var outcome = await StoreToStoreCopier.CopyAsync(
-                            archive.Store, replica, cancellationToken,
-                            destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
-                            counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
-                        copied = outcome.Copied;
-                        alreadyHeld = outcome.AlreadyHeld;
-                    }
-                }
-                finally
-                {
-                    if (completeness is { } counted)
-                    {
-                        ledger.RecordCompleteness(
-                            set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
-                    }
-                }
-
-                ReportShortfall(
-                    runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
-            }
-
-            // The repair sync (ADR-0035 Amendment 1, FR-VER-007): objects a
-            // deep sweep found damaged and could not repair are re-read here,
-            // after the copy has filled whatever it could, and repaired from
-            // whatever sound copy exists now. The pair is not called in sync
-            // while any remain — the ledger holds it failed regardless, and
-            // recording the failure here backs the next attempt off rather
-            // than re-reading the same blobs every pass.
-            if (previous?.DamagedKeys is { Count: > 0 } outstanding)
-            {
-                await using var repairer = new ReplicaRepairer(runtime, set, destination.Name, archive, userInitiated);
-                var (resolved, unrepaired) = await repairer.RecheckAsync(
-                    replica, outstanding,
-                    key => (keeps?.Invoke(key) ?? true) || (spares?.Invoke(key) ?? false),
-                    cancellationToken).ConfigureAwait(false);
-                var remaining = ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], resolved, nowMs)
-                    .DamagedKeys;
-                if (remaining is { Count: > 0 })
-                {
-                    // The copy answered: what holds the pair now is the damage
-                    // alone, whatever failure stood before (FR-VER-005).
-                    ledger.RecordHeldForDamage(
-                        set.Id, destination.Name,
-                        DestinationSyncStore.DamageStatement(remaining)
-                            + (unrepaired.Count > 0 ? $" ({unrepaired[0].Detail})" : string.Empty),
-                        nowMs);
-                    return;
-                }
-            }
-
-            // Only a pass that read both inventories through may say so: the
-            // stamp is what a later pass skips on, and an incremental pass has
-            // not looked at the parts it did not walk.
-            var reconciled = scope == SyncScope.Reconcile;
-
-            if (plan.Samples.Count > 0)
-            {
-                // The local twin of the peer challenge (peer-protocol 04):
-                // both destination kinds earn "verified" from bytes read back
-                // off the destination's own disk, never from a copy having
-                // reported success (FR-VER-001).
-                // The repository is handed in so the blob half can be proved
-                // at the replica by its own AEAD tags. Without it the only
-                // proof is a comparison, and a direct-ship set has nothing
-                // independent to compare against — archive.Store reads blobs
-                // back from the destinations themselves (ADR-0046), so the
-                // comparison would put this replica against itself.
-                // The catalogue's signed digests feed the digest tier: a
-                // write-only set's data records are sealed to a key this
-                // service does not hold, so the whole-blob digest the writer
-                // signed into the index is what proves them at the replica.
-                var verification = await Replication.ReplicaVerifier.VerifyAsync(
-                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
-                    archive.Catalogue.SignedDigestOf)
-                    .ConfigureAwait(false);
-                if (verification.Failed.Count > 0)
-                {
-                    RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
-                    return;
-                }
-
-                ledger.RecordSuccess(
-                    set.Id, destination.Name, copied, nowMs, syncedSequence,
-                    keepFingerprint, reconciled, newestSnapshot,
-                    ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
-                    convergedAt);
-                return;
-            }
-
-            ledger.RecordSuccess(
-                set.Id, destination.Name, copied, nowMs, syncedSequence,
-                keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
         }
+    }
+
+    /// <summary>
+    /// Copies the set's archive to an S3-compatible destination (ADR-0091):
+    /// the local path's sync over the provider's store, under the
+    /// destination's prefix and the repository's id. What differs is only
+    /// what a store cannot be asked: whether a directory exists, which is
+    /// whether the prefix holds anything; and how much room is left, which a
+    /// store does not say and a bucket does not run out of the way a disk does.
+    /// </summary>
+    /// <remarks>
+    /// A store that does not answer is <see cref="DestinationSyncState.Unavailable"/>,
+    /// a gap that closes itself (FR-DEST-003). A store that answers and refuses
+    /// — a signature, a bucket that is not there — is failed, because waiting
+    /// does not change its answer; so is a destination with no access key
+    /// stored, which is sent nothing.
+    /// </remarks>
+    private static async ValueTask CopyToS3Async(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, bool userInitiated,
+        CancellationToken cancellationToken)
+    {
+        var ledger = runtime.DestinationSync;
+
+        Storage.S3.S3ObjectStore? store;
+        string? refusal;
+        try
+        {
+            store = StoreComposition.OpenS3(runtime, destination, archive.Repository.RepositoryId.ToString(), out refusal);
+        }
+        catch (Domain.ClientStateException damaged)
+        {
+            ledger.RecordFailure(set.Id, destination.Name, DestinationSyncState.Failed, damaged.Message, nowMs);
+            return;
+        }
+
+        if (store is null)
+        {
+            ledger.RecordFailure(set.Id, destination.Name, DestinationSyncState.Failed, refusal!, nowMs);
+            return;
+        }
+
+        try
+        {
+            var replicaRootMissing = !await HoldsAnyAsync(store, string.Empty, cancellationToken).ConfigureAwait(false);
+            await CopyToReplicaAsync(
+                    runtime, set, destination, archive, PacedObjectStore.Over(store, limiter), replicaRootMissing,
+                    shortOfSpace: null, nowMs, userInitiated, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        {
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Unavailable, unreachable.Message, nowMs);
+        }
+        catch (IOException exception)
+        {
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Failed, exception.Message, nowMs);
+        }
+    }
+
+    /// <summary>
+    /// Brings one replica level with the set's archive and proves it, over
+    /// whatever store holds it (ADR-0012 Amendment 2): the heal from a
+    /// destination that is ahead, the keep-set a retention policy or a
+    /// person's deletion gives it, the copy or the converge, the repair of
+    /// what a sweep found damaged, and a sample read back before the pair is
+    /// called in sync. A local path and an S3-compatible store are this one
+    /// pass behind their own opening.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set.</param>
+    /// <param name="destination">The destination.</param>
+    /// <param name="archive">The set's archive.</param>
+    /// <param name="replica">The replica's store, paced as the caller decided.</param>
+    /// <param name="replicaRootMissing">Whether the replica held nothing when the pass began.</param>
+    /// <param name="shortOfSpace">Why the destination has no room for the copy, or null; none for a store that cannot say.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="userInitiated">Whether a person is waiting.</param>
+    /// <param name="cancellationToken">Cancels the pass.</param>
+    private static async ValueTask CopyToReplicaAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
+        ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, bool replicaRootMissing,
+        Func<string?>? shortOfSpace, ulong nowMs, bool userInitiated, CancellationToken cancellationToken)
+    {
+        var ledger = runtime.DestinationSync;
+
+        // Read before this pass writes over it: "did we believe this
+        // destination held our data a moment ago" is the question the
+        // shortfall check rests on, and the rotation cursor below is the
+        // other half of the same before-picture.
+        var previous = ledger.Find(set.Id, destination.Name);
+        var priorSuccess = previous?.LastSuccessAt is not null;
+
+        // The destination as the rollback witness (ADR-0062). A state
+        // directory restored from an older copy rolls the catalogue, the
+        // sequence file, this ledger and a direct-ship set's metadata
+        // store back together, so nothing local can notice — but the
+        // destination still holds what was published, and its journal
+        // keys carry this writer's sequence in the clear. The allocator
+        // is the detector: numbers are handed out before anything is
+        // written, so a destination attesting a number the writer has
+        // not yet allocated is a rollback of the allocation state and
+        // nothing else. Per writer, so a second device writing the same
+        // repository never reads as this one's rollback. Asked before
+        // the gate below, which reads a ledger that rolled back too.
+        var rolledBack = false;
+        if (!replicaRootMissing)
+        {
+            var attested = await ObservedHead.JournalHeadAsync(replica, runtime.Writer, cancellationToken)
+                .ConfigureAwait(false);
+            var ahead = archive.Sequence.AdoptObservedHead(attested) as SequenceAdoption.Adopted;
+            rolledBack = ahead is not null;
+
+            // The heal: the destination's metadata copied back — and,
+            // for a staging set, the content the newer history needs,
+            // blobs before the manifests that reference them — the
+            // catalogue rebuilt in place, the writer moved past what the
+            // healed archive attests. Triggered by the metadata plane
+            // rather than by the allocator, so a heal that failed is
+            // retried on every pass until it succeeds — the sequence
+            // moved durably the first time and would never ask again.
+            // It runs before the keep-set is computed, which is what
+            // keeps a converging pass from trimming the destination to a
+            // history the archive has not yet got back (ADR-0062
+            // Amendment 2).
+            ServiceRuntime.HealOutcome? heal = null;
+            if (attested > await ObservedHead.JournalHeadAsync(archive.Store, runtime.Writer, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                heal = await runtime.HealFromDestinationAsync(set.Id, archive, replica, cancellationToken)
+                    .ConfigureAwait(false);
+                LogHeal(runtime, set, destination, archive, heal);
+            }
+
+            if (ahead is not null)
+            {
+                ReportDestinationAhead(
+                    runtime, set, destination.Name, ahead, staging: archive.ShipSink is null, heal, nowMs,
+                    peer: false);
+            }
+
+            if (heal?.Failure is { } healFailure)
+            {
+                // Nothing at the destination is touched and the ledger is
+                // not advanced: the next pass finds the archive still
+                // behind and heals again.
+                ledger.RecordFailure(
+                    set.Id, destination.Name, DestinationSyncState.Failed,
+                    HealFailureForLedger(archive, healFailure), nowMs);
+                return;
+            }
+        }
+
+        // The sequence is read BEFORE the copy starts — and after the
+        // heal, so it is the healed archive's: a success then proves the
+        // destination holds everything published at or before it, which
+        // is what the replication gate compares snapshots to (FR-GC-009).
+        // A snapshot publishing mid-copy may or may not have crossed, so
+        // the claim stops at the pre-copy sequence.
+        var (syncedSequence, newestSnapshot) = await StagingPublicationSequenceAsync(archive, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Filling a destination volume to zero is a harm to the machine,
+        // not just to this backup: logs stop, temp files fail, and on the
+        // source's own volume the next capture cannot even stage. The copy
+        // is held off before it starts rather than after it has taken the
+        // last of the space.
+        if (shortOfSpace?.Invoke() is { } shortfall)
+        {
+            // Unavailable, not Failed: deleting something frees the space
+            // and the next pass simply succeeds (FR-DEST-003). Nothing
+            // here needs a human's decision, only room.
+            ledger.RecordFailure(
+                set.Id, destination.Name, DestinationSyncState.Unavailable, shortfall, nowMs);
+            return;
+        }
+
+        // A destination under a retention policy holds exactly its
+        // keep-set's closure, converged in one operation with the copy so
+        // fan-out and retention cannot disagree (FR-GC-010). One without a
+        // policy gets the conservative whole copy — and so does a pass
+        // whose staging graph will not walk, but that second case is a
+        // fault rather than a choice and now says so.
+        var effective = set.Destinations
+            .FirstOrDefault(reference => string.Equals(reference.Ref, destination.Name, StringComparison.Ordinal))
+            ?.Retention ?? set.Retention;
+        Func<string, bool>? keeps = null;
+
+        // "Keeps everything" is a keep-set and has a rendering of its own:
+        // null would mean "nobody computed one", which is what the ledger
+        // carries forward rather than compares (ADR-0056).
+        // A keep-set computed from rolled-back metadata would converge
+        // the destination down to the history the rollback can see,
+        // deleting the newest backup from the only place that holds it.
+        // The detecting pass therefore keeps everything: CopyAsync never
+        // deletes, only ConvergeAsync does, and no keeps means no
+        // converge (and no spares, which only a keep-set needs).
+        var keepFingerprint = KeepsEverything;
+
+        // A person's deletion converges a destination with no rules too
+        // (FR-GC-013): its whole copy would otherwise keep the snapshot,
+        // and staging holds the snapshot until every copy has let it go.
+        // With no rule the keep-set is everything but what was requested.
+        // The journal head is read before the keep-set, so the converge
+        // recorded below began after every request it was computed from.
+        var deletion = rolledBack ? null : await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false);
+        if (!rolledBack && (Retention.DestinationConvergence.HasRules(effective) || deletion is not null))
+        {
+            var convergence = await Retention.DestinationConvergence.ComputeKeepsAsync(
+                archive.Store, archive.Repository, effective ?? new RetentionConfiguration(),
+                DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
+                runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
+            keeps = convergence.Keeps;
+            keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
+            ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+            ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
+        }
+
+        var convergedAt = keeps is not null ? deletion : null;
+
+        // What this pass has to do, decided before it reads anything
+        // (ADR-0056). A pair the last pass left level, with nothing
+        // published since and its keep-set unmoved, is one this pass can
+        // answer from what that pass wrote down — and the reading-through
+        // it wrote down expires, so the answer cannot go stale for ever.
+        // A migrating direct-ship set keeps its staging archive until
+        // retirement, and the ledger cannot speak for the history only
+        // that archive holds: its runs record success for what they
+        // shipped (ADR-0046 §3). Until the archive is gone, every pass
+        // reads through — which is what seeds the destination and what
+        // lets retirement establish that nothing would be lost.
+        var stagingRemains = archive.ShipSink is not null
+            && File.Exists(Path.Combine(
+                runtime.ArchivePath(set.Id), Repository.RepositoryLifecycle.DescriptorKey.Value));
+
+        // The gate's ledger rolled back with everything else, so its
+        // "nothing to look at" would be the rollback's own opinion of
+        // itself: a detecting pass reads through.
+        var scope = rolledBack
+            ? SyncScope.Reconcile
+            : ReconciliationGate.Decide(
+                previous, syncedSequence, keepFingerprint, nowMs,
+                ReconciliationGate.DefaultIntervalMilliseconds, stagingRemains);
+
+        // Samples come from the pre-copy listing, filtered like the copy
+        // itself: everything sampled is carried by the copy below, so a
+        // mismatch afterwards is the replica's fault, never a race with a
+        // publication that had not crossed yet.
+        //
+        // The rotation resumes after the last passed challenge, so
+        // coverage accumulates across syncs (FR-VER-002). A local path takes
+        // no reservoir share: this hub reads the replica's bytes off its own
+        // disk, so there is nobody on the other side who could arrange to
+        // hold only the objects it expects to be asked about. A store at a
+        // provider has somebody on the other side, and the rotation is
+        // predictable from what was asked before, so it takes the peer's
+        // share drawn at random from the whole set (ADR-0091).
+        var plan = await VerificationSampler.SampleAsync(
+            archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
+            VerificationSampler.DefaultBudget,
+            destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
+            Protocol.VerificationChallenge.MaximumLength, cancellationToken)
+            .ConfigureAwait(false);
+
+        // The converge spare (FR-GC-009's direct-ship shape): under
+        // direct-ship the replicas are the only holders, so before this
+        // destination's policy may drop anything, the closure of every
+        // snapshot a sibling is still owed is set aside — a narrow
+        // override must not delete the last copy of history a wide
+        // sibling has not received yet. A staging set needs none of
+        // this: the gate holds the staging copy until every entitled
+        // destination provably has its own (FR-GC-009), so a trimmed
+        // replica is re-seedable from staging.
+        Func<string, bool>? spares = null;
+        if (keeps is not null && archive.ShipSink is not null)
+        {
+            var sparePlan = await Retention.DestinationConvergence.ComputeSparesAsync(
+                archive.Store, archive.Repository, set.Destinations, set.Retention,
+                name => ledger.Find(set.Id, name), nowMs, cancellationToken,
+                runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
+            spares = sparePlan.Spares;
+
+            // Folded into the fingerprint the gate compares, because a
+            // spare set moves when a sibling catches up and nothing about
+            // that is published: a pass that skipped over it would keep
+            // holding copies whose only reason to exist had been
+            // delivered (ADR-0056).
+            keepFingerprint = $"{keepFingerprint}/{sparePlan.Fingerprint}";
+        }
+
+        // Held against owed, in bytes, as the copy discovers it. Kept
+        // here rather than returned by the copier because the figure
+        // matters most when the pass does NOT finish: a drive pulled
+        // halfway leaves a destination genuinely part-full, and a number
+        // that only survived success could never say so. Recorded below
+        // on every exit, which is why it is captured and not written as
+        // it arrives — a ledger write per object would be thousands.
+        CopyProgress? completeness = null;
+        var counting = new Progress<CopyProgress>(latest => completeness = latest);
+
+        long copied = 0;
+        long alreadyHeld = 0;
+
+        // The newest backup's files at this destination, counted as the
+        // copy lands their content and read by the status while it runs
+        // (ADR-0088 Amendment 1). The ledger's figure moves only once the
+        // pass has succeeded, so the count stands until then.
+        using var count = scope == SyncScope.Skip
+            ? null
+            : await SyncCount.StartAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (scope == SyncScope.Skip)
+        {
+            // Nothing published since this pair was last read through, its
+            // keep-set has not moved, and the reading-through is still
+            // good: there is nothing a listing could discover, so the pass
+            // costs the sequence read that established it. The completeness
+            // figures and the shortfall check both belong to a pass that
+            // counted something, and this one counted nothing.
+            var skipLog = runtime.LoggerFor(typeof(FanOut));
+            Log.SyncSkipped(skipLog, new LogLabel(set.Name), new LogLabel(destination.Name), syncedSequence);
+            alreadyHeld = previous?.Objects ?? 0;
+        }
+        else
+        {
+            var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
+            try
+            {
+                if (keeps is not null)
+                {
+                    var converged = await StoreToStoreCopier.ConvergeAsync(
+                        archive.Store, replica, keeps, cancellationToken,
+                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                        spares, counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
+                    copied = converged.Copied;
+                    alreadyHeld = converged.AlreadyHeld;
+                }
+                else
+                {
+                    var outcome = await StoreToStoreCopier.CopyAsync(
+                        archive.Store, replica, cancellationToken,
+                        destination.Name, runtime.LoggerFor(typeof(StoreToStoreCopier)),
+                        counting, copyScope, count is null ? null : count.Holds).ConfigureAwait(false);
+                    copied = outcome.Copied;
+                    alreadyHeld = outcome.AlreadyHeld;
+                }
+            }
+            finally
+            {
+                if (completeness is { } counted)
+                {
+                    ledger.RecordCompleteness(
+                        set.Id, destination.Name, counted.HeldBytes, counted.OwedBytes, nowMs);
+                }
+            }
+
+            ReportShortfall(
+                runtime, set, destination.Name, priorSuccess, replicaRootMissing, alreadyHeld, copied, nowMs);
+        }
+
+        // The repair sync (ADR-0035 Amendment 1, FR-VER-007): objects a
+        // deep sweep found damaged and could not repair are re-read here,
+        // after the copy has filled whatever it could, and repaired from
+        // whatever sound copy exists now. The pair is not called in sync
+        // while any remain — the ledger holds it failed regardless, and
+        // recording the failure here backs the next attempt off rather
+        // than re-reading the same blobs every pass.
+        if (previous?.DamagedKeys is { Count: > 0 } outstanding)
+        {
+            await using var repairer = new ReplicaRepairer(runtime, set, destination.Name, archive, userInitiated);
+            var (resolved, unrepaired) = await repairer.RecheckAsync(
+                replica, outstanding,
+                key => (keeps?.Invoke(key) ?? true) || (spares?.Invoke(key) ?? false),
+                cancellationToken).ConfigureAwait(false);
+            var remaining = ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], resolved, nowMs)
+                .DamagedKeys;
+            if (remaining is { Count: > 0 })
+            {
+                // The copy answered: what holds the pair now is the damage
+                // alone, whatever failure stood before (FR-VER-005).
+                ledger.RecordHeldForDamage(
+                    set.Id, destination.Name,
+                    DestinationSyncStore.DamageStatement(remaining)
+                        + (unrepaired.Count > 0 ? $" ({unrepaired[0].Detail})" : string.Empty),
+                    nowMs);
+                return;
+            }
+        }
+
+        // Only a pass that read both inventories through may say so: the
+        // stamp is what a later pass skips on, and an incremental pass has
+        // not looked at the parts it did not walk.
+        var reconciled = scope == SyncScope.Reconcile;
+
+        if (plan.Samples.Count > 0)
+        {
+            // The hub-read twin of the peer challenge (peer-protocol 04):
+            // every destination kind earns "verified" from bytes read back
+            // off the destination itself — its disk, or its store — never
+            // from a copy having reported success (FR-VER-001).
+            // The repository is handed in so the blob half can be proved
+            // at the replica by its own AEAD tags. Without it the only
+            // proof is a comparison, and a direct-ship set has nothing
+            // independent to compare against — archive.Store reads blobs
+            // back from the destinations themselves (ADR-0046), so the
+            // comparison would put this replica against itself.
+            // The catalogue's signed digests feed the digest tier: a
+            // write-only set's data records are sealed to a key this
+            // service does not hold, so the whole-blob digest the writer
+            // signed into the index is what proves them at the replica.
+            var verification = await Replication.ReplicaVerifier.VerifyAsync(
+                archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
+                archive.Catalogue.SignedDigestOf)
+                .ConfigureAwait(false);
+            if (verification.Failed.Count > 0)
+            {
+                RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);
+                return;
+            }
+
+            ledger.RecordSuccess(
+                set.Id, destination.Name, copied, nowMs, syncedSequence,
+                keepFingerprint, reconciled, newestSnapshot,
+                ProofOf(verification, plan.Population, syncedSequence, plan.NextCursor),
+                convergedAt);
+            return;
+        }
+
+        ledger.RecordSuccess(
+            set.Id, destination.Name, copied, nowMs, syncedSequence,
+            keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
     }
 
     /// <summary>

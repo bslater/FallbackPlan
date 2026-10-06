@@ -3298,9 +3298,10 @@ function renderConfigBody() {
   const destinations = S.destinations.map(destination => `
     <tr>
       <td><b>${esc(destination.name)}</b>
-          ${destination.addressDefect ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "address defect")} ${esc(destination.addressDefect)}</div>` : ""}</td>
+          ${destination.addressDefect ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "address defect")} ${esc(destination.addressDefect)}</div>` : ""}
+          ${destination.kind === "s3" && destination.accessKeyStored === false ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "no access key")} nothing is sent until one is stored</div>` : ""}</td>
       <td>${esc(destination.kind)}</td>
-      <td class="mono detail">${esc(destination.path ?? (destination.endpoint ? destination.endpoint + " · " + (destination.fingerprint ?? "").slice(0, 10) + "…" : "—"))}</td>
+      <td class="mono detail">${esc(destinationAddress(destination))}</td>
       <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
       <td>
         <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
@@ -3369,6 +3370,7 @@ function renderConfigBody() {
         <span>
           <button type="button" class="btn small" data-action="dest-add-local">＋ Local folder</button>
           <button type="button" class="btn small" data-action="dest-add-peer" ${S.pairings.length ? "" : "disabled title='Pair with a peer first'"}>＋ Peer destination</button>
+          <button type="button" class="btn small" data-action="dest-add-s3">＋ S3-compatible storage</button>
           <button type="button" class="btn small" data-action="invite-open">✉ Invite a peer</button>
           <button type="button" class="btn small" data-action="pair-open">🔗 Pair with a remote service</button>
         </span>
@@ -3780,7 +3782,8 @@ function setSectionHtml(key) {
         <label class="field">Storage shape</label>
         <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
         reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
-        local-path or paired-peer destination, and a backup waits when none is reachable. With only a peer
+        local-path or paired-peer destination, and a backup waits when none is reachable; an S3-compatible
+        store is filled by the sync after each run, from what the run shipped. With only a peer
         to ship to, there is no second copy here to check its content against, so it is never reported as
         verified. Unticked, backups stage into a
         local archive first and copy outward after — a local buffer at the cost of a second copy on this
@@ -4916,6 +4919,7 @@ Object.assign(actions, {
 
   "dest-add-local"() { openDestEditor("local-path", null); },
   "dest-add-peer"() { openDestEditor("peer", null); },
+  "dest-add-s3"() { openDestEditor("s3", null); },
 
   "cfg-edit-dest"(el) {
     const destination = S.destinations.find(candidate => candidate.id === el.dataset.id);
@@ -4948,16 +4952,24 @@ Object.assign(actions, {
 
   async "dest-save"(el) {
     const kind = el.dataset.kind;
+    const s3 = kind === "s3";
     const drillText = document.getElementById("dest-drill").value.trim();
+    const field = id => document.getElementById(id)?.value.trim() ?? "";
     const descriptor = {
       id: el.dataset.id || null,
       name: document.getElementById("dest-name").value.trim(),
       kind,
       path: kind === "local-path" ? document.getElementById("dest-path").value.trim() : null,
       fingerprint: kind === "peer" ? document.getElementById("dest-fp").value.trim() : null,
-      endpoint: kind === "peer" ? document.getElementById("dest-endpoint").value.trim() : null,
+      endpoint: kind === "peer" || s3 ? document.getElementById("dest-endpoint").value.trim() : null,
+      // An S3-compatible store's address (ADR-0091); an emptied optional
+      // field goes as empty, which the service reads as none.
+      bucket: s3 ? field("dest-bucket") : null,
+      region: s3 ? field("dest-region") : null,
+      prefix: s3 ? field("dest-prefix") : null,
+      addressing: s3 ? field("dest-addressing") : null,
       failureDomain: document.getElementById("dest-domain").value || null,
-      deepVerifyIntervalDays: Number(document.getElementById("dest-sweep").value.trim()) || null,
+      deepVerifyIntervalDays: Number(field("dest-sweep")) || null,
       priority: intOrNull(document.getElementById("dest-priority").value),
       // Contract 1.44: both go as shown, so an emptied field clears — the
       // empty limit and the zero cadence are the wire's "remove it".
@@ -4971,21 +4983,28 @@ Object.assign(actions, {
     if (document.getElementById("dest-priority").value.trim() !== "" && descriptor.priority === null) {
       toast("warn", "Priority is a whole number."); return;
     }
+    // The secret is read here and sent only to the console's own endpoint,
+    // which seals it to the service; nothing typed is sent when nothing was.
+    const keyId = s3 ? field("dest-key-id") : "";
+    const secret = s3 ? (document.getElementById("dest-secret")?.value ?? "") : "";
+    if (secret && !keyId) { toast("warn", "An access key needs its id too."); return; }
 
     await withBusy(el, async () => {
       const result = await run(
         { command: "upsert_destination", destination: descriptor }, { errToast: "The service refused the destination" });
-      if (result) {
-        toast("ok", `Destination '${descriptor.name}' saved.`);
-        closeDialog();
-        // The service answers with lines only when it has something to say
-        // back: a relative path it resolved, or a move onto a root's drive
-        // that only a Debug build lets stand (ADR-0051 Amendment 2).
-        if (result.result === "configuration_change" && result.lines?.length) {
-          reportDialog(`Destination '${descriptor.name}' saved`, result.lines);
-        }
-        refreshConfigData(); refreshStatus();
+      if (!result) return;
+      toast("ok", `Destination '${descriptor.name}' saved.`);
+      closeDialog();
+      // The service answers with lines only when it has something to say
+      // back: a relative path it resolved, or a move onto a root's drive
+      // that only a Debug build lets stand (ADR-0051 Amendment 2).
+      const lines = result.result === "configuration_change" ? [...(result.lines ?? [])] : [];
+      if (secret) {
+        const stored = await storeAccessKey(descriptor.name, keyId, secret);
+        if (stored) lines.push(...stored);
       }
+      if (lines.length) reportDialog(`Destination '${descriptor.name}' saved`, lines);
+      refreshConfigData(); refreshStatus();
     });
   },
 
@@ -5151,13 +5170,85 @@ Object.assign(actions, {
 
 /* ----- destination editor & root browser ----- */
 
+// Where a destination is, in one line: a folder, a peer's address and
+// fingerprint, or a store's endpoint, bucket and prefix.
+function destinationAddress(destination) {
+  if (destination.kind === "s3") {
+    return `${destination.endpoint ?? ""} · ${destination.bucket ?? ""}${destination.prefix ? "/" + destination.prefix : ""}`;
+  }
+  return destination.path
+    ?? (destination.endpoint ? destination.endpoint + " · " + (destination.fingerprint ?? "").slice(0, 10) + "…" : "—");
+}
+
+// The access key goes to the console's own endpoint, which seals it to the
+// service for this destination and key id (ADR-0091): the command relay is
+// never sent the secret. Answers the service's lines, or null when refused.
+async function storeAccessKey(destinationName, accessKeyId, secretAccessKey) {
+  let response;
+  try {
+    response = await fetch("/api/destination-credentials", {
+      method: "POST",
+      headers: session
+        ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
+        : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+      body: JSON.stringify({ destinationName, accessKeyId, secretAccessKey }),
+    });
+  } catch {
+    toast("warn", "The console process stopped answering; the access key was not stored.");
+    return null;
+  }
+  const body = await safeJson(response);
+  if (response.ok && body?.outcome === "stored") return body.lines ?? [];
+  toast("bad", body?.detail ?? body?.message ?? "The access key was not stored.");
+  return null;
+}
+
+function destinationHeading(kind, isNew) {
+  if (!isNew) return "Edit destination";
+  return kind === "peer" ? "New peer destination"
+    : kind === "s3" ? "New S3-compatible destination"
+    : "New local destination";
+}
+
+function s3Fields(destination) {
+  const held = destination?.accessKeyStored === true;
+  const addressing = destination?.addressing ?? "path";
+  return `
+      <label class="field" for="dest-endpoint">Endpoint <span class="plain">— the store's base URL, https://…</span></label>
+      <input type="text" id="dest-endpoint" class="mono" spellcheck="false" value="${esc(destination?.endpoint ?? "")}"
+        placeholder="https://objects.example.net">
+      <div class="field-row wrap">
+        <label class="mini">bucket <input type="text" id="dest-bucket" class="mono" spellcheck="false"
+          value="${esc(destination?.bucket ?? "")}"></label>
+        <label class="mini">region <input type="text" id="dest-region" class="mono" spellcheck="false"
+          value="${esc(destination?.region ?? "")}" placeholder="us-east-1"></label>
+        <label class="mini">prefix <input type="text" id="dest-prefix" class="mono" spellcheck="false"
+          value="${esc(destination?.prefix ?? "")}" placeholder="the bucket's top"></label>
+        <label class="mini">addressing
+          <select id="dest-addressing">${["path", "virtual-host"].map(option =>
+            `<option value="${option}" ${option === addressing ? "selected" : ""}>${option}</option>`).join("")}
+          </select></label>
+      </div>
+      <p class="subtle" id="dest-key-held">${held
+        ? "An access key is held. Type a new one only to replace it."
+        : "No access key is held yet: nothing is sent to the store until one is."}</p>
+      <div class="field-row wrap">
+        <label class="mini">access key id <input type="text" id="dest-key-id" class="mono" spellcheck="false"
+          autocomplete="off"></label>
+        <label class="mini">secret access key <input type="password" id="dest-secret" autocomplete="new-password"></label>
+      </div>`;
+}
+
 function openDestEditor(kind, destination) {
   const isNew = !destination?.id;
   const domains = ["", "same-volume", "same-machine", "same-site", "independent"];
   openDialog(`
-    <h3>${isNew ? (kind === "peer" ? "New peer destination" : "New local destination") : "Edit destination"}</h3>
+    <h3>${destinationHeading(kind, isNew)}</h3>
     ${kind === "peer" ? `<p class="dlg-sub">A peer destination points a set at a machine you have paired with.
       The grant holds the key; this holds the address (FR-DEST-006).</p>` : ""}
+    ${kind === "s3" ? `<p class="dlg-sub">A bucket at any store that speaks the S3 API. Everything written there is
+      sealed before it leaves this machine; the access key is sealed to the service here and held in its state
+      directory, never in the configuration (ADR-0091).</p>` : ""}
     <label class="field" for="dest-name">Name <span class="plain">— what sets reference</span></label>
     <input type="text" id="dest-name" spellcheck="false" value="${esc(destination?.name ?? "")}">
     ${kind === "local-path" ? `
@@ -5166,7 +5257,7 @@ function openDestEditor(kind, destination) {
         <input type="text" id="dest-path" class="mono" spellcheck="false" value="${esc(destination?.path ?? "")}">
         <button type="button" class="btn" data-action="picker-browse" data-browser="dest-browser" data-input="dest-path">Browse…</button>
       </div>
-      <div id="dest-browser" hidden></div>` : `
+      <div id="dest-browser" hidden></div>` : kind === "s3" ? s3Fields(destination) : `
       <label class="field" for="dest-fp">Paired peer</label>
       <select id="dest-fp">${S.pairings.map(pairing =>
         `<option value="${esc(pairing.fingerprint)}" ${pairing.fingerprint === destination?.fingerprint ? "selected" : ""}>
@@ -5179,13 +5270,13 @@ function openDestEditor(kind, destination) {
         <select id="dest-domain">${domains.map(domain =>
           `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
         </select></label>
-      <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num"
-        value="${destination?.deepVerifyIntervalDays ?? ""}" placeholder="${kind === "peer" ? "never" : "default"}"></label>
+      ${kind === "s3" ? "" : `<label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num"
+        value="${destination?.deepVerifyIntervalDays ?? ""}" placeholder="${kind === "peer" ? "never" : "default"}"></label>`}
       <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
       <label class="mini">transfer limit <input type="text" id="dest-limit"
         value="${esc(destination?.transferLimit ?? "")}" placeholder="unlimited — e.g. 2 MiB/s"></label>
       <label class="mini">drill every (days) <input type="text" id="dest-drill" class="num"
-        value="${esc(destination?.drillIntervalDays ?? "")}" placeholder="${kind === "peer" ? "never" : "default"}"></label>
+        value="${esc(destination?.drillIntervalDays ?? "")}" placeholder="${kind === "local-path" ? "default" : "never"}"></label>
     </div>
     <p class="subtle">Among waiting transfers, the higher-priority destination ships first; a prioritised backup writes
     to its destinations in priority order.</p>
@@ -5460,10 +5551,12 @@ function rstStep2() {
     <label class="radio-block"><input type="radio" name="rst-src" value="staging" ${W.destinationName === null ? "checked" : ""}>
       ${here}</label>`);
   for (const destination of W.dests) {
-    if (destination.kind !== "local-path" && destination.kind !== "peer") continue;
+    if (destination.kind !== "local-path" && destination.kind !== "peer" && destination.kind !== "s3") continue;
     const label = destination.kind === "local-path"
       ? `replica at <span class="mono">${esc(destination.path ?? "")}</span>`
-      : `replica at peer <span class="mono">${esc(destination.endpoint ?? "")}</span>, over the network`;
+      : destination.kind === "s3"
+        ? `replica in bucket <span class="mono">${esc(destination.bucket ?? "")}</span>, over the network`
+        : `replica at peer <span class="mono">${esc(destination.endpoint ?? "")}</span>, over the network`;
     options.push(`
       <label class="radio-block"><input type="radio" name="rst-src" value="${esc(destination.name)}"
         ${W.destinationName === destination.name ? "checked" : ""}>
@@ -5472,7 +5565,7 @@ function rstStep2() {
 
   return `
     <p class="dlg-sub">Where to restore <b>from</b>. A destination's replica serves when this machine's own
-    archive is damaged or gone — a peer's travels the paired connection.</p>
+    archive is damaged or gone — a peer's travels the paired connection, a store's its endpoint.</p>
     <label class="field" for="rst-set">Backup set</label>
     <select id="rst-set">${W.sets.map(set =>
       `<option ${set.name === W.setName ? "selected" : ""}>${esc(set.name)}</option>`).join("")}</select>

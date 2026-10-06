@@ -186,4 +186,15 @@ internal static class Strings
     /// </summary>
     internal static string FormatReclaimAuthority_RootExactlyBytes(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ReclaimAuthority_RootExactlyBytes, arg0);
+
+    /// <summary>
+    /// A secret access key is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    private static string WriteOnlyProvisioning_AccessKeySecretMalformed => Get(nameof(WriteOnlyProvisioning_AccessKeySecretMalformed));
+
+    /// <summary>
+    /// A secret access key is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    internal static string FormatWriteOnlyProvisioning_AccessKeySecretMalformed(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyProvisioning_AccessKeySecretMalformed, arg0);
 }

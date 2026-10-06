@@ -207,6 +207,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
             Logger(options, typeof(JobScheduler)), BackupPoolWidth, options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
+        DestinationCredentials = new DestinationCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
         ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
         Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System);
@@ -320,6 +321,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
     internal WriteCredentialStore WriteCredentials { get; }
+
+    /// <summary>The access keys this service signs S3-compatible destinations' requests with (ADR-0091).</summary>
+    internal DestinationCredentialStore DestinationCredentials { get; }
 
     /// <summary>
     /// Which peer each replica stored here belongs to (peer-protocol 05 §2).

@@ -447,7 +447,10 @@ public static class Scheduler
     /// service must not put on somebody else's link by default
     /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
     /// Amendment 3). Absent means never, and the bytes one drill may pull
-    /// are capped in <see cref="RecoveryDrillJob"/>.
+    /// are capped in <see cref="RecoveryDrillJob"/>. An S3-compatible store
+    /// keeps the peer's rule for a reason of its own: every read is a request
+    /// a provider may charge for, a cost the person who declared it chooses
+    /// (ADR-0091).
     /// </para>
     /// <para>
     /// A pair nothing has ever reached is not due one: there is nothing there
@@ -468,7 +471,7 @@ public static class Scheduler
             case DestinationKind.LocalPath:
                 break;
 
-            case DestinationKind.Peer when destination.DrillIntervalDays is not null:
+            case DestinationKind.Peer or DestinationKind.S3 when destination.DrillIntervalDays is not null:
                 break;
 
             default:

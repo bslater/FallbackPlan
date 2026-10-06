@@ -64,6 +64,8 @@ internal static class DestinationProbe
             DestinationKind.LocalPath => ProbeLocalPath(runtime, set, declared, nowMs),
             DestinationKind.Peer =>
                 await ProbePeerAsync(runtime, set, declared, nowMs, cancellationToken).ConfigureAwait(false),
+            DestinationKind.S3 =>
+                await ProbeS3Async(runtime, set, declared, nowMs, cancellationToken).ConfigureAwait(false),
 
             // A reserved kind is a stated incapacity, never a failure
             // (FR-DEST-005), and the probe must not spell it like one.
@@ -175,6 +177,65 @@ internal static class DestinationProbe
             return Refuse(
                 runtime, set, declared, DestinationSyncState.Unavailable,
                 $"could not reach {host}:{port}: {exception.Message}", nowMs);
+        }
+    }
+
+    /// <summary>
+    /// Asks the store for one key under the destination's prefix: the
+    /// cheapest request that proves the endpoint answers, the access key
+    /// signs and the bucket is there (ADR-0091). Nothing is written.
+    /// </summary>
+    private static async ValueTask<ProbeOutcome> ProbeS3Async(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        DestinationConfiguration declared,
+        ulong nowMs,
+        CancellationToken cancellationToken)
+    {
+        Storage.S3.S3ObjectStore? store;
+        string? refusal;
+        try
+        {
+            store = StoreComposition.OpenS3(runtime, declared, repositoryIdHex: null, out refusal);
+        }
+        catch (Domain.ClientStateException damaged)
+        {
+            return Refuse(runtime, set, declared, DestinationSyncState.Failed, damaged.Message, nowMs);
+        }
+
+        if (store is null)
+        {
+            return Refuse(runtime, set, declared, DestinationSyncState.Failed, refusal!, nowMs);
+        }
+
+        try
+        {
+            await foreach (var _ in store
+                .ListAsync(
+                    Storage.Abstractions.ObjectPrefix.All,
+                    new Storage.Abstractions.ListOptions { PageSizeHint = 1 },
+                    cancellationToken)
+                .ConfigureAwait(false))
+            {
+                break;
+            }
+
+            return new ProbeOutcome(
+                true, $"reached bucket '{declared.Bucket}' at {declared.Endpoint}, and the access key signs");
+        }
+        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        {
+            // Not reached, so a gap that closes itself when it answers again
+            // (FR-DEST-003).
+            return Refuse(
+                runtime, set, declared, DestinationSyncState.Unavailable,
+                $"could not reach {declared.Endpoint}: {unreachable.Message}", nowMs);
+        }
+        catch (IOException refused)
+        {
+            return Refuse(
+                runtime, set, declared, DestinationSyncState.Failed,
+                $"the store refused: {refused.Message}", nowMs);
         }
     }
 

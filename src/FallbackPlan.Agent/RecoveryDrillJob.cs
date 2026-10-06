@@ -118,7 +118,8 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// Drills one (set, destination) pair and records the result, under the
     /// budget the destination's kind implies: none for a local path, the
-    /// peer budget for a peer.
+    /// peer budget for a peer and for an S3-compatible store, whose every
+    /// byte read back crosses a network and, at a provider, a bill.
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set whose replica to read.</param>
@@ -132,7 +133,8 @@ internal static class RecoveryDrillJob
         ulong nowMs,
         CancellationToken cancellationToken)
     {
-        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+        var budget = runtime.Configuration.FindDestination(destinationName) is
+            { Kind: DestinationKind.Peer or DestinationKind.S3 }
             ? SampleBudget.Peer
             : null;
         return RunAsync(runtime, set, destinationName, nowMs, budget, cancellationToken);
@@ -185,7 +187,7 @@ internal static class RecoveryDrillJob
             return "the destination is no longer declared";
         }
 
-        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer))
+        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer or DestinationKind.S3))
         {
             return $"a {destination.Kind} destination is not served yet";
         }
@@ -226,7 +228,8 @@ internal static class RecoveryDrillJob
         bool userInitiated,
         CancellationToken cancellationToken)
     {
-        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+        var budget = runtime.Configuration.FindDestination(destinationName) is
+            { Kind: DestinationKind.Peer or DestinationKind.S3 }
             ? SampleBudget.Peer
             : null;
         return RunAsync(

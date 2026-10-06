@@ -166,6 +166,13 @@ public sealed class KeyMaterialConfinementTests
         // no repository to read the KDF salt from — the recovery kit carries
         // it, and the kit is on the client. Sealing it is what keeps the
         // passphrase itself off the surface.
+        //
+        // set_destination_credentials joined by decision (ADR-0091). An
+        // S3-compatible destination's secret access key opens no archive and
+        // derives no repository key, but it does reach the bucket the backups
+        // are in, and anyone holding it could delete them there (T-6). So it
+        // takes the one shape this surface allows a secret: sealed where it
+        // was typed, opened only by this service, into its state directory.
         var envelopeMembers = ContractTypes()
             .SelectMany(type => type
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -181,15 +188,17 @@ public sealed class KeyMaterialConfinementTests
                 nameof(OpenRestoreSourceCommand),
                 nameof(AdoptArchiveCommand),
                 nameof(PreviewAdoptionCommand),
+                nameof(SetDestinationCredentialsCommand),
             },
             envelopeMembers.Select(member => member.Type.Name).ToList(),
             "Sealed envelopes are permitted on exactly provision_write_only_set, provision_installation, "
             + "open_restore_source (NFR-SEC-009 as amended by ADR-0042, and NFR-SEC-011 for setup), "
             + "adopt_archive (ADR-0061: the same provisioning envelope, sealed against a discovered archive's "
-            + "descriptor) and preview_adoption (FR-DR-009: the same envelope, because the shape it shows is "
-            + "sealed metadata only the passphrase's derivation reads) — nowhere else. This list grows only by "
-            + "decision, which is what keeps it a fence; widening it to a pattern that admits any verb named "
-            + "plausibly would not be one.");
+            + "descriptor), preview_adoption (FR-DR-009: the same envelope, because the shape it shows is "
+            + "sealed metadata only the passphrase's derivation reads) and set_destination_credentials (ADR-0091: "
+            + "an S3-compatible destination's secret access key, sealed where it was typed) — nowhere else. This "
+            + "list grows only by decision, which is what keeps it a fence; widening it to a pattern that admits "
+            + "any verb named plausibly would not be one.");
 
         foreach (var (type, property) in envelopeMembers)
         {

@@ -606,8 +606,20 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// passphrase by the caller's session. Additive: a pre-1.59 client reads
     /// messages that name no files, and has no way to ask for the names.
     /// </para>
+    /// <para>
+    /// 1.60 serves the <c>s3</c> destination kind (FR-DEST-005, ADR-0091).
+    /// `DestinationDescriptor` gains `bucket`, `region`, `prefix` and
+    /// `addressing`, which address it, its `endpoint` is the store's base URL,
+    /// and `access_key_stored` says whether the service holds its access key.
+    /// `set_destination_credentials` hands the service that key: its
+    /// `access_key_id` in clear, and the secret only as an `envelope` sealed
+    /// to the service's recipient key, a verb added to those that carry one by
+    /// decision (NFR-SEC-009). The service keeps it in its state directory and never
+    /// answers it back. Additive: a pre-1.60 client sends none of the fields,
+    /// and its upsert of another kind is read as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 59);
+    public static ContractVersion Current { get; } = new(1, 60);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -224,6 +224,7 @@
           "FallbackPlan.Restore": "[1.0.0, )",
           "FallbackPlan.Retention": "[1.0.0, )",
           "FallbackPlan.Storage.Local": "[1.0.0, )",
+          "FallbackPlan.Storage.S3": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )",
           "System.ServiceProcess.ServiceController": "[10.0.10, )"
         }
@@ -441,6 +442,14 @@
         }
       },
       "fallbackplan.storage.local": {
+        "type": "Project",
+        "dependencies": {
+          "Bodu.Core": "[1.0.0, )",
+          "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )"
+        }
+      },
+      "fallbackplan.storage.s3": {
         "type": "Project",
         "dependencies": {
           "Bodu.Core": "[1.0.0, )",

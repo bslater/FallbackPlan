@@ -41,9 +41,17 @@ internal static class ReplicaSweepJob
     /// <summary>
     /// Whether this service reads a destination of <paramref name="kind"/>
     /// back in full: a local path off its disk, a peer over the retrieval
-    /// session. The reserved kinds are not served, so nothing reads them.
+    /// session. An S3-compatible store is read back by sample at every sync
+    /// and not swept (ADR-0091); the reserved kinds are not served, so
+    /// nothing reads them.
     /// </summary>
     internal static bool Sweeps(DestinationKind kind) => kind is DestinationKind.LocalPath or DestinationKind.Peer;
+
+    /// <summary>Why a destination of <paramref name="kind"/> is not swept, as a person asking is told.</summary>
+    /// <param name="kind">A kind <see cref="Sweeps"/> refuses.</param>
+    internal static string NotSweptBecause(DestinationKind kind) => kind == DestinationKind.S3
+        ? "the deep sweep does not read an s3 destination; every sync reads a sample of it back (ADR-0091)"
+        : $"a {kind} destination is not served yet";
 
     /// <summary>
     /// The days the scheduler rests between one circuit's close and the next

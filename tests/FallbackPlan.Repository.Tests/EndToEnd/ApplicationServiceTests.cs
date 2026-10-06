@@ -629,11 +629,11 @@ public sealed class ApplicationServiceTests : IDisposable
         // manufactures a Degraded.
         var status = StatusDeriver.Derive(HealthyInputs() with
         {
-            Destinations = [Destination("s3-main", DestinationSyncState.NotSupported, kind: DestinationKind.S3)],
+            Destinations = [Destination("blob-main", DestinationSyncState.NotSupported, kind: DestinationKind.AzureBlob)],
         });
 
         Assert.AreEqual(ProtectionState.Captured, status.State);
-        Assert.Contains(warning => warning.Contains("s3-main", StringComparison.Ordinal), status.Warnings);
+        Assert.Contains(warning => warning.Contains("blob-main", StringComparison.Ordinal), status.Warnings);
     }
 
     [TestMethod]
