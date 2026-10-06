@@ -198,8 +198,8 @@ public sealed class DrillNowTests : IDisposable
         await joined.Task.WaitAsync(Timeout);
         release.SetResult();
 
-        Assert.IsInstanceOfType<DrillResult>(await asked, out var drilled);
-        var outcome = await scheduled;
+        Assert.IsInstanceOfType<DrillResult>(await asked.WaitAsync(Timeout), out var drilled);
+        var outcome = await scheduled.WaitAsync(Timeout);
         Assert.Contains("held at the gate", outcome.Failure!, StringComparison.Ordinal);
         Assert.AreEqual(1, drilled.Failed, "the person is told the answer of the drill they joined");
         Assert.Contains("held at the gate", Assert.ContainsSingle(drilled.Lines), StringComparison.Ordinal);
@@ -230,8 +230,10 @@ public sealed class DrillNowTests : IDisposable
         var asked = handler.ExecuteAsync(new RunDrillCommand("docs", "vault"), asker.Token).AsTask();
         await WaitUntilAsync(() => runtime.Drills.IsDrilling(_harness.DocsSetId, "vault"));
 
+        // Bounded: a drill that waited on the asker would wait on the held
+        // lane, which this test releases only after the answer.
         await asker.CancelAsync();
-        Assert.IsInstanceOfType<ServiceError>(await asked, out var gaveUp);
+        Assert.IsInstanceOfType<ServiceError>(await asked.WaitAsync(Timeout), out var gaveUp);
         Assert.AreEqual(ServiceErrorReason.Cancelled, gaveUp.Reason);
 
         release.SetResult();
