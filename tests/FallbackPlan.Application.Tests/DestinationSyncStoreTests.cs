@@ -599,13 +599,61 @@ public sealed class DestinationSyncStoreTests
     }
 
     [TestMethod]
+    public void RecordDrill_FailedDrillsInARow_AreCounted_AndAPassingDrillEndsTheCount()
+    {
+        // ADR-0054 Amendment 5. A failed drill is checked again once the
+        // replica has synced since it, on a back-off that doubles while the
+        // failures go on, so the run of them has to outlive a restart. A drill
+        // that did not complete answered nothing about the replica, and
+        // neither adds to the run nor ends it.
+        var store = DestinationSyncStore.Open(_state);
+        store.RecordSuccess(SetId, "vault", objects: 3, nowUnixMilliseconds: 1_000, syncedSequence: 1);
+
+        store.RecordDrill(SetId, "vault", files: 0, bytes: 0, failure: "'a' would not restore", limit: null, nowUnixMilliseconds: 2_000);
+        store.RecordIncompleteDrill(SetId, "vault", "the drill did not complete: listing the snapshot was cancelled", 3_000);
+        store.RecordDrill(SetId, "vault", files: 0, bytes: 0, failure: "'a' would not restore", limit: null, nowUnixMilliseconds: 4_000);
+
+        var twice = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
+        Assert.AreEqual(2, twice.ConsecutiveFailedDrills);
+        Assert.AreEqual(0, twice.ConsecutiveIncompleteDrills, "a drill that completed ends the other count");
+        Assert.Contains("\"consecutive_failed_drills\": 2", File.ReadAllText(Path.Combine(_state, "destinations.json")), StringComparison.Ordinal);
+
+        store.RecordDrill(SetId, "vault", files: 1, bytes: 10, failure: null, limit: null, nowUnixMilliseconds: 5_000);
+        Assert.AreEqual(0, store.Find(SetId, "vault")!.ConsecutiveFailedDrills, "a drill that passes ends the count");
+    }
+
+    [TestMethod]
+    public void Open_ASchemaNineLedger_ReadsAStandingFailedDrillAsTheFirstOfItsRun()
+    {
+        // Schema 10 added the count of failed drills in a row, as a plain
+        // additive column. A schema-9 row with a failure standing reads it as
+        // zero, which the back-off takes as the first of a run: nothing
+        // counted the ones before it.
+        var path = Path.Combine(_state, "destinations.json");
+        File.WriteAllText(path, """
+            { "schema_version": 9, "destinations": [
+                { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
+                  "last_attempt_at": 1000, "last_success_at": 1000, "synced_sequence": 42,
+                  "drilled_at": 2000, "drill_files": 0, "drill_bytes": 0,
+                  "drill_failure": "the replica holds no snapshot of this set." } ] }
+            """);
+
+        var record = DestinationSyncStore.Open(_state).Find(SetId, "vault");
+
+        Assert.IsNotNull(record, "a schema-9 ledger must migrate, not quarantine");
+        Assert.IsFalse(File.Exists(path + ".corrupt"));
+        Assert.AreEqual("the replica holds no snapshot of this set.", record.DrillFailure);
+        Assert.AreEqual(0, record.ConsecutiveFailedDrills);
+    }
+
+    [TestMethod]
     public void Open_AFileOneSchemaAhead_IsSetAside()
     {
         // The downgrade rule, pinned at the edge rather than at 99: the very
         // next schema is already foreign to this build.
         var path = Path.Combine(_state, "destinations.json");
         File.WriteAllText(path, """
-            { "schema_version": 10, "destinations": [
+            { "schema_version": 11, "destinations": [
                 { "set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "destination": "vault", "state": "InSync",
                   "last_attempt_at": 1000, "synced_sequence": 42 } ] }
             """);
@@ -658,7 +706,7 @@ public sealed class DestinationSyncStoreTests
             .RecordSuccess(SetId, "vault", objects: 7, nowUnixMilliseconds: 1_000, syncedSequence: 42);
 
         var text = File.ReadAllText(Path.Combine(_state, "destinations.json"));
-        Assert.Contains("\"schema_version\": 9", text, StringComparison.Ordinal);
+        Assert.Contains("\"schema_version\": 10", text, StringComparison.Ordinal);
 
         var record = DestinationSyncStore.Open(_state).Find(SetId, "vault")!;
         Assert.AreEqual(42UL, record.SyncedSequence);

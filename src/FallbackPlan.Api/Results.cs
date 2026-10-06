@@ -934,8 +934,10 @@ public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long D
 /// The machine cause behind a not-in-sync state (contract 1.22, ADR-0027
 /// §4): <c>catching-up</c> (a backup completed after the last sync; the
 /// next pass heals it unaided), <c>awaiting-seed</c>, <c>never-synced</c>,
-/// or <c>reported</c> (<paramref name="Detail"/> carries the ledger's own
-/// words). Null on a healthy row and from older services.
+/// <c>awaiting-first-backup</c> (the set has no snapshot yet, so there is
+/// nothing to hold; contract 1.57), or <c>reported</c>
+/// (<paramref name="Detail"/> carries the ledger's own words). Null on a
+/// healthy row and from older services.
 /// </param>
 /// <param name="HeldBytes">
 /// Bytes this destination holds of what it is owed, as the last pass counted

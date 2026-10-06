@@ -58,6 +58,13 @@ public static class DestinationStatus
     /// <param name="setRoots">The set's capture roots, for the failure-domain comparison (ADR-0040).</param>
     /// <param name="record">The pair's sync ledger row, or null when never attempted.</param>
     /// <param name="lastCompletedAt">When the set last completed a backup, Unix milliseconds; 0 when never.</param>
+    /// <param name="hasSnapshot">
+    /// Whether the set's archive holds a snapshot of it. Without one there is
+    /// nothing a destination could hold, whatever its ledger row says
+    /// ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md)
+    /// Amendment 2). The archive answers this rather than the job journal,
+    /// which an adopted set's archive is older than.
+    /// </param>
     /// <param name="nowUnixMilliseconds">
     /// The clock, for the age of the verification stamp. It enters here rather
     /// than in <see cref="StatusDeriver.Derive"/> because the derivation is
@@ -76,7 +83,8 @@ public static class DestinationStatus
         DestinationSyncRecord? record,
         ulong lastCompletedAt,
         ulong nowUnixMilliseconds,
-        Func<string, ulong?> deviceIdOf)
+        Func<string, ulong?> deviceIdOf,
+        bool hasSnapshot)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(reference);
         ThrowHelper.ThrowIfNull(setRoots);
@@ -106,7 +114,18 @@ public static class DestinationStatus
         var sync = record?.State ?? DestinationSyncState.Behind;
         var cause = SyncCause.None;
         var detail = record?.LastError;
-        if (record is null)
+        if (!hasSnapshot && sync is DestinationSyncState.InSync or DestinationSyncState.Behind)
+        {
+            // Before the set's first snapshot there is nothing to hold. Never
+            // synced and owed a seed are both true then and neither says why,
+            // and an older service's copy of the empty archive left a row that
+            // read in sync (ADR-0050 Amendment 2). A fault the ledger reported
+            // in its own words keeps them: that wait does not end by itself.
+            sync = DestinationSyncState.Behind;
+            cause = SyncCause.AwaitingFirstBackup;
+            detail = "waiting for the set's first backup — nothing is copied here until one completes";
+        }
+        else if (record is null)
         {
             cause = SyncCause.NeverSynced;
             detail = "never synced — no sync has been attempted for this destination yet";
@@ -252,6 +271,12 @@ public enum SyncCause
 
     /// <summary>The ledger recorded its own reason; <see cref="DestinationStatusInput.Detail"/> carries those words.</summary>
     Reported = 4,
+
+    /// <summary>
+    /// The set has no snapshot yet, so there is nothing for the destination to
+    /// hold until its first backup completes (ADR-0050 Amendment 2).
+    /// </summary>
+    AwaitingFirstBackup = 5,
 }
 
 /// <summary>

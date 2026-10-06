@@ -189,6 +189,19 @@ public sealed class ConsoleProgressScriptTests
     }
 
     [TestMethod]
+    public void TheAwaitingFirstBackupChip_ReadsAsAWait_NotAsBehindOrInSync()
+    {
+        var card = FunctionBody(AppJs(), "renderSetCard");
+
+        // A set with no snapshot yet gives its destinations nothing to hold
+        // (ADR-0050 Amendment 2, contract 1.57). The chip says so from the
+        // wire reason, never re-derived; "behind" would read as a copy that
+        // fell short, and nothing has been owed yet.
+        Assert.Contains("d.reason === \"awaiting-first-backup\"", card, StringComparison.Ordinal);
+        Assert.Contains("waiting for first backup", card, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void TheOverviewDestinations_StackVerticallyInShipOrder()
     {
         var card = FunctionBody(AppJs(), "renderSetCard");

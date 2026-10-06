@@ -2994,7 +2994,8 @@ public static class CliApplication
                             ledger.Find(set.Id, reference.Ref),
                             lastCompleted,
                             (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                            DeviceProbe.DeviceOf));
+                            DeviceProbe.DeviceOf,
+                            hasSnapshot: latest is not null));
                     }
 
                     var status = StatusDeriver.Derive(new StatusInputs

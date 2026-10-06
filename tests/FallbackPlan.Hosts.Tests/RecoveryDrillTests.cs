@@ -7,7 +7,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// The scheduled restore drill (FR-DRL-002, NFR-OPS-005): the service
 /// periodically restores a sampled file from a destination's own replica,
-/// records what happened, and lets the answer go stale visibly.
+/// records what happened, and lets the answer go stale visibly. A set with no
+/// snapshot yet has nothing to copy or drill, and its destinations read as
+/// awaiting its first backup rather than in sync (FR-DEST-004).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -378,12 +380,15 @@ public sealed class RecoveryDrillTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Drill_ThatFoundDamage_WaitsItsFullInterval()
+    public async Task Drill_ThatFoundDamage_WaitsItsFullInterval_WhileTheDamageStands()
     {
-        // The back-off is for a drill that did not complete. One that
-        // completed and found damage has answered, and is not asked again
-        // until its interval says so (§4): drilling a broken replica every
-        // hour would repeat the notice, not add evidence.
+        // The back-off is for a drill that did not complete, and for a failed
+        // one once a sync since has put the replica right (Amendment 5). Here
+        // the syncs go on around damage the deep sweep found and could not
+        // replace, so the replica the drill answered about is still broken,
+        // and it is not asked again until its interval says so (§4): drilling
+        // a known-broken replica every hour would repeat the notice, not add
+        // evidence.
         await using var runtime = await StartDrilledAsync();
         TamperEveryDataBlob(Assert.ContainsSingle(Directory.GetDirectories(Vault)));
 
@@ -394,25 +399,182 @@ public sealed class RecoveryDrillTests : IDisposable
         Assert.AreEqual(0, failed.ConsecutiveIncompleteDrills);
 
         await PassAsync(runtime, at.AddHours(2));
-        Assert.AreEqual(failed.DrilledAt, Pair(runtime).DrilledAt);
+        var later = Pair(runtime);
+        Assert.IsTrue(later.LastSuccessAt > failed.DrilledAt, $"a sync has run since the drill: {later}");
+        Assert.IsNotEmpty(later.DamagedKeys ?? [], $"and the damage still stands there: {later}");
+        Assert.AreEqual(failed.DrilledAt, later.DrilledAt);
     }
 
     [TestMethod]
-    public void IncompleteRetry_StartsAtAnHour_Doubles_AndNeverWaitsPastTheInterval()
+    public async Task Drill_ThatFailed_IsDrilledAgainAnHourOn_OnceTheReplicaHasSynced_AndItsNoticeClears()
+    {
+        // ADR-0054 Amendment 5. There is no drill-now verb, so a failed
+        // drill's notice used to stand for the pair's whole interval, a
+        // month by default, however soon the replica was put right. The one
+        // this arranges is the false notice an older service raised when it
+        // drilled a copy of an archive that held no snapshot yet: the failure
+        // as that drill recorded it, and a sync since.
+        await using var runtime = await StartDrilledAsync();
+        var at = DateTimeOffset.Now.AddDays(1);
+        var key = $"drill-failed:{_harness.DocsSetId}:vault";
+        runtime.DestinationSync.RecordDrill(
+            _harness.DocsSetId, "vault", files: 0, bytes: 0, "the replica holds no snapshot of this set.",
+            limit: null, (ulong)at.ToUnixTimeMilliseconds());
+        runtime.Notices.Raise(
+            key,
+            "A restore drill against 'vault' could not bring back a file from set 'docs': "
+            + "the replica holds no snapshot of this set.",
+            (ulong)at.ToUnixTimeMilliseconds());
+        var synced = Pair(runtime);
+        runtime.DestinationSync.RecordSuccess(
+            _harness.DocsSetId, "vault", synced.Objects, (ulong)at.AddMinutes(10).ToUnixTimeMilliseconds(),
+            synced.SyncedSequence);
+
+        await PassAsync(runtime, at.AddMinutes(30));
+        Assert.AreEqual((ulong)at.ToUnixTimeMilliseconds(), Pair(runtime).DrilledAt, "inside the hour it is not due");
+        Assert.IsNotEmpty(DrillNotices(runtime));
+
+        var retry = at.AddMinutes(61);
+        await PassAsync(runtime, retry);
+        var record = Pair(runtime);
+        Assert.AreEqual((ulong)retry.ToUnixTimeMilliseconds(), record.DrilledAt, "an hour on, it is drilled again");
+        Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.AreEqual(0, record.ConsecutiveFailedDrills, "a drill that passes ends the count");
+        Assert.IsEmpty(DrillNotices(runtime), "and its notice clears");
+    }
+
+    [TestMethod]
+    public void DrillWait_AFailedDrill_ComesForwardOnceTheReplicaHasSyncedSinceWithNoDamageStanding_AndBacksOff()
     {
         const ulong Hour = 3_600_000;
         const ulong Month = 30 * 24 * Hour;
-        Assert.AreEqual(Hour, RecoveryDrillJob.IncompleteRetryMs(1, Month));
-        Assert.AreEqual(2 * Hour, RecoveryDrillJob.IncompleteRetryMs(2, Month));
-        Assert.AreEqual(4 * Hour, RecoveryDrillJob.IncompleteRetryMs(3, Month));
-        Assert.AreEqual(512 * Hour, RecoveryDrillJob.IncompleteRetryMs(10, Month));
-        Assert.AreEqual(Month, RecoveryDrillJob.IncompleteRetryMs(11, Month), "1,024 hours is past a month's interval");
-        Assert.AreEqual(Month, RecoveryDrillJob.IncompleteRetryMs(int.MaxValue, Month), "and a long run of them cannot overflow");
+        const ulong Drilled = 1_000 * Hour;
+
+        DestinationSyncRecord Failed(int inARow, ulong? syncedAt) => new()
+        {
+            SetId = _harness.DocsSetId,
+            Destination = "vault",
+            State = DestinationSyncState.InSync,
+            LastAttemptAt = syncedAt ?? 0,
+            LastSuccessAt = syncedAt,
+            DrilledAt = Drilled,
+            DrillFailure = "'a.txt' would not restore",
+            ConsecutiveFailedDrills = inARow,
+        };
+
+        // Nothing has synced since: the replica the drill answered about is
+        // still the replica, so the answer stands for the interval. A sync in
+        // the same pass ran before the drill, so the drill saw what it copied.
+        Assert.AreEqual(Month, RecoveryDrillJob.DrillWaitMs(Failed(1, Drilled - Hour), Month));
+        Assert.AreEqual(Month, RecoveryDrillJob.DrillWaitMs(Failed(1, Drilled), Month));
+        Assert.AreEqual(Month, RecoveryDrillJob.DrillWaitMs(Failed(1, syncedAt: null), Month));
+
+        // A sync since: an hour after the drill, doubling while it keeps
+        // failing, never past the interval.
+        Assert.AreEqual(Hour, RecoveryDrillJob.DrillWaitMs(Failed(1, Drilled + 1), Month));
+        Assert.AreEqual(2 * Hour, RecoveryDrillJob.DrillWaitMs(Failed(2, Drilled + 1), Month));
+        Assert.AreEqual(4 * Hour, RecoveryDrillJob.DrillWaitMs(Failed(3, Drilled + 1), Month));
+        Assert.AreEqual(Month, RecoveryDrillJob.DrillWaitMs(Failed(30, Drilled + 1), Month));
+
+        // A failure recorded before the count existed is the first of its run.
+        Assert.AreEqual(Hour, RecoveryDrillJob.DrillWaitMs(Failed(0, Drilled + 1), Month));
+
+        // A sync around damage that still stands there has not put right what
+        // the drill found, so the failure waits its interval.
+        Assert.AreEqual(
+            Month,
+            RecoveryDrillJob.DrillWaitMs(Failed(1, Drilled + 1) with { DamagedKeys = ["blobs/data/aa/aabb"] }, Month));
+
+        // A drill that passed waits its interval, whatever has synced since.
+        Assert.AreEqual(Month, RecoveryDrillJob.DrillWaitMs(Failed(0, Drilled + 1) with { DrillFailure = null }, Month));
+
+        // One that did not complete keeps Amendment 4's back-off, sync or none.
+        Assert.AreEqual(
+            2 * Hour,
+            RecoveryDrillJob.DrillWaitMs(Failed(0, Drilled - Hour) with { ConsecutiveIncompleteDrills = 2 }, Month));
+    }
+
+    [TestMethod]
+    [DataRow(true, DisplayName = "direct-ship")]
+    [DataRow(false, DisplayName = "staging")]
+    public async Task Pass_ASetWhoseArchiveHoldsNoSnapshotYet_IsNeitherCopiedNorDrilled(bool directShip)
+    {
+        // A set's archive exists from the moment its first backup starts, and
+        // stays when that backup ends before it commits. A pass that took the
+        // archive for a backup copied it with nothing in it, recorded the copy
+        // as a success, and drilled it: "in sync", then a drill-failed notice
+        // that stood for the pair's whole interval (ADR-0054 Amendment 5). No
+        // schedule here, so the pass runs no backup of its own.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip, schedule: null);
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets[0];
+        await runtime.ArchiveForAsync(set, Timeout);
+        Assert.IsTrue(runtime.ArchiveExists(set.Id), "the archive must exist, or this tests nothing");
+
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var untouched = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.IsNull(untouched?.LastSuccessAt, $"nothing is copied before the set has a snapshot: {untouched}");
+        Assert.IsNull(untouched?.DrilledAt, "and nothing is drilled");
+        Assert.IsEmpty(DrillNotices(runtime));
+
+        // Once the set has a snapshot, the pass copies and drills it.
+        var backup = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        Assert.AreEqual("ran", backup.Outcome, backup.Detail);
+        await PassAsync(runtime, DateTimeOffset.Now);
+
+        var record = Pair(runtime);
+        Assert.IsNotNull(record.LastSuccessAt, $"the snapshot is copied: {record}");
+        Assert.IsNotNull(record.DrilledAt, "and drilled");
+        Assert.IsNull(record.DrillFailure, record.DrillFailure);
+        Assert.IsEmpty(DrillNotices(runtime));
+    }
+
+    [TestMethod]
+    public async Task Status_ASetWithNoSnapshotYet_IsAwaitingItsFirstBackup_EvenWhereACopyOfItWasRecorded()
+    {
+        // FR-DEST-004: the row an older service wrote after copying an archive
+        // that held no snapshot read "in-sync" for a set that had never backed
+        // up. Nothing there can be restored, so no ledger row makes it in sync.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true, schedule: null);
+
+        await using var runtime = await StartAsync();
+        await runtime.ArchiveForAsync(runtime.Configuration.BackupSets[0], Timeout);
+        runtime.DestinationSync.RecordSuccess(
+            _harness.DocsSetId, "vault", objects: 3, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            syncedSequence: 1);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<StatusResult>(
+            await handler.ExecuteAsync(new GetStatusCommand(), Timeout), out var status);
+
+        var row = Assert.ContainsSingle(Assert.ContainsSingle(status.Sets).Destinations);
+        Assert.AreNotEqual("in-sync", row.State, $"{row.State}: {row.Detail}");
+        Assert.AreEqual("awaiting-first-backup", row.Reason, row.Detail);
+        Assert.IsNotNull(row.Detail);
+        Assert.Contains("first backup", row.Detail, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Retry_StartsAtAnHour_Doubles_AndNeverWaitsPastTheInterval()
+    {
+        const ulong Hour = 3_600_000;
+        const ulong Month = 30 * 24 * Hour;
+        Assert.AreEqual(Hour, RecoveryDrillJob.RetryMs(1, Month));
+        Assert.AreEqual(2 * Hour, RecoveryDrillJob.RetryMs(2, Month));
+        Assert.AreEqual(4 * Hour, RecoveryDrillJob.RetryMs(3, Month));
+        Assert.AreEqual(512 * Hour, RecoveryDrillJob.RetryMs(10, Month));
+        Assert.AreEqual(Month, RecoveryDrillJob.RetryMs(11, Month), "1,024 hours is past a month's interval");
+        Assert.AreEqual(Month, RecoveryDrillJob.RetryMs(int.MaxValue, Month), "and a long run of them cannot overflow");
 
         // A peer's cadence is its operator's, and the back-off stays under it
         // too, which is what keeps a lasting fault off somebody else's link.
         const ulong Week = 7 * 24 * Hour;
-        Assert.AreEqual(Week, RecoveryDrillJob.IncompleteRetryMs(9, Week));
+        Assert.AreEqual(Week, RecoveryDrillJob.RetryMs(9, Week));
     }
 
     [TestMethod]
@@ -532,7 +694,7 @@ public sealed class RecoveryDrillTests : IDisposable
         }
     }
 
-    private void WriteConfiguration(bool directShip)
+    private void WriteConfiguration(bool directShip, string? schedule = "every 1h")
     {
         new ClientConfiguration
         {
@@ -551,7 +713,7 @@ public sealed class RecoveryDrillTests : IDisposable
                     Id = _harness.DocsSetId,
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
-                    Schedule = "every 1h",
+                    Schedule = schedule,
                     Destinations = [new SetDestinationReference { Ref = "vault" }],
                     DirectShip = directShip,
                 },

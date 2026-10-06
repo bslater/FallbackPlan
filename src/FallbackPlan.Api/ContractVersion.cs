@@ -577,8 +577,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// unlock first. The session a command came from is the connection's
     /// gate's to say, so it is never on the wire.
     /// </para>
+    /// <para>
+    /// 1.57 gives a destination row of a set with no snapshot yet its own
+    /// reason (FR-DEST-004, ADR-0050 Amendment 2): `reason` may be
+    /// `awaiting-first-backup`, on a row that reads `behind`. Before it, a row
+    /// an earlier service wrote after copying the empty archive of a set whose
+    /// first backup had not committed read `in-sync`. Additive: a pre-1.57
+    /// client that does not know the value shows the row's `detail`, which
+    /// says the same in words.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 56);
+    public static ContractVersion Current { get; } = new(1, 57);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

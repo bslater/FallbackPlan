@@ -1083,7 +1083,8 @@ public sealed partial class ServiceCommandHandler
             }
 
             var input = DestinationStatus.Describe(
-                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, runtime.VolumeIdOf);
+                name, destination, [.. roots], record: null, lastCompletedAt: 0, nowMs, runtime.VolumeIdOf,
+                hasSnapshot: false);
 
             if (input.Domain > best)
             {
