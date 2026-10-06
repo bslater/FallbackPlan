@@ -35,7 +35,8 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.IsInstanceOfType<RestorePlanResult>(
             await handler.ExecuteAsync(
-                new PlanRestoreCommand(snapshotId, null, OutputDirectory: destination), _timeout.Token),
+                new PlanRestoreCommand(snapshotId, null, OutputDirectory: destination, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId),
+                _timeout.Token),
             out var plan);
 
         // One volume holds the folder and the engine's working directory, so
@@ -216,7 +217,9 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         var snapshotId = await SnapshotIdAsync(handler);
 
         Assert.IsInstanceOfType<RestorePlanResult>(
-            await handler.ExecuteAsync(new PlanRestoreCommand(snapshotId, null), _timeout.Token), out var plan);
+            await handler.ExecuteAsync(
+                new PlanRestoreCommand(snapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
+            out var plan);
 
         Assert.IsNotNull(plan.Degradations);
         var (declared, count) = OperatingSystem.IsWindows() ? ("File attributes", "2 file(s)") : ("Metadata captured", "1 symlink(s)");

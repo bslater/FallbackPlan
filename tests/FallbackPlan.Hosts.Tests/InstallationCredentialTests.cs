@@ -368,7 +368,7 @@ public sealed class InstallationCredentialTests : IDisposable
         // a v2 replica carries the same descriptor (ADR-0042 §5) — so the
         // restore path that probes destinations must reach it for a set the
         // installation created, not only for one provisioned per set.
-        Save(Store());
+        var salt = Save(Store());
         _harness.WriteSourceFile("notes.txt", "held at the vault too");
         _harness.WriteConfiguration("every 1h");
         Directory.CreateDirectory(Path.Combine(_harness.StateDirectory, "vault"));
@@ -394,7 +394,12 @@ public sealed class InstallationCredentialTests : IDisposable
         await using (var runtime = await StartWithoutPassphraseAsync())
         {
             var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
-            var opened = await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token);
+            Assert.IsInstanceOfType<ServiceDescriptionResult>(
+                await handler.ExecuteAsync(new DescribeServiceCommand(), _timeout.Token), out var description);
+            var opened = await handler.ExecuteAsync(
+                new OpenRestoreSourceCommand(
+                    "docs", "vault", Envelope: SealGrant(description.RestoreGrantRecipient!, salt)),
+                _timeout.Token);
             Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
                 opened, out var replica, (opened as ServiceError)?.Message ?? opened.GetType().Name);
             Assert.AreEqual("vault", replica.Location);

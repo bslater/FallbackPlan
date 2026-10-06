@@ -148,8 +148,17 @@ public sealed class RemoteConsoleTests : IDisposable
         Assert.AreEqual(0, snapshots.ExitCode, snapshots.Error);
         var snapshotId = snapshots.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Split(' ')[0];
 
-        var listing = await RunCliAsync(
+        // A snapshot's files are named only with the passphrase (FR-WOR-007):
+        // without it the listing is refused and says which option brings it.
+        var refused = await RunCliAsync(
             "ls", snapshotId, "--connect", address, "--state", consoleState, "--fingerprint", fingerprint);
+        Assert.AreNotEqual(0, refused.ExitCode, refused.Output);
+        Assert.Contains("--passphrase-env", refused.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("notes.txt", refused.Output, StringComparison.Ordinal);
+
+        var listing = await RunCliAsync(
+            "ls", snapshotId, "--connect", address, "--state", consoleState, "--fingerprint", fingerprint,
+            "--passphrase-env", _harness.PassphraseVariable);
         Assert.AreEqual(0, listing.ExitCode, listing.Error);
         Assert.Contains("notes.txt", listing.Output, StringComparison.Ordinal);
 

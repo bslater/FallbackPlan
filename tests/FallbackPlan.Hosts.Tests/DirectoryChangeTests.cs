@@ -42,8 +42,13 @@ public sealed class DirectoryChangeTests : IDisposable
         await RunBackupAndWaitAsync(runtime, handler);
         var first = await LatestSnapshotIdAsync(handler);
 
+        // Listing names the backup's files, so it reads through a source
+        // unlocked with the passphrase (FR-WOR-007); the set's own archive
+        // answers every later snapshot through the same handle.
+        var source = (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId;
+
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(new ListDirectoryCommand(first, null), _timeout.Token), out var opening);
+            await handler.ExecuteAsync(new ListDirectoryCommand(first, null, Source: source), _timeout.Token), out var opening);
         Assert.IsNull(opening.PreviousSnapshotId);
         Assert.IsNull(opening.Deleted);
         Assert.IsTrue(opening.Entries.All(entry => entry.Change is null));
@@ -61,7 +66,7 @@ public sealed class DirectoryChangeTests : IDisposable
         Assert.AreNotEqual(first, second);
 
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(new ListDirectoryCommand(second, null), _timeout.Token), out var root);
+            await handler.ExecuteAsync(new ListDirectoryCommand(second, null, Source: source), _timeout.Token), out var root);
         Assert.AreEqual(first, root.PreviousSnapshotId);
         Assert.AreEqual("changed", root.Entries.Single(entry => entry.Name == "notes.txt").Change);
         Assert.AreEqual("new", root.Entries.Single(entry => entry.Name == "d.txt").Change);
@@ -76,14 +81,14 @@ public sealed class DirectoryChangeTests : IDisposable
         var third = await LatestSnapshotIdAsync(handler);
 
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(new ListDirectoryCommand(third, null), _timeout.Token), out var atRoot);
+            await handler.ExecuteAsync(new ListDirectoryCommand(third, null, Source: source), _timeout.Token), out var atRoot);
         Assert.AreEqual(second, atRoot.PreviousSnapshotId);
         Assert.IsNull(atRoot.Entries.Single(entry => entry.Name == "sub").Change);
         Assert.AreEqual("same", atRoot.Entries.Single(entry => entry.Name == "notes.txt").Change);
         Assert.IsEmpty(atRoot.Deleted!);
 
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(new ListDirectoryCommand(third, "sub"), _timeout.Token), out var inside);
+            await handler.ExecuteAsync(new ListDirectoryCommand(third, "sub", Source: source), _timeout.Token), out var inside);
         Assert.AreEqual("changed", Assert.ContainsSingle(inside.Entries).Change);
     }
 

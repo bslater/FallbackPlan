@@ -1,8 +1,4 @@
 using FallbackPlan.Api;
-using FallbackPlan.Domain.Configuration;
-using FallbackPlan.Repository;
-using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 using Microsoft.Playwright;
 using static Microsoft.Playwright.Assertions;
@@ -13,9 +9,11 @@ namespace FallbackPlan.Web.DomTests;
 /// <summary>
 /// The guided restore wizard (ADR-0041) walked end to end in a real browser —
 /// the committed counterpart of the "live Playwright walk" ADR-0041 cites.
-/// The passphrase gate is the real thing: a v1 archive on disk, the console
-/// process deriving with Argon2id against its key files, the secret never on
-/// the service wire (NFR-SEC-009). The last step confirms a plan, so nothing
+/// The passphrase gate is the real thing (FR-WOR-007, ADR-0089): the console
+/// process derives with Argon2id under the facts the service publishes, the
+/// source opens under the grant that derivation proves, the secret is never
+/// on the service wire (NFR-SEC-009), and there is no way through without a
+/// passphrase that checks out. The last step confirms a plan, so nothing
 /// there can be confirmed until the plan is on screen — the console's half of
 /// FR-RST-003, which puts the plan before any byte is written. The plan is
 /// asked with the run's shape, so it shows the room the run needs where it
@@ -29,59 +27,12 @@ namespace FallbackPlan.Web.DomTests;
 [BrowserCondition]
 public sealed class RestoreWizardDomTests
 {
-    private const string RightPassphrase = "the right passphrase!!";
+    private const string RightPassphrase = Wire.Passphrase;
 
-    private static string _archives = null!;
-
-    [ClassInitialize]
-    public static async Task CreateTheArchiveAsync(TestContext context)
-    {
-        _ = context;
-        if (Environment.GetEnvironmentVariable(BrowserConditionAttribute.Variable) != "1")
-        {
-            return; // condition-skipped runs must not pay the derivation either
-        }
-
-        // One real v1 archive for the whole class: the gate verifies against
-        // whichever archive under the root will answer, keyed by directory.
-        _archives = Path.Combine(Path.GetTempPath(), "fbp-dom-gate", Guid.NewGuid().ToString("n")[..12]);
-        var archive = Path.Combine(_archives, Wire.SetId);
-        Directory.CreateDirectory(archive);
-        using var right = Passphrase.Create(RightPassphrase);
-
-        // Re-homed onto the credential-taking CreateAsync this branch settled
-        // on: the passphrase overload went with KeyHierarchy. The salt is
-        // fixed so the archive these tests gate against is reproducible.
-        var salt = Enumerable.Repeat((byte)0x5A, KekDerivation.SaltLength).ToArray();
-        using var authority = WriteOnlyDerivation.Derive(
-            right, RepositoryCreationSettings.Default.KdfParameters, salt,
-            KdfValidationMode.CreateRepository);
-        (await RepositoryLifecycle.CreateAsync(
-            new LocalFileSystemObjectStore(archive), authority.Credential,
-            salt, RepositoryCreationSettings.Default.KdfParameters,
-            createdBy: "dom-tests", 1_722_700_000_000UL, CancellationToken.None)).Dispose();
-    }
-
-    [ClassCleanup]
-    public static void DeleteTheArchive()
-    {
-        try
-        {
-            if (_archives is not null)
-            {
-                Directory.Delete(_archives, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-            // A straggling handle on a temp directory is not a test failure.
-        }
-    }
-
-    private static Func<ServiceCommand, ServiceResult> WizardFakes(ulong now, string archivesRoot) =>
+    private static Func<ServiceCommand, ServiceResult> WizardFakes(ulong now) =>
         command => command switch
         {
-            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner", archivesRoot: archivesRoot),
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
             ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
             ListDestinationsCommand => new DestinationsResult([]),
             ListSnapshotsCommand => new SnapshotsResult([Wire.Snapshot(now)]),
@@ -125,14 +76,15 @@ public sealed class RestoreWizardDomTests
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        harness.Clients.Client.Respond = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = WizardFakes(now);
 
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
         await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
 
         // Step 1 — unlock: the typed passphrase is checked by the console
-        // process against the archive on disk. A real derivation runs here.
+        // process against the sealing key the service publishes for the set.
+        // A real derivation runs here.
         await page.ClickAsync("[data-action=\"restore\"]");
         await page.FillAsync("#rst-passphrase", RightPassphrase);
         await page.ClickAsync("[data-action=\"rst-continue\"]");
@@ -145,6 +97,7 @@ public sealed class RestoreWizardDomTests
         var opened = await harness.ReceivedAsync<OpenRestoreSourceCommand>();
         Assert.AreEqual("docs", opened.SetName);
         Assert.IsNull(opened.DestinationName, "the staging archive is not a destination");
+        Assert.IsTrue(Wire.IsTheInstallationsGrant(opened.Envelope), "the source opens under the set's grant");
 
         // Step 3 — date: today's default resolves to the only snapshot.
         await Expect(page.Locator("#rst-date")).ToBeVisibleAsync();
@@ -190,7 +143,7 @@ public sealed class RestoreWizardDomTests
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        harness.Clients.Client.Respond = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = WizardFakes(now);
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
         await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
@@ -230,7 +183,7 @@ public sealed class RestoreWizardDomTests
         // from another copy, and what the copy they were read around held.
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         const string line = "notes.txt — read from destination 'spare', around destination 'vault': "
             + "Record 1234 in blob 5678 failed authentication (specification 04 §7).";
         harness.Clients.Client.Respond = command => command is RunRestoreCommand
@@ -258,7 +211,7 @@ public sealed class RestoreWizardDomTests
         // folder the run will write to, so it is asked with the run's shape.
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         harness.Clients.Client.Respond = command => command is PlanRestoreCommand
             ? new RestorePlanResult(
                 1, 42, [], WriteBytes: 42,
@@ -293,7 +246,7 @@ public sealed class RestoreWizardDomTests
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         harness.Clients.Client.Respond = command => command is PlanRestoreCommand
             ? new RestorePlanResult(
                 1, 42, [], Conflicts: 1,
@@ -332,7 +285,7 @@ public sealed class RestoreWizardDomTests
         // came back without.
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         harness.Clients.Client.Respond = command => command is RunRestoreCommand
             ? new ApiRestoreResult(
                 1, 0, "/restore/out", "complete", ReceiptPath: "/restore/out/receipt.json",
@@ -355,7 +308,7 @@ public sealed class RestoreWizardDomTests
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         var planReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Clients.Client.Respond = command =>
         {
@@ -413,7 +366,7 @@ public sealed class RestoreWizardDomTests
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        var fakes = WizardFakes(now, _archives);
+        var fakes = WizardFakes(now);
         harness.Clients.Client.Respond = command => command is PlanRestoreCommand
             ? new ServiceError(ServiceErrorReason.Failed, "The snapshot's manifest could not be read.")
             : fakes(command);
@@ -433,11 +386,11 @@ public sealed class RestoreWizardDomTests
     }
 
     [TestMethod]
-    public async Task Wizard_TheWrongPassphrase_IsRefusedByTheLocalGate()
+    public async Task Wizard_TheWrongPassphrase_IsRefused_AndOpensNothing()
     {
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await using var harness = await DomHarness.StartAsync();
-        harness.Clients.Client.Respond = WizardFakes(now, _archives);
+        harness.Clients.Client.Respond = WizardFakes(now);
 
         await using var context = await BrowserSession.NewContextAsync();
         var page = await context.NewPageAsync();
@@ -447,49 +400,48 @@ public sealed class RestoreWizardDomTests
         await page.FillAsync("#rst-passphrase", "not the passphrase");
         await page.ClickAsync("[data-action=\"rst-continue\"]");
 
-        // The refusal is the archive's own: a failed unwrap against real key
-        // files, not a string comparison — and the wizard stays on step 1.
+        // The refusal is a derivation that does not reproduce the published
+        // sealing key, not a string comparison — and the wizard stays on
+        // step 1 with nothing opened.
         await Expect(page.GetByText("That passphrase does not open the repository.")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-set")).Not.ToBeVisibleAsync();
+        lock (harness.Clients.Client.Received)
+        {
+            Assert.IsEmpty(harness.Clients.Client.Received.OfType<OpenRestoreSourceCommand>());
+        }
     }
 
     [TestMethod]
-    public async Task Wizard_WithNoLocalArchive_OffersTheAcknowledgedWayThrough()
+    public async Task Wizard_WhereThePassphraseCannotBeChecked_ThereIsNoWayThrough()
     {
+        // A service that publishes nothing to derive under — not yet set up —
+        // cannot have its passphrase checked, and an unchecked passphrase is
+        // no passphrase at all: the wizard says why and goes no further.
         var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var empty = Path.Combine(Path.GetTempPath(), "fbp-dom-gate", Guid.NewGuid().ToString("n")[..12]);
-        Directory.CreateDirectory(empty);
-        try
-        {
-            await using var harness = await DomHarness.StartAsync();
-            harness.Clients.Client.Respond = WizardFakes(now, empty);
-
-            await using var context = await BrowserSession.NewContextAsync();
-            var page = await context.NewPageAsync();
-            await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
-
-            await page.ClickAsync("[data-action=\"restore\"]");
-            await page.FillAsync("#rst-passphrase", "anything at all");
-            await page.ClickAsync("[data-action=\"rst-continue\"]");
-
-            // Nothing local to verify against: the gate says so honestly and
-            // asks for an explicit acknowledgement instead of pretending.
-            await Expect(page.Locator("#rst-gate-ack")).ToBeVisibleAsync();
-            await page.CheckAsync("#rst-gate-ack");
-            await page.ClickAsync("[data-action=\"rst-continue\"]");
-
-            await Expect(page.Locator("#rst-set")).ToBeVisibleAsync();
-        }
-        finally
-        {
-            try
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command is DescribeServiceCommand
+            ? Wire.Describe("ready", signedInUser: "owner") with
             {
-                Directory.Delete(empty, recursive: true);
+                RestoreGrantRecipient = null, KdfSalt = null, SealingPublicKey = null,
             }
-            catch (IOException)
-            {
-                // A straggling handle on a temp directory is not a test failure.
-            }
+            : fakes(command);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#snapshots");
+
+        await page.ClickAsync("[data-action=\"restore\"]");
+        await page.FillAsync("#rst-passphrase", "anything at all");
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+
+        await Expect(page.GetByText("cannot be checked")).ToBeVisibleAsync();
+        await Expect(page.Locator("#rst-gate-ack")).ToHaveCountAsync(0);
+        await page.ClickAsync("[data-action=\"rst-continue\"]");
+        await Expect(page.Locator("#rst-set")).Not.ToBeVisibleAsync();
+        lock (harness.Clients.Client.Received)
+        {
+            Assert.IsEmpty(harness.Clients.Client.Received.OfType<OpenRestoreSourceCommand>());
         }
     }
 

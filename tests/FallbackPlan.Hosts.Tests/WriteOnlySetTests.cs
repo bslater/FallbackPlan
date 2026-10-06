@@ -196,19 +196,28 @@ public sealed class WriteOnlySetTests : IDisposable
         Assert.Contains("restore grant", incapacity, StringComparison.Ordinal);
         Assert.Contains("Not damage", incapacity, StringComparison.Ordinal);
 
+        // A person opens a backup with the passphrase or not at all
+        // (FR-WOR-007): without a grant the open is refused by name.
+        Assert.IsInstanceOfType<ServiceError>(
+            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var ungranted);
+        Assert.AreEqual(ServiceErrorReason.Refused, ungranted.Reason);
+
+        // The service's own work — a drill — reads the structure plane on the
+        // write bundle alone (FR-WOR-003): it opens, browses and plans.
+        var own = new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service);
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var structure);
+            await own.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var structure);
         var snapshotId = Assert.ContainsSingle(structure.Snapshots).SnapshotId;
 
         Assert.IsInstanceOfType<DirectoryResult>(
-            await handler.ExecuteAsync(
+            await own.ExecuteAsync(
                 new ListDirectoryCommand(snapshotId, null, Source: structure.SourceId), _timeout.Token),
             out var top);
         CollectionAssert.AreEquivalent(
             new[] { "notes.txt", "photos" }, top.Entries.Select(entry => entry.Name).ToArray());
 
         Assert.IsInstanceOfType<RestorePlanResult>(
-            await handler.ExecuteAsync(
+            await own.ExecuteAsync(
                 new PlanRestoreCommand(snapshotId, null, Source: structure.SourceId), _timeout.Token),
             out var plan);
         Assert.AreEqual(2, plan.Files);
@@ -217,7 +226,7 @@ public sealed class WriteOnlySetTests : IDisposable
         // read reports sealed, the receipt says so, and nothing is written.
         var sealedOut = Path.Combine(_harness.WorkPath, "sealed");
         Assert.IsInstanceOfType<RestoreResult>(
-            await handler.ExecuteAsync(
+            await own.ExecuteAsync(
                 new RunRestoreCommand(
                     snapshotId, null, sealedOut, Source: structure.SourceId, InPlace: true),
                 _timeout.Token),
@@ -229,7 +238,7 @@ public sealed class WriteOnlySetTests : IDisposable
             $"the failure names the sealed content: {string.Join("; ", refusedRun.FailedSample!)}");
 
         Assert.IsInstanceOfType<AcknowledgedResult>(
-            await handler.ExecuteAsync(new CloseRestoreSourceCommand(structure.SourceId), _timeout.Token));
+            await own.ExecuteAsync(new CloseRestoreSourceCommand(structure.SourceId), _timeout.Token));
 
         // The restore ceremony: re-enter the passphrase (client side), derive
         // against the descriptor's recorded salt and parameters, seal the
@@ -302,11 +311,9 @@ public sealed class WriteOnlySetTests : IDisposable
                 await Task.Delay(50, _timeout.Token);
             }
 
-            Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var opened);
-            snapshotId = Assert.ContainsSingle(opened.Snapshots).SnapshotId;
-            Assert.IsInstanceOfType<AcknowledgedResult>(
-                await handler.ExecuteAsync(new CloseRestoreSourceCommand(opened.SourceId), _timeout.Token));
+            Assert.IsInstanceOfType<SnapshotsResult>(
+                await handler.ExecuteAsync(new ListSnapshotsCommand(), _timeout.Token), out var listed);
+            snapshotId = Assert.ContainsSingle(listed.Snapshots).SnapshotId;
         }
 
         // Machine B: the archive moved (same archives root), the state
@@ -369,17 +376,18 @@ public sealed class WriteOnlySetTests : IDisposable
             // is exactly what adoption bought. (The per-archive catalogue is
             // machine-local derived state, so machine B browses through the
             // replica source, which rebuilds its own from the repository.)
+            var own = new ServiceCommandHandler(runtime, RemoteBindingState.Off, CallerScope.Service);
             Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var reopened);
+                await own.ExecuteAsync(new OpenRestoreSourceCommand("docs"), _timeout.Token), out var reopened);
             Assert.IsInstanceOfType<AcknowledgedResult>(
-                await handler.ExecuteAsync(new CloseRestoreSourceCommand(reopened.SourceId), _timeout.Token));
+                await own.ExecuteAsync(new CloseRestoreSourceCommand(reopened.SourceId), _timeout.Token));
 
             Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-                await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
+                await own.ExecuteAsync(new OpenRestoreSourceCommand("docs", "vault"), _timeout.Token),
                 out var browsable);
             Assert.AreEqual(snapshotId, Assert.ContainsSingle(browsable.Snapshots).SnapshotId);
             Assert.IsInstanceOfType<AcknowledgedResult>(
-                await handler.ExecuteAsync(new CloseRestoreSourceCommand(browsable.SourceId), _timeout.Token));
+                await own.ExecuteAsync(new CloseRestoreSourceCommand(browsable.SourceId), _timeout.Token));
 
             // And the granted restore works on machine B — passphrase, not
             // state, is what carries restore capability across machines.

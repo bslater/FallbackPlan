@@ -218,8 +218,7 @@ public sealed class DirectShipTests : IDisposable
             "ran",
             (await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout)).Outcome);
 
-        Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
-            await handler.ExecuteAsync(new OpenRestoreSourceCommand("docs"), Timeout), out var opened);
+        var opened = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout);
 
         Assert.AreNotEqual("staging", opened.Location, "a set that never stages has no staging archive to restore from");
         Assert.Contains("metadata", opened.Location, StringComparison.OrdinalIgnoreCase);
