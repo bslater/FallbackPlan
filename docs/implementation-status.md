@@ -4,7 +4,7 @@
 
 ---
 
-Eighty-nine decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Ninety decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -112,8 +112,9 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart. Amendment 1: a quarantine restore keeps set-id bits as any restore does, a decision documented rather than a change | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
 | [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
 | [0087](adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md) | A restore writes back the extended attributes it may: each captured attribute of a file or a folder is written alone by its captured name, never through a link, after its owner and group and before its permissions, and one left is named in the item's detail. An ACL that names accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the security and trusted namespaces. Where an ACL does not come back the group gets no more than it gave. The plan declares each with counts | **Built** | `Domain/ExtendedAttributes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestorePlan` · `Restore/RestoreAccount` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreExtendedAttributesTests`, `Domain.Tests/ExtendedAttributesTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0087--extended-attributes) |
-| [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count, and the source-identity hints are written up to sixteen at once, all before the snapshot record. Amendment 1 makes two figures of it: a job's bar is its three stages over the plan's files (scanned, processed, backed up, contract 1.55), and each destination's circle is how many of the newest backup's files it holds, worked out from its ledger watermark at rest, counted live during a sync, with a live run folded in by the console; the set's circle is its least complete destination's | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Catalogue/Catalogue` · `Agent/DeliveredFiles` · `Agent/FileHoldingCounter` · `Agent/LiveHoldings` · `Agent/DestinationShipSink` · `Repository.Tests/BackedUpProgressTests`, `Hosts.Tests/DestinationFilesHeldTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
+| [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count, and the source-identity hints went out up to sixteen at once, all before the snapshot record, until [0090](adr/0090-a-backups-hints-are-one-pack.md) made them one pack. Amendment 1 makes two figures of it: a job's bar is its three stages over the plan's files (scanned, processed, backed up, contract 1.55), and each destination's circle is how many of the newest backup's files it holds, worked out from its ledger watermark at rest, counted live during a sync, with a live run folded in by the console; the set's circle is its least complete destination's | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Catalogue/Catalogue` · `Agent/DeliveredFiles` · `Agent/FileHoldingCounter` · `Agent/LiveHoldings` · `Agent/DestinationShipSink` · `Repository.Tests/BackedUpProgressTests`, `Hosts.Tests/DestinationFilesHeldTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
 | [0089](adr/0089-a-backups-file-names-need-the-passphrase.md) | A backup's file names need the passphrase: the service names a file a backup holds only through a restore source opened under a verified grant, held by the session that opened it and of the set asked about, refusing a snapshot's listing, a restore's plan and run, and a run's changes and failures without one; a change preview without one counts what only the backup names and leaves the names out (contract 1.56). The console derives a grant per set under the published facts and asks at every look, slowing a run of wrong passphrases per account; the CLI derives under `--passphrase-env` | **Built** | `Agent/ServiceCommandHandler` · `Agent/AuthenticatingService` · `Agent/RestoreSourceRegistry` · `Agent/RecoveryDrillJob` · `Api/ContractVersion` · `Web/ConsoleRestoreGate` · `Web/RestoreGateThrottle` · `Web/WebConsoleHost` · `Cli/GrantedSources` · `Cli/OperationGateway` · `Hosts.Tests/PassphraseGateTests`, `Web.Tests/RestoreGateTests`, `Web.DomTests/PassphraseGateDomTests`, `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsolePassphraseGateScriptTests`, `Api.Tests/ContractAdditiveFieldsTests` · [notes](#0089--the-names-behind-the-passphrase) |
+| [0090](adr/0090-a-backups-hints-are-one-pack.md) | A backup's hints are one pack: a publication writes the source-identity hints of the versions it created as one object, type `0x11`, before its snapshot record, rather than one object a version, so they cost a request a backup rather than a request a file. After a catalogue rebuild a reader takes its device's packs once and asks the per-file hints older backups left only for a source key no pack names. NFR-PERF-008 is measured for the first time: no request grows with the number of files, and everything but the blob covers is within the budget | **Built** | `Repository.Format/Manifests/SourceIdentityPack` · `Domain/ObjectType` · `Repository.Packing/MetadataStoreKeys` · `Repository/ManifestBuilder` · `Repository/SnapshotPublication` · `Repository/SourceIdentityPackIndex` · `Repository/SourceIdentityLookup` · `Repository.Tests/UploadBudgetTests`, `Repository.Tests/HintPackTests`, `Repository.Tests/SourceIdentityPackCodecTests`, `Domain.Tests/ObjectTypeTests`, `Repository.Tests/BackedUpProgressTests`, `InterruptionTests/TreeSnapshotInterruptionTests` · [notes](#0090--one-pack-a-backup) |
 
 ---
 
@@ -2378,8 +2379,9 @@ holes, or a file that failed or shrank, still count where the file ended.
 
 The console shows one figure for the bar and the percentage, held at 99 until
 the job settles. While the run is publishing, the words beside it say
-"Finishing" and count the hints. The hints are written sixteen at a time, all
-before the snapshot record. The figure rides every report, and is reported
+"Finishing" and count the hints. The hints were written sixteen at a time, all
+before the snapshot record; since [0090](#0090--one-pack-a-backup) they are one
+pack, still written before it. The figure rides every report, and is reported
 again each time an acknowledged blob moves it, so the meter moves while one
 large file is still being read. The CLI's `jobs <id>` prints how much of its
 plan a run backed up, which for a failed or cancelled run is how far it got.
@@ -2491,3 +2493,38 @@ throttle slows only guesses made at the console. A grant taken from the page
 while a look is open is a bearer proof until the service's recipient key
 changes. And a damage notice still names a sample of the files the damage
 reaches, to anyone signed in.
+
+### 0090 — one pack a backup
+
+Built. The first measurement of NFR-PERF-008's upload half found one term
+that grew with the number of files: the source-identity hints, one store
+object per new file version. On the 4.48 GB, 9 190-file first backup that
+showed the cost, that was about 2 000 requests per GB against a budget of 20.
+A publication now writes them as one pack. The bytes still follow what
+changed, and a request per file became a request per backup.
+
+`Repository.Tests/UploadBudgetTests` counts every request a first backup and
+an incremental make, by the kind of object each was for. A test cannot write
+a GiB, so it measures the terms apart and adds them up at the object-store
+blob profile:
+
+| Backup | Requests per GiB | Blob covers | Everything else |
+|---|---|---|---|
+| First backup, ~490 KB a file | 23 | 9 | 14 |
+| First backup, 16 KiB a file | 25 | 10 | 15 |
+| Incremental, ~490 KB a file | 25 | 9 | 16 |
+| Incremental, 16 KiB a file | 27 | 10 | 17 |
+
+So NFR-PERF-008 is met for data blobs (8 per GiB against 10) and for
+everything beside the blob covers. It is not met in total. Every blob is
+preceded by the journal's intent extension that covers it, each its own
+request. Covering several blobs with one is a change to the machinery
+garbage collection depends on, and is owed separately. The suite pins one
+cover per blob, so that change will show.
+
+Repositories keep the per-file hints every earlier backup wrote, and they
+are still read. The reader that runs after a catalogue rebuild takes its
+device's packs once, then asks the per-file form only for a source key no
+pack names, and only if the repository holds any per-file hints at all.
+Neither shape is collected, as hints never were.
+

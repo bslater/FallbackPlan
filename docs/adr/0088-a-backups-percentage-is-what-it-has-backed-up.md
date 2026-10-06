@@ -1,6 +1,6 @@
 # ADR-0088 — A backup's percentage is what it has backed up
 
-**Status:** Accepted, amended (Amendment 1, 2026-10)
+**Status:** Accepted, amended (Amendment 1, 2026-10); decision 4 superseded by [ADR-0090](0090-a-backups-hints-are-one-pack.md)
 **Date:** 2026-10
 **Requirements:** FR-SVC-006
 **Related:** [ADR-0048](0048-determinate-backup-progress.md) (the counted plan; this replaces what its meter divides and what its estimate runs on), [ADR-0046](0046-direct-to-destination-publication.md) (a blob's put returns when every destination of the run holds it), [ADR-0029 §2](0029-pipeline-and-service-concurrency.md) (uploads leave the archive loop), [ADR-0034](0034-hub-and-spoke-destinations.md) (catch-up to a destination outside a run), [specification 06 §11](../../specifications/repository-format/06-manifests.md#11-source-identity) (source-identity hints), [architecture 10 §3](../architecture/10-observability.md#3-job-state-machine) (job states)
@@ -14,6 +14,7 @@
 - Amendment 1, the console: the job's bar is its three stages; each destination's circle and line are what it holds, a live run folded in; the set's summary carries its least complete destination's circle.
 - The tests:
   - `Repository.Tests/BackedUpProgressTests` — against a store that holds each data blob's put until released: nothing is backed up while every file is read but no blob acknowledged; releasing the first blob counts what it carried and nothing past it; an unchanged file counts before any upload; the hints' count appears once the run is publishing and its last report has them all; the hints go out several at a time, never more than sixteen, and all before the snapshot record
+    > **Superseded 2026-10 ([ADR-0090](0090-a-backups-hints-are-one-pack.md)).** The hints are one pack now; the same suite holds that it goes out before the snapshot record.
   - `Web.DomTests/BackupProgressDomTests` — the jobs card and the overview's live row and glance line show bytes backed up rather than files read, and hold at 99 while the run finishes, naming the step and its count
   - `Web.Tests/ConsoleProgressScriptTests` — the shared meter divides what is backed up by the plan's bytes, holds below 100, and falls back to files for a service without the measure; the estimate runs on the meter's measure
   - `Api.Tests/ContractAdditiveFieldsTests`, `Api.Tests/ConfigurationContractTests` — the fields' wire names, null from a pre-1.54 service, and the version pinned at 1.54
@@ -63,6 +64,8 @@ One fact makes "stored at every destination" measurable at a single point. In a 
    - **A pre-1.54 service** is divided by files against the plan, as before, and also held at 99.
 4. **The hints are written several at a time.** Up to `HintWritesInFlight`, sixteen, are at the store at once, and all of them land before the snapshot record, as specification 06 §11 requires. Each stays advisory: a store fault on one is passed over, as it was.
 
+   > **Superseded 2026-10 ([ADR-0090](0090-a-backups-hints-are-one-pack.md)).** Writing them sixteen at a time shortened the wait. It did not change the count: one store request per new file version, about 2 000 per GB on the first backup that showed the wait, against NFR-PERF-008's 20. A publication now writes its hints as one pack, still before the snapshot record and still advisory, and the sixteen-at-once writer is gone. The finishing count is unchanged: it counts the pack's entries, which land together.
+
 ## Consequences
 
 **Positive**
@@ -92,6 +95,8 @@ One fact makes "stored at every destination" measurable at a single point. In a 
 - **Count a file only when every blob of it has landed.** This is as honest, but the meter would step by the largest file in flight. Counting in archive order per segment gives the same truth more smoothly.
 - **Give the finishing work a share of the bar.** The owner was offered this and declined it. The percentage would then measure the job's storing work rather than bytes stored, and the share would be a guess.
 - **Pack the hints into one object per snapshot.** Fewer objects, but [Q21](../open-questions.md#closed) chose one object per new file version on purpose. A later reader lists one source key's prefix to find a file's history, and a per-snapshot table pays for the whole tree every run.
+
+  > **Revisited 2026-10 ([ADR-0090](0090-a-backups-hints-are-one-pack.md)).** The whole-tree cost belongs to a table of every file. A pack of only the versions a backup created costs what changed, as the per-file hint did, and one request a backup. ADR-0090 adopts it.
 - **A bar that is elapsed time over estimated total time.** That is honest about time but not about what is stored, which is what the owner asked the number to mean.
 
 ## Amendment 1 (2026-10) — a job's three stages, and what each destination holds
@@ -217,3 +222,4 @@ the files scanned and what it lacks, then a dash and what the job is doing.
 | 2026-10 | Accepted | Written from the owner's direction after a first backup showed 100% for its last four and a half minutes |
 | 2026-10 | Built | The measure (`Repository/BackedUpTally`, `Repository/ArchiveSession`, `Repository/SnapshotPublication`), the concurrent hints (`Repository/ManifestBuilder`), contract 1.54 (`Domain/JobProgress`, `Api/ContractVersion`, `Api/Results`, `Application/JobStateStore`), the job row and the CLI's report (`Agent/BackupRunner`, `Cli/CliApplication`), and the console's meters, pinned by `Repository.Tests/BackedUpProgressTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests` and `Hosts.Tests/JobsVerbServiceTests` |
 | 2026-10 | Amended | Amendment 1, from the owner's direction: a job's bar is its three stages over its files, and each destination's circle is what it holds of the newest backup (contract 1.55; `Repository.Catalogue/Catalogue`, `Agent/FileHoldingCounter`, `Agent/LiveHoldings`, `Agent/DeliveredFiles`, `Agent/DestinationShipSink`), pinned by `Hosts.Tests/DestinationFilesHeldTests` and `Web.DomTests/BackupProgressDomTests` |
+| 2026-10 | Amended | Decision 4 superseded by [ADR-0090](0090-a-backups-hints-are-one-pack.md): the hints are one pack a backup (`Repository/ManifestBuilder`, `Repository/SnapshotPublication`), not sixteen per-file writes at once, and the alternative this record rejected is the one adopted |

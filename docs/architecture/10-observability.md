@@ -199,7 +199,9 @@ queued upload is not counted, and neither is a publication still writing.
 Every byte is backed up before the snapshot is published, so a client holds
 the meter at 99% until the job settles, and while the run finishes its
 reports count the source-identity hints it is writing, which a client shows
-beside the meter. A report reaches the hub each time an acknowledged blob
+beside the meter. They are one pack since
+[ADR-0090](../adr/0090-a-backups-hints-are-one-pack.md), so the count lands
+whole when the pack does. A report reaches the hub each time an acknowledged blob
 moves the figure, so the meter moves while one large file is still being read.
 
 [ADR-0088](../adr/0088-a-backups-percentage-is-what-it-has-backed-up.md)
