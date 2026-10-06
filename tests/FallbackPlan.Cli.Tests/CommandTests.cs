@@ -164,6 +164,18 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task NoticeNames_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Notices are the service's ledger; there is nothing here to name.
+        var named = await _cli.RunAsync("notice-names", "n1");
+
+        Assert.AreEqual(1, named.ExitCode);
+        Assert.Contains("notices are the service's", named.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Retention_WithNoServiceToCommand_RefusesWithDirections()
     {
         await _cli.InitAsync();

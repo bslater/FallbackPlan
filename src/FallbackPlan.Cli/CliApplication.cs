@@ -1635,6 +1635,26 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // --------------------------------------------------------- notice-names
+
+        {
+            var noticeArgument = new Argument<string>("notice")
+            {
+                Description = "The notice, by the identifier the notices listing gives it.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "notice-names",
+                "Name the backup's files a notice left out (FR-WOR-007): a notice counts what it found, and the "
+                + "names need the set's passphrase, read from --passphrase-env."));
+            command.Arguments.Add(noticeArgument);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.NoticeNamesAsync(parse.GetValue(noticeArgument)!, token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------------ retention
 
         {

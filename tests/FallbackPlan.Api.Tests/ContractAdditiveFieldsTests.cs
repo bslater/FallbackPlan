@@ -21,8 +21,10 @@ namespace FallbackPlan.Api.Tests;
 /// of FR-VER-003's report of a circuit, 1.47's observed clock skew on
 /// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot",
 /// 1.48's implausible capture time on each snapshot, the wire half of
-/// FR-GC-012's "the snapshot list says which are flagged and why", and
-/// 1.54's bytes backed up and finishing count on the progress surface.
+/// FR-GC-012's "the snapshot list says which are flagged and why",
+/// 1.54's bytes backed up and finishing count on the progress surface, and
+/// 1.59's withheld names on a notice and the look that names them, the wire
+/// half of FR-WOR-007's notices.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1157,6 +1159,42 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.IsNull(row.DrillLimit);
         Assert.IsNull(row.DrillFailure);
         Assert.AreEqual(7_000UL, row.DrilledAt);
+    }
+
+    [TestMethod]
+    public void ANoticesWithheldNames_WireNamesAndPre159Defaults()
+    {
+        // Contract 1.59 (FR-WOR-007, ADR-0089 Amendment 1): a notice says how
+        // many of a backup's file names it left out, and whose set they are,
+        // so a client knows to offer the passphrase rather than the names.
+        var modern = JsonSerializer.Serialize(
+            new NoticeDescriptor("n1", "drill-failed:set:vault", "a sampled file would not restore", 1_000, null,
+                SetId: "set", NamesWithheld: 2),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"set_id\":\"set\"", modern, StringComparison.Ordinal);
+        Assert.Contains("\"names_withheld\":2", modern, StringComparison.Ordinal);
+
+        // A pre-1.59 frame withholds nothing it says it withheld.
+        var old = modern
+            .Replace(",\"set_id\":\"set\"", "", StringComparison.Ordinal)
+            .Replace(",\"names_withheld\":2", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the fields, or the old frame proves nothing");
+        var notice = JsonSerializer.Deserialize<NoticeDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(notice.SetId);
+        Assert.AreEqual(0, notice.NamesWithheld);
+
+        // The look itself names its notice and the source that proves the
+        // passphrase, and answers the names.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new NoticeNamesCommand("n1", "src-1"), FrameCodec.SerializerOptions);
+        Assert.Contains("\"command\":\"notice_names\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"notice_id\":\"n1\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"source\":\"src-1\"", asked, StringComparison.Ordinal);
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new NoticeNamesResult(["docs/report.txt"]), FrameCodec.SerializerOptions);
+        Assert.Contains("\"result\":\"notice_names\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"names\":[\"docs/report.txt\"]", answered, StringComparison.Ordinal);
     }
 
     [TestMethod]

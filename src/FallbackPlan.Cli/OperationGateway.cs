@@ -172,6 +172,16 @@ public interface IOperationGateway : IAsyncDisposable
     /// <param name="cancellationToken">Ends the wait; the drill itself is the service's and finishes.</param>
     /// <returns>A line per pair; not ok unless every pair asked about was drilled and restored.</returns>
     ValueTask<OperationReport> DrillAsync(string? setName, string? destinationName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Names the backup's files a notice left out (FR-WOR-007, ADR-0089
+    /// Amendment 1), through a source of the notice's set the passphrase
+    /// unlocked. Only a service can serve this: the notices are its ledger.
+    /// </summary>
+    /// <param name="noticeId">The notice, by the identifier the listing gives it.</param>
+    /// <param name="cancellationToken">Cancels the look.</param>
+    /// <returns>The names, one a line, or that the notice names no files.</returns>
+    ValueTask<OperationReport> NoticeNamesAsync(string noticeId, CancellationToken cancellationToken);
 }
 
 /// <summary>What a restore was asked to write, and where.</summary>
@@ -603,6 +613,37 @@ internal sealed class ServiceGateway(
         // A pair nothing was drilled at has proved nothing, so it is not a
         // success either; the counts say so without anyone parsing the prose.
         return new OperationReport(result.Failed == 0 && result.NotDrilled == 0, result.Lines);
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<OperationReport> NoticeNamesAsync(string noticeId, CancellationToken cancellationToken)
+    {
+        var listed = await SendAsync<NoticesResult>(
+            new ListNoticesCommand(IncludeAcknowledged: true), "the notices", cancellationToken).ConfigureAwait(false);
+        var notice = listed.Notices.FirstOrDefault(candidate => string.Equals(candidate.Id, noticeId, StringComparison.Ordinal))
+            ?? throw new CliFailureException($"No notice '{noticeId}' is on record.");
+
+        // A notice that left nothing out needs no passphrase to say so.
+        if (notice is not { NamesWithheld: > 0, SetId: { } setId })
+        {
+            return new OperationReport(true, ["This notice names no files."]);
+        }
+
+        var source = await GrantedSources.OpenAsync(
+            client, passphraseEnvironmentVariable, "A notice's files",
+            set => string.Equals(set.Id, setId, StringComparison.OrdinalIgnoreCase), cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            var named = await SendAsync<NoticeNamesResult>(
+                new NoticeNamesCommand(noticeId, source.SourceId), "a notice's files", cancellationToken)
+                .ConfigureAwait(false);
+            return new OperationReport(true, named.Names);
+        }
+        finally
+        {
+            await GrantedSources.CloseAsync(client, source.SourceId).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask<OperationReport> SyncAsync(
@@ -1293,6 +1334,11 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
         // stamp live in the service's ledger, so a direct-mode pass would read
         // the same objects forever and never record that it had.
         throw new CliFailureException(Strings.DirectGateway_VerifyDestinationNeedsTheService);
+
+    /// <inheritdoc/>
+    public ValueTask<OperationReport> NoticeNamesAsync(string noticeId, CancellationToken cancellationToken) =>
+        // The notices are the service's ledger: nothing here was raised.
+        throw new CliFailureException(Strings.DirectGateway_NoticeNamesNeedsTheService);
 
     /// <inheritdoc/>
     public ValueTask<OperationReport> DrillAsync(

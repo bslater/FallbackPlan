@@ -610,6 +610,7 @@ public sealed partial class ServiceCommandHandler(
         PairWithInviteCommand pair => await PairWithInviteAsync(pair, cancellationToken).ConfigureAwait(false),
         ListNoticesCommand listNotices => ListNotices(listNotices),
         AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
+        NoticeNamesCommand names => NoticeNames(names),
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
         ListReplicaAttributionsCommand => ListReplicaAttributions(),
         ReattributeReplicaCommand reattribute => ReattributeReplica(reattribute),
@@ -2890,7 +2891,32 @@ public sealed partial class ServiceCommandHandler(
                 ? runtime.Notices.Notices.OrderBy(notice => notice.RaisedAt)
                 : runtime.Notices.Unacknowledged.OrderBy(notice => notice.RaisedAt))
             .Select(notice => new NoticeDescriptor(
-                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt))]);
+                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt,
+                notice.Names is { Count: > 0 } ? notice.SetId : null, notice.Names?.Count ?? 0))]);
+
+    /// <summary>
+    /// Names the backup's files a notice left out (FR-WOR-007, ADR-0089
+    /// Amendment 1), through a source the notice's set's passphrase unlocked
+    /// for this session, as every other look at a backup's files is answered.
+    /// A notice that left no names out answers none and needs no source.
+    /// </summary>
+    private ServiceResult NoticeNames(NoticeNamesCommand command)
+    {
+        if (runtime.Notices.Notices.FirstOrDefault(notice =>
+                string.Equals(notice.Id, command.NoticeId, StringComparison.Ordinal)) is not { } notice)
+        {
+            return new ServiceError(ServiceErrorReason.NotFound, $"No notice '{command.NoticeId}' is on record.");
+        }
+
+        if (notice is not { Names: { Count: > 0 } names, SetId: { } setId })
+        {
+            return new NoticeNamesResult([]);
+        }
+
+        return RefuseUnproved(command.Source, command.SessionId, setId, "Showing a notice's files") is { } unproved
+            ? unproved
+            : new NoticeNamesResult(names);
+    }
 
     /// <summary>A person has seen the notice; it stays on record (FR-DEST-008).</summary>
     private ServiceResult AcknowledgeNotice(AcknowledgeNoticeCommand command) =>

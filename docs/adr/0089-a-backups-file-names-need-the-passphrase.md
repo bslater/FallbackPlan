@@ -73,6 +73,8 @@ The owner chose what is gated (browsing, restoring, and a run's file lists), how
 - **A captured grant is a bearer proof.** A grant envelope taken from the page while a look is open unlocks sources on that service until its recipient key changes. The page holds it only for the open. Anyone able to read it there can read the passphrase as it is typed.
 - **Incidental names.** A notice can name a path a drill could not restore, and a damage notice names a sample of the files the damage reaches ([ADR-0076](0076-damage-is-traced-to-what-needs-it.md)), both shown to anyone signed in. The service's log is redacted by type ([ADR-0081](0081-diagnostic-bundle.md)), and a diagnostic bundle carries paths only when a local person opts in.
 
+  > **Amended (2026-10):** closed for the notices this service raises from now on: they count, and the names need the passphrase — see [Amendment 1](#amendment-1-2026-10--a-notice-counts-and-its-names-need-the-passphrase-too).
+
 ## Alternatives considered
 
 - **Remember an unlock for the session, or for a few minutes.** One derivation per sign-in would be cheaper. The owner chose every time.
@@ -83,8 +85,55 @@ The owner chose what is gated (browsing, restoring, and a run's file lists), how
 - **Stop publishing the sealing key, so guessing has to go through the throttle.** The key is in the descriptor every copy of the backup carries, and the retention and adoption ceremonies prove against it. Withholding it here would close one route and leave the others open.
 - **Refuse the change preview without a source.** The editor asks for it at every tick of a rule. All but two of its buckets name files on disk now, which the folder picker shows anyway.
 
+## Amendment 1 (2026-10) — a notice counts, and its names need the passphrase too
+
+The residual this record called incidental names was the gate's one hole a
+service raised itself. A drill that could not bring a file back wrote the
+file's path into its notice, into the pair's row and onto the status matrix,
+and a damage notice and verify-destination's line named a sample of the files
+the damage reached. Anyone signed in read them. The owner chose to close it in
+the same pitch as the drill a person can run (ADR-0054 Amendment 6), whose
+answer would otherwise have been one more place a path appeared.
+
+**Decision.**
+
+- **The words count.** A drill's failure says "a sampled file", wherever it
+  goes: its notice, the ledger row, the status matrix's `drill_failure` and a
+  person's drill answer. The engine's words keep their diagnosis, with the
+  sampled file's path taken out, as the snapshot names it and as the platform
+  writes it, and the file's own name where it stands as a part of a path or
+  in quotes. A damage notice and verify-destination's line say how many
+  snapshots and files the damage reaches, not which.
+- **The names are kept beside the notice.** The notice ledger holds, per
+  notice, the files its message left out and the set they belong to. The
+  service's state directory held them before, in the catalogue, so nothing
+  is stored that the service did not already hold.
+- **A look at them is a look at the backup's files.** `notice_names`
+  (contract 1.59) answers them through a source the notice's set's passphrase
+  unlocked, held by the caller's session, exactly as this record's other
+  looks do, and refuses without one in the same words. A notice that left
+  nothing out answers none and asks for nothing. Each listed notice says how
+  many names it withheld and for which set, so a client knows to offer the
+  passphrase rather than the names.
+- **Every client asks the same way.** The console's notice list offers
+  **Show files…** where names were withheld and unlocks the notice's set
+  first. The CLI's `notice-names <id>` derives the grant from
+  `--passphrase-env` as its other looks do.
+
+**What stays.** A notice an older service raised keeps its words until it is
+resolved or acknowledged; nothing rewrites one, since nothing can tell which
+words in it are a name. An engine message that names the file other than as
+a path or in quotes would still name it; the drill's own messages do not.
+
+`Application/NoticeStore` keeps the names, `Agent/DamageReachText` and
+`Agent/RecoveryDrillJob` leave them out of the words, and
+`Agent/ServiceCommandHandler` answers the look. `Hosts.Tests/NoticeNamesTests`
+drills a rotted replica and finds the file in none of the answers, the row,
+the matrix or the notice, and only behind the passphrase.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Written from the owner's direction that viewing or restoring a backup must ask for, and check, the passphrase first; built with it — the service's refusals and session-bound sources (`Agent/ServiceCommandHandler`, `Agent/AuthenticatingService`, `Agent/RestoreSourceRegistry`), contract 1.56 (`Api/ContractVersion`), the console's per-set grants and throttle (`Web/ConsoleRestoreGate`, `Web/RestoreGateThrottle`), and the CLI's (`Cli/GrantedSources`), pinned by `Hosts.Tests/PassphraseGateTests`, `Web.Tests/RestoreGateTests`, `Web.DomTests/PassphraseGateDomTests` and `Api.Tests/ContractAdditiveFieldsTests` |
+| 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--a-notice-counts-and-its-names-need-the-passphrase-too): the notices this service raises count what they found, and the files they leave out are answered by contract 1.59's `notice_names` only through a source the set's passphrase unlocked. Built in `Application/NoticeStore`, `Agent/DamageReachText`, `Agent/RecoveryDrillJob` and `Agent/ServiceCommandHandler`, with the console's Show files and the CLI's `notice-names`; pinned by `Hosts.Tests/NoticeNamesTests`, `Hosts.Tests/DamageScopeTests`, `Application.Tests/NoticeStoreTests`, `Cli.Tests/NoticeNamesVerbTests` and `Web.DomTests/PassphraseGateDomTests` |

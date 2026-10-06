@@ -32,10 +32,14 @@ public sealed partial class ServiceCommandHandler
         {
             List<string> keys = [.. found.Select(refusal => refusal.BlobKey!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
 
-            // Named by what needs them, not only by their keys (FR-VER-005):
-            // everything that copy could not give back on its own.
+            // Said by what needs them, not only by their keys (FR-VER-005):
+            // everything that copy could not give back on its own, counted,
+            // with the files kept beside the notice for whoever unlocks the
+            // set (ADR-0089 Amendment 1).
+            var reach = archive.TraceDamage(keys);
+            var names = DamageReachText.Names(set.Id, reach);
             var what = $"{keys.Count} object(s) that no longer match what was sealed: {found.First().Detail.TrimEnd('.')}. "
-                + DamageReachText.Sentences(archive.TraceDamage(keys));
+                + DamageReachText.Sentences(reach);
             var after = found.All(passedOver.Contains)
                 ? "The files that needed them were read from another copy of the set instead, and verified. "
                 : "Files that no other copy of the set held sound did not restore. ";
@@ -47,7 +51,8 @@ public sealed partial class ServiceCommandHandler
                     $"A restore found the staging archive of set '{set.Name}' holding {what} {after}Nothing here "
                     + "repairs a staging archive in place, so those objects stay as they are: check the disk that "
                     + "holds it, and the filesystem, before counting on it.",
-                    nowMs);
+                    nowMs,
+                    names);
                 continue;
             }
 
@@ -79,7 +84,8 @@ public sealed partial class ServiceCommandHandler
                     : said + "The next sync replaces them from a sound copy and re-verifies them where they land. "
                         + "Its storage altered a backup once and may again: check the device, the filesystem, and "
                         + "anything else that writes there before counting on it.",
-                nowMs);
+                nowMs,
+                names);
         }
     }
 }

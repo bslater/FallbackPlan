@@ -8,8 +8,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// Damage has a scope a person can act on (FR-VER-005, specification 04 §7).
 /// Objects a destination holds damaged, with no sound copy to replace them,
 /// degrade the snapshots that need them there — in the per-snapshot status —
-/// and no others; the notice and verify-destination's line name the files and
-/// the snapshots they reach. The scope is read when it is asked for, so a
+/// and no others; the notice and verify-destination's line count the files and
+/// the snapshots they reach, and the notice names the files only to a caller
+/// who unlocked the set with its passphrase (FR-WOR-007). The scope is read
+/// when it is asked for, so a
 /// snapshot taken after the finding that needs the same objects is degraded
 /// too. Damage the service cannot trace to any snapshot degrades every
 /// snapshot there, as all damage did before it could be traced.
@@ -53,12 +55,22 @@ public sealed class DamageScopeTests : IDisposable
             "the newer snapshot needs none of what was found damaged, and is still restorable from there");
 
         var line = Assert.ContainsSingle(verified.Lines);
-        Assert.Contains("docs/ledger.txt", line, StringComparison.Ordinal);
         Assert.Contains("1 snapshot(s)", line, StringComparison.Ordinal);
+        Assert.Contains("1 file(s)", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("ledger.txt", line, StringComparison.Ordinal);
 
-        var notice = Notice(runtime).Message;
-        Assert.Contains("docs/ledger.txt", notice, StringComparison.Ordinal);
-        Assert.Contains("1 snapshot(s)", notice, StringComparison.Ordinal);
+        // Counted for anyone signed in, named only behind the set's passphrase
+        // (ADR-0089 Amendment 1).
+        var notice = Notice(runtime);
+        Assert.Contains("1 snapshot(s)", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("1 file(s)", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ledger.txt", notice.Message, StringComparison.Ordinal);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout);
+        Assert.IsInstanceOfType<NoticeNamesResult>(
+            await handler.ExecuteAsync(new NoticeNamesCommand(notice.Id, source.SourceId), Timeout), out var named);
+        Assert.EndsWith("docs/ledger.txt", Assert.ContainsSingle(named.Names), StringComparison.Ordinal);
     }
 
     [TestMethod]

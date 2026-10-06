@@ -244,6 +244,11 @@ internal static class Strings
     internal static string DirectGateway_DrillNeedsTheService => Get(nameof(DirectGateway_DrillNeedsTheService));
 
     /// <summary>
+    /// The notices are the service's ledger — nothing raised one here. Connect to the service with --connect, or run this on the hub while it runs.
+    /// </summary>
+    internal static string DirectGateway_NoticeNamesNeedsTheService => Get(nameof(DirectGateway_NoticeNamesNeedsTheService));
+
+    /// <summary>
     /// Syncing destinations is the service's job — its scheduler, ledger and per-set archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.
     /// </summary>
     internal static string DirectGateway_SyncNeedsTheService => Get(nameof(DirectGateway_SyncNeedsTheService));

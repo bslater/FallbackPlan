@@ -72,6 +72,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
 [JsonDerivedType(typeof(AdoptionPreviewResult), "adoption_preview")]
 [JsonDerivedType(typeof(NoticesResult), "notices")]
+[JsonDerivedType(typeof(NoticeNamesResult), "notice_names")]
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
@@ -681,12 +682,27 @@ public sealed record SnapshotsResult(IReadOnlyList<SnapshotDescriptor> Snapshots
 /// <param name="Message">The prose a person reads.</param>
 /// <param name="RaisedAt">When the condition was first seen, Unix milliseconds.</param>
 /// <param name="AcknowledgedAt">When a person acknowledged it, Unix milliseconds; null while it still awaits one.</param>
+/// <param name="SetId">
+/// The set whose passphrase names the files the message leaves out (contract
+/// 1.59); null when it leaves none out.
+/// </param>
+/// <param name="NamesWithheld">
+/// How many of a backup's file names the message leaves out (contract 1.59):
+/// <c>notice_names</c> answers them through a source <paramref name="SetId"/>'s
+/// passphrase unlocked. Zero when it names no files, and from a pre-1.59
+/// service, whose message may name them itself.
+/// </param>
 public sealed record NoticeDescriptor(
-    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt);
+    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt,
+    string? SetId = null, int NamesWithheld = 0);
 
 /// <summary>The notices, oldest first.</summary>
 /// <param name="Notices">The listed notices.</param>
 public sealed record NoticesResult(IReadOnlyList<NoticeDescriptor> Notices) : ServiceResult;
+
+/// <summary>The backup's file names a notice left out (FR-WOR-007, contract 1.59).</summary>
+/// <param name="Names">The files, as the backup names them; empty for a notice that names none.</param>
+public sealed record NoticeNamesResult(IReadOnlyList<string> Names) : ServiceResult;
 
 /// <summary>One entry inside a snapshot directory.</summary>
 /// <param name="Name">The entry's name.</param>

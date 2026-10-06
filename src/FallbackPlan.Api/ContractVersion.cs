@@ -596,8 +596,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// raises or clears its notice exactly as a scheduled one does. Additive:
     /// a pre-1.58 client never sends the command.
     /// </para>
+    /// <para>
+    /// 1.59 names a backup's files in a notice only behind the passphrase
+    /// (FR-WOR-007, ADR-0089 Amendment 1). A notice about a drill or about
+    /// damage counts what it found and leaves the names out; the drill's
+    /// failure on a status row and in `drill` does too. `NoticeDescriptor`
+    /// gains `set_id` and `names_withheld`, and `notice_names` answers the
+    /// names, `names`, through a `source` of that set unlocked with its
+    /// passphrase by the caller's session. Additive: a pre-1.59 client reads
+    /// messages that name no files, and has no way to ask for the names.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 58);
+    public static ContractVersion Current { get; } = new(1, 59);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -23,6 +23,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(PreviewSetChangesCommand), "preview_set_changes")]
 [JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
 [JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
+[JsonDerivedType(typeof(NoticeNamesCommand), "notice_names")]
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
 [JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
@@ -353,6 +354,20 @@ public sealed record ListNoticesCommand(bool IncludeAcknowledged = false) : Serv
 /// </summary>
 /// <param name="Id">The notice's identifier, from the listing.</param>
 public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
+
+/// <summary>
+/// Names the backup's files a notice left out (FR-WOR-007, ADR-0089
+/// Amendment 1): a notice counts what it found, and the names are answered
+/// only through a source the notice's set's passphrase unlocked, held by the
+/// caller's session — the proof every look at a backup's files asks for.
+/// </summary>
+/// <param name="NoticeId">The notice's identifier, from the listing.</param>
+/// <param name="Source">
+/// A source of the notice's set, opened under a verified restore grant by
+/// this session. Not needed for a notice that names no files, which answers
+/// none.
+/// </param>
+public sealed record NoticeNamesCommand(string NoticeId, string? Source = null) : ServiceCommand;
 
 /// <summary>
 /// Ends a pairing (ADR-0030 Amendment 2): announces the termination to the

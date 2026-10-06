@@ -1,3 +1,4 @@
+using FallbackPlan.Application;
 using FallbackPlan.Repository.Catalogue;
 
 namespace FallbackPlan.Agent;
@@ -5,12 +6,20 @@ namespace FallbackPlan.Agent;
 /// <summary>
 /// How a notice or a line says what damaged objects reach (FR-VER-005,
 /// specification 04 §7): the snapshots and the files a restore of which
-/// needs them, named, so the damage has a scope a person can act on.
+/// needs them, counted, so the damage has a scope a person can act on.
 /// </summary>
 /// <remarks>
-/// Counts for the whole, names for a bounded sample. What could not be traced
-/// is said as such, with what it costs: every snapshot there is counted as
-/// needing it, because not knowing is not evidence that none does.
+/// <para>
+/// Counts in the words, names behind the passphrase: the files are a bounded
+/// sample a notice keeps beside its message, for a caller who unlocks the set
+/// (FR-WOR-007, ADR-0089 Amendment 1), because anyone signed in reads the
+/// words.
+/// </para>
+/// <para>
+/// What could not be traced is said as such, with what it costs: every
+/// snapshot there is counted as needing it, because not knowing is not
+/// evidence that none does.
+/// </para>
 /// </remarks>
 internal static class DamageReachText
 {
@@ -28,8 +37,25 @@ internal static class DamageReachText
             said.Add($"{untraced}.");
         }
 
+        if (reach.FileSample.Count > 0)
+        {
+            said.Add(WithheldSentence);
+        }
+
         return said.Count == 0 ? "No snapshot this installation lists needs them." : string.Join(" ", said);
     }
+
+    /// <summary>
+    /// The files a notice keeps beside its message: the bounded sample the
+    /// trace named, of <paramref name="setId"/>'s backup, or null when it
+    /// named none.
+    /// </summary>
+    public static NoticeNames? Names(string setId, DamageReach reach) =>
+        reach.FileSample.Count == 0 ? null : new NoticeNames(setId, reach.FileSample);
+
+    /// <summary>What a message says in place of the names it leaves out.</summary>
+    public const string WithheldSentence =
+        "Which files they are is shown only to someone who unlocks the set with its passphrase.";
 
     /// <summary>The same, as a clause for verify-destination's one line.</summary>
     public static string Clause(DamageReach reach)
@@ -58,8 +84,7 @@ internal static class DamageReachText
         List<string> what = [];
         if (reach.Files > 0)
         {
-            var more = reach.Files - reach.FileSample.Count;
-            what.Add($"for {reach.Files} file(s): {string.Join(", ", reach.FileSample)}{(more > 0 ? $" and {more} more" : string.Empty)}");
+            what.Add($"for {reach.Files} file(s)");
         }
 
         if (reach.Structures > 0)

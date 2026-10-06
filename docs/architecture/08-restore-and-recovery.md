@@ -12,7 +12,7 @@ Restore the latest version · state at a chosen date and time · a named or tagg
 
 "Deleted files" is a first-class path rather than a special case, because it is one of the two things users actually come to a backup product for. The other is "the version from before I broke it", which is the individual-file-version path.
 
-Every path starts at the passphrase. A person sees a backup's file names — listing a snapshot, planning or running a restore, a run's changes and failures — only through a restore source opened under a grant (§4.3) derived from the set's passphrase, which serves the session that opened it and is asked for again at the next look ([ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The service's own drill reads without one.
+Every path starts at the passphrase. A person sees a backup's file names — listing a snapshot, planning or running a restore, a run's changes and failures, the files a notice leaves out — only through a restore source opened under a grant (§4.3) derived from the set's passphrase, which serves the session that opened it and is asked for again at the next look ([ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The service's own drill reads without one, and what it says about a file it could not bring back counts the file and names it only behind the same gate (ADR-0089 Amendment 1).
 
 ## 2. Restore planning
 

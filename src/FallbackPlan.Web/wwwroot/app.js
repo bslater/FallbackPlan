@@ -1272,6 +1272,8 @@ function renderNotices() {
               ? `<button type="button" class="btn small" data-action="upgrade-format" data-key="${esc(notice.key)}">Upgrade format…</button>` : ""}
             ${!notice.acknowledgedAt && S.signedInRole === "Owner" && notice.key?.startsWith("replica-claimed:")
               ? `<button type="button" class="btn small" data-action="claim-ack-open" data-repository="${esc(notice.key.slice("replica-claimed:".length))}">Acknowledge claim…</button>` : ""}
+            ${notice.namesWithheld > 0 && notice.setId
+              ? `<button type="button" class="btn small" data-action="notice-names" data-id="${esc(notice.id)}" data-set="${esc(notice.setId)}">Show files…</button>` : ""}
             ${notice.acknowledgedAt ? "" : `<button type="button" class="btn small" data-action="notice-ack" data-id="${esc(notice.id)}">Acknowledge</button>`}
           </div>`).join("")}</div>`}`;
 }
@@ -3059,6 +3061,24 @@ const actions = {
         refreshConfigData(); refreshNotices(); refreshStatus();
       }
     });
+  },
+
+  // The files a notice left out (FR-WOR-007, ADR-0089 Amendment 1): the
+  // notice counts what it found, and its names are a look at the backup's
+  // files like any other — unlocked with the set's passphrase, then closed.
+  async "notice-names"(el) {
+    const source = await unlockSource(() => setById(el.dataset.set), "Showing this notice's files");
+    if (!source) return;
+    try {
+      const result = await run(
+        { command: "notice_names", noticeId: el.dataset.id, source },
+        { errToast: "The service would not name this notice's files" });
+      if (result?.result !== "notice_names") { closeDialog(); return; }
+      reportDialog("Files this notice names", result.names,
+        "As the backup names them. Shown because the set's passphrase was given; asked for again next time.");
+    } finally {
+      run({ command: "close_restore_source", sourceId: source });
+    }
   },
 
   async "notice-ack"(el) {

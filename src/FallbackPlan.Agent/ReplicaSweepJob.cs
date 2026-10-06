@@ -474,8 +474,10 @@ internal static class ReplicaSweepJob
                 nowMs,
                 damageOnly: true);
 
-            // What the damage still standing reaches, by name: at a local path
-            // what no sound copy could replace, at a peer all of it.
+            // What the damage still standing reaches: at a local path what no
+            // sound copy could replace, at a peer all of it. Counted in the
+            // words, and the files kept beside them for whoever unlocks the
+            // set (ADR-0089 Amendment 1).
             List<string> standing = [.. outcomes.Where(outcome => !outcome.Repaired).Select(outcome => outcome.Key)];
             var reach = standing.Count > 0 ? archive.TraceDamage(standing) : null;
             runtime.Notices.Raise(
@@ -486,7 +488,8 @@ internal static class ReplicaSweepJob
                         set, destinationName, archive, result, reach,
                         await SoundHereAsync(runtime, set, destinationName, archive, standing, userInitiated, cancellationToken)
                             .ConfigureAwait(false)),
-                nowMs);
+                nowMs,
+                reach is null ? null : DamageReachText.Names(set.Id, reach));
             return new SegmentOutcome(
                 result.Examined, result.Findings.Count, repaired.Count, result.NextCursor, result.CompletedCircuit)
             {

@@ -93,6 +93,15 @@ internal static class RecoveryDrillJob
         /// cancelled rather than told it passed.
         /// </summary>
         public bool Recorded { get; init; } = true;
+
+        /// <summary>
+        /// The file, or the folder, the drill was at when it failed, as the
+        /// snapshot names it; null when it failed at none. Never part of
+        /// <see cref="Failure"/>, which goes where anyone signed in reads it:
+        /// it is kept beside the drill's notice for whoever unlocks the set
+        /// with its passphrase (FR-WOR-007, ADR-0089 Amendment 1).
+        /// </summary>
+        public string? FailedPath { get; init; }
     }
 
     /// <summary>
@@ -320,11 +329,13 @@ internal static class RecoveryDrillJob
         var scratch = Path.Combine(
             runtime.RestoreCacheRoot, $"drill-{Convert.ToHexStringLower(Guid.NewGuid().ToByteArray())[..16]}");
         string? sourceId = null;
+        string? at = null;
 
         try
         {
             var outcome = await DrillAsync(
-                handler, set, destinationName, scratch, budget, draw, id => sourceId = id, cancellationToken)
+                handler, set, destinationName, scratch, budget, draw, id => sourceId = id, path => at = path,
+                cancellationToken)
                 .ConfigureAwait(false);
 
             // A failure reached while the service is stopping is about the
@@ -358,9 +369,9 @@ internal static class RecoveryDrillJob
             // cancellation or a disposed object is not shutdown unless the
             // service is stopping; met while it runs, it is a fault on the
             // road back, and silence would hide it for as long as it lasted.
-            var failure = $"the drill did not complete: {exception.Message.ReplaceLineEndings(" ")}";
+            var failure = $"the drill did not complete: {Unnamed(exception.Message.ReplaceLineEndings(" "), at)}";
             runtime.DestinationSync.RecordIncompleteDrill(set.Id, destinationName, failure, nowMs);
-            var outcome = new DrillOutcome(0, 0, failure);
+            var outcome = new DrillOutcome(0, 0, failure) { FailedPath = at };
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -481,6 +492,7 @@ internal static class RecoveryDrillJob
         SampleBudget? budget,
         Random draw,
         Action<string> keepSourceId,
+        Action<string> keepPath,
         CancellationToken cancellationToken)
     {
         var opened = await handler.ExecuteAsync(
@@ -513,7 +525,7 @@ internal static class RecoveryDrillJob
         }
 
         var (paths, skipped) = await SampleAsync(
-            handler, source.SourceId, newest.SnapshotId, budget, draw, cancellationToken).ConfigureAwait(false);
+            handler, source.SourceId, newest.SnapshotId, budget, draw, keepPath, cancellationToken).ConfigureAwait(false);
         if (paths.Count == 0)
         {
             // A snapshot of an empty tree is not a failure to restore from —
@@ -537,6 +549,7 @@ internal static class RecoveryDrillJob
         var sealedFiles = 0;
         foreach (var path in paths)
         {
+            keepPath(path);
             var restored = await handler.ExecuteAsync(
                 new RunRestoreCommand(
                     newest.SnapshotId, path, Path.Combine(scratch, $"{files}"), source.SourceId, InPlace: true),
@@ -545,8 +558,8 @@ internal static class RecoveryDrillJob
             switch (restored)
             {
                 case ServiceError error:
-                    ThrowIfCancelled(error, $"restoring '{path}'");
-                    return new DrillOutcome(0, 0, $"'{path}' would not restore: {error.Message}");
+                    ThrowIfCancelled(error, "restoring a sampled file");
+                    return Failed($"a sampled file would not restore: {Unnamed(error.Message, path)}", path);
 
                 // The whole-file hash is checked inside the restore, after
                 // reassembly and before a byte is emitted (specification 06
@@ -572,33 +585,33 @@ internal static class RecoveryDrillJob
                     switch (planned)
                     {
                         case ServiceError error:
-                            ThrowIfCancelled(error, $"planning '{path}'");
-                            return new DrillOutcome(0, 0, $"'{path}' would not plan: {error.Message}");
+                            ThrowIfCancelled(error, "planning a sampled file");
+                            return Failed($"a sampled file would not plan: {Unnamed(error.Message, path)}", path);
 
                         case RestorePlanResult { MissingObjects.Count: 0 }:
                             sealedFiles++;
                             break;
 
                         case RestorePlanResult missing:
-                            return new DrillOutcome(
-                                0, 0,
-                                $"'{path}' is missing {missing.MissingObjects.Count} object(s) at the replica: "
-                                + $"{missing.MissingObjects[0]}");
+                            return Failed(
+                                $"a sampled file is missing {missing.MissingObjects.Count} object(s) at the replica: "
+                                + $"{missing.MissingObjects[0]}",
+                                path);
 
                         default:
-                            return new DrillOutcome(0, 0, $"planning '{path}' answered {planned.GetType().Name}.");
+                            return Failed($"planning a sampled file answered {planned.GetType().Name}.", path);
                     }
 
                     break;
 
                 case RestoreResult other:
-                    return new DrillOutcome(
-                        0, 0,
-                        $"'{path}' restored {other.Outcome} — {other.Failed} failed"
-                        + (other.FailedSample is { Count: > 0 } sample ? $": {sample[0]}" : "."));
+                    return Failed(
+                        $"a sampled file restored {other.Outcome} — {other.Failed} failed"
+                        + (other.FailedSample is { Count: > 0 } sample ? $": {Unnamed(sample[0], path)}" : "."),
+                        path);
 
                 default:
-                    return new DrillOutcome(0, 0, $"restoring '{path}' answered {restored.GetType().Name}.");
+                    return Failed($"restoring a sampled file answered {restored.GetType().Name}.", path);
             }
         }
 
@@ -614,6 +627,62 @@ internal static class RecoveryDrillJob
         }
 
         return new DrillOutcome(files + sealedFiles, bytes, null, limits.Count == 0 ? null : string.Join(" ", limits));
+    }
+
+    /// <summary>A drill that failed at <paramref name="path"/>, which the failure does not name.</summary>
+    private static DrillOutcome Failed(string failure, string path) => new(0, 0, failure) { FailedPath = path };
+
+    /// <summary>What the drill's notice says in place of the file it leaves out.</summary>
+    private const string WithheldSentence =
+        "Which file it was is shown only to someone who unlocks the set with its passphrase.";
+
+    /// <summary>What a drill's words call the file they leave out.</summary>
+    private const string SampledFile = "the sampled file";
+
+    /// <summary>
+    /// <paramref name="message"/> with <paramref name="path"/> taken out, so a
+    /// drill's words can go where anyone signed in reads them (FR-WOR-007,
+    /// ADR-0089 Amendment 1): the path as the snapshot names it, as this
+    /// platform writes it, and the file's own name where it stands as a part
+    /// of a path or in quotes. A name in running prose is not matched, since
+    /// a short one would match inside other words.
+    /// </summary>
+    /// <param name="message">The engine's words.</param>
+    /// <param name="path">The path the drill was at, or null.</param>
+    internal static string Unnamed(string message, string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return message;
+        }
+
+        var said = message.Replace(path, SampledFile, StringComparison.Ordinal);
+        var native = path.Replace('/', Path.DirectorySeparatorChar);
+        said = said.Replace(native, SampledFile, StringComparison.Ordinal);
+
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        if (name.Length == 0)
+        {
+            return said;
+        }
+
+        var unnamed = new System.Text.StringBuilder(said.Length);
+        var from = 0;
+        for (var at = said.IndexOf(name, StringComparison.Ordinal); at >= 0;
+            at = said.IndexOf(name, at + name.Length, StringComparison.Ordinal))
+        {
+            var end = at + name.Length;
+            var opens = at > 0 && said[at - 1] is '/' or '\\' or '\'' or '"';
+            var closes = end == said.Length || said[end] is '/' or '\\' or '\'' or '"' or ':' or ',' or ';' or ')'
+                || char.IsWhiteSpace(said[end]);
+            if (opens && closes)
+            {
+                unnamed.Append(said, from, at - from).Append(SampledFile);
+                from = end;
+            }
+        }
+
+        return unnamed.Append(said, from, said.Length - from).ToString();
     }
 
     /// <summary>
@@ -654,6 +723,7 @@ internal static class RecoveryDrillJob
         string snapshotId,
         SampleBudget? budget,
         Random draw,
+        Action<string> keepPath,
         CancellationToken cancellationToken)
     {
         var chosen = new List<string>();
@@ -666,6 +736,11 @@ internal static class RecoveryDrillJob
             var path = string.Empty;
             for (var depth = 0; depth < MaximumDepth; depth++)
             {
+                if (path.Length > 0)
+                {
+                    keepPath(path);
+                }
+
                 var listed = await handler.ExecuteAsync(
                     new ListDirectoryCommand(snapshotId, path.Length == 0 ? null : path, sourceId),
                     cancellationToken).ConfigureAwait(false);
@@ -675,7 +750,7 @@ internal static class RecoveryDrillJob
                 // snapshot for having nothing it could sample.
                 if (listed is ServiceError listFailure)
                 {
-                    ThrowIfCancelled(listFailure, path.Length == 0 ? "listing the snapshot" : $"listing '{path}'");
+                    ThrowIfCancelled(listFailure, path.Length == 0 ? "listing the snapshot" : "listing a folder of it");
                 }
 
                 if (listed is not DirectoryResult directory || directory.Entries.Count == 0)
@@ -770,8 +845,10 @@ internal static class RecoveryDrillJob
             key,
             $"A restore drill against '{destinationName}' could not bring back a file from set '{set.Name}': "
             + $"{outcome.Failure} The destination may still hold every byte it was sent — a drill tests the "
-            + "path back, not the copy out — so check this before you need it.",
-            nowMs);
+            + "path back, not the copy out — so check this before you need it."
+            + (outcome.FailedPath is null ? string.Empty : " " + WithheldSentence),
+            nowMs,
+            outcome.FailedPath is null ? null : new NoticeNames(set.Id, [outcome.FailedPath]));
     }
 
     private static void TryDelete(string directory)

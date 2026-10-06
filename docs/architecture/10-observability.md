@@ -165,6 +165,13 @@ and its own listing until a human acknowledges it, and names the action it
 asks for. It is not a log line — a log line is what nobody reads until
 afterwards.
 
+Anyone signed in reads a notice, so a notice about a backup's files counts
+them. The names it leaves out are kept beside it, with the set they belong
+to, and answered only through a source that set's passphrase unlocked; a
+listed notice says how many it withheld, so a client knows to ask for the
+passphrase ([ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md)
+Amendment 1).
+
 **Progress events are not telemetry.** They may carry job identity because they
 travel to an authenticated local caller or a paired remote client and are shown
 to the person whose data it is; the OpenTelemetry instruments keep their closed

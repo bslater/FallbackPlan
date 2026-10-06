@@ -32,6 +32,24 @@ public sealed record Notice
     public ulong? AcknowledgedAt { get; init; }
 
     /// <summary>
+    /// The backup set <see cref="Names"/> belong to, or null when the notice
+    /// leaves no names out.
+    /// </summary>
+    [JsonPropertyName("set_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SetId { get; init; }
+
+    /// <summary>
+    /// The backup's file names the message leaves out (FR-WOR-007, ADR-0089
+    /// Amendment 1): kept here, beside the counts the message gives, for a
+    /// caller who unlocked <see cref="SetId"/> with its passphrase. Null when
+    /// the notice names no files.
+    /// </summary>
+    [JsonPropertyName("names")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Names { get; init; }
+
+    /// <summary>
     /// What kind of notice this is: the key up to its first colon, a word the
     /// code chose (<c>terms-narrowed</c>, <c>staging-retirable</c>) and so
     /// safe to show anywhere (ADR-0081).
@@ -47,6 +65,14 @@ public sealed record Notice
     [JsonIgnore]
     public string? Subject => Key.IndexOf(':', StringComparison.Ordinal) is var colon and >= 0 ? Key[(colon + 1)..] : null;
 }
+
+/// <summary>
+/// The backup's file names a notice leaves out of its message, and the set
+/// whose passphrase names them (FR-WOR-007, ADR-0089 Amendment 1).
+/// </summary>
+/// <param name="SetId">The backup set the files belong to.</param>
+/// <param name="Names">The files, as the backup names them.</param>
+public sealed record NoticeNames(string SetId, IReadOnlyList<string> Names);
 
 /// <summary>
 /// The durable notices ledger: <c>notices.json</c> beside <c>jobs.json</c>
@@ -126,10 +152,11 @@ public sealed class NoticeStore
     /// same — a failing condition observed hourly is one notice, not a pile.
     /// </summary>
     /// <param name="key">The stable machine key: one per (kind, subject).</param>
-    /// <param name="message">What happened, for the human.</param>
+    /// <param name="message">What happened, for the human. It names none of a backup's files.</param>
     /// <param name="nowUnixMilliseconds">When it was observed.</param>
+    /// <param name="names">The backup's file names the message leaves out, or null when it leaves none out.</param>
     /// <returns>The notice on record.</returns>
-    public Notice Raise(string key, string message, ulong nowUnixMilliseconds)
+    public Notice Raise(string key, string message, ulong nowUnixMilliseconds, NoticeNames? names = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(key);
         ThrowHelper.ThrowIfNullOrWhiteSpace(message);
@@ -147,14 +174,17 @@ public sealed class NoticeStore
                 // forever while the real figures moved underneath it. The
                 // original timestamp is the useful one ("since when"), so it
                 // stays; the text is the one that must be current.
-                var refreshed = _notices[index] with { Message = message };
-                if (refreshed != _notices[index])
+                var current = _notices[index];
+                var refreshed = current with { Message = message, SetId = names?.SetId, Names = names?.Names };
+                if (!string.Equals(current.Message, message, StringComparison.Ordinal)
+                    || !string.Equals(current.SetId, refreshed.SetId, StringComparison.Ordinal)
+                    || !(current.Names ?? []).SequenceEqual(refreshed.Names ?? [], StringComparer.Ordinal))
                 {
                     _notices[index] = refreshed;
                     Save();
                 }
 
-                return refreshed;
+                return _notices[index];
             }
 
             var notice = new Notice
@@ -163,6 +193,8 @@ public sealed class NoticeStore
                 Key = key,
                 Message = message,
                 RaisedAt = nowUnixMilliseconds,
+                SetId = names?.SetId,
+                Names = names?.Names,
             };
             _notices.Add(notice);
             Save();
@@ -193,8 +225,10 @@ public sealed class NoticeStore
     /// <param name="key">The stable machine key: one per (kind, subject).</param>
     /// <param name="message">What was found, for the human. The same finding must render the same text.</param>
     /// <param name="nowUnixMilliseconds">When it was observed.</param>
+    /// <param name="names">The backup's file names the message leaves out, or null when it leaves none out.</param>
     /// <returns>The notice on record, or null when this finding was already acknowledged.</returns>
-    public Notice? RaiseUnlessAcknowledged(string key, string message, ulong nowUnixMilliseconds)
+    public Notice? RaiseUnlessAcknowledged(
+        string key, string message, ulong nowUnixMilliseconds, NoticeNames? names = null)
     {
         ThrowHelper.ThrowIfNullOrWhiteSpace(key);
         ThrowHelper.ThrowIfNullOrWhiteSpace(message);
@@ -212,7 +246,7 @@ public sealed class NoticeStore
                 return null;
             }
 
-            return Raise(key, message, nowUnixMilliseconds);
+            return Raise(key, message, nowUnixMilliseconds, names);
         }
     }
 
