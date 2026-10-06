@@ -57,6 +57,11 @@ answers to one flag.
    backup that completes for the set** — the moment the new settings are
    actually captured. Schedule and retention edits change when and how long,
    not what, and stay a plain acknowledgement.
+
+   > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10-a-material-edit-backs-up-at-once)).**
+   > The edit also queues a backup under the new settings at once, after any
+   > run still capturing under the earlier ones, and only a run that captured
+   > the current settings resolves the notice.
 5. **`full` means full everywhere.** The flag is plumbed through the
    scheduler to the runner, which empties the parent list and the incremental
    baseline exactly as direct mode always did.
@@ -148,6 +153,53 @@ Three changes, none to the contract:
   abandoned preview releases the reader lane instead of leaving minutes of
   walking queued ahead of the save's own rescan.
 
+## Amendment 2 (2026-10): a material edit backs up at once
+
+The owner asked that a saved change to a set's sources, filters or exclusions
+start a new scan that settles what needs to be backed up, or purged. Decision 4
+queued a dry rescan and left the work to the next scheduled backup. Until that
+ran, the set stood under settings no backup had captured, for as long as its
+schedule said.
+
+1. **The save queues a backup under the new settings at once.** A material
+   edit, of the roots or the rules, queues a backup of the set as a person's
+   request: ahead of scheduled work, not held by the background window, and
+   followed by the set's fan-out like any backup a person asks for. A set that
+   has never backed up gets its first backup the same way. The owner chose
+   this over waiting for the window. Schedule and retention edits still queue
+   nothing.
+2. **A run under the earlier settings cannot stand in for it.** One run of a
+   set at a time (ADR-0027 §1), and a run captures the settings it was queued
+   with. When a run is queued or under way at the save, the backup the edit
+   asks for follows it as soon as it settles, under the settings current
+   then. Several edits during one run owe one run after it, not one each. The
+   request is made under the scheduler's enqueue gate and taken under it when
+   the run settles, so it cannot fall between the two.
+3. **The notice is about the settings, not the clock.** Each set's settings
+   have a generation, which a material edit moves on, and a run captures the
+   generation current when it was queued. Only a run that captured the
+   current generation resolves the set-changed notice, so the run under way at
+   an edit no longer clears the notice about that edit. The rescan raises or
+   refreshes the notice only while its own generation is current and no run
+   has captured it. A rescan that finishes after the backup, which a busy
+   reader lane makes possible, therefore leaves nothing behind, and a rescan
+   of settings already superseded stays silent. The generations live in
+   memory: after a restart every run captures the configuration as it stands,
+   which is what a standing notice is about.
+4. **Purging stays with retention.** The owner chose that deleted files, and
+   files the new rules stop capturing, leave the backup from the new snapshot
+   on. Earlier snapshots keep them until retention prunes those snapshots, as
+   before. Retention's deletions need the passphrase
+   ([ADR-0055](0055-reclaim-authority.md)), so the service could not purge on
+   its own in any case.
+
+**Consequences.** A material edit costs a backup at once, which is what the
+person asked for. The rescan and the backup both walk the source, the rescan
+on the reader lane and the backup on the writer lane; the rescan keeps the
+counts that tell deleted files from files the rules stopped capturing, which
+the backup's own record does not. The contract is unchanged: the save's
+answer was already prose, and now names the queued job or the run it follows.
+
 ## Status history
 
 | Date | Status | Note |
@@ -156,3 +208,4 @@ Three changes, none to the contract:
 | 2026-08 | Accepted | Built: contract 1.8, the comparer beside the publisher's own predicates, the after-edit rescan and its notice, the CLI `changes` verb and the web editor's preview |
 | 2026-08 | Amended | The console's step two opens before the comparison answers: the walk fills in from the background, Apply never waits on it, and superseded previews are aborted. The service-side rescan-and-notice (decision 4) is unchanged and remains the authoritative record |
 | 2026-08 | Amended by later records | The same upsert now also *acts*: a new set's save queues its first backup and a gained destination queues its seed ([ADR-0047](0047-backup-pool-and-priorities.md) §5), alongside decision 4's rescan for material edits to an existing set. Decision 4's "resolved by the next backup that completes" tolerates that completion being deferred by a preemption pause, which is bounded by the max-pause age ([ADR-0047](0047-backup-pool-and-priorities.md) Amendment 1). The notice store this record introduced also carries [ADR-0046](0046-direct-to-destination-publication.md)'s standing staging-retirable notice, resolved by retirement rather than by a backup |
+| 2026-10 | Amended | Amendment 2: a material edit queues a backup under the new settings at once, after any run still capturing under the earlier ones; only a run of the current settings resolves the notice, and a rescan finishing after it raises nothing. `Agent/SetSettingsGenerations`, `Agent/Scheduler`, `Agent/SetChangeScan`, `Agent/BackupRunner`; `Hosts.Tests/SetChangeTests` |

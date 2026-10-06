@@ -62,7 +62,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0035](adr/0035-destination-fitness.md) | Destination fitness — and, since Amendments 1 to 3, a sweep that reads a whole replica each circuit, a peer's on a stated cadence, repairs what it finds at a local path, and is reported on each destination's status row | **Built** | `Agent/DestinationProbe.cs`, `Agent/PeerAddress.cs`, `Agent/ReplicaSweepJob.cs`, `Repository/ReplicaSweep.cs`, `Repository/ReplicaRepair.cs`, `Agent/ReplicaRepairer.cs`, `Replication/VerificationSampler.cs`, `Application/DestinationCapacity.cs` · `Retention.Tests/DestinationConvergenceTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/PeerQuotaTests`, `Hosts.Tests/DeepSweepTests`, `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepCadenceTests`, `Cli.Tests/StatusSweepTokenTests`, `Repository.Tests/ReplicaRepairTests` · [notes](#0035--a-destination-has-to-earn-being-relied-on) |
 | [0036](adr/0036-local-web-console.md) | The local web console | **Built** | `FallbackPlan.Web`, `Web/WebConsoleHost.cs`, `Web/ConsoleAuth.cs` · `Web.Tests/ConsoleAuthTests`, `Web.Tests/CommandRelayTests`, `Web.Tests/EventStreamTests`, `ArchitectureTests/DependencyRuleTests` · [notes](#0036--the-first-front-end-beyond-the-cli) |
 | [0037](adr/0037-configuration-over-the-command-contract.md) | Configuration over the command contract | **Built** | `Agent/ServiceCommandHandler.Configuration.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `Protocol/PairingInvite.cs` · `Hosts.Tests/ConfigurationCommandTests`, `Hosts.Tests/ServiceSettingsCommandTests`, `Hosts.Tests/InvitePairingCommandTests`, `Protocol.Tests/InvitePairingTests`, `Api.Tests/ConfigurationContractTests`, `Hosts.Tests/LocalPlacementTests`, `Web.DomTests/NewSetWizardDomTests` · [notes](#0037--the-configuration-lifecycle-joins-the-contract) |
-| [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
+| [0038](adr/0038-set-change-rescan-and-notice.md) | Set changes rescanned, and since Amendment 2 backed up at once under the new settings, after any run still capturing under the earlier ones | **Built** | `Repository/SourceComparer.cs`, `Repository/ChangeDetection.cs`, `Agent/SetChangeScan.cs`, `Agent/SetSettingsGenerations`, `Agent/Scheduler` · `Repository.Tests/SourceComparerTests`, `Hosts.Tests/SetChangeTests` · [notes](#0038--a-set-edit-answers-with-its-meaning) |
 | [0039](adr/0039-console-operator-loop.md) | The console's operator loop | **Built** | `Agent/PeerUnpairing.cs`, `Agent/ServiceCommandHandler.cs`, `Agent/ServiceCommandHandler.Pairing.cs`, `FallbackPlan.Web` · `Hosts.Tests/NoticeCommandTests`, `Hosts.Tests/UnpairCommandTests`, `Hosts.Tests/DirectoryChangeTests` · [notes](#0039--the-loops-close-where-the-operator-lives) |
 | [0040](adr/0040-multi-root-backup-sets.md) | Multi-root backup sets | **Built** | `Filesystem/MultiRootScan.cs`, `Filesystem/ScanRoot.cs`, `Application/ClientConfiguration.cs`, `Agent/ServiceCommandHandler.cs`, `FallbackPlan.Web` · `Repository.Tests/MultiRootPublicationTests`, `Hosts.Tests/MultiRootSetTests` · [notes](#0040--several-folders-one-snapshot) |
 | [0041](adr/0041-guided-restore-and-peer-retrieval.md) | The guided restore and peer retrieval — its targeted blob load is no longer what a restore uses ([0068](adr/0068-the-catalogue-directed-restore-read.md)), and its passphrase gate is the service's, checked in the console against what the service publishes (Amendment 1, [0089](adr/0089-a-backups-file-names-need-the-passphrase.md)) | **Built** | `Restore/RestoreExecutor.cs`, `Agent/RestoreSourceRegistry.cs`, `Agent/RetrievalResponder.cs`, `Protocol/PeerRetrievalMessages.cs`, `Web/ConsoleRestoreGate.cs` · `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreSourceTests`, `Hosts.Tests/PeerRetrievalTests`, `Web.Tests/RestoreGateTests` · [notes](#0041--restore-walks-in-through-the-front-door) |
@@ -1228,6 +1228,23 @@ that reads `FilesReused == 0` off the progress channel. Recorded costs, not
 fixed: a re-included file re-captures with severed ancestry (manifests are
 immutable), a root change reads as delete-all-plus-new-all, and a hand-edit
 of `config.json` bypasses the rescan hook — the next backup still applies it.
+
+Amendment 2 (2026-10) made the save act. The owner asked that a saved change
+to a set's sources, filters or exclusions start a scan that settles what needs
+backing up, so a material edit now queues a backup under the new settings at
+once, as a person's request, with the set's fan-out after it. A run already
+queued or under way captures the settings it was queued with, so it cannot
+stand in: the edit's backup follows it as soon as it settles, and several
+edits during one run owe one run after it. The notice now follows the
+settings rather than the clock. Each set's settings have a generation that a
+material edit moves on (`Agent/SetSettingsGenerations`), and only a run that
+captured the current generation resolves the notice. A rescan raises it only
+while its generation is current and uncaptured, so a rescan held behind a busy
+reader lane cannot raise a notice the backup has already answered. The tests
+hold runs at the start of scanning and occupy the reader lane, so each
+ordering is one the test arranges rather than one it hopes for. Purging stays
+with retention, as the owner chose: deleted and excluded files leave the
+backup from the new snapshot on.
 
 ### 0039 — the loops close where the operator lives
 

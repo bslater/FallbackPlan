@@ -6,7 +6,9 @@ namespace FallbackPlan.Web.Tests;
 /// behind the confirm-word dialog, and its go-handler sends the verb and
 /// drops the browser's dead session — the restart signs everybody out by
 /// design. The set editor's shape is pinned here too: a summary with a dialog
-/// per section for an edit, and six steps for a new set (FR-SVC-022).
+/// per section for an edit, and six steps for a new set (FR-SVC-022); and a
+/// material save says a backup under the new settings is on its way, not that
+/// the next scheduled one will capture them (FR-SVC-009).
 /// </summary>
 [TestClass]
 public sealed class ConsoleAdminScriptTests
@@ -268,5 +270,15 @@ public sealed class ConsoleAdminScriptTests
         Assert.Contains("restart_service", go, StringComparison.Ordinal);
         Assert.Contains("sessionExpired()", go, StringComparison.Ordinal,
             "the restart signs this browser out too (FR-USR-003); the page must not discover it refusal by refusal");
+    }
+
+    [TestMethod]
+    public void AMaterialSave_SaysABackupUnderTheNewSettingsIsQueued_NotThatTheNextOneWillCapture()
+    {
+        var save = FunctionBody(AppJs(), "applySetUpsert");
+
+        Assert.DoesNotContain("The next backup captures under the new settings", save, StringComparison.Ordinal,
+            "a material save starts a backup under the new settings at once");
+        Assert.Contains("A backup under the new settings", save, StringComparison.Ordinal);
     }
 }

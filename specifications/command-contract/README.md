@@ -72,7 +72,10 @@ flagged where it does not resolve here, answered with the confirmation
 `delete_backup_set`, `list_destinations` / `upsert_destination` /
 `delete_destination`, `browse_folders`, `validate_set_draft`,
 `preview_set_changes`, `export_configuration` (ADR-0037/0038/0040). Since
-1.19 a new set's upsert answers with its queued first backup; since 1.25
+1.19 a new set's upsert answers with its queued first backup, and a material
+edit of an existing set now queues a backup under the new settings too, or
+one to follow the run still capturing under the earlier settings, its answer
+naming the job either way (ADR-0038 Amendment 2, no wire change); since 1.25
 the set descriptor carries `direct_ship` (null preserves — a pre-1.25
 client cannot convert a set; an explicit value sets the storage shape,
 refused mid-run and without a local-path destination, and a new local-path

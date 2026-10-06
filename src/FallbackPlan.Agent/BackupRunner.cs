@@ -62,6 +62,11 @@ public static class BackupRunner
     /// The run's suspension point (ADR-0047 Amendment 1), when its scheduler preempts;
     /// the capture pipeline honours it between scan events.
     /// </param>
+    /// <param name="settingsGeneration">
+    /// The generation of the set's settings <paramref name="set"/> carries
+    /// (ADR-0038 Amendment 2): a run resolves the set-changed notice only when
+    /// it captured the generation still current.
+    /// </param>
     /// <param name="cancellationToken">Cancels the backup.</param>
     /// <returns>What happened.</returns>
     public static async ValueTask<BackupOutcome> RunAsync(
@@ -72,6 +77,7 @@ public static class BackupRunner
         bool userInitiated,
         bool full = false,
         IPauseGate? pauseGate = null,
+        long settingsGeneration = 0,
         CancellationToken cancellationToken = default)
     {
         ThrowHelper.ThrowIfNull(runtime);
@@ -254,9 +260,12 @@ public static class BackupRunner
             runCommitted = true;
 
             // The set-changed notice's condition is "the last backup predates
-            // the settings", and this backup just captured under them
-            // (ADR-0038). A no-op when no such notice stands.
-            runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs);
+            // the settings" (ADR-0038). This backup captured the settings it
+            // was queued with, which clears it only when they are still the
+            // current ones: a run queued before an edit leaves the edit's
+            // notice standing for the run that follows it (Amendment 2).
+            runtime.SetSettings.Captured(
+                set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
 
             return new BackupOutcome(set.Name, "ran", summary);
         }

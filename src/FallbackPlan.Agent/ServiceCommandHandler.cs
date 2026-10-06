@@ -1580,16 +1580,7 @@ public sealed partial class ServiceCommandHandler(
                 runtime.DestinationSync.RecordNeedsFull(replacement.Id, reference.Ref, nowMs);
             }
 
-            var first = Scheduler.Enqueue(runtime, replacement, now, userInitiated: true);
-            _ = first.ContinueWith(
-                completed =>
-                {
-                    if (completed is { Status: TaskStatus.RanToCompletion, Result.Outcome: "ran" })
-                    {
-                        FanOut.EnqueueAll(runtime, replacement, now, userInitiated: true);
-                    }
-                },
-                TaskScheduler.Default);
+            _ = Scheduler.EnqueueAndFanOut(runtime, replacement, now);
 
             return new ConfigurationChangeResult(
             [
@@ -1665,17 +1656,22 @@ public sealed partial class ServiceCommandHandler(
                     + "lost the root's label prefix so they keep meaning what they meant.");
             }
 
-            if (runtime.ArchiveExists(replacement.Id))
+            // Saving a material edit is asking for the backup to hold what the
+            // new settings capture (FR-SVC-009): a backup under them is queued
+            // now, or after the run still capturing under the earlier ones, and
+            // the set's notice stands until a run under them commits (ADR-0038
+            // Amendment 2).
+            var generation = runtime.SetSettings.Advance(replacement.Id);
+            var backedUpBefore = runtime.ArchiveExists(replacement.Id);
+            if (backedUpBefore)
             {
-                SetChangeScan.Enqueue(runtime, replacement);
+                SetChangeScan.Enqueue(runtime, replacement, generation);
                 lines.Add(
-                    "A rescan against the last backup was queued; its findings will stand as a notice " +
-                    "until the next backup completes.");
+                    "A rescan against the last backup was queued; its findings stand as a notice until a backup "
+                    + "under these settings completes.");
             }
-            else
-            {
-                lines.Add("This set has not backed up yet; its first backup captures under these settings.");
-            }
+
+            lines.Add(QueueBackupUnderNewSettings(replacement, now, backedUpBefore));
 
             lines.AddRange(seeded);
             lines.AddRange(allowed);
@@ -1684,6 +1680,29 @@ public sealed partial class ServiceCommandHandler(
 
         List<string> said = [.. seeded, .. allowed];
         return said.Count > 0 ? new ConfigurationChangeResult(said) : new AcknowledgedResult();
+    }
+
+    /// <summary>
+    /// Queues the backup a material edit asks for (FR-SVC-009) and says what
+    /// became of it: queued now, or to follow the run still capturing under the
+    /// earlier settings, which cannot stand in for it.
+    /// </summary>
+    /// <param name="set">The set as just saved.</param>
+    /// <param name="now">The clock.</param>
+    /// <param name="backedUpBefore">Whether the set has an archive, so whether this is its first backup.</param>
+    /// <returns>The line the answer carries.</returns>
+    private string QueueBackupUnderNewSettings(BackupSetConfiguration set, DateTimeOffset now, bool backedUpBefore)
+    {
+        var queued = Scheduler.EnqueueAndFanOut(runtime, set, now, followIfRunning: true);
+        var job = Scheduler.LatestJobFor(runtime, set.Id) ?? "(pending)";
+        if (queued is { IsCompletedSuccessfully: true, Result.Outcome: "already-running" })
+        {
+            return $"A backup under the new settings follows job {job}, which is still capturing under the earlier ones.";
+        }
+
+        return backedUpBefore
+            ? $"A backup under the new settings was queued as job {job}."
+            : $"This set has not backed up yet; its first backup, under these settings, was queued as job {job}.";
     }
 
     /// <summary>
