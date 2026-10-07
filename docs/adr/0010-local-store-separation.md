@@ -259,7 +259,9 @@ that backup does:
 - **Retention**, looking up where objects now live, forgetting the
   snapshots a deletion took, and compacting. It runs on the writer pool,
   whose default width is two. One run per set at a time is a rule for
-  backups, and retention is not one.
+  backups, and retention is not one. Collection beside an in-flight backup
+  is designed for: the write-intent rule keeps the backup's blobs from it
+  (FR-GC-003).
 - **A snapshot deletion**, the same way.
 - **The heal after a rollback**
   ([ADR-0062](0062-the-destination-is-the-rollback-witness.md)), which

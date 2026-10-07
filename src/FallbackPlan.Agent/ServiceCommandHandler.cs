@@ -207,11 +207,11 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// Runs a pass on the queue's writer lane and waits for it. Retention is
-    /// a writer: it tombstones and deletes in the sets' archives, so it takes
-    /// the writer lane rather than racing the captures that share it — and
-    /// the per-set exclusion, not the lane (now a pool, ADR-0047), is what
-    /// keeps one set's retention and its capture apart (ADR-0029 §4's
-    /// reasoning, applied to the one maintenance path that mutates).
+    /// a writer: it tombstones and deletes in the sets' archives, so it queues
+    /// with the captures. The lane is a pool (ADR-0047), so a pass can run
+    /// beside a capture of the same set: the write-intent rule keeps the
+    /// capture's blobs from the pass (FR-GC-003), and each uses a catalogue
+    /// connection of its own (ADR-0010 Amendment 5).
     /// </summary>
     private async ValueTask<ServiceResult> OnWriterLaneAsync(
         string description,
