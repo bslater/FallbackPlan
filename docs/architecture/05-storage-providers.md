@@ -161,6 +161,8 @@ Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather 
 
 A replica lands under `<prefix>/<repository id>/`, the layout a local path gives it. The shared suite (§6) runs against an in-process store that checks every signature, and against any real store named in the environment; a store that does not honour the conditional create fails it.
 
+The deep sweep reads a store's replica back whole only on a cadence its operator states, as it reads a peer's, because every read is a request the provider may charge for. What it finds is repaired as at a local path, except that the damaged object is deleted and a sound copy put in its place, since nothing here overwrites. An archive is adopted from a store as from a directory, into a staging set, because a run never writes through a store ([ADR-0091](../adr/0091-an-s3-compatible-destination.md) Amendment 1).
+
 ### 4.5 The ship sink — a composed store, not a provider
 
 A direct-ship set's publication writes a `DestinationShipSink`
