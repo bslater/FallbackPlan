@@ -119,6 +119,12 @@ are untouched, remain fully supported, and never convert implicitly.
    > the destination and key id it was typed for. The verbs that may carry an
    > envelope are listed by `KeyMaterialConfinementTests`, and the list grows
    > only by decision.
+
+   > **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+   > The same verb's envelope may instead carry an Azure Blob destination's
+   > account key or shared access signature, each under a purpose of its own
+   > and bound to the destination it was typed for. No verb was added to the
+   > list.
 7. **Write-only is honest about what it cannot do.** Verify levels that
    decrypt content, `verify --file`, and verify-on-reuse deduplication
    are impossible without the private key, so: v2 creation refuses the
@@ -271,3 +277,4 @@ reader of the derivation should not have to infer it.
 | 2026-09 | Amended (kit withdrawn) | Item 8 of the decision describes a kit that no longer exists ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the archive descriptor carries what it carried, and the recovery tool opens from the passphrase and the descriptor |
 | 2026-10 | Amended | Decision 5, by [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): the grant is no longer only content's key but the proof a person needs to see a backup's file names at all; a person's grant-less open is refused, and only the service's own work reads the structure plane without one (FR-WOR-003, FR-WOR-007). `Agent/ServiceCommandHandler`; `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/WriteOnlySetTests` |
 | 2026-10 | Amended | Decision 6, by [ADR-0091](0091-an-s3-compatible-destination.md): the envelope also carries an S3-compatible destination's secret access key, on `set_destination_credentials`, under its own purpose and bound to the destination and key id |
+| 2026-10 | Amended | Decision 6, by [ADR-0093](0093-an-azure-blob-destination.md): the same verb's envelope may carry an Azure Blob destination's account key or shared access signature, each under its own purpose and bound to the destination; no verb added |

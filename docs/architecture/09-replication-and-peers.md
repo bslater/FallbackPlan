@@ -143,12 +143,14 @@ Snapshot healthy when:
   - a local-path destination: verified within 7 days,  and
   - a peer destination:       verified within 30 days, and
   - an s3 destination:        verified within 7 days, as a local path is
+  - an azure-blob destination: verified within 7 days, as a local path is
   - another cloud destination: durable within 24 hours (reserved; not served)
 ```
 
-An `s3` destination is read back by the hub at every sync, as a local path
-is, so it is held to the local bound
-([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).
+An `s3` or `azure-blob` destination is read back by the hub at every sync, as
+a local path is, so it is held to the local bound
+([ADR-0091](../adr/0091-an-s3-compatible-destination.md),
+[ADR-0093](../adr/0093-an-azure-blob-destination.md)).
 
 The verification bounds are no longer an illustration. They are the values the
 status derivation compares each destination's proof against
@@ -352,10 +354,10 @@ session is said to be unreadable, and never blamed; one that has gone between
 syncs is recorded unreachable by the run that meets it, as a sync would record
 it, so the next pass does not dial it again.
 
-An S3-compatible store is swept on the peer's rule, for a reason of its own:
-every read at a provider is a request it may charge for
+An object store, a bucket or a container, is swept on the peer's rule, for a
+reason of its own: every read at a provider is a request it may charge for
 ([ADR-0091](../adr/0091-an-s3-compatible-destination.md) Amendment 1,
-FR-VER-008). The read runs over the store's API on a peer's share per run. What
+[ADR-0093](../adr/0093-an-azure-blob-destination.md), FR-VER-008). The read runs over the store's API on a peer's share per run. What
 it finds is repaired as a local path's is, except that the damaged object is
 deleted and a sound copy put in its place, since a put there never overwrites.
 A store that does not answer is recorded unavailable, as a sync records it. One

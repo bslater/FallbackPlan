@@ -508,6 +508,10 @@ among them.
 > One `src` assembly now references an HTTP client, by name: `Storage.S3`,
 > the S3-compatible provider. `Diagnostics` is still not among those that
 > may, so a sink still cannot post anywhere.
+
+> **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+> Two do: `Storage.AzureBlob`, the Azure Blob provider, is the second.
+> `Diagnostics` is still not among them.
  The same commit found and closed a gap in the guard beside it:
 `DependencyRuleTests.AllSourceAssemblies`, which the cryptography and
 recurrence containment rules iterate, named twenty-one of the twenty-four
@@ -537,3 +541,4 @@ and a retention drill over an applied pass.
 | 2026-09 | Amended | §1's division extended to the network: no sink may reach for an HTTP client, which needs no package reference and so escaped `ArchitectureTests/LoggingShapeTests` (`ArchitectureTests/TelemetrySilenceTests`; reasoning at [ADR-0027](0027-services-scheduling-status-telemetry.md) §3's 2026-09 amendment) |
 | 2026-09 | Accepted | Built: a trace tier at the two seams a conversation crosses, restored after the merge at 9fb5ab6 lost it — the merge dropped the service's, whose ids collided, and 38c4df3 removed the console's once its call sites were gone. Every verb crossing the service's command seam leaves one line naming the command, the result and the time (3784), and the provisioning verb says how it classified the ceremony (3785); the merged line's ids for these, 3758 and 3760, were already this branch's. The console keeps the merged line's ids: the request line (4110), the setup outcome (4111), the command relay (4113) and the static asset (4114). 4112 was the recovery-kit rebuild's outcome and stays unused ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)). Both tiers are asserted arriving through real dispatch, as the amendment above requires: `Hosts.Tests/CommandTraceLoggingTests`, `Web.Tests/SetupCeremonyLoggingTests` |
 | 2026-10 | Amended | One `src` assembly may reference an HTTP client, `Storage.S3`, by an allowlist of one ([ADR-0091](0091-an-s3-compatible-destination.md)); `Diagnostics` still may not |
+| 2026-10 | Amended | A second `src` assembly may reference an HTTP client, `Storage.AzureBlob` ([ADR-0093](0093-an-azure-blob-destination.md)), and logs in 2750–2799, the half of the 2700–2799 block `Storage.S3` never used; `Diagnostics` still may not |

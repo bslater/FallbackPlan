@@ -361,6 +361,11 @@ added a dependency.
 > run below is unchanged; it backs up to a local path and makes no HTTP
 > request.
 
+> **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+> The allowlist has two entries: `Storage.AzureBlob`, which speaks the Azure
+> Blob API to the endpoint a person declares, joins on the same terms. The
+> default run is still unchanged.
+
 **And a default run transmits nothing.** `Hosts.Tests/DefaultBuildSilenceTests`
 puts a default installation through setup, a backup to a local path, status,
 snapshots, a restore and a retention pass — driven through the transport an
@@ -444,3 +449,4 @@ for that reason.
 | 2026-08 | Amended (§4) | The vocabulary standardised: never-emitted `Replicated` and `PolicyCompliant` retired with their wire numbers reserved, and the console gained the five-word glance layer over the derived states — both normative at 10 §1.1, NFR-OPS-002 amended to match, pinned by `Domain.Tests/ProtectionStateTests` and the console vocabulary pins |
 | 2026-09 | Amended (§3) | "Exporters deferred" became a property of the build: no HTTP client in any `src` assembly, the network confined to five named owners, no `MeterListener` or `ActivityListener`, and the shipped package set pinned whole (`ArchitectureTests/TelemetrySilenceTests`); a default run is captured transmitting nothing (`Hosts.Tests/DefaultBuildSilenceTests`), which is NFR-PRIV-001's own acceptance criterion run rather than argued |
 | 2026-10 | Amended (§3) | The HTTP rule gains an allowlist of one, `Storage.S3`, for the S3-compatible destination ([ADR-0091](0091-an-s3-compatible-destination.md)); the other three rules and the captured default run are unchanged |
+| 2026-10 | Amended (§3) | The allowlist gains a second entry, `Storage.AzureBlob`, for the Azure Blob destination ([ADR-0093](0093-an-azure-blob-destination.md)), on the first entry's terms; the other three rules and the captured default run are unchanged |
