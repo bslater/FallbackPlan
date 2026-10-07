@@ -269,6 +269,17 @@ public sealed partial class ServiceCommandHandler
                     handle = peerOpened;
                     break;
 
+                case Application.DestinationKind.S3:
+                    var (storeOpened, storeRefusal) = await OpenS3SourceAsync(
+                        sourceId, set, destination, warnings, cancellationToken).ConfigureAwait(false);
+                    if (storeOpened is null)
+                    {
+                        return storeRefusal!;
+                    }
+
+                    handle = storeOpened;
+                    break;
+
                 default:
                     return new ServiceError(
                         ServiceErrorReason.InvalidArgument,
@@ -484,6 +495,106 @@ public sealed partial class ServiceCommandHandler
             return (null, new ServiceError(
                 ServiceErrorReason.Unavailable,
                 $"Peer '{destination.Name}' is not reachable: {unreachable.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// Opens an S3-compatible destination's replica of one set as a source
+    /// (ADR-0091): the replica under the destination's prefix at the
+    /// repository id the staging archive names, or — with staging lost — each
+    /// folder the prefix holds, tried until one both unlocks and holds this
+    /// set's snapshots. The local path's search, over a listing.
+    /// </summary>
+    private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenS3SourceAsync(
+        string sourceId,
+        Application.BackupSetConfiguration set,
+        Application.DestinationConfiguration destination,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        Storage.S3.S3ObjectStore? prefix;
+        string? refusal;
+        try
+        {
+            prefix = StoreComposition.OpenS3(runtime, destination, repositoryIdHex: null, out refusal);
+        }
+        catch (Domain.ClientStateException damaged)
+        {
+            return (null, new ServiceError(ServiceErrorReason.Failed, damaged.Message));
+        }
+
+        if (prefix is null)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Failed, $"Destination '{destination.Name}' cannot be read: {refusal}."));
+        }
+
+        var setId = Convert.FromHexString(set.Id);
+        try
+        {
+            List<string> candidates = [];
+            var staging = await runtime.ExistingArchiveAsync(set.Id, cancellationToken).ConfigureAwait(false);
+            if (staging is not null)
+            {
+                candidates.Add(staging.Repository.RepositoryId.ToString());
+            }
+            else
+            {
+                await foreach (var child in prefix.ListChildrenAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    candidates.Add(child);
+                }
+            }
+
+            foreach (var repositoryIdHex in candidates)
+            {
+                var replica = StoreComposition.OpenS3(runtime, destination, repositoryIdHex, out _)!;
+                if (!(await replica.GetMetadataAsync(RepositoryLifecycle.DescriptorKey, cancellationToken)
+                        .ConfigureAwait(false)).Found)
+                {
+                    continue;
+                }
+
+                var store = PacedObjectStore.Over(replica, SourcePacing(destination));
+                OpenedRepository repository;
+                try
+                {
+                    repository = await OpenSourceRepositoryAsync(set, store, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is KeyUnwrapFailedException or RepositoryOpenException)
+                {
+                    warnings.Add($"a replica '{repositoryIdHex}' in the store would not open: {exception.Message}");
+                    continue;
+                }
+
+                var handle = await BuildSourceAsync(
+                    sourceId, set, setId, destination.Name, store, repository, transport: null,
+                    warnings, cancellationToken).ConfigureAwait(false);
+                if (handle is null)
+                {
+                    repository.Dispose();
+                    continue;
+                }
+
+                return (handle, null);
+            }
+
+            return (null, new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"Destination '{destination.Name}' holds no readable replica of set '{set.Name}'."
+                + (warnings.Count == 0 ? string.Empty : $" ({string.Join("; ", warnings)})")));
+        }
+        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Unavailable,
+                $"Destination '{destination.Name}' is not reachable: {unreachable.Message}"));
+        }
+        catch (IOException refused)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Failed,
+                $"Destination '{destination.Name}' refused the read: {refused.Message}"));
         }
     }
 

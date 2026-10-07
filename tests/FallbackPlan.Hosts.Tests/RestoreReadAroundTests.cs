@@ -159,10 +159,12 @@ public sealed class RestoreReadAroundTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Restore_TheDamageItFound_IsNamedByTheFilesAndSnapshotsThatNeedIt()
+    public async Task Restore_TheDamageItFound_IsCountedByWhatNeedsIt_AndTheFilesKeptBehindThePassphrase()
     {
         // FR-VER-005: the notice gives the damage a scope, so a person knows
-        // what that destination could not have given back on its own.
+        // what that destination could not have given back on its own. The
+        // files are counted in its words and named only to whoever unlocks
+        // the set (FR-WOR-007, ADR-0089 Amendment 1).
         await using var runtime = await StartAsync(directShip: true, ("vault", 10), ("spare", 1));
         await BackUpAsync(runtime);
         TamperEveryDataBlob(ReplicaRoot(Vault));
@@ -170,10 +172,13 @@ public sealed class RestoreReadAroundTests : IDisposable
         var restored = await RestoreAsync(runtime);
         Assert.AreEqual("complete", restored.Outcome, string.Join(" | ", restored.FailedSample ?? []));
 
-        var notice = Notice(runtime, "vault").Message;
-        Assert.Contains("docs/notes.txt", notice, StringComparison.Ordinal);
-        Assert.Contains("docs/report.txt", notice, StringComparison.Ordinal);
-        Assert.Contains("1 snapshot(s)", notice, StringComparison.Ordinal);
+        var notice = Notice(runtime, "vault");
+        Assert.Contains("1 snapshot(s)", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("2 file(s)", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("notes.txt", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("report.txt", notice.Message, StringComparison.Ordinal);
+        Assert.IsTrue(notice.Names?.Any(name => name.EndsWith("docs/notes.txt", StringComparison.Ordinal)), string.Join(" | ", notice.Names ?? []));
+        Assert.IsTrue(notice.Names?.Any(name => name.EndsWith("docs/report.txt", StringComparison.Ordinal)), string.Join(" | ", notice.Names ?? []));
     }
 
     [TestMethod]

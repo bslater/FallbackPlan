@@ -84,7 +84,25 @@ internal static class RecoveryDrillJob
     /// <param name="Bytes">What they amounted to; zero under a limit, since nothing was written.</param>
     /// <param name="Failure">Why it did not work, or null when it did.</param>
     /// <param name="Limit">What a passing drill could not prove, or null when it proved everything.</param>
-    public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null);
+    public sealed record DrillOutcome(int Files, long Bytes, string? Failure, string? Limit = null)
+    {
+        /// <summary>
+        /// Whether the drill stated anything. False for a drill the service
+        /// stopping cut short, which records nothing and raises nothing
+        /// (ADR-0054 Amendments 1 and 4), so whoever asked for it is answered
+        /// cancelled rather than told it passed.
+        /// </summary>
+        public bool Recorded { get; init; } = true;
+
+        /// <summary>
+        /// The file, or the folder, the drill was at when it failed, as the
+        /// snapshot names it; null when it failed at none. Never part of
+        /// <see cref="Failure"/>, which goes where anyone signed in reads it:
+        /// it is kept beside the drill's notice for whoever unlocks the set
+        /// with its passphrase (FR-WOR-007, ADR-0089 Amendment 1).
+        /// </summary>
+        public string? FailedPath { get; init; }
+    }
 
     /// <summary>
     /// The limit a drill states on a write-only set (ADR-0054 Amendment 2):
@@ -100,7 +118,8 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// Drills one (set, destination) pair and records the result, under the
     /// budget the destination's kind implies: none for a local path, the
-    /// peer budget for a peer.
+    /// peer budget for a peer and for an S3-compatible store, whose every
+    /// byte read back crosses a network and, at a provider, a bill.
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set whose replica to read.</param>
@@ -114,11 +133,79 @@ internal static class RecoveryDrillJob
         ulong nowMs,
         CancellationToken cancellationToken)
     {
-        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+        var budget = runtime.Configuration.FindDestination(destinationName) is
+            { Kind: DestinationKind.Peer or DestinationKind.S3 }
             ? SampleBudget.Peer
             : null;
         return RunAsync(runtime, set, destinationName, nowMs, budget, cancellationToken);
     }
+
+    /// <summary>
+    /// Drills one pair because a person asked (FR-DRL-003, ADR-0054
+    /// Amendment 6), as the scheduler would, under the budget the
+    /// destination's kind implies and through no transfer limit.
+    /// </summary>
+    /// <remarks>
+    /// The drill runs on the service's lifetime, not the asker's: a person
+    /// who stops waiting is answered cancelled, and the drill they started
+    /// finishes and is recorded, as an on-demand sync does. Only the service
+    /// stopping cuts it short, and then it states nothing.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica to read.</param>
+    /// <param name="destinationName">The destination holding it.</param>
+    /// <param name="nowMs">The clock.</param>
+    /// <param name="cancellationToken">Ends the wait for the answer, never the drill.</param>
+    public static Task<DrillOutcome> RunOnRequestAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        CancellationToken cancellationToken) =>
+        RunAsync(runtime, set, destinationName, nowMs, userInitiated: true, runtime.Queue.StoppingToken)
+            .WaitAsync(cancellationToken);
+
+    /// <summary>
+    /// Why a person's ask finds nothing at a pair to drill, beyond the set
+    /// having no snapshot, which the asker settles first: null when there is
+    /// something there to restore.
+    /// </summary>
+    /// <remarks>
+    /// The scheduler's rule for a pair nothing has reached holds for a
+    /// person's ask too: drilling would record a failure about an absence
+    /// that is correct. Its cadence rule does not: a peer with no stated
+    /// cadence is drilled when a person asks, because one drill somebody
+    /// chose is not a standing cost on the peer's link.
+    /// </remarks>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set asked about.</param>
+    /// <param name="destinationName">The destination asked about.</param>
+    internal static string? NothingToDrill(ServiceRuntime runtime, BackupSetConfiguration set, string destinationName)
+    {
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination)
+        {
+            return "the destination is no longer declared";
+        }
+
+        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer or DestinationKind.S3))
+        {
+            return $"a {destination.Kind} destination is not served yet";
+        }
+
+        return runtime.DestinationSync.Find(set.Id, destinationName)?.LastSuccessAt is null
+            ? "nothing has been copied there yet, so there is nothing there to restore"
+            : null;
+    }
+
+    /// <summary>What a drill found, as the clause a person's report gives it.</summary>
+    /// <param name="outcome">A drill's recorded outcome.</param>
+    internal static string Describe(DrillOutcome outcome) => outcome switch
+    {
+        { Failure: { } failure } => $"could not restore — {failure}",
+        { Limit: { } limit } => $"passed, {outcome.Files} file(s) proved — {limit}",
+        { Files: > 0 } => $"restored {outcome.Files} file(s) from its replica",
+        _ => "passed — its newest snapshot holds no file to restore",
+    };
 
     /// <summary>
     /// Drills one pair as the scheduler does, under the budget the
@@ -141,7 +228,8 @@ internal static class RecoveryDrillJob
         bool userInitiated,
         CancellationToken cancellationToken)
     {
-        var budget = runtime.Configuration.FindDestination(destinationName) is { Kind: DestinationKind.Peer }
+        var budget = runtime.Configuration.FindDestination(destinationName) is
+            { Kind: DestinationKind.Peer or DestinationKind.S3 }
             ? SampleBudget.Peer
             : null;
         return RunAsync(
@@ -205,7 +293,9 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// Drills one (set, destination) pair through the service it is handed —
     /// a test's way to put one fault between the drill and the verbs it
-    /// calls, so that the fault is all that differs from a clean drill.
+    /// calls, so that the fault is all that differs from a clean drill. A
+    /// drill of the pair already under way is joined rather than started
+    /// again, whoever started it (FR-DRL-003).
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="handler">The verbs the drill calls.</param>
@@ -215,7 +305,21 @@ internal static class RecoveryDrillJob
     /// <param name="budget">What the sample may read, or null for no cap.</param>
     /// <param name="draw">Chooses among the entries the descent is offered at each step.</param>
     /// <param name="cancellationToken">Cancels the drill.</param>
-    internal static async Task<DrillOutcome> RunAsync(
+    internal static Task<DrillOutcome> RunAsync(
+        ServiceRuntime runtime,
+        IFallbackPlanService handler,
+        BackupSetConfiguration set,
+        string destinationName,
+        ulong nowMs,
+        SampleBudget? budget,
+        Random draw,
+        CancellationToken cancellationToken) =>
+        runtime.Drills.RunOrJoin(
+            set.Id,
+            destinationName,
+            () => DrillAndRecordAsync(runtime, handler, set, destinationName, nowMs, budget, draw, cancellationToken));
+
+    private static async Task<DrillOutcome> DrillAndRecordAsync(
         ServiceRuntime runtime,
         IFallbackPlanService handler,
         BackupSetConfiguration set,
@@ -228,11 +332,13 @@ internal static class RecoveryDrillJob
         var scratch = Path.Combine(
             runtime.RestoreCacheRoot, $"drill-{Convert.ToHexStringLower(Guid.NewGuid().ToByteArray())[..16]}");
         string? sourceId = null;
+        string? at = null;
 
         try
         {
             var outcome = await DrillAsync(
-                handler, set, destinationName, scratch, budget, draw, id => sourceId = id, cancellationToken)
+                handler, set, destinationName, scratch, budget, draw, id => sourceId = id, path => at = path,
+                cancellationToken)
                 .ConfigureAwait(false);
 
             // A failure reached while the service is stopping is about the
@@ -266,9 +372,9 @@ internal static class RecoveryDrillJob
             // cancellation or a disposed object is not shutdown unless the
             // service is stopping; met while it runs, it is a fault on the
             // road back, and silence would hide it for as long as it lasted.
-            var failure = $"the drill did not complete: {exception.Message.ReplaceLineEndings(" ")}";
+            var failure = $"the drill did not complete: {Unnamed(exception.Message.ReplaceLineEndings(" "), at)}";
             runtime.DestinationSync.RecordIncompleteDrill(set.Id, destinationName, failure, nowMs);
-            var outcome = new DrillOutcome(0, 0, failure);
+            var outcome = new DrillOutcome(0, 0, failure) { FailedPath = at };
             Announce(runtime, set, destinationName, outcome, nowMs);
             return outcome;
         }
@@ -327,10 +433,12 @@ internal static class RecoveryDrillJob
     /// own interval.
     /// </summary>
     /// <remarks>
-    /// Sooner than the interval, because there is no drill-now verb and a
-    /// fault that passed in a minute should not stand as a failed drill for a
-    /// month. Not every pass, because a fault that lasts would then drill
-    /// every minute, and a peer's drill reads over somebody else's link.
+    /// Sooner than the interval, because a fault that passed in a minute
+    /// should not stand as a failed drill for a month on an installation
+    /// nobody is watching. A person can drill at once (FR-DRL-003), and the
+    /// schedule must not depend on one doing so. Not every pass, because a
+    /// fault that lasts would then drill every minute, and a peer's drill
+    /// reads over somebody else's link.
     /// </remarks>
     /// <param name="inARow">Drills in the run so far; one or more.</param>
     /// <param name="intervalMs">The pair's drill interval.</param>
@@ -345,7 +453,7 @@ internal static class RecoveryDrillJob
     private const ulong RetryFirstMs = 3_600_000;
 
     /// <summary>What a drill that states nothing returns: no files, no failure, no limit, and nothing recorded.</summary>
-    private static DrillOutcome Unrecorded { get; } = new(0, 0, null);
+    private static DrillOutcome Unrecorded { get; } = new(0, 0, null) { Recorded = false };
 
     /// <summary>
     /// Whether the service is stopping, which is the only thing that makes a
@@ -387,6 +495,7 @@ internal static class RecoveryDrillJob
         SampleBudget? budget,
         Random draw,
         Action<string> keepSourceId,
+        Action<string> keepPath,
         CancellationToken cancellationToken)
     {
         var opened = await handler.ExecuteAsync(
@@ -419,7 +528,7 @@ internal static class RecoveryDrillJob
         }
 
         var (paths, skipped) = await SampleAsync(
-            handler, source.SourceId, newest.SnapshotId, budget, draw, cancellationToken).ConfigureAwait(false);
+            handler, source.SourceId, newest.SnapshotId, budget, draw, keepPath, cancellationToken).ConfigureAwait(false);
         if (paths.Count == 0)
         {
             // A snapshot of an empty tree is not a failure to restore from —
@@ -443,6 +552,7 @@ internal static class RecoveryDrillJob
         var sealedFiles = 0;
         foreach (var path in paths)
         {
+            keepPath(path);
             var restored = await handler.ExecuteAsync(
                 new RunRestoreCommand(
                     newest.SnapshotId, path, Path.Combine(scratch, $"{files}"), source.SourceId, InPlace: true),
@@ -451,8 +561,8 @@ internal static class RecoveryDrillJob
             switch (restored)
             {
                 case ServiceError error:
-                    ThrowIfCancelled(error, $"restoring '{path}'");
-                    return new DrillOutcome(0, 0, $"'{path}' would not restore: {error.Message}");
+                    ThrowIfCancelled(error, "restoring a sampled file");
+                    return Failed($"a sampled file would not restore: {Unnamed(error.Message, path)}", path);
 
                 // The whole-file hash is checked inside the restore, after
                 // reassembly and before a byte is emitted (specification 06
@@ -478,33 +588,33 @@ internal static class RecoveryDrillJob
                     switch (planned)
                     {
                         case ServiceError error:
-                            ThrowIfCancelled(error, $"planning '{path}'");
-                            return new DrillOutcome(0, 0, $"'{path}' would not plan: {error.Message}");
+                            ThrowIfCancelled(error, "planning a sampled file");
+                            return Failed($"a sampled file would not plan: {Unnamed(error.Message, path)}", path);
 
                         case RestorePlanResult { MissingObjects.Count: 0 }:
                             sealedFiles++;
                             break;
 
                         case RestorePlanResult missing:
-                            return new DrillOutcome(
-                                0, 0,
-                                $"'{path}' is missing {missing.MissingObjects.Count} object(s) at the replica: "
-                                + $"{missing.MissingObjects[0]}");
+                            return Failed(
+                                $"a sampled file is missing {missing.MissingObjects.Count} object(s) at the replica: "
+                                + $"{missing.MissingObjects[0]}",
+                                path);
 
                         default:
-                            return new DrillOutcome(0, 0, $"planning '{path}' answered {planned.GetType().Name}.");
+                            return Failed($"planning a sampled file answered {planned.GetType().Name}.", path);
                     }
 
                     break;
 
                 case RestoreResult other:
-                    return new DrillOutcome(
-                        0, 0,
-                        $"'{path}' restored {other.Outcome} — {other.Failed} failed"
-                        + (other.FailedSample is { Count: > 0 } sample ? $": {sample[0]}" : "."));
+                    return Failed(
+                        $"a sampled file restored {other.Outcome} — {other.Failed} failed"
+                        + (other.FailedSample is { Count: > 0 } sample ? $": {Unnamed(sample[0], path)}" : "."),
+                        path);
 
                 default:
-                    return new DrillOutcome(0, 0, $"restoring '{path}' answered {restored.GetType().Name}.");
+                    return Failed($"restoring a sampled file answered {restored.GetType().Name}.", path);
             }
         }
 
@@ -520,6 +630,62 @@ internal static class RecoveryDrillJob
         }
 
         return new DrillOutcome(files + sealedFiles, bytes, null, limits.Count == 0 ? null : string.Join(" ", limits));
+    }
+
+    /// <summary>A drill that failed at <paramref name="path"/>, which the failure does not name.</summary>
+    private static DrillOutcome Failed(string failure, string path) => new(0, 0, failure) { FailedPath = path };
+
+    /// <summary>What the drill's notice says in place of the file it leaves out.</summary>
+    private const string WithheldSentence =
+        "Which file it was is shown only to someone who unlocks the set with its passphrase.";
+
+    /// <summary>What a drill's words call the file they leave out.</summary>
+    private const string SampledFile = "the sampled file";
+
+    /// <summary>
+    /// <paramref name="message"/> with <paramref name="path"/> taken out, so a
+    /// drill's words can go where anyone signed in reads them (FR-WOR-007,
+    /// ADR-0089 Amendment 1): the path as the snapshot names it, as this
+    /// platform writes it, and the file's own name where it stands as a part
+    /// of a path or in quotes. A name in running prose is not matched, since
+    /// a short one would match inside other words.
+    /// </summary>
+    /// <param name="message">The engine's words.</param>
+    /// <param name="path">The path the drill was at, or null.</param>
+    internal static string Unnamed(string message, string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return message;
+        }
+
+        var said = message.Replace(path, SampledFile, StringComparison.Ordinal);
+        var native = path.Replace('/', Path.DirectorySeparatorChar);
+        said = said.Replace(native, SampledFile, StringComparison.Ordinal);
+
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        if (name.Length == 0)
+        {
+            return said;
+        }
+
+        var unnamed = new System.Text.StringBuilder(said.Length);
+        var from = 0;
+        for (var at = said.IndexOf(name, StringComparison.Ordinal); at >= 0;
+            at = said.IndexOf(name, at + name.Length, StringComparison.Ordinal))
+        {
+            var end = at + name.Length;
+            var opens = at > 0 && said[at - 1] is '/' or '\\' or '\'' or '"';
+            var closes = end == said.Length || said[end] is '/' or '\\' or '\'' or '"' or ':' or ',' or ';' or ')'
+                || char.IsWhiteSpace(said[end]);
+            if (opens && closes)
+            {
+                unnamed.Append(said, from, at - from).Append(SampledFile);
+                from = end;
+            }
+        }
+
+        return unnamed.Append(said, from, said.Length - from).ToString();
     }
 
     /// <summary>
@@ -560,6 +726,7 @@ internal static class RecoveryDrillJob
         string snapshotId,
         SampleBudget? budget,
         Random draw,
+        Action<string> keepPath,
         CancellationToken cancellationToken)
     {
         var chosen = new List<string>();
@@ -572,6 +739,11 @@ internal static class RecoveryDrillJob
             var path = string.Empty;
             for (var depth = 0; depth < MaximumDepth; depth++)
             {
+                if (path.Length > 0)
+                {
+                    keepPath(path);
+                }
+
                 var listed = await handler.ExecuteAsync(
                     new ListDirectoryCommand(snapshotId, path.Length == 0 ? null : path, sourceId),
                     cancellationToken).ConfigureAwait(false);
@@ -581,7 +753,7 @@ internal static class RecoveryDrillJob
                 // snapshot for having nothing it could sample.
                 if (listed is ServiceError listFailure)
                 {
-                    ThrowIfCancelled(listFailure, path.Length == 0 ? "listing the snapshot" : $"listing '{path}'");
+                    ThrowIfCancelled(listFailure, path.Length == 0 ? "listing the snapshot" : "listing a folder of it");
                 }
 
                 if (listed is not DirectoryResult directory || directory.Entries.Count == 0)
@@ -676,8 +848,10 @@ internal static class RecoveryDrillJob
             key,
             $"A restore drill against '{destinationName}' could not bring back a file from set '{set.Name}': "
             + $"{outcome.Failure} The destination may still hold every byte it was sent — a drill tests the "
-            + "path back, not the copy out — so check this before you need it.",
-            nowMs);
+            + "path back, not the copy out — so check this before you need it."
+            + (outcome.FailedPath is null ? string.Empty : " " + WithheldSentence),
+            nowMs,
+            outcome.FailedPath is null ? null : new NoticeNames(set.Id, [outcome.FailedPath]));
     }
 
     private static void TryDelete(string directory)

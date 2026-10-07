@@ -12,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// [ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md) Amendment 3):
 /// a peer is drilled only when the source's operator states a cadence for it,
 /// the drill reads over the retrieval session the peer already serves, and
-/// the bytes one drill may pull are capped. Does not establish FR-DRL-001.
+/// the bytes one drill may pull are capped. A person may still ask for one
+/// drill of a peer the schedule leaves alone (FR-DRL-003). Does not establish
+/// FR-DRL-001.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -67,6 +69,37 @@ public sealed class PeerRecoveryDrillTests : IDisposable
         Assert.IsNotNull(record?.LastSuccessAt, "the run must have reached the peer, or the case proves nothing");
         Assert.IsNull(record.DrilledAt, "a peer with no stated cadence must not be drilled");
         Assert.IsNull(record.DrillFailure, "and must not be blamed for it either");
+    }
+
+    [TestMethod]
+    public async Task DrillNow_APeerWithNoStatedCadence_IsDrilledWhenAPersonAsks()
+    {
+        // FR-DRL-003. The schedule leaves this peer alone because a cadence
+        // is a standing cost on somebody else's link that nobody wrote down.
+        // One drill a person asks for is not a cadence: it reads over the
+        // retrieval session under the peer's caps, as a scheduled one would.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, drillIntervalDays: null);
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 90_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+
+        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+        Assert.IsNull(
+            runtime.DestinationSync.Find(_harness.DocsSetId, "friend")?.DrilledAt,
+            "the premise: the schedule has not drilled a peer with no stated cadence");
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var answer = await handler.ExecuteAsync(new RunDrillCommand("docs", "friend"), Timeout);
+
+        Assert.IsInstanceOfType<DrillResult>(answer, out var drilled, (answer as ServiceError)?.Message);
+        Assert.AreEqual(0, drilled.Failed, string.Join(" | ", drilled.Lines));
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record?.DrilledAt, "the person's drill is recorded on the pair's row");
+        Assert.IsGreaterThan(0, record.DrillFiles, "a drill that reached no file over the wire has proved nothing");
+        Assert.Contains("sealed", record.DrillLimit ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]

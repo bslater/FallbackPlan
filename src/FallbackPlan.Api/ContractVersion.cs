@@ -586,8 +586,40 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// client that does not know the value shows the row's `detail`, which
     /// says the same in words.
     /// </para>
+    /// <para>
+    /// 1.58 adds `run_drill` (FR-DRL-003, ADR-0054 Amendment 6): a person
+    /// runs a destination's restore drill now, outside its cadence. It names
+    /// its pair as `sync` does, `backup_set_name` and `destination_name`, and
+    /// either left out means every one. The answer, `drill`, carries a line
+    /// per pair and two counts, `failed` and `not_drilled`, so an exit code is
+    /// never read from the prose. The drill is recorded on the pair's row and
+    /// raises or clears its notice exactly as a scheduled one does. Additive:
+    /// a pre-1.58 client never sends the command.
+    /// </para>
+    /// <para>
+    /// 1.59 names a backup's files in a notice only behind the passphrase
+    /// (FR-WOR-007, ADR-0089 Amendment 1). A notice about a drill or about
+    /// damage counts what it found and leaves the names out; the drill's
+    /// failure on a status row and in `drill` does too. `NoticeDescriptor`
+    /// gains `set_id` and `names_withheld`, and `notice_names` answers the
+    /// names, `names`, through a `source` of that set unlocked with its
+    /// passphrase by the caller's session. Additive: a pre-1.59 client reads
+    /// messages that name no files, and has no way to ask for the names.
+    /// </para>
+    /// <para>
+    /// 1.60 serves the <c>s3</c> destination kind (FR-DEST-005, ADR-0091).
+    /// `DestinationDescriptor` gains `bucket`, `region`, `prefix` and
+    /// `addressing`, which address it, its `endpoint` is the store's base URL,
+    /// and `access_key_stored` says whether the service holds its access key.
+    /// `set_destination_credentials` hands the service that key: its
+    /// `access_key_id` in clear, and the secret only as an `envelope` sealed
+    /// to the service's recipient key, a verb added to those that carry one by
+    /// decision (NFR-SEC-009). The service keeps it in its state directory and never
+    /// answers it back. Additive: a pre-1.60 client sends none of the fields,
+    /// and its upsert of another kind is read as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 57);
+    public static ContractVersion Current { get; } = new(1, 60);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). Cloud providers are phase 3 — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider is built (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and passes the shared contract suite; Azure Blob is phase 3 — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -121,8 +121,9 @@ forcing case rather than an assumption nobody made.
 A provider is how a **destination kind** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
 touches bytes: `local-path` is the local filesystem provider aimed at a
 directory the user named, `peer` reaches a paired instance over the peer
-protocol, and the cloud kinds below arrive in phase 3 as further `IObjectStore`
-implementations behind the same contract. Fan-out neither knows nor cares which
+protocol, `s3` speaks the S3 API to a bucket (§4.4), and the other cloud kinds
+arrive in phase 3 as further `IObjectStore` implementations behind the same
+contract. Fan-out neither knows nor cares which
 kind it is copying to — that indifference is the seam
 ([ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)),
 and it is why a cloud bucket is one more destination rather than a feature.
@@ -142,11 +143,23 @@ Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather 
 
 `Azure.Storage.Blobs` · block blobs with staged block uploads above the multipart threshold · conditional creation via ETag or if-none-match · managed identity, workload identity, connection strings, and SAS · access-tier policy expressed separately from repository correctness.
 
-### 4.4 Amazon S3 and S3-compatible
+### 4.4 S3-compatible object storage
 
-AWS SDK for .NET · multipart upload above the threshold · IAM roles, profiles, web identity, access keys, custom endpoints · object lock only through explicit repository policy.
+> **Rewritten 2026-10 ([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).**
+> This section described a provider built on a vendor SDK, with multipart
+> upload and every credential source the SDK knows. What was built is
+> narrower, and this is it.
 
-S3-compatible implementations vary in conditional-operation semantics, checksum support, and listing consistency. A tested compatibility matrix is maintained per implementation, and a store whose behaviour cannot be established is treated as the weakest case rather than assumed compatible.
+`Storage.S3` speaks the S3 API over the platform's HTTP client with a request signer of its own, so the product's package set is unchanged; it is the one assembly allowed an HTTP client, and only the service composes it. A destination names an endpoint (`https`, except on this machine), a bucket, a region, an optional prefix and path or virtual-host addressing; its access key is held in the service's state directory and arrives only sealed to the service.
+
+- **Every put is a create** (`If-None-Match: *`), so nothing the service writes overwrites anything; a 412 is `AlreadyExists`.
+- **One request per blob**, up to five GiB; the format's blobs are a fraction of that, so multipart upload is not used.
+- **Content is hashed before it is sent**, which the signature needs: rewound when it can seek, spooled while it is hashed when it cannot, and read once either way (§2.1).
+- **A range that runs past the end is answered short**, and the range served is read back from the response; a body that ends early is a fault.
+- **Listing is declared strong**, which the API has promised of every operation since 2020.
+- **A refusal that may not last is retried** a few times from the content already read; one that will last is a fault at once, and a store that never answers is told apart from one that refuses.
+
+A replica lands under `<prefix>/<repository id>/`, the layout a local path gives it. The shared suite (§6) runs against an in-process store that checks every signature, and against any real store named in the environment; a store that does not honour the conditional create fails it.
 
 ### 4.5 The ship sink — a composed store, not a provider
 
@@ -164,7 +177,10 @@ holds the bytes — metadata locally, a blob from the first destination
 holding the key in priority order, a listing as the union across
 destinations. §2.1's re-openable content factory is what makes the fan-write
 affordable: one sealed spool file re-opens per destination instead of
-buffering N copies.
+buffering N copies. An S3-compatible store is the one served kind the sink
+does not write through, by decision: a run records it behind, and the sync
+that follows the run fills it from what the run shipped
+([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).
 
 ## 5. Request economics
 
@@ -177,7 +193,7 @@ Object stores charge per request, so request count is a first-class design conce
 - **Coalesce neighbouring reads, under stated bounds.** A file's records sit next to each other in the blob they were written into, so they are fetched together — and the run that fetches the first of them reaches down to offset 0 to collect the blob's envelope on the way past, which is the difference between two requests a blob and one. The bounds are what keep the saving honest: a window, so a large file does not become one buffer (NFR-PERF-001); and a cap on the bytes a read may *waste*, so a gap between two wanted records is bridged only when bridging is cheaper than a second request. Without that second bound a request budget is simply paid for in bandwidth.
 - **Batch deletes** where supported, in bounded batches.
 
-Requests and PUTs per GB are measured against explicit targets — see [`../requirements/non-functional.md`](../requirements/non-functional.md#performance) NFR-PERF-008/009 — because §23 of the original proposal named request amplification as a major risk and named packing as the mitigation, without any way to detect the mitigation ceasing to work. There is one now for the GET half: `Repository.Tests/RestoreBreadthTests` measures a whole-snapshot restore's requests against the blobs it needs, and the three terms that made the budget reachable are held apart so each can be lost on its own. The PUT half is still a target and not a measurement.
+Requests and PUTs per GB are measured against explicit targets — see [`../requirements/non-functional.md`](../requirements/non-functional.md#performance) NFR-PERF-008/009 — because §23 of the original proposal named request amplification as a major risk and named packing as the mitigation, without any way to detect the mitigation ceasing to work. There is one now for the GET half: `Repository.Tests/RestoreBreadthTests` measures a whole-snapshot restore's requests against the blobs it needs, and the three terms that made the budget reachable are held apart so each can be lost on its own. The PUT half is measured too, since [ADR-0090](../adr/0090-a-backups-hints-are-one-pack.md): `Repository.Tests/UploadBudgetTests` counts every request a first backup and an incremental make, by the kind of object each was for, and builds the per-GiB figure from the terms. Two findings came out of it. One was a request per file: a hint per new file version (06 §11), about 2 000 per GB, now one pack per backup. The other is a request per blob that remains. Every blob is preceded by its own intent extension (08 §4), so blobs cost two requests each, and the total is 23–27 per GiB against 20 until one extension covers several blobs. Everything else is within the budget.
 
 ## 6. Contract tests
 

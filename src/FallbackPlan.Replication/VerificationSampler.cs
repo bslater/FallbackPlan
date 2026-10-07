@@ -35,14 +35,16 @@ public static class VerificationSampler
 
     /// <summary>
     /// How much of a peer's budget stays random rather than following the
-    /// rotation.
+    /// rotation — and an S3-compatible store's, for the same reason.
     /// </summary>
     /// <remarks>
     /// A pure rotation is predictable, and a destination that can predict
     /// which objects it will be asked for can hold exactly those and discard
-    /// the rest. That threat only exists for a peer: a local-path replica's
-    /// bytes are read by this hub off its own disk, so there is nobody there
-    /// to game the question, and the whole budget goes to the rotation.
+    /// the rest. That threat exists wherever somebody else holds the bytes —
+    /// a peer, or the provider behind a store (ADR-0091). A local-path
+    /// replica's bytes are read by this hub off its own disk, so there is
+    /// nobody there to game the question, and the whole budget goes to the
+    /// rotation.
     /// </remarks>
     public const int PeerReservoirShare = 4;
 
@@ -84,7 +86,7 @@ public static class VerificationSampler
     /// <param name="reservoirShare">
     /// How many of those samples are drawn at random from the whole eligible
     /// population instead of the rotation — <see cref="PeerReservoirShare"/>
-    /// for a peer, zero for a local path.
+    /// for a peer or an S3-compatible store, zero for a local path.
     /// </param>
     /// <param name="maximumRangeLength">
     /// The longest range the destination will answer — the wire's bound

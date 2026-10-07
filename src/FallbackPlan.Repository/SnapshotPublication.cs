@@ -382,7 +382,7 @@ public sealed partial class PublicationOrchestrator
 
             var walker = new TreeWalkPublisher(
                 job, options, session, builder, grouper, gated, sourceKeys,
-                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, bound) : null,
+                hintBound is { } bound ? new HintSource(_store, _repositoryId, _keys, job.DeviceId, bound) : null,
                 reader, _logger);
 
             // Steps 2–4 interleave by design: the scan streams, and each
@@ -552,13 +552,15 @@ public sealed partial class PublicationOrchestrator
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
             // Step 7: the snapshot's discoverable standalone copy — preceded
-            // by the advisory source-identity hints, so a hint the next
-            // publication wants is never published after the snapshot that
-            // makes it findable (06 §11).
+            // by the advisory source-identity hints, as one pack rather than
+            // a request per version created (06 §11.5, ADR-0090), so a hint
+            // the next publication wants is never published after the
+            // snapshot that makes it findable.
             var hints = walker.SourceIdentities;
             reporter.HintsOwed(hints.Count);
-            await builder.WriteSourceIdentityHintsAsync(
-                hints, intentSequence, reporter.HintWritten, cancellationToken).ConfigureAwait(false);
+            await builder.WriteSourceIdentityPacksAsync(
+                job.DeviceId, job.SnapshotId, job.NowUnixMilliseconds, hints, intentSequence,
+                reporter.HintsWritten, cancellationToken).ConfigureAwait(false);
 
             // The standalone copy rides under the intent's sequence,
             // hint-style (ADR-0022 §Decision 7) — see the single-stream path
@@ -760,7 +762,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
         private readonly List<ObjectId> _trees = [];
-        private readonly Dictionary<SourceKey, SourceIdentityHint?> _hints = [];
+        private readonly Dictionary<SourceKey, SourceIdentityPackEntry?> _hints = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
 
@@ -777,8 +779,8 @@ public sealed partial class PublicationOrchestrator
         public IReadOnlyList<ObjectId> Trees => _trees;
 
         /// <summary>
-        /// The 06 §11 hints this snapshot owes: one per file version it
-        /// <em>created</em>.
+        /// The 06 §11 hints this snapshot owes, published as its pack (06
+        /// §11.5): one entry per file version it <em>created</em>.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -795,7 +797,7 @@ public sealed partial class PublicationOrchestrator
         /// manifest keeps forever.
         /// </para>
         /// </remarks>
-        public IReadOnlyList<SourceIdentityHint> SourceIdentities =>
+        public IReadOnlyList<SourceIdentityPackEntry> SourceIdentities =>
             [.. _hints.Values.Where(static hint => hint is not null).Select(static hint => hint!)];
 
         public async ValueTask ConsumeAsync(ScanEvent scanEvent, CancellationToken cancellationToken)
@@ -1144,13 +1146,7 @@ public sealed partial class PublicationOrchestrator
                 return;
             }
 
-            _hints[key] = new SourceIdentityHint
-            {
-                SourceKey = sourceKey,
-                SnapshotId = job.SnapshotId,
-                ObjectId = objectId,
-                CapturedAt = job.NowUnixMilliseconds,
-            };
+            _hints[key] = new SourceIdentityPackEntry { SourceKey = sourceKey, ObjectId = objectId };
         }
 
         private ArchiveResult? LastArchive { get; set; }
@@ -1543,12 +1539,15 @@ public sealed partial class PublicationOrchestrator
             }
         }
 
-        /// <summary>One hint landed, or was refused and passed over; the last one always reports.</summary>
-        public void HintWritten()
+        /// <summary>
+        /// A pack of <paramref name="count"/> hints landed, or was refused and
+        /// passed over; the last one always reports.
+        /// </summary>
+        public void HintsWritten(int count)
         {
             lock (_gate)
             {
-                _hintsWritten = (_hintsWritten ?? 0) + 1;
+                _hintsWritten = (_hintsWritten ?? 0) + count;
                 Emit(_lastState, _files, _failures, force: _hintsWritten >= _hintsTotal);
             }
         }

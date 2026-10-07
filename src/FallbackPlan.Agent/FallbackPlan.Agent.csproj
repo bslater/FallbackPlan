@@ -29,6 +29,9 @@
     <ProjectReference Include="..\FallbackPlan.Filesystem\FallbackPlan.Filesystem.csproj" />
     <ProjectReference Include="..\FallbackPlan.Filesystem.Local\FallbackPlan.Filesystem.Local.csproj" />
     <ProjectReference Include="..\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
+    <!-- The S3-compatible provider (ADR-0091): the one HTTP client in the
+         product, composed here and nowhere else (DependencyRuleTests). -->
+    <ProjectReference Include="..\FallbackPlan.Storage.S3\FallbackPlan.Storage.S3.csproj" />
   </ItemGroup>
 
   <ItemGroup>

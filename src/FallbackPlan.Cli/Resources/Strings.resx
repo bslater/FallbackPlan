@@ -127,6 +127,12 @@
   <data name="DirectGateway_VerifyDestinationNeedsTheService" xml:space="preserve">
     <value>Verifying a destination runs on the hub — the sweep resumes from a cursor in the service's ledger, so a direct-mode pass would re-read the same objects forever and never record that it had. Connect to it with --connect, or run `fallbackplan-agent verify-destination` there.</value>
   </data>
+  <data name="DirectGateway_DrillNeedsTheService" xml:space="preserve">
+    <value>A restore drill runs on the hub — its answer is recorded on the service's ledger, where it raises or clears the drill notice, so a direct-mode drill would prove something nobody else ever learns. Connect to it with --connect, or run `fallbackplan-agent drill` on the hub when no service is running.</value>
+  </data>
+  <data name="DirectGateway_NoticeNamesNeedsTheService" xml:space="preserve">
+    <value>The notices are the service's ledger — nothing raised one here. Connect to the service with --connect, or run this on the hub while it runs.</value>
+  </data>
   <data name="DirectGateway_SyncNeedsTheService" xml:space="preserve">
     <value>Syncing destinations is the service's job — its scheduler, ledger and per-set archives do the work. Connect to it with --connect, or run `fallbackplan-agent sync` on the hub when no service is running.</value>
   </data>

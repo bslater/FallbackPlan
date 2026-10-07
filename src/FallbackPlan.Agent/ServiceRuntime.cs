@@ -105,6 +105,14 @@ public sealed record ServiceOptions
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
 
     /// <summary>
+    /// Called with a set id and a destination name whenever a drill of that
+    /// pair joins the one already under way (FR-DRL-003): a test harness's
+    /// way to know the join happened before it lets the first drill finish.
+    /// Null, the production value, observes nothing.
+    /// </summary>
+    internal Action<string, string>? DrillJoined { get; init; }
+
+    /// <summary>
     /// The clock the byte-rate limits pace on (NFR-PERF-013, ADR-0074) — a
     /// test harness's way to prove a rate by the waits it asked for rather
     /// than by sleeping through them. Null, the production value, paces on
@@ -199,9 +207,11 @@ public sealed class ServiceRuntime : IAsyncDisposable
             Logger(options, typeof(JobScheduler)), BackupPoolWidth, options.MaxPauseOverride);
         GrantRecipient = GrantRecipient.Open(options.StateDirectory);
         WriteCredentials = new WriteCredentialStore(options.StateDirectory);
+        DestinationCredentials = new DestinationCredentialStore(options.StateDirectory);
         InstallationCredential = new InstallationCredentialStore(options.StateDirectory);
         ReplicaOwners = ReplicaOwnerStore.Open(options.StateDirectory);
         Pacing = new BackgroundPacing(options.PacingClock ?? PacingClock.System);
+        Drills = new DrillFlights(options.DrillJoined);
     }
 
     /// <summary>How this service was started.</summary>
@@ -303,6 +313,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The open restore sources (ADR-0041).</summary>
     internal RestoreSourceRegistry RestoreSources { get; } = new();
 
+    /// <summary>The restore drills under way, one per (set, destination) pair (FR-DRL-003).</summary>
+    internal DrillFlights Drills { get; }
+
     /// <summary>
     /// The byte-rate limiters background work is paced through (NFR-PERF-013,
     /// ADR-0074): one per limited destination and one for source reads, each
@@ -315,6 +328,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
     /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
     internal WriteCredentialStore WriteCredentials { get; }
+
+    /// <summary>The access keys this service signs S3-compatible destinations' requests with (ADR-0091).</summary>
+    internal DestinationCredentialStore DestinationCredentials { get; }
 
     /// <summary>
     /// Which peer each replica stored here belongs to (peer-protocol 05 §2).

@@ -42,6 +42,7 @@ public sealed class LoggingShapeTests
         (2000, 2499, "FallbackPlan.Repository"),
         (2500, 2599, "FallbackPlan.Storage.Local"),
         (2600, 2699, "FallbackPlan.Filesystem.Local"),
+        (2700, 2799, "FallbackPlan.Storage.S3"),
         (2800, 2899, "FallbackPlan.Restore"),
         (2900, 2999, "FallbackPlan.Retention"),
         (3000, 3099, "FallbackPlan.Replication"),

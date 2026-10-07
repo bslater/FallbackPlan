@@ -704,8 +704,9 @@ public sealed class DirectShipTests : IDisposable
         // refuses every capture, which is a failure discovered at the worst
         // possible moment. The configuration boundary is where that dies —
         // and the rule is about what the sink can write to, not about one
-        // kind: a reserved cloud kind (FR-DEST-005) is modelled by the
-        // configuration and served by nothing.
+        // kind: an s3 destination is filled by the sync after a run, never
+        // written through during one (ADR-0091), and a reserved kind
+        // (FR-DEST-005) is served by nothing.
         Directory.CreateDirectory(VaultA);
         WriteDirectShipConfiguration(vaultBToo: false);
         await using var runtime = await StartAsync();
@@ -713,7 +714,8 @@ public sealed class DirectShipTests : IDisposable
 
         Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
             new UpsertDestinationCommand(new DestinationDescriptor(
-                new string('7', 32), "bucket", "s3", null, null, null)),
+                new string('7', 32), "bucket", "s3", null, null, "https://objects.example.net",
+                Bucket: "family-backups")),
             Timeout));
 
         var set = runtime.Configuration.BackupSets.Single();

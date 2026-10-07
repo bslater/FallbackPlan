@@ -155,6 +155,11 @@ Each gives the number of snapshots, the number of files and the first five
 paths in order, the directory structure of any snapshot whose own records are
 reached, and what could not be traced.
 
+> **Amended (2026-10):** the paths are no longer in the words. Anyone signed
+> in reads a notice and the verify line, so they count; the first five paths
+> are kept beside the notice and shown only through a source the set's
+> passphrase unlocked — see [ADR-0089 Amendment 1](0089-a-backups-file-names-need-the-passphrase.md#amendment-1-2026-10--a-notice-counts-and-its-names-need-the-passphrase-too).
+
 A finding at a peer also says whether a copy this installation reads without
 the peer holds the objects sound: the staging archive, or the set's local
 paths. Nothing here can replace an object at a peer, so what the person
@@ -226,3 +231,4 @@ runs only when damage stands.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | Built tests first (the catalogue's trace, the three routes that fill the index, the derivation, the ledger, and the service's status and words), with each rule's removal confirmed to turn its tests red: a capture that records no version contents or no trees, a projection that records no contents, a forensic rebuild that records no structure, a superseded location taken for reached, an untraced object or key dropped, the derivation or the list ignoring the scope, a damage finding narrowing another failure, a sync's re-check not narrowing one, and a trace that waits behind a capture's write lock |
+| 2026-10 | Amended (related) | [ADR-0089 Amendment 1](0089-a-backups-file-names-need-the-passphrase.md#amendment-1-2026-10--a-notice-counts-and-its-names-need-the-passphrase-too): §5's words count the files and snapshots, and the sample of paths is kept beside the notice for someone who unlocks the set with its passphrase |

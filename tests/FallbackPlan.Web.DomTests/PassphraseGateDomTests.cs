@@ -10,7 +10,8 @@ namespace FallbackPlan.Web.DomTests;
 /// <summary>
 /// The passphrase gate as a person meets it (FR-WOR-007, ADR-0089): every
 /// action that names a backup's files — browsing a snapshot, a run's changes
-/// and failures, a set's "what changed" — asks for the passphrase first and
+/// and failures, a set's "what changed", the files a notice left out — asks
+/// for the passphrase first and
 /// asks again the next time, and reads through the restore source the
 /// passphrase unlocked, closing it after. A wrong passphrase opens nothing
 /// and names nothing.
@@ -44,6 +45,15 @@ public sealed class PassphraseGateDomTests
             SampleLimit: 20),
         JobFailuresCommand => new JobFailuresResult(
             "docs", "snap-1", 1, [new CaptureFailureDescriptor("locked.db", "permission", "Access denied.")], 100),
+        ListNoticesCommand => new NoticesResult(
+            [
+                new NoticeDescriptor(
+                    "n1", $"drill-failed:{Wire.SetId}:vault",
+                    "A restore drill against 'vault' could not bring back a file from set 'docs': a sampled file would not restore.",
+                    now, null, SetId: Wire.SetId, NamesWithheld: 1),
+            ]),
+        NoticeNamesCommand { Source: "src-1" } => new NoticeNamesResult(["docs/report.txt"]),
+        NoticeNamesCommand => new ServiceError(ServiceErrorReason.Refused, "A notice's files need the set's passphrase."),
         PreviewSetChangesCommand => new SetChangePreviewResult(
             "docs", "snap-1", now, 3,
             New: new ChangeBucketDescriptor(0, []),
@@ -138,6 +148,34 @@ public sealed class PassphraseGateDomTests
         await Expect(page.Locator("#dialog").GetByText("locked.db")).ToBeVisibleAsync();
         Assert.AreEqual("src-1", (await harness.ReceivedAsync<JobFailuresCommand>()).Source);
         Assert.AreEqual(2, Count<OpenRestoreSourceCommand>(harness), "each look unlocked its own source");
+    }
+
+    [TestMethod]
+    public async Task ANoticesFiles_AreShownOnlyAfterThePassphrase_AndOnlyThroughWhatItUnlocked()
+    {
+        // ADR-0089 Amendment 1: the notice counts what the drill found, and
+        // the file it could not bring back is named behind the set's
+        // passphrase, as every other look at a backup's files is.
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Answers(now);
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#notices");
+        await Expect(page.Locator("#view-notices")).ToContainTextAsync("a sampled file would not restore");
+        await Expect(page.Locator("#view-notices")).Not.ToContainTextAsync("report.txt");
+
+        await page.ClickAsync("[data-action=\"notice-names\"]");
+        await UnlockAsync(page, Wire.Passphrase);
+        await Expect(page.Locator("#dialog").GetByText("docs/report.txt")).ToBeVisibleAsync();
+
+        var opened = await harness.ReceivedAsync<OpenRestoreSourceCommand>();
+        Assert.AreEqual("docs", opened.SetName, "the notice's own set is the one unlocked");
+        var asked = await harness.ReceivedAsync<NoticeNamesCommand>();
+        Assert.AreEqual("n1", asked.NoticeId);
+        Assert.AreEqual("src-1", asked.Source);
+        Assert.AreEqual("src-1", (await harness.ReceivedAsync<CloseRestoreSourceCommand>()).SourceId);
     }
 
     [TestMethod]

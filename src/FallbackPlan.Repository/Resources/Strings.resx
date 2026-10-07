@@ -61,6 +61,9 @@
   <data name="Frame_UnknownScanEvent" xml:space="preserve">
     <value>Unknown scan event {0}.</value>
   </data>
+  <data name="ManifestBuilder_SourceKeyNamedTwice" xml:space="preserve">
+    <value>One publication names a source key twice; a hardlink group's names publish no hint at all (specification 06 §11).</value>
+  </data>
   <data name="ManifestBuilder_StoreRefusedSnapshotObjectWith" xml:space="preserve">
     <value>The store refused snapshot object '{0}' with a failed precondition.</value>
   </data>

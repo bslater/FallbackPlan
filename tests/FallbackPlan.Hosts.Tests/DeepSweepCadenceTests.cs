@@ -35,7 +35,9 @@ public sealed class DeepSweepCadenceTests
         Assert.IsTrue(ReplicaSweepJob.Sweeps(DestinationKind.Peer));
         foreach (var kind in new[] { DestinationKind.S3, DestinationKind.AzureBlob, DestinationKind.Dropbox })
         {
-            Assert.IsFalse(ReplicaSweepJob.Sweeps(kind), $"{kind} is reserved, and nothing reads it back");
+            // An s3 store is read back by sample at every sync and not swept
+            // (ADR-0091); the reserved kinds are read by nothing.
+            Assert.IsFalse(ReplicaSweepJob.Sweeps(kind), $"nothing reads {kind} back in full");
             Assert.IsNull(
                 ReplicaSweepJob.ScheduledIntervalDays(Declared(kind, intervalDays: 7)),
                 $"a stated interval does not make {kind} swept");

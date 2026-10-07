@@ -6,9 +6,10 @@ namespace FallbackPlan.Application;
 
 /// <summary>
 /// The destination kinds a configuration may declare (ADR-0034 §5).
-/// <see cref="LocalPath"/> and <see cref="Peer"/> are operational; the cloud
-/// kinds are accepted by validation and refused at runtime as a stated
-/// incapacity until their providers exist (FR-DEST-005).
+/// <see cref="LocalPath"/>, <see cref="Peer"/> and <see cref="S3"/> are
+/// operational; the other cloud kinds are accepted by validation and refused
+/// at runtime as a stated incapacity until their providers exist
+/// (FR-DEST-005, ADR-0091).
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<DestinationKind>))]
 public enum DestinationKind
@@ -21,7 +22,7 @@ public enum DestinationKind
     [JsonStringEnumMemberName("peer")]
     Peer,
 
-    /// <summary>Amazon S3 or an S3-compatible store — reserved, not yet served.</summary>
+    /// <summary>A bucket of an S3-compatible object store, spoken to over the S3 API (ADR-0091).</summary>
     [JsonStringEnumMemberName("s3")]
     S3,
 
@@ -57,6 +58,19 @@ public enum FailureDomain
     /// <summary>An offsite peer or cloud store.</summary>
     [JsonStringEnumMemberName("independent")]
     Independent = 3,
+}
+
+/// <summary>How requests to an S3-compatible destination name its bucket (ADR-0091).</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<BucketAddressing>))]
+public enum BucketAddressing
+{
+    /// <summary><c>https://endpoint/bucket/key</c> — what every S3-compatible store answers, and the default.</summary>
+    [JsonStringEnumMemberName("path")]
+    Path,
+
+    /// <summary><c>https://bucket.endpoint/key</c> — for a store that has retired path addressing.</summary>
+    [JsonStringEnumMemberName("virtual-host")]
+    VirtualHost,
 }
 
 /// <summary>
@@ -118,9 +132,47 @@ public sealed record DestinationConfiguration
     [JsonPropertyName("fingerprint")]
     public string? Fingerprint { get; init; }
 
-    /// <summary>The endpoint to dial (host:port), for <see cref="DestinationKind.Peer"/>.</summary>
+    /// <summary>
+    /// The endpoint: the host and port to dial for <see cref="DestinationKind.Peer"/>,
+    /// or the store's base URL for <see cref="DestinationKind.S3"/>.
+    /// </summary>
     [JsonPropertyName("endpoint")]
     public string? Endpoint { get; init; }
+
+    /// <summary>The region an S3-compatible store's signatures are scoped to when none is declared.</summary>
+    public const string DefaultS3Region = "us-east-1";
+
+    /// <summary>The bucket, for <see cref="DestinationKind.S3"/>.</summary>
+    [JsonPropertyName("bucket")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Bucket { get; init; }
+
+    /// <summary>
+    /// The region, for <see cref="DestinationKind.S3"/>; absent means
+    /// <see cref="DefaultS3Region"/>, which is what most S3-compatible stores
+    /// answer to.
+    /// </summary>
+    [JsonPropertyName("region")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Region { get; init; }
+
+    /// <summary>
+    /// Where in the bucket this destination writes, for <see cref="DestinationKind.S3"/>;
+    /// absent means the bucket's top. Each repository lands in a folder of
+    /// its own under it, as it does under a local path.
+    /// </summary>
+    [JsonPropertyName("prefix")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Prefix { get; init; }
+
+    /// <summary>How requests name the bucket, for <see cref="DestinationKind.S3"/>; absent means by path.</summary>
+    [JsonPropertyName("addressing")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BucketAddressing? Addressing { get; init; }
+
+    /// <summary>The region requests are signed for: the declared one, or the default.</summary>
+    [JsonIgnore]
+    public string EffectiveRegion => Region ?? DefaultS3Region;
 
     /// <summary>
     /// The declared failure domain (FR-SNP-007, ADR-0018 Amendment 2) — only
@@ -251,6 +303,7 @@ public sealed record DestinationConfiguration
     {
         DestinationKind.LocalPath => LocalPathDefect(),
         DestinationKind.Peer => PeerDefect(),
+        DestinationKind.S3 => S3Defect(),
         _ => null,
     };
 
@@ -290,6 +343,64 @@ public sealed record DestinationConfiguration
         // a valid endpoint is — they once both accepted `fe80::1` as host
         // `fe80:` on port 1.
         return PeerEndpoint.TryParse(endpoint, out _, out _, out var defect) ? null : defect;
+    }
+
+    /// <summary>What is wrong with an S3-compatible destination's address, or null when nothing is.</summary>
+    /// <remarks>
+    /// The provider makes the same checks when it opens the store, and
+    /// <c>Hosts.Tests/S3DestinationTests</c> holds the two to the same
+    /// answers: this project knows no provider, so the rule is written twice
+    /// and pinned once.
+    /// </remarks>
+    private string? S3Defect()
+    {
+        if (Endpoint is not { Length: > 0 } endpoint || Bucket is not { Length: > 0 } bucket)
+        {
+            return "no endpoint or bucket is declared.";
+        }
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("https" or "http")
+            || uri.UserInfo.Length > 0
+            || uri.AbsolutePath != "/"
+            || uri.Query.Length > 0
+            || uri.Fragment.Length > 0)
+        {
+            return $"endpoint '{endpoint}' is not a base URL — give a scheme, a host and, where it is not the "
+                + "scheme's own, a port, such as https://objects.example.net.";
+        }
+
+        if (uri.Scheme == "http" && !uri.IsLoopback)
+        {
+            // The objects are sealed already; their keys, their sizes and the
+            // access key id are not, and a store across a network is reached
+            // through whoever is in between.
+            return $"endpoint '{endpoint}' is not https; only a store on this machine is spoken to in clear.";
+        }
+
+        if (bucket.Length is < 3 or > 63
+            || !bucket.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '.' or '-')
+            || !char.IsAsciiLetterOrDigit(bucket[0])
+            || !char.IsAsciiLetterOrDigit(bucket[^1]))
+        {
+            return $"'{bucket}' is not a bucket name: 3 to 63 lowercase letters, digits, dots and hyphens, "
+                + "starting and ending with a letter or a digit.";
+        }
+
+        if (Region is { } region
+            && (region.Length == 0 || !region.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-')))
+        {
+            return $"'{region}' is not a region: lowercase letters, digits and hyphens, such as us-east-1.";
+        }
+
+        return Prefix is not { } prefix
+            || (prefix.Length <= 512 && prefix.Split('/').All(component =>
+                component.Length is > 0 and <= 255
+                && component[0] != '.'
+                && component.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '.' or '_' or '-')))
+            ? null
+            : $"'{prefix}' is not a prefix: folders of lowercase letters, digits, dots, underscores and hyphens, "
+                + "separated by '/', none starting with a dot.";
     }
 }
 

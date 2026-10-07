@@ -242,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     /// <summary>
     /// The clock skew margin, in hours, a configuration that states none
@@ -457,10 +457,15 @@ public sealed record ClientConfiguration
     /// <c>clock_skew_margin_hours</c>. Nothing moves — absent means a day —
     /// and the version rises for the same reason again.
     /// </para>
+    /// <para>
+    /// <b>8 → 9</b> (ADR-0091): an <c>s3</c> destination gains <c>bucket</c>,
+    /// <c>region</c>, <c>prefix</c> and <c>addressing</c>, and its
+    /// <c>endpoint</c> is a URL. No other kind carries them, so nothing moves.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -745,11 +750,12 @@ public sealed record ClientConfiguration
 
         // Each kind requires its own fields and refuses the others': a peer
         // carrying a path is a misread configuration, not extra information.
-        var (requiresPath, requiresPeer) = destination.Kind switch
+        var (requiresPath, requiresPeer, requiresStore) = destination.Kind switch
         {
-            DestinationKind.LocalPath => (true, false),
-            DestinationKind.Peer => (false, true),
-            _ => (false, false),
+            DestinationKind.LocalPath => (true, false, false),
+            DestinationKind.Peer => (false, true, false),
+            DestinationKind.S3 => (false, false, true),
+            _ => (false, false, false),
         };
 
         if (requiresPath && string.IsNullOrWhiteSpace(destination.Path))
@@ -762,14 +768,31 @@ public sealed record ClientConfiguration
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsPeerIdentity(destination.Name));
         }
 
+        if (requiresStore && (string.IsNullOrWhiteSpace(destination.Endpoint) || string.IsNullOrWhiteSpace(destination.Bucket)))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsBucket(destination.Name));
+        }
+
         if (!requiresPath && destination.Path is not null)
         {
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "path"));
         }
 
-        if (!requiresPeer && (destination.Fingerprint is not null || destination.Endpoint is not null))
+        if (!requiresPeer && destination.Fingerprint is not null)
         {
-            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "fingerprint/endpoint"));
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "fingerprint"));
+        }
+
+        if (!requiresPeer && !requiresStore && destination.Endpoint is not null)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "endpoint"));
+        }
+
+        if (!requiresStore && (destination.Bucket is not null || destination.Region is not null
+            || destination.Prefix is not null || destination.Addressing is not null))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(
+                destination.Name, "bucket/region/prefix/addressing"));
         }
 
         // The acknowledgement exists for destinations that genuinely cannot be
@@ -778,8 +801,8 @@ public sealed record ClientConfiguration
         // and the check costs sixteen ranges of a few kilobytes. Accepting the
         // excuse here would buy nothing measurable and permanently forfeit the
         // staging trim, so it is refused at load rather than regretted later
-        // (FR-VER-006).
-        if (requiresPath && !destination.RequiresVerification)
+        // (FR-VER-006). A bucket is read back the same way, at the same cost.
+        if ((requiresPath || requiresStore) && !destination.RequiresVerification)
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationCannotDeclineVerification(destination.Name));

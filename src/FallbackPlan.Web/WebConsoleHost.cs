@@ -209,6 +209,8 @@ public static class WebConsoleHost
             TimedAsync(context, log, "/api/adopt-archive", () => AdoptArchiveAsync(context, clients, auth)));
         app.MapPost("/api/retention-apply", (HttpContext context) =>
             TimedAsync(context, log, "/api/retention-apply", () => RetentionApplyAsync(context, clients, auth)));
+        app.MapPost("/api/destination-credentials", (HttpContext context) =>
+            TimedAsync(context, log, "/api/destination-credentials", () => DestinationCredentialsAsync(context, clients, auth)));
         app.MapPost("/api/delete-snapshots", (HttpContext context) =>
             TimedAsync(context, log, "/api/delete-snapshots", () => DeleteSnapshotsAsync(context, clients, auth)));
         app.MapPost("/api/setup", (HttpContext context) =>
@@ -849,6 +851,122 @@ public static class WebConsoleHost
                 RetentionResult report => new RetentionApplyResponse("applied", Lines: report.Lines),
                 ServiceError refusal => new RetentionApplyResponse("refused", refusal.Message),
                 _ => new RetentionApplyResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
+            }).ConfigureAwait(false);
+        }
+        catch (ServiceConnectionException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status503ServiceUnavailable, "service_unreachable",
+                exception.Message).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>What the destination-credentials endpoint reads from the page.</summary>
+    /// <param name="DestinationName">The s3 destination the key is for.</param>
+    /// <param name="AccessKeyId">The access key id.</param>
+    /// <param name="SecretAccessKey">The typed secret; sealed here, sent nowhere (ADR-0091).</param>
+    private sealed record DestinationCredentialsRequest(
+        string? DestinationName, string? AccessKeyId, string? SecretAccessKey);
+
+    /// <summary>The destination-credentials endpoint's answer to the page.</summary>
+    /// <param name="Outcome"><c>stored</c>, <c>refused</c>, or <c>unavailable</c>.</param>
+    /// <param name="Detail">Why, when not stored.</param>
+    /// <param name="Lines">The service's report, when stored.</param>
+    private sealed record DestinationCredentialsResponse(
+        string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
+
+    /// <summary>
+    /// Stores an S3-compatible destination's access key
+    /// ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)): the
+    /// third endpoint permitted a secret, and it holds the restore gate's
+    /// line. The secret is sealed here, in the console's process, to the
+    /// service's published recipient key for the one destination and key id
+    /// it was typed for, and only the envelope reaches the service
+    /// (NFR-SEC-009).
+    /// </summary>
+    /// <remarks>
+    /// The browser's session is resumed first, so the change is the person's
+    /// who made it and not whoever the console last relayed for (ADR-0045).
+    /// </remarks>
+    private static async Task DestinationCredentialsAsync(
+        HttpContext context, IServiceClientFactory clients, ConsoleAuth auth)
+    {
+        if (!auth.Authorizes(context.Request))
+        {
+            await RefuseAsync(context, StatusCodes.Status401Unauthorized, "token_missing_or_wrong",
+                Strings.WebConsoleHost_TokenMissingOrWrong).ConfigureAwait(false);
+            return;
+        }
+
+        DestinationCredentialsRequest? request;
+        try
+        {
+            request = await JsonSerializer.DeserializeAsync<DestinationCredentialsRequest>(
+                context.Request.Body, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(exception.Message)).ConfigureAwait(false);
+            return;
+        }
+
+        if (request is not { DestinationName.Length: > 0, AccessKeyId.Length: > 0, SecretAccessKey.Length: > 0 })
+        {
+            await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
+                Strings.FormatWebConsoleHost_MalformedCommand(
+                    "a destination, an access key id and a secret access key are required"))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        async Task AnswerAsync(DestinationCredentialsResponse response)
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            context.Response.Headers.CacheControl = "no-store";
+            await JsonSerializer.SerializeAsync(
+                context.Response.Body, response, SerializerOptions, context.RequestAborted).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await using var client = await clients.ConnectAsync(context.RequestAborted).ConfigureAwait(false);
+
+            if (context.Request.Headers[SessionHeader].ToString() is { Length: > 0 } session
+                && await client.ExecuteAsync(new ResumeSessionCommand(session), context.RequestAborted)
+                    .ConfigureAwait(false) is ServiceError { Reason: ServiceErrorReason.Refused } dead)
+            {
+                await AnswerAsync(new DestinationCredentialsResponse("refused", dead.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (await client.ExecuteAsync(new DescribeServiceCommand(), context.RequestAborted).ConfigureAwait(false)
+                is not ServiceDescriptionResult { RestoreGrantRecipient.Length: > 0 } description)
+            {
+                await AnswerAsync(new DestinationCredentialsResponse(
+                    "unavailable", "The service does not publish a recipient key to seal to.")).ConfigureAwait(false);
+                return;
+            }
+
+            var sealedKey = ConsoleRestoreGate.SealAccessKey(
+                request.DestinationName, request.AccessKeyId, request.SecretAccessKey,
+                description.RestoreGrantRecipient);
+            if (sealedKey.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
+            {
+                await AnswerAsync(new DestinationCredentialsResponse(
+                    sealedKey.Outcome == ConsoleRestoreGate.GateOutcome.Wrong ? "refused" : "unavailable",
+                    sealedKey.Detail)).ConfigureAwait(false);
+                return;
+            }
+
+            var result = await client.ExecuteAsync(
+                new SetDestinationCredentialsCommand(request.DestinationName, request.AccessKeyId, sealedKey.Envelope!),
+                context.RequestAborted).ConfigureAwait(false);
+            await AnswerAsync(result switch
+            {
+                ConfigurationChangeResult change => new DestinationCredentialsResponse("stored", Lines: change.Lines),
+                ServiceError refusal => new DestinationCredentialsResponse("refused", refusal.Message),
+                _ => new DestinationCredentialsResponse("refused", $"Unexpected result '{result.GetType().Name}'."),
             }).ConfigureAwait(false);
         }
         catch (ServiceConnectionException exception)

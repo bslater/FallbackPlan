@@ -23,6 +23,8 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(PreviewSetChangesCommand), "preview_set_changes")]
 [JsonDerivedType(typeof(ListNoticesCommand), "list_notices")]
 [JsonDerivedType(typeof(AcknowledgeNoticeCommand), "acknowledge_notice")]
+[JsonDerivedType(typeof(NoticeNamesCommand), "notice_names")]
+[JsonDerivedType(typeof(SetDestinationCredentialsCommand), "set_destination_credentials")]
 [JsonDerivedType(typeof(UnpairCommand), "unpair")]
 [JsonDerivedType(typeof(ListReplicaAttributionsCommand), "list_replica_attributions")]
 [JsonDerivedType(typeof(ReattributeReplicaCommand), "reattribute_replica")]
@@ -58,6 +60,7 @@ namespace FallbackPlan.Api;
 [JsonDerivedType(typeof(DeleteSnapshotsCommand), "delete_snapshots")]
 [JsonDerivedType(typeof(SyncCommand), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationCommand), "verify_destination")]
+[JsonDerivedType(typeof(RunDrillCommand), "run_drill")]
 [JsonDerivedType(typeof(RetireStagingCommand), "retire_staging")]
 [JsonDerivedType(typeof(UpgradeSetFormatCommand), "upgrade_set_format")]
 [JsonDerivedType(typeof(GetStatusCommand), "get_status")]
@@ -352,6 +355,35 @@ public sealed record ListNoticesCommand(bool IncludeAcknowledged = false) : Serv
 /// </summary>
 /// <param name="Id">The notice's identifier, from the listing.</param>
 public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
+
+/// <summary>
+/// Names the backup's files a notice left out (FR-WOR-007, ADR-0089
+/// Amendment 1): a notice counts what it found, and the names are answered
+/// only through a source the notice's set's passphrase unlocked, held by the
+/// caller's session — the proof every look at a backup's files asks for.
+/// </summary>
+/// <param name="NoticeId">The notice's identifier, from the listing.</param>
+/// <param name="Source">
+/// A source of the notice's set, opened under a verified restore grant by
+/// this session. Not needed for a notice that names no files, which answers
+/// none.
+/// </param>
+public sealed record NoticeNamesCommand(string NoticeId, string? Source = null) : ServiceCommand;
+
+/// <summary>
+/// Stores the access key an S3-compatible destination's requests are signed
+/// with (contract 1.60, ADR-0091). The secret arrives only as an envelope
+/// sealed to the service's published recipient key, where it was typed, as
+/// every secret that crosses this surface does (NFR-SEC-009); the service
+/// opens it into its own state directory, owner-only, and never into the
+/// configuration file, an export, a diagnostic bundle or a log (NFR-SEC-006,
+/// NFR-SEC-012). Nothing ever answers it back.
+/// </summary>
+/// <param name="DestinationName">The <c>s3</c> destination, by name.</param>
+/// <param name="AccessKeyId">The access key id the store knows the key by, which every request carries in clear.</param>
+/// <param name="Envelope">The secret access key, sealed to the service's recipient key, as hex.</param>
+public sealed record SetDestinationCredentialsCommand(
+    string DestinationName, string AccessKeyId, string Envelope) : ServiceCommand;
 
 /// <summary>
 /// Ends a pairing (ADR-0030 Amendment 2): announces the termination to the
@@ -946,6 +978,21 @@ public sealed record SyncCommand(string? BackupSetName, string? DestinationName)
 /// </param>
 public sealed record VerifyDestinationCommand(
     string? BackupSetName, string? DestinationName, bool Full, bool Probe = false) : ServiceCommand;
+
+/// <summary>
+/// Runs a restore drill now, outside the cadence (FR-DRL-003, ADR-0054
+/// Amendment 6): the drill the schedule runs, for each matching
+/// <c>(set, destination)</c> pair, answered once each has been recorded.
+/// </summary>
+/// <remarks>
+/// A pair already being drilled is joined rather than drilled twice, and the
+/// drill belongs to the service, so a caller who stops waiting does not cut it
+/// short. A pair with nothing there to restore — a set with no snapshot yet, a
+/// destination nothing has been copied to — is said and not drilled.
+/// </remarks>
+/// <param name="BackupSetName">The set to drill; null drills every configured set.</param>
+/// <param name="DestinationName">The destination to drill; null drills each set's every destination.</param>
+public sealed record RunDrillCommand(string? BackupSetName, string? DestinationName) : ServiceCommand;
 
 /// <summary>
 /// Retires a direct-ship set's staging archive (ADR-0046, contract 1.18):

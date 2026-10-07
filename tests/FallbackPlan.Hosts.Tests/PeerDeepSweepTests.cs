@@ -126,12 +126,14 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ASweepFindingAtAPeer_NamesWhatNeedsTheObjects_AndTheCopyHereThatHoldsThemSound()
+    public async Task ASweepFindingAtAPeer_CountsWhatNeedsTheObjects_AndNamesTheCopyHereThatHoldsThemSound()
     {
         // FR-VER-005: damage with a scope a person can act on. Nothing here
         // can replace an object at a peer, so what matters to the person
         // reading is what needs it and whether a copy they can reach is
-        // sound — which the staging archive, here, is.
+        // sound — which the staging archive, here, is. The file is counted
+        // in the words and named only behind the set's passphrase
+        // (FR-WOR-007, ADR-0089 Amendment 1).
         await using var runtime = await StartAsync(cadenceDays: 30);
         await BackUpAsync(runtime);
         await PassAsync(runtime, DateTimeOffset.Now);
@@ -139,10 +141,11 @@ public sealed class PeerDeepSweepTests : IDisposable
 
         await SweepAsync(runtime);
 
-        var notice = DeepVerifyNotice(runtime).Message;
-        Assert.Contains("docs/big.bin", notice, StringComparison.Ordinal);
-        Assert.Contains("1 snapshot(s)", notice, StringComparison.Ordinal);
-        Assert.Contains("held sound by the staging archive", notice, StringComparison.Ordinal);
+        var notice = DeepVerifyNotice(runtime);
+        Assert.Contains("1 snapshot(s)", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("held sound by the staging archive", notice.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("big.bin", notice.Message, StringComparison.Ordinal);
+        Assert.IsTrue(notice.Names?.Any(name => name.EndsWith("docs/big.bin", StringComparison.Ordinal)), string.Join(" | ", notice.Names ?? []));
     }
 
     [TestMethod]

@@ -150,6 +150,32 @@ public sealed class CommandTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Drill_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // A drill is recorded on the service's ledger and raises or clears
+        // the service's notice (FR-DRL-003); one run here would be a drill
+        // nobody else ever learns about.
+        var drill = await _cli.RunAsync("drill");
+
+        Assert.AreEqual(1, drill.ExitCode);
+        Assert.Contains("fallbackplan-agent drill", drill.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task NoticeNames_WithNoServiceToCommand_RefusesWithDirections()
+    {
+        await _cli.InitAsync();
+
+        // Notices are the service's ledger; there is nothing here to name.
+        var named = await _cli.RunAsync("notice-names", "n1");
+
+        Assert.AreEqual(1, named.ExitCode);
+        Assert.Contains("notices are the service's", named.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Retention_WithNoServiceToCommand_RefusesWithDirections()
     {
         await _cli.InitAsync();

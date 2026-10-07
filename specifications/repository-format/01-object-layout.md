@@ -26,6 +26,7 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /format-upgrade/<to-version>
 /hints/placement/<snapshot-id>
 /hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
+/hints/identity-pack/<device-id>/<captured-at>/<snapshot-id>/<part>
 /config/<backup-set-id>/<recorded-at>/<config-id>
 ```
 
@@ -33,7 +34,7 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 
 `<to-version>` under `/format-upgrade/` is a format version as four lowercase hexadecimal digits ([11 §5](11-lifecycle-objects.md#5-format-upgrade-record)).
 
-`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` and a source-identity hint's `<captured-at>` ([06 §11](06-manifests.md#11-source-identity)) follow the same rule; that hint's `<shard>` is the first four base32 characters of its `<source-key>`, sharded for the reason blobs are — one child per file in the repository is exactly the listing prefix this rule exists to bound.
+`<generation>` is rendered as a zero-padded 16-digit decimal `u64`, so lexicographic key order matches numeric order. `<sequence>` and a source-identity hint's `<captured-at>` ([06 §11](06-manifests.md#11-source-identity)) follow the same rule; that hint's `<shard>` is the first four base32 characters of its `<source-key>`, sharded for the reason blobs are — one child per file in the repository is exactly the listing prefix this rule exists to bound. A source-identity pack's `<captured-at>` and `<part>` ([06 §11.5](06-manifests.md#115-the-pack)) follow the same rule. Its prefix is not sharded: it holds one child per publication, as `/snapshots/` does.
 
 > **Erratum (phase 0).** This specification never defines how `<delta-id>` or `<checkpoint-id>` are allocated or rendered. Pending a normative edit, [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) resolves them: delta and checkpoint identifiers are 16 CSPRNG bytes allocated at publication and rendered as 26 lowercase base32 characters (§00 §6). The `/keys/<key-id>` entry that used to sit beside them belonged to format 1 and went with it ([03 §3](03-keys.md#3-the-key-object)).
 

@@ -89,6 +89,8 @@ The collector's three objects are assigned the same way: **lease** `0x0D`, **tom
 
 The **set-configuration object** is `0x10` ([11 §5](../../docs/adr/0071-recovering-operation-after-total-loss.md)). It is the first assignment above `0x0F`, and it is deliberately not squeezed into the reserved `0x07`: that value stays reserved forever for the reason the row above gives.
 
+The **source-identity pack** is `0x11` ([06 §11.5](06-manifests.md#115-the-pack), [ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)): a publication's source-identity hints in one object. It is advisory as the hints are, and takes the next value above the set-configuration object's.
+
 ### 3.2 What this does and does not protect
 
 Keying defends against the **store**. It does not defend against a **repository member**, because members hold the key.

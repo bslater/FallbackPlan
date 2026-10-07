@@ -111,6 +111,14 @@ are untouched, remain fully supported, and never convert implicitly.
    hex string, on the two named verbs — and
    `KeyMaterialConfinementTests` enforces the amended rule as narrowly
    as it enforced the original.
+
+   > **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md)).**
+   > The same shape now also carries a secret that is not the repository's:
+   > an S3-compatible destination's secret access key, on
+   > `set_destination_credentials`, under a purpose of its own and bound to
+   > the destination and key id it was typed for. The verbs that may carry an
+   > envelope are listed by `KeyMaterialConfinementTests`, and the list grows
+   > only by decision.
 7. **Write-only is honest about what it cannot do.** Verify levels that
    decrypt content, `verify --file`, and verify-on-reuse deduplication
    are impossible without the private key, so: v2 creation refuses the
@@ -262,3 +270,4 @@ reader of the derivation should not have to infer it.
 | 2026-08 | Amended | This record's device-trust posture is generalised by [ADR-0046](0046-direct-to-destination-publication.md) §6: direct-ship sets run `device` trust on any format version — not because the private key is absent, as here, but because verify-on-reuse through the sink would pay a destination round trip per reuse — with the destination presence probe as the stale-catalogue guard in both cases. "Each set's staging archive is then created from it" reads "each set's repository" now that a direct-ship set's is a metadata store plus destinations; the derivation is indifferent to which. |
 | 2026-09 | Amended (kit withdrawn) | Item 8 of the decision describes a kit that no longer exists ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the archive descriptor carries what it carried, and the recovery tool opens from the passphrase and the descriptor |
 | 2026-10 | Amended | Decision 5, by [ADR-0089](0089-a-backups-file-names-need-the-passphrase.md): the grant is no longer only content's key but the proof a person needs to see a backup's file names at all; a person's grant-less open is refused, and only the service's own work reads the structure plane without one (FR-WOR-003, FR-WOR-007). `Agent/ServiceCommandHandler`; `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/WriteOnlySetTests` |
+| 2026-10 | Amended | Decision 6, by [ADR-0091](0091-an-s3-compatible-destination.md): the envelope also carries an S3-compatible destination's secret access key, on `set_destination_credentials`, under its own purpose and bound to the destination and key id |

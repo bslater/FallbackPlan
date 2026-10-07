@@ -23,6 +23,7 @@
     <Project Path="src/FallbackPlan.Retention/FallbackPlan.Retention.csproj" />
     <Project Path="src/FallbackPlan.Storage.Abstractions/FallbackPlan.Storage.Abstractions.csproj" />
     <Project Path="src/FallbackPlan.Storage.Local/FallbackPlan.Storage.Local.csproj" />
+    <Project Path="src/FallbackPlan.Storage.S3/FallbackPlan.Storage.S3.csproj" />
     <Project Path="src/FallbackPlan.Web/FallbackPlan.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">

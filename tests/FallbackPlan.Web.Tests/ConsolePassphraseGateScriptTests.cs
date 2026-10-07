@@ -4,9 +4,10 @@ namespace FallbackPlan.Web.Tests;
 /// The console's half of the passphrase gate (FR-WOR-007, ADR-0089), pinned
 /// structurally: every action that names a backup's files unlocks a source
 /// with the passphrase first, the restore wizard has no way past a passphrase
-/// it could not check, and a change report says when the service withheld the
-/// names only the backup holds. <c>PassphraseGateDomTests</c> walks the same
-/// gate in a browser.
+/// it could not check, a change report says when the service withheld the
+/// names only the backup holds, and a notice offers the names it left out only
+/// through the same unlock. <c>PassphraseGateDomTests</c> walks the same gate
+/// in a browser.
 /// </summary>
 [TestClass]
 public sealed class ConsolePassphraseGateScriptTests
@@ -59,7 +60,7 @@ public sealed class ConsolePassphraseGateScriptTests
     public void EveryActionThatNamesABackupsFiles_UnlocksASourceFirst()
     {
         var script = AppJs();
-        foreach (var action in new[] { "browse", "job-changes", "job-failures", "what-changed" })
+        foreach (var action in new[] { "browse", "job-changes", "job-failures", "what-changed", "notice-names" })
         {
             Assert.Contains("unlockSource(", ActionBody(script, action), StringComparison.Ordinal, action);
         }
@@ -81,5 +82,23 @@ public sealed class ConsolePassphraseGateScriptTests
     public void TheChangeReport_SaysWhenTheServiceWithheldNames()
     {
         Assert.Contains("namesWithheld", FunctionBody(AppJs(), "comparisonReport"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void ANoticeThatWithheldNames_OffersToShowThem_ForItsOwnSet_AndClosesWhatItUnlocked()
+    {
+        // ADR-0089 Amendment 1: a notice counts what it found and keeps the
+        // names behind the passphrase, so the list offers the look only where
+        // the service says names were left out, for the set it names.
+        var script = AppJs();
+        var list = FunctionBody(script, "renderNotices");
+        Assert.Contains("notice.namesWithheld > 0", list, StringComparison.Ordinal);
+        Assert.Contains("data-action=\"notice-names\"", list, StringComparison.Ordinal);
+        Assert.Contains("data-set=\"${esc(notice.setId)}\"", list, StringComparison.Ordinal);
+
+        var look = ActionBody(script, "notice-names");
+        Assert.Contains("setById(el.dataset.set)", look, StringComparison.Ordinal);
+        Assert.Contains("command: \"notice_names\"", look, StringComparison.Ordinal);
+        Assert.Contains("close_restore_source", look, StringComparison.Ordinal);
     }
 }

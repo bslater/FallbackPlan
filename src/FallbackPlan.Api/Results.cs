@@ -55,6 +55,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DeleteSnapshotsResult), "snapshots_deleted")]
 [JsonDerivedType(typeof(SyncResult), "sync")]
 [JsonDerivedType(typeof(VerifyDestinationResult), "verify_destination")]
+[JsonDerivedType(typeof(DrillResult), "drill")]
 [JsonDerivedType(typeof(StatusResult), "status")]
 [JsonDerivedType(typeof(ConfigurationResult), "configuration")]
 [JsonDerivedType(typeof(ServiceDescriptionResult), "service_description")]
@@ -71,6 +72,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(SetChangePreviewResult), "set_change_preview")]
 [JsonDerivedType(typeof(AdoptionPreviewResult), "adoption_preview")]
 [JsonDerivedType(typeof(NoticesResult), "notices")]
+[JsonDerivedType(typeof(NoticeNamesResult), "notice_names")]
 [JsonDerivedType(typeof(PairingInviteResult), "pairing_invite")]
 [JsonDerivedType(typeof(PairingInvitesResult), "pairing_invites")]
 [JsonDerivedType(typeof(PairingCompletedResult), "pairing_completed")]
@@ -207,7 +209,8 @@ public sealed record BackupSetDescriptor(
 /// One declared destination, as the configuration surface sees it
 /// (ADR-0037). Which fields apply depends on <paramref name="Kind"/>:
 /// <c>local-path</c> takes a path; <c>peer</c> takes a fingerprint and an
-/// endpoint; the schema-reserved cloud kinds take neither yet.
+/// endpoint; <c>s3</c> takes an endpoint URL, a bucket, a region and a prefix
+/// (contract 1.60); the other schema-reserved cloud kinds take none yet.
 /// </summary>
 /// <param name="Id">The destination's 32-hex identity; null on an upsert declares a new one.</param>
 /// <param name="Name">Its unique name — what sets reference.</param>
@@ -238,6 +241,15 @@ public sealed record BackupSetDescriptor(
 /// never for a peer. On an upsert, null preserves what the declaration has and
 /// zero removes the cadence.
 /// </param>
+/// <param name="Bucket">The bucket, for <c>s3</c> (contract 1.60, ADR-0091).</param>
+/// <param name="Region">The region its signatures are scoped to, for <c>s3</c>; null means the API's default.</param>
+/// <param name="Prefix">Where in the bucket it writes, for <c>s3</c>; null means the bucket's top.</param>
+/// <param name="Addressing">How requests name the bucket, <c>path</c> or <c>virtual-host</c>, for <c>s3</c>.</param>
+/// <param name="AccessKeyStored">
+/// Whether the service holds an access key for it, for <c>s3</c>; the key
+/// itself never crosses back. Ignored on an upsert: <c>set_destination_credentials</c>
+/// is how a key arrives.
+/// </param>
 public sealed record DestinationDescriptor(
     string? Id,
     string Name,
@@ -250,7 +262,12 @@ public sealed record DestinationDescriptor(
     string? AddressDefect = null,
     int? Priority = null,
     string? TransferLimit = null,
-    int? DrillIntervalDays = null);
+    int? DrillIntervalDays = null,
+    string? Bucket = null,
+    string? Region = null,
+    string? Prefix = null,
+    string? Addressing = null,
+    bool? AccessKeyStored = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>
@@ -680,12 +697,27 @@ public sealed record SnapshotsResult(IReadOnlyList<SnapshotDescriptor> Snapshots
 /// <param name="Message">The prose a person reads.</param>
 /// <param name="RaisedAt">When the condition was first seen, Unix milliseconds.</param>
 /// <param name="AcknowledgedAt">When a person acknowledged it, Unix milliseconds; null while it still awaits one.</param>
+/// <param name="SetId">
+/// The set whose passphrase names the files the message leaves out (contract
+/// 1.59); null when it leaves none out.
+/// </param>
+/// <param name="NamesWithheld">
+/// How many of a backup's file names the message leaves out (contract 1.59):
+/// <c>notice_names</c> answers them through a source <paramref name="SetId"/>'s
+/// passphrase unlocked. Zero when it names no files, and from a pre-1.59
+/// service, whose message may name them itself.
+/// </param>
 public sealed record NoticeDescriptor(
-    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt);
+    string Id, string Key, string Message, ulong RaisedAt, ulong? AcknowledgedAt,
+    string? SetId = null, int NamesWithheld = 0);
 
 /// <summary>The notices, oldest first.</summary>
 /// <param name="Notices">The listed notices.</param>
 public sealed record NoticesResult(IReadOnlyList<NoticeDescriptor> Notices) : ServiceResult;
+
+/// <summary>The backup's file names a notice left out (FR-WOR-007, contract 1.59).</summary>
+/// <param name="Names">The files, as the backup names them; empty for a notice that names none.</param>
+public sealed record NoticeNamesResult(IReadOnlyList<string> Names) : ServiceResult;
 
 /// <summary>One entry inside a snapshot directory.</summary>
 /// <param name="Name">The entry's name.</param>
@@ -907,6 +939,23 @@ public sealed record SyncResult(IReadOnlyList<string> Lines) : ServiceResult;
 /// from the lines because an exit code must not be recovered by parsing prose.
 /// </param>
 public sealed record VerifyDestinationResult(IReadOnlyList<string> Lines, long Damaged) : ServiceResult;
+
+/// <summary>
+/// What drills run on request found, one line per <c>(set, destination)</c>
+/// pair (FR-DRL-003): what each restored, why it could not, or why the pair
+/// was not drilled.
+/// </summary>
+/// <param name="Lines">The per-pair report.</param>
+/// <param name="Failed">
+/// Drills that could not restore. Separate from the lines because an exit
+/// code must not be recovered by parsing prose.
+/// </param>
+/// <param name="NotDrilled">
+/// Pairs asked about and not drilled, because there was nothing there to
+/// restore. Counted apart from a failure: nothing was recorded against them
+/// and no notice raised, but nothing was proved either.
+/// </param>
+public sealed record DrillResult(IReadOnlyList<string> Lines, int Failed, int NotDrilled) : ServiceResult;
 
 /// <summary>One destination's row in a set's status matrix (FR-DEST-004).</summary>
 /// <param name="Name">The destination's declared name.</param>

@@ -541,8 +541,9 @@ public sealed partial class ServiceCommandHandler(
     /// <summary>
     /// How a destination's holdings can be verified for the staging trim
     /// (ADR-0034 §6): a reachable local-path replica is probed key by key —
-    /// direct evidence; a peer is trusted through its sync-ledger claim
-    /// <b>backed by a verification stamp</b> (FR-VER-006); anything else — an
+    /// direct evidence; a peer or an S3-compatible store is trusted through
+    /// its sync-ledger claim <b>backed by a verification stamp</b>
+    /// (FR-VER-006); anything else — an
     /// unplugged drive, an unserved kind — cannot vouch, and every blob it is
     /// entitled to stays in staging.
     /// </summary>
@@ -571,7 +572,10 @@ public sealed partial class ServiceCommandHandler(
                         new Storage.Local.LocalFileSystemObjectStore(replicaRoot))
                     : Retention.TrimVerification.None;
 
-            case DestinationKind.Peer:
+            // A store the hub cannot probe key by key without a request per
+            // key: trusted, as a peer is, through its ledger claim backed by
+            // the read-back stamp every sync earns there (ADR-0091).
+            case DestinationKind.Peer or DestinationKind.S3:
                 return Retention.TrimVerification.Ledger;
 
             default:
@@ -595,6 +599,7 @@ public sealed partial class ServiceCommandHandler(
         ListDestinationsCommand => ListDestinations(),
         UpsertDestinationCommand upsertDestination => UpsertDestination(upsertDestination),
         DeleteDestinationCommand deleteDestination => DeleteDestination(deleteDestination),
+        SetDestinationCredentialsCommand credentials => SetDestinationCredentials(credentials),
         GetServiceSettingsCommand => GetServiceSettings(),
         UpdateServiceSettingsCommand updateSettings => UpdateServiceSettings(updateSettings),
         ListPairingsCommand => ListPairings(),
@@ -610,6 +615,7 @@ public sealed partial class ServiceCommandHandler(
         PairWithInviteCommand pair => await PairWithInviteAsync(pair, cancellationToken).ConfigureAwait(false),
         ListNoticesCommand listNotices => ListNotices(listNotices),
         AcknowledgeNoticeCommand acknowledge => AcknowledgeNotice(acknowledge),
+        NoticeNamesCommand names => NoticeNames(names),
         UnpairCommand unpair => await UnpairAsync(unpair, cancellationToken).ConfigureAwait(false),
         ListReplicaAttributionsCommand => ListReplicaAttributions(),
         ReattributeReplicaCommand reattribute => ReattributeReplica(reattribute),
@@ -630,6 +636,7 @@ public sealed partial class ServiceCommandHandler(
         SyncCommand sync => await SyncAsync(sync, cancellationToken).ConfigureAwait(false),
         VerifyDestinationCommand deep =>
             await VerifyDestinationAsync(deep, cancellationToken).ConfigureAwait(false),
+        RunDrillCommand drill => await RunDrillAsync(drill, cancellationToken).ConfigureAwait(false),
         GetStatusCommand => await GetStatusAsync(cancellationToken).ConfigureAwait(false),
         ExportConfigurationCommand => new ConfigurationResult(runtime.Configuration.ExportJson()),
         DescribeServiceCommand => Describe(),
@@ -2026,7 +2033,7 @@ public sealed partial class ServiceCommandHandler(
                     // Said rather than skipped.
                     lines.Add(
                         $"{set.Name} -> {reference.Ref}: not deeply verifiable — "
-                        + (declared is null ? "no longer declared" : $"a {declared.Kind} destination is not served yet"));
+                        + (declared is null ? "no longer declared" : ReplicaSweepJob.NotSweptBecause(declared.Kind)));
                     continue;
                 }
 
@@ -2204,6 +2211,108 @@ public sealed partial class ServiceCommandHandler(
         }
 
         return new SyncResult(lines);
+    }
+
+    /// <summary>
+    /// Runs the restore drill of each matching pair now (FR-DRL-003, ADR-0054
+    /// Amendment 6), one pair at a time as the schedule's drill phase does,
+    /// and answers once each has been recorded.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not on a lane, for the drill's own reason: the verbs it calls queue
+    /// themselves on the reader lane, whose one worker a drill holding it
+    /// would wait on for ever.
+    /// </para>
+    /// <para>
+    /// A pair with nothing there to restore is said and counted apart, and
+    /// nothing is recorded against it: a set with no snapshot yet, a
+    /// destination nothing has been copied to, one no longer declared, or a
+    /// kind nothing serves. Drilling those would record a failure about an
+    /// absence that is correct.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<ServiceResult> RunDrillAsync(RunDrillCommand command, CancellationToken cancellationToken)
+    {
+        var configuration = runtime.Configuration;
+
+        IReadOnlyList<BackupSetConfiguration> sets;
+        if (command.BackupSetName is null)
+        {
+            sets = configuration.BackupSets;
+        }
+        else if (configuration.FindSet(command.BackupSetName) is { } found)
+        {
+            sets = [found];
+        }
+        else
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No backup set named '{command.BackupSetName}' is configured.");
+        }
+
+        if (command.DestinationName is not null && configuration.FindDestination(command.DestinationName) is null)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound, $"No destination named '{command.DestinationName}' is declared.");
+        }
+
+        var lines = new List<string>();
+        var failed = 0;
+        var notDrilled = 0;
+        var matched = false;
+        foreach (var set in sets)
+        {
+            bool? holdsSnapshot = null;
+            foreach (var reference in set.Destinations)
+            {
+                if (command.DestinationName is not null
+                    && !string.Equals(reference.Ref, command.DestinationName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matched = true;
+                holdsSnapshot ??= await runtime.HasSnapshotAsync(set.Id, cancellationToken).ConfigureAwait(false);
+                var nothing = holdsSnapshot.Value
+                    ? RecoveryDrillJob.NothingToDrill(runtime, set, reference.Ref)
+                    : "the set has no backup yet, so there is nothing there to restore";
+                if (nothing is not null)
+                {
+                    lines.Add($"{set.Name} -> {reference.Ref}: not drilled — {nothing}");
+                    notDrilled++;
+                    continue;
+                }
+
+                var outcome = await RecoveryDrillJob.RunOnRequestAsync(
+                    runtime, set, reference.Ref, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    cancellationToken).ConfigureAwait(false);
+                if (!outcome.Recorded)
+                {
+                    // The service is stopping: the drill states nothing, and
+                    // neither may its answer.
+                    return new ServiceError(ServiceErrorReason.Cancelled, "The operation was cancelled.");
+                }
+
+                if (outcome.Failure is not null)
+                {
+                    failed++;
+                }
+
+                lines.Add($"{set.Name} -> {reference.Ref}: {RecoveryDrillJob.Describe(outcome)}");
+            }
+        }
+
+        if (!matched)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                command.DestinationName is null
+                    ? "No backup set declares a destination."
+                    : $"No matching set declares destination '{command.DestinationName}'.");
+        }
+
+        return new DrillResult(lines, failed, notDrilled);
     }
 
     private static string DescribeSync(DestinationSyncRecord? record) => record?.State switch
@@ -2806,7 +2915,32 @@ public sealed partial class ServiceCommandHandler(
                 ? runtime.Notices.Notices.OrderBy(notice => notice.RaisedAt)
                 : runtime.Notices.Unacknowledged.OrderBy(notice => notice.RaisedAt))
             .Select(notice => new NoticeDescriptor(
-                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt))]);
+                notice.Id, notice.Key, notice.Message, notice.RaisedAt, notice.AcknowledgedAt,
+                notice.Names is { Count: > 0 } ? notice.SetId : null, notice.Names?.Count ?? 0))]);
+
+    /// <summary>
+    /// Names the backup's files a notice left out (FR-WOR-007, ADR-0089
+    /// Amendment 1), through a source the notice's set's passphrase unlocked
+    /// for this session, as every other look at a backup's files is answered.
+    /// A notice that left no names out answers none and needs no source.
+    /// </summary>
+    private ServiceResult NoticeNames(NoticeNamesCommand command)
+    {
+        if (runtime.Notices.Notices.FirstOrDefault(notice =>
+                string.Equals(notice.Id, command.NoticeId, StringComparison.Ordinal)) is not { } notice)
+        {
+            return new ServiceError(ServiceErrorReason.NotFound, $"No notice '{command.NoticeId}' is on record.");
+        }
+
+        if (notice is not { Names: { Count: > 0 } names, SetId: { } setId })
+        {
+            return new NoticeNamesResult([]);
+        }
+
+        return RefuseUnproved(command.Source, command.SessionId, setId, "Showing a notice's files") is { } unproved
+            ? unproved
+            : new NoticeNamesResult(names);
+    }
 
     /// <summary>A person has seen the notice; it stays on record (FR-DEST-008).</summary>
     private ServiceResult AcknowledgeNotice(AcknowledgeNoticeCommand command) =>

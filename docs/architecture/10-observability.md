@@ -165,6 +165,13 @@ and its own listing until a human acknowledges it, and names the action it
 asks for. It is not a log line — a log line is what nobody reads until
 afterwards.
 
+Anyone signed in reads a notice, so a notice about a backup's files counts
+them. The names it leaves out are kept beside it, with the set they belong
+to, and answered only through a source that set's passphrase unlocked; a
+listed notice says how many it withheld, so a client knows to ask for the
+passphrase ([ADR-0089](../adr/0089-a-backups-file-names-need-the-passphrase.md)
+Amendment 1).
+
 **Progress events are not telemetry.** They may carry job identity because they
 travel to an authenticated local caller or a paired remote client and are shown
 to the person whose data it is; the OpenTelemetry instruments keep their closed
@@ -199,7 +206,9 @@ queued upload is not counted, and neither is a publication still writing.
 Every byte is backed up before the snapshot is published, so a client holds
 the meter at 99% until the job settles, and while the run finishes its
 reports count the source-identity hints it is writing, which a client shows
-beside the meter. A report reaches the hub each time an acknowledged blob
+beside the meter. They are one pack since
+[ADR-0090](../adr/0090-a-backups-hints-are-one-pack.md), so the count lands
+whole when the pack does. A report reaches the hub each time an acknowledged blob
 moves the figure, so the meter moves while one large file is still being read.
 
 [ADR-0088](../adr/0088-a-backups-percentage-is-what-it-has-backed-up.md)

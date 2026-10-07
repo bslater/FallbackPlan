@@ -601,11 +601,12 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
 
         var priorSnapshotId = Enumerable.Repeat((byte)0xF1, 16).ToArray();
 
-        // They were published, and they are only hints: deleting every one
-        // must leave a publication that still succeeds.
+        // They were published, and they are only hints: deleting every one,
+        // in whichever shape this writer published them, must leave a
+        // publication that still succeeds.
         var hintKeys = new List<ObjectKey>();
         await foreach (var entry in store.ListAsync(
-            ObjectPrefix.Parse("hints/identity/"), ListOptions.Default, CancellationToken.None))
+            ObjectPrefix.Parse("hints/"), ListOptions.Default, CancellationToken.None))
         {
             hintKeys.Add(entry.Key);
         }
@@ -706,9 +707,9 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // And the whole store, not just the manifest plane — which is the
         // assertion the per-snapshot source-identity map made impossible. It
         // described the whole tree every run, so the bytes a snapshot wrote
-        // followed the repository however little had changed; keyed by source
-        // key, a hint is written once per version and this measures it
-        // (06 §11, Q21).
+        // followed the repository however little had changed. A hint is
+        // written once per version, in the pack of the backup that created it,
+        // and this measures it (06 §11, Q21, ADR-0090).
         var growth = afterSecond - afterFirst;
         Assert.IsTrue(
             growth * 20 < afterFirst,

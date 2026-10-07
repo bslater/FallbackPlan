@@ -208,6 +208,13 @@ public sealed class JobScheduler : IAsyncDisposable
     }
 
     /// <summary>
+    /// Cancelled when the queue begins stopping: the lifetime of work that
+    /// belongs to the service rather than to whoever asked for it, such as a
+    /// drill a person asked for and stopped waiting on (FR-DRL-003).
+    /// </summary>
+    internal CancellationToken StoppingToken => _stoppingToken;
+
+    /// <summary>
     /// Whether the queue has begun stopping. From then on it takes no work,
     /// so every command that needs a lane answers cancelled.
     /// </summary>

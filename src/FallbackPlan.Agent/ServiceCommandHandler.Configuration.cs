@@ -92,7 +92,14 @@ public sealed partial class ServiceCommandHandler
             destination.AddressDefect,
             destination.Priority,
             destination.TransferLimit,
-            destination.DrillIntervalDays))]);
+            destination.DrillIntervalDays,
+            destination.Bucket,
+            destination.Region,
+            destination.Prefix,
+            AddressingName(destination.Addressing),
+            // Whether one is held, never what it is (ADR-0091); a kind that
+            // signs nothing is not said to lack a key.
+            destination.Kind == DestinationKind.S3 ? runtime.DestinationCredentials.Holds(destination.Id) : null))]);
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
     {
@@ -114,6 +121,14 @@ public sealed partial class ServiceCommandHandler
             }
 
             domain = parsed;
+        }
+
+        if (!TryParseAddressing(command.Destination.Addressing, out var addressing))
+        {
+            return new ServiceError(
+                ServiceErrorReason.InvalidArgument,
+                $"Destination '{command.Destination.Name}': '{command.Destination.Addressing}' is not a bucket "
+                + "addressing (path | virtual-host).");
         }
 
         var configuration = runtime.Configuration;
@@ -187,6 +202,13 @@ public sealed partial class ServiceCommandHandler
             Verification = existing?.Verification,
             DrillIntervalDays = drillIntervalDays,
             TransferLimit = transferLimit,
+            // An empty text is no value, as the console's empty field is: the
+            // configuration's own validation then says which ones an s3
+            // destination cannot do without and which other kinds may not carry.
+            Bucket = NullIfEmpty(command.Destination.Bucket),
+            Region = NullIfEmpty(command.Destination.Region),
+            Prefix = NullIfEmpty(command.Destination.Prefix),
+            Addressing = addressing,
         };
 
         // The circular-capture guard (FR-DEST-011), entered from this door:
@@ -439,12 +461,27 @@ public sealed partial class ServiceCommandHandler
                     + "peering is over too.");
                 break;
 
+            case DestinationKind.S3:
+                lines.Add(
+                    $"Bucket '{destination.Bucket}' at {destination.Endpoint} keeps every object it was sent"
+                    + (destination.Prefix is { } prefix ? $" under '{prefix}'" : string.Empty) + ".");
+                if (runtime.DestinationCredentials.Delete(destination.Id))
+                {
+                    lines.Add(
+                        "Its access key is forgotten: this service holds it no longer. Revoke it at the provider "
+                        + "too if nothing else uses it.");
+                }
+
+                break;
+
             default:
                 break;
         }
 
         return new ConfigurationChangeResult(lines);
     }
+
+    private static string? NullIfEmpty(string? text) => string.IsNullOrEmpty(text) ? null : text;
 
     /// <summary>
     /// Retires a migrated direct-ship set's staging archive (ADR-0046,

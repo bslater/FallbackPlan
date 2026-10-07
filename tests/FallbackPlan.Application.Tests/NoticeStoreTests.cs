@@ -5,7 +5,9 @@ namespace FallbackPlan.Application.Tests;
 /// <summary>
 /// Notices are the channel that survives being ignored, which is exactly why
 /// they must not accumulate: one that outlives its cause, or one that shows a
-/// figure from last week, teaches an operator to stop reading them.
+/// figure from last week, teaches an operator to stop reading them. A notice
+/// that found something about a backup's files says it in counts and keeps the
+/// names beside it, for a caller who unlocks the set (FR-WOR-007).
 /// </summary>
 [TestClass]
 public sealed class NoticeStoreTests
@@ -48,6 +50,56 @@ public sealed class NoticeStoreTests
         Assert.AreEqual(1_000UL, second.RaisedAt, "the first sighting is the useful timestamp — since when");
         Assert.HasCount(1, store.Unacknowledged);
         Assert.AreEqual("9 GiB short", NoticeStore.Open(_state).Unacknowledged.Single().Message);
+    }
+
+    [TestMethod]
+    public void Raise_WithNames_KeepsThemBesideTheMessage_AndOnRecordAcrossAReopen()
+    {
+        // FR-WOR-007 as amended (ADR-0089 Amendment 1): a notice says what it
+        // found in counts, and the file names it leaves out are kept beside
+        // it, with the set they belong to, for a caller who unlocks that set.
+        var store = NoticeStore.Open(_state);
+
+        var raised = store.Raise(
+            "drill-failed:set-1:vault", "a sampled file would not restore", 1_000,
+            new NoticeNames("set-1", ["docs/report.txt"]));
+
+        Assert.AreEqual("set-1", raised.SetId);
+        Assert.AreEqual("docs/report.txt", Assert.ContainsSingle(raised.Names!));
+        Assert.DoesNotContain("report.txt", raised.Message, StringComparison.Ordinal);
+
+        var reopened = Assert.ContainsSingle(NoticeStore.Open(_state).Unacknowledged);
+        Assert.AreEqual("set-1", reopened.SetId);
+        Assert.AreEqual("docs/report.txt", Assert.ContainsSingle(reopened.Names!));
+    }
+
+    [TestMethod]
+    public void Raise_AgainUnderTheSameKey_ReplacesTheNamesWithTheNewFindings()
+    {
+        var store = NoticeStore.Open(_state);
+        store.Raise("drill-failed:set-1:vault", "first", 1_000, new NoticeNames("set-1", ["docs/a.txt"]));
+
+        var refreshed = store.Raise("drill-failed:set-1:vault", "second", 2_000, new NoticeNames("set-1", ["docs/b.txt"]));
+
+        Assert.AreEqual("docs/b.txt", Assert.ContainsSingle(refreshed.Names!));
+        Assert.AreEqual(
+            "docs/b.txt", Assert.ContainsSingle(Assert.ContainsSingle(NoticeStore.Open(_state).Unacknowledged).Names!));
+    }
+
+    [TestMethod]
+    public void Raise_WithoutNames_WritesTheLedgerAsBefore()
+    {
+        // An older service reads the ledger this one writes: a notice that
+        // names no files carries neither field, so its record is unchanged.
+        var store = NoticeStore.Open(_state);
+
+        var raised = store.Raise("quota-low:friend", "3 GiB short", 1_000);
+
+        Assert.IsNull(raised.SetId);
+        Assert.IsNull(raised.Names);
+        var written = File.ReadAllText(Path.Combine(_state, "notices.json"));
+        Assert.DoesNotContain("\"names\"", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"set_id\"", written, StringComparison.Ordinal);
     }
 
     [TestMethod]

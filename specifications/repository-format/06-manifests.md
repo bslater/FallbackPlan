@@ -410,6 +410,8 @@ A separate object has neither problem, and gains one: absence is the normal case
 
 ## 11 Source identity
 
+> **Amended (2026-10, [ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)).** This section's per-file object is the form a writer published before ADR-0090. [§11.5](#115-the-pack)'s pack is the form it publishes now: the same facts, in one object per publication rather than one per version. A writer MUST NOT publish both forms for one snapshot. A reader MUST accept both, and §11.5 says how they combine.
+
 **Optional, and load-bearing for one thing.** A writer MAY publish one source-identity hint per file version it creates, recording the stable filesystem identity that version was captured from:
 
 ```text
@@ -468,7 +470,45 @@ One store object per file version created — so a first capture writes one per 
 
 The price is object count rather than bytes: a sealed standalone record is around 230 bytes whatever it holds, against roughly 50 bytes for an entry in a packed table, and on a store that charges per request each one is a request. That is the per-object overhead blobs exist to amortise, spent deliberately. It is cheaper than the alternative from the second capture onwards, because the alternative — one object per snapshot naming every file — pays for the whole repository every run whether or not anything changed. → [Q21](../../docs/open-questions.md#closed)
 
+> **Amended (2026-10, [ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)).** The request each version cost was the price this section accepted. On a store that charges by the request it was most of a first backup's bill: about 2 000 requests per GB against [NFR-PERF-008](../../docs/requirements/non-functional.md)'s 20. §11.5's pack keeps the bytes in proportion to what changed and makes the requests one per publication.
+
 A collector treats a hint as it treats the placement hint: unreferenced by anything, advisory, and collectable once the snapshot that wrote it is gone.
+
+### 11.5 The pack
+
+**One publication's hints in one object** ([ADR-0090](../../docs/adr/0090-a-backups-hints-are-one-pack.md)):
+
+```text
+/hints/identity-pack/<device-id>/<captured-at>/<snapshot-id>/<part>
+```
+
+```text
+source_identity_pack = {
+    1: u16       schema version, 1
+    2: bytes[16] device_id     the device whose source keys these are
+    3: bytes[16] snapshot_id
+    4: u64       captured_at   the snapshot's capture time
+    5: u32       part          from 0
+    6: [+ [bytes[16] source_key, bytes[32] object_id]]
+}
+```
+
+It is a standalone metadata record of type `0x11` ([02 §3.1](02-identifiers.md#31-object-types)), sealed and keyed as the per-file hint is, and it carries the sequence number of the write intent it was published under ([08 §2](08-journal.md#2-record-framing)). `<device-id>` and `<snapshot-id>` render as 26 lowercase base32 characters; `<captured-at>` and `<part>` render as zero-padded 16-digit decimals ([01 §2](01-object-layout.md#2-namespace)). Keys 2–5 repeat the store key, and a reader MUST refuse a pack whose body disagrees with the key it was fetched under, for the reason §11 gives.
+
+A writer publishes one pack per publication. It names every version that publication created, which are the versions §11 would have given a hint each, and nothing else.
+
+- **Order.** The entries ascend strictly by `source_key` compared as bytes, each key at most once. §11's rule for a key claimed twice in one snapshot is unchanged: such a key is not named.
+- **Size.** A pack holds at most **131 072** entries. A publication that created more writes further parts, numbered from 0, with the entries split in order so that the parts together ascend as each one does.
+- **When.** A publication that created no version writes no pack. A pack is written before the snapshot object, as the per-file hint was.
+
+**Reading.** A reader looking for the version a given snapshot held lists `/hints/identity-pack/<device-id>/`. It reads every pack whose `<captured-at>` is at or before that snapshot's capture time, in key order. Key order is capture order, so the listing stops at the first pack past the bound. A later entry for a source key replaces an earlier one.
+
+For a source key no pack names, the reader looks for a per-file hint as §11.3 describes. A device's per-file hints all predate its first pack, so a pack's answer is not checked against them. The rest of §11.3 holds:
+
+- size and modification time are checked before content is reused;
+- a pack that fails to authenticate, fails to parse or disagrees with its key is passed over, and is never a damage finding.
+
+**Cost.** One object per publication for each 131 072 versions created, at about 52 bytes an entry. The bytes still follow what changed, and the requests no longer do. A collector treats a pack as it treats a per-file hint (§11.4).
 
 ---
 

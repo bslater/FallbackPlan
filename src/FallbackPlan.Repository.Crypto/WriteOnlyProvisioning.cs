@@ -9,19 +9,30 @@ namespace FallbackPlan.Repository.Crypto;
 /// The sealed envelopes a service's ceremonies exchange (ADR-0042 §4,
 /// ADR-0070): <b>provisioning</b> carries the write bundle plus the KDF salt
 /// and parameters the descriptor must record, a <b>restore grant</b> carries
-/// the derived scalar alone, and a <b>claim root</b> carries the Argon2id
-/// output a rebuilt machine proves a replica with. Each is sealed end-to-end
-/// to the service's published recipient key with its own associated-data
-/// purpose, so none can be replayed as another — and the passphrase itself is
-/// in none of them.
+/// the derived scalar alone, a <b>claim root</b> carries the Argon2id
+/// output a rebuilt machine proves a replica with, and an <b>access key</b>
+/// carries the secret an S3-compatible destination's requests are signed with
+/// (ADR-0091). Each is sealed end-to-end to the service's published recipient
+/// key with its own associated-data purpose, so none can be replayed as
+/// another — and the passphrase itself is in none of them.
 /// </summary>
 public static class WriteOnlyProvisioning
 {
+    /// <summary>The longest secret access key an envelope carries.</summary>
+    /// <remarks>
+    /// Several times what any provider issues. The bound exists so a pasted
+    /// file is refused where it was pasted rather than stored and sent as a
+    /// signing key on every request.
+    /// </remarks>
+    public const int MaximumAccessKeySecretLength = 256;
+
     private static ReadOnlySpan<byte> ProvisionMagic => "FBPPROV1"u8;
 
     private static ReadOnlySpan<byte> ProvisionAad => "fbp/provision/v2"u8;
 
     private static ReadOnlySpan<byte> GrantAad => "fbp/restore-grant/v2"u8;
+
+    private static ReadOnlySpan<byte> AccessKeyPurpose => "fbp/destination-access-key/v1"u8;
 
     /// <summary>Everything in the provisioning payload except the credential: magic ‖ … ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
     /// <remarks>
@@ -161,6 +172,115 @@ public static class WriteOnlyProvisioning
         }
 
         return ContentSealing.SealPayload(recipientPublicKey, reclaimRoot, GrantAad);
+    }
+
+    /// <summary>
+    /// Seals the secret access key of an S3-compatible destination for the
+    /// service's recipient key (ADR-0091), bound to the destination and the
+    /// access key id it was typed for.
+    /// </summary>
+    /// <remarks>
+    /// The destination name and key id are in the associated data, not the
+    /// payload: they cross beside the envelope in clear, as the key id does
+    /// on every request the store receives, and binding them means an
+    /// envelope cannot be replayed into another destination's credentials or
+    /// stored beside a key id it was not issued with.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="destinationName">The destination the key is for, by its declared name.</param>
+    /// <param name="accessKeyId">The access key id the secret belongs to.</param>
+    /// <param name="secretAccessKey">The secret, as the provider issued it.</param>
+    /// <exception cref="ArgumentException">
+    /// A name is blank, or the secret is empty, longer than
+    /// <see cref="MaximumAccessKeySecretLength"/>, or carries a control character.
+    /// </exception>
+    public static byte[] SealAccessKeySecret(
+        ReadOnlySpan<byte> recipientPublicKey, string destinationName, string accessKeyId, string secretAccessKey)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(accessKeyId);
+        ThrowHelper.ThrowIfNull(secretAccessKey);
+
+        if (!IsAccessKeySecret(secretAccessKey))
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyProvisioning_AccessKeySecretMalformed(MaximumAccessKeySecretLength),
+                nameof(secretAccessKey));
+        }
+
+        var payload = System.Text.Encoding.UTF8.GetBytes(secretAccessKey);
+        try
+        {
+            return ContentSealing.SealPayload(
+                recipientPublicKey, payload, AccessKeyAssociatedData(destinationName, accessKeyId));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
+
+    /// <summary>Opens an access-key envelope with the service's recipient scalar.</summary>
+    /// <param name="recipientPrivateKey">The service's recipient scalar.</param>
+    /// <param name="sealedBytes">The envelope.</param>
+    /// <param name="destinationName">The destination the envelope must have been sealed for.</param>
+    /// <param name="accessKeyId">The access key id it must have been sealed beside.</param>
+    /// <exception cref="SealedContentException">
+    /// The envelope does not open — another recipient, another destination or
+    /// key id, another purpose, tampered bytes — or what it carries is not a
+    /// secret access key.
+    /// </exception>
+    public static string OpenAccessKeySecret(
+        ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes,
+        string destinationName, string accessKeyId)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        ThrowHelper.ThrowIfNullOrWhiteSpace(accessKeyId);
+
+        var payload = ContentSealing.OpenPayload(
+            recipientPrivateKey, sealedBytes, AccessKeyAssociatedData(destinationName, accessKeyId));
+        try
+        {
+            string secret;
+            try
+            {
+                secret = new System.Text.UTF8Encoding(false, throwOnInvalidBytes: true).GetString(payload);
+            }
+            catch (System.Text.DecoderFallbackException)
+            {
+                throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
+            }
+
+            // One refusal shape for every envelope that is not this one,
+            // as a provisioning envelope hiding garbage gets.
+            return IsAccessKeySecret(secret)
+                ? secret
+                : throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
+
+    private static bool IsAccessKeySecret(string candidate) =>
+        candidate.Length is > 0 and <= MaximumAccessKeySecretLength && !candidate.Any(char.IsControl);
+
+    private static byte[] AccessKeyAssociatedData(string destinationName, string accessKeyId)
+    {
+        // Purpose, then each name with its length before it, so no two
+        // (destination, key id) pairs share an encoding.
+        var destination = System.Text.Encoding.UTF8.GetBytes(destinationName);
+        var keyId = System.Text.Encoding.UTF8.GetBytes(accessKeyId);
+        var data = new byte[AccessKeyPurpose.Length + 4 + destination.Length + 4 + keyId.Length];
+        AccessKeyPurpose.CopyTo(data);
+        var offset = AccessKeyPurpose.Length;
+        BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset), destination.Length);
+        destination.CopyTo(data, offset + 4);
+        offset += 4 + destination.Length;
+        BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset), keyId.Length);
+        keyId.CopyTo(data, offset + 4);
+        return data;
     }
 
     /// <summary>Opens a restore grant with the service's recipient scalar.</summary>

@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.57
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.60
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.57 — 62 commands. One line each; parameters, results
+The register as of 1.60 — 65 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -88,7 +88,14 @@ the stored value, and an empty text or a zero clears it. Since 1.49,
 `validate_set_draft` takes `set_id`, the set the draft edits or would create,
 and with it names each placement refusal the save would give (ADR-0037
 Amendment 2, ADR-0051, FR-DEST-017). A draft that names no set is not judged
-for placement.
+for placement. Since 1.60 the destination descriptor addresses an `s3`
+destination — `bucket`, `region`, `prefix`, `addressing`, with `endpoint` the
+store's base URL — and says whether the service holds its access key
+(`access_key_stored`); `set_destination_credentials` hands the service that
+key, its `access_key_id` in clear and the secret only as an `envelope` sealed
+to the service's recipient key for that destination and key id
+([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md),
+NFR-SEC-009). Nothing answers the key back.
 
 **Backups and jobs** — `run_backup`, `cancel_job`, `list_jobs` (since
 1.24 with the run's terminal numbers on each row and an optional newest-N
@@ -138,7 +145,9 @@ snapshot of `list_snapshots` a person asked to delete carries
 `retention`, `retire_staging` (1.20, ADR-0046), `upgrade_set_format`
 (1.38, [ADR-0066](../../docs/adr/0066-the-format-upgrade-record.md) — one set moved to the latest repository format this
 build writes, by an appended signed record rather than a rewritten
-descriptor).
+descriptor), `run_drill` (1.58, [ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
+Amendment 6 — a destination's restore drill now, outside its cadence,
+recorded and announced as the schedule's is).
 
 **Pairing and peers** — `list_pairings`, `create_pairing_invite` /
 `list_pairing_invites` / `revoke_pairing_invite` / `pair_with_invite`,
@@ -150,7 +159,9 @@ claim that moved a replica here, which until then may read it and may not
 delete from it).
 
 **Notices and diagnostics** — `list_notices` / `acknowledge_notice`
-(ADR-0039), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043);
+(ADR-0039), `notice_names` (1.59, [ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md)
+Amendment 1 — the files a notice's words leave out, only through a source
+its set's passphrase unlocked), `get_diagnostics` / `read_log` / `set_log_level` (ADR-0043);
 `list_receipts` (1.35, ADR-0063/0064 — every deletion and replication
 receipt filed here, both roles, as facts with the service's verdict on each
 signature; any signed-in role, any caller scope); `export_diagnostics`
@@ -218,3 +229,6 @@ verification, status) and predate the per-version changelog convention.
 | 1.55 | Two figures, kept apart ([ADR-0088](../../docs/adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) Amendment 1, FR-SVC-006, FR-DEST-004). A job's progress is three equal stages over its counted plan's files — scanned, processed, and backed up, which `JobProgress` and the job row now count as `files_backed_up`. How much of a backup a destination holds is a status row's: `files_held` and `files_total`, of the set's newest backup's files, how many have all their content there; `holds_newest`, whether it holds that backup whole, snapshot record included, the only thing that lets a client draw 100%; `in_run`, whether the set's live run writes to it; and `syncing`, whether a sync to it is under way, its count then being that sync's own. Additive: a pre-1.55 service sends none of them, and a client reads null `files_held` as not counted, never as none |
 | 1.56 | A backup's file names need the passphrase ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md), FR-WOR-007). The proof is a restore source opened under a verified restore grant, serving only the session that opened it. `job_changes`, `job_failures` and `preview_set_changes` gain `source` to name one; `preview_set_changes` answers without one, counting deleted and no-longer-included files and leaving their names out, and says so in `names_withheld`. Not additive, as 1.42 was not: `open_restore_source` without an `envelope`, and `list_directory`, `plan_restore`, `run_restore`, `job_changes` and `job_failures` without such a source — or with another session's, or another set's — are refused by name. The console and the CLI ship with the service and unlock first. The session a command came from is the connection's gate's to say, never on the wire |
 | 1.57 | A set with no snapshot yet gives its destinations nothing to hold ([ADR-0050](../../docs/adr/0050-completed-run-record-and-drill-down.md) Amendment 2, FR-DEST-004). A destination row's `reason` may be `awaiting-first-backup`, on a row that reads `behind`, whatever the ledger row says, unless the ledger reported a fault in its own words. Additive: a pre-1.57 client that does not know the value shows the row's `detail`, which says the same in words |
+| 1.58 | `run_drill` ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md) Amendment 6, FR-DRL-003): a person runs a destination's restore drill now, outside its cadence. It names its pair as `sync` does, `backup_set_name` and `destination_name`, and either left out means every one. The answer, `drill`, carries a line per pair and two counts, `failed` and `not_drilled`, so an exit code is never read from the prose. The drill is recorded on the pair's row and raises or clears its notice as a scheduled one does; a pair already being drilled is joined, not drilled twice; a caller who stops waiting is answered cancelled and the drill finishes. A pair with nothing there to restore is said and not drilled. Additive: a pre-1.58 client never sends the command |
+| 1.59 | A notice counts, and its names need the passphrase ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md) Amendment 1, FR-WOR-007). The notices the service raises about a drill or about damage, a drill's failure on the status matrix's `drill_failure` and in a `drill` answer, and verify-destination's lines count the backup's files they concern and name none. A listed notice gains `names_withheld`, how many files its message left out, and `set_id`, the set whose passphrase names them. `notice_names`, answered by `notice_names`, gives those files through `source`, a restore source of that set the caller's session opened under a verified grant, and is refused without one in the same words as the other looks; a notice that left nothing out answers none. Additive: a pre-1.59 service sends neither field and has no names to give, and its notices keep the names in their words |
+| 1.60 | An S3-compatible destination ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md), FR-DEST-005). `DestinationDescriptor` gains `bucket`, `region`, `prefix` and `addressing`, its `endpoint` is the store's base URL for an `s3` destination, and `access_key_stored` says whether the service holds that destination's access key. New verb `set_destination_credentials` (destination name, `access_key_id`, `envelope`): the secret crosses only sealed to the service's recipient key, bound to the destination and key id, joining the envelope verbs by decision (NFR-SEC-009); the service holds it in its state directory and never answers it back. Additive: a pre-1.60 client sends none of the fields, and its upsert of another kind is read as before. |

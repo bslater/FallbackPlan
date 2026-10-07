@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-09
-**Requirements:** FR-DRL-001, FR-DRL-002 (FR-KIT-006 and FR-KIT-007 until [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md) re-homed them), FR-VER-004, NFR-OPS-005
+**Requirements:** FR-DRL-001, FR-DRL-002, FR-DRL-003 (FR-KIT-006 and FR-KIT-007 until [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md) re-homed them), FR-VER-004, NFR-OPS-005
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0041](0041-guided-restore-and-peer-retrieval.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0046](0046-direct-to-destination-publication.md), [recovery drill](../../eng/recovery-drill.sh)
 
 ---
@@ -54,6 +54,9 @@ than rot does.
 > **Amended (2026-09):** a drill that did not complete is not left for the
 > whole interval: it is due again on a back-off from an hour, never later
 > than the interval — see [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09).
+
+> **Amended (2026-10):** and whenever a person asks, outside the cadence —
+> see [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10).
 
 ### 2 The replica is opened the way a stranger would open it
 
@@ -164,6 +167,10 @@ than silently skipped, so the gap is visible on the
 > operator writes down for it, never by default, and under a byte cap. The
 > read path across the protocol turned out to exist already. See
 > [Amendment 3](#amendment-3--a-peer-is-drilled-on-a-stated-cadence-and-under-a-byte-cap-2026-09).
+
+> **Amended (2026-10):** a person may also drill a peer with no stated
+> cadence, once, by asking, under the same caps — see
+> [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10).
 
 ### 7 Sampling
 
@@ -378,6 +385,10 @@ time.
   > the deep sweep recorded still standing there, the failure is checked
   > again on this back-off — see
   > [Amendment 5](#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10).
+
+  > **Amended (2026-10):** there is a drill-now verb since
+  > [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10). The back-off stays: it is what
+  > clears a passing fault on an installation nobody is watching.
 - **A listing answered as cancelled is not an empty folder.** Read as one,
   it ended every descent of the sample, and the drill blamed the snapshot
   for having nothing it could sample, both at a stop and while the service
@@ -400,6 +411,10 @@ that followed found no replica of the set and raised `drill-failed`. Its
 notice stood for the pair's whole interval, thirty days by default, because
 there is no drill-now verb, and the sync that soon carried the first
 snapshot changed nothing about that.
+
+> **Amended (2026-10):** a person can now clear such a notice at once by
+> drilling the pair ([Amendment 6](#amendment-6--a-person-can-drill-now-2026-10)). The rule below is
+> still what clears it with nobody asking.
 
 **Decision.**
 
@@ -439,6 +454,60 @@ first backup does and runs a pass over it, for a direct-ship set and a
 staging one. It also arranges the false notice and the sync that clears it,
 and pins the wait as a function of the ledger row.
 
+## Amendment 6 — a person can drill now (2026-10)
+
+Amendments 4 and 5 each worked around the same gap: "there is no drill-now
+verb". A fault that passed in a minute, or a false notice an older service
+raised, stood until the schedule came round again, and the back-offs those
+amendments added shortened the wait without letting anyone end it. The owner
+asked for a drill a person can run.
+
+**Decision.**
+
+- **A person runs a pair's drill now** (FR-DRL-003): `run_drill` on the
+  command contract (1.58), **Run restore drill** on each destination row in
+  the console, `fallbackplan drill` and `fallbackplan-agent drill`, each
+  naming a set and a destination or leaving either out for every one. It is
+  the drill the schedule runs: the same replica opened the same way, the
+  same caps for a peer, recorded on the pair's row, and the `drill-failed`
+  notice raised or cleared exactly as §4 says. It moves the stamp, so the
+  schedule's next drill of the pair is an interval after it.
+- **What a person may drill.** Anything the schedule would, and a peer with
+  no stated cadence. §6 and Amendment 3 kept peers off a default cadence
+  because a cadence is a standing cost on somebody else's link; one drill a
+  person chose is not. Not a pair with nothing there to restore: a set with
+  no snapshot yet, as Amendment 5 has it, a destination nothing has been
+  copied to, one no longer declared, or a kind nothing serves. Those are
+  said and counted apart, and nothing is recorded against them, because
+  drilling would record a failure about an absence that is correct.
+- **One drill of a pair at a time.** A drill asked for while the pair is
+  being drilled, by the schedule or by a person, joins the drill under way
+  and is told its answer. A second drill would rebuild a second catalogue
+  from the same replica, and both would record, so the counts of drills in
+  a row would move twice for one state of it. The pair is let go before the
+  drill is answered, so whoever is told it has finished may ask for the
+  next at once.
+- **The drill is the service's.** It runs on the service's lifetime, not
+  the asker's, as an on-demand sync does. A person who stops waiting is
+  answered cancelled, and the drill finishes and is recorded. Only the
+  service stopping cuts it short, and then it states nothing, as Amendments
+  1 and 4 require, and the ask is answered cancelled rather than as a pass.
+- **The answer counts what an exit code needs.** A line per pair, and the
+  number of drills that could not restore and of pairs not drilled. A pair
+  not drilled proved nothing, so the CLI exits non-zero unless every pair
+  asked about was drilled and restored.
+- **The back-offs stay.** Amendments 4 and 5 shortened the wait because
+  nobody might ask, and on an installation nobody watches nobody does.
+
+`Agent/DrillFlights` holds the drills under way, and `Agent/RecoveryDrillJob`
+runs every drill through it, the schedule's included, and runs a person's on
+the service's lifetime. `Agent/ServiceCommandHandler` answers the command,
+`Agent/AgentHost` and `Cli/CliApplication` give it a verb, and the console
+gives each destination row a button. `Hosts.Tests/DrillNowTests` drills a
+pair the pass drilled moments ago, clears a failed drill's notice, holds the
+schedule's drill at its first step while an ask joins it, and lets the
+person who asked give up while the drill finishes.
+
 ## Status history
 
 | Date | Status | Note |
@@ -450,3 +519,4 @@ and pins the wait as a function of the ledger row.
 | 2026-09 | Amended (kit withdrawn) | The requirements this record carries are FR-DRL-001/002, the drills re-homed from FR-KIT-006/007 by [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md); §5's first "does not exercise" bullet is moot because there is no kit file, and `eng/recovery-drill.sh` is rewritten passphrase-only |
 | 2026-09 | Amended | [Amendment 4](#amendment-4--a-drill-that-did-not-complete-says-so-2026-09): a drill states nothing only when the service is stopping or its pass is cancelled; any other ending is a drill that did not complete, recorded as a failure and retried on a back-off from an hour, never later than the interval. `Agent/RecoveryDrillJob` decides silence from the stopping state of `Agent/ServiceRuntime`; `Application/DestinationSyncStore` counts the drills that did not complete; `Agent/Scheduler` backs off; `Hosts.Tests/RecoveryDrillTests` puts each fault between the drill and the service |
 | 2026-10 | Amended | [Amendment 5](#amendment-5--a-set-with-no-snapshot-is-not-drilled-and-a-failed-drill-is-checked-again-once-its-replica-has-synced-2026-10): the pass copies, sweeps and drills only a set whose archive holds a snapshot, and a failed drill is checked again on the back-off once a sync has succeeded since it with no damage standing there. `Agent/ServiceRuntime` and `Agent/Scheduler` gate the phases; `Agent/RecoveryDrillJob` holds the wait; `Application/DestinationSyncStore` counts failed drills in schema 10; `Hosts.Tests/RecoveryDrillTests` runs a pass over an archive with no snapshot and clears a false notice |
+| 2026-10 | Amended | [Amendment 6](#amendment-6--a-person-can-drill-now-2026-10): a person runs a pair's drill now, outside its cadence, from the console, the CLI and the service's own command line, contract 1.58's `run_drill`. A peer with no stated cadence may be drilled by asking; a pair with nothing there to restore is said and not drilled; an ask joins the pair's drill under way; the drill runs on the service's lifetime. `Agent/DrillFlights` holds the drills under way; `Agent/RecoveryDrillJob` runs every drill through it; `Agent/ServiceCommandHandler` answers the command; `Hosts.Tests/DrillNowTests` pins it |

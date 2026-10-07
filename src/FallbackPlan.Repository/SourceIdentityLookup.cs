@@ -12,9 +12,10 @@ using FallbackPlan.Repository.Resources;
 namespace FallbackPlan.Repository;
 
 /// <summary>
-/// The read side of the source-identity hints (specification 06 §11): given
-/// one source file's keyed identity, which file version was captured from
-/// it.
+/// The read side of the per-file source-identity hints (specification 06
+/// §11): given one source file's keyed identity, which file version was
+/// captured from it. Installations from before the packs (06 §11.5) wrote
+/// these, and a publication asks them for a source key no pack names.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -188,18 +189,35 @@ internal readonly record struct SourceKey(ulong High, ulong Low)
 
 /// <summary>
 /// One publication's view of the source-identity hints: the store, the keys,
-/// the capture time to bound the answer at, and a memo so two files that
-/// somehow ask the same question pay for one round trip.
+/// the device and the capture time to bound the answer at, and a memo so two
+/// files that somehow ask the same question pay for one round trip.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Constructed only when the catalogue cannot answer identity questions for
 /// the prior snapshot, which is the window a rebuild opens. On the warm path
 /// nothing here is built and nothing here is called.
+/// </para>
+/// <para>
+/// Two shapes answer (06 §11.5). The device's packs are read once, at the
+/// first question, and answer for every source key they name. A key no pack
+/// names is asked of the per-file hints an installation from before the packs
+/// published, but only if the repository holds any: one listing settles that,
+/// so a repository of packs alone never pays a listing per new file. A pack
+/// answer is taken without asking the per-file form, because a device's
+/// per-file hints all predate its first pack.
+/// </para>
 /// </remarks>
 internal sealed class HintSource(
-    IObjectStore store, RepositoryId repositoryId, RepositoryKeySet keys, ulong capturedAtBound)
+    IObjectStore store,
+    RepositoryId repositoryId,
+    RepositoryKeySet keys,
+    ReadOnlyMemory<byte> deviceId,
+    ulong capturedAtBound)
 {
     private readonly Dictionary<SourceKey, ObjectId?> _answered = [];
+    private SourceIdentityPackIndex? _packs;
+    private bool? _perFileHintsExist;
 
     public async ValueTask<ObjectId?> FindAsync(
         ReadOnlyMemory<byte> sourceKey, CancellationToken cancellationToken)
@@ -210,11 +228,38 @@ internal sealed class HintSource(
             return cached;
         }
 
-        var found = await SourceIdentityLookup
-            .FindAsync(store, repositoryId, keys, sourceKey, capturedAtBound, cancellationToken)
+        _packs ??= await SourceIdentityPackIndex
+            .LoadAsync(store, repositoryId, keys, deviceId, capturedAtBound, cancellationToken)
             .ConfigureAwait(false);
+
+        var found = _packs.Find(sourceKey.Span);
+        if (found is null && await PerFileHintsExistAsync(cancellationToken).ConfigureAwait(false))
+        {
+            found = await SourceIdentityLookup
+                .FindAsync(store, repositoryId, keys, sourceKey, capturedAtBound, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         _answered[memo] = found;
         return found;
+    }
+
+    private async ValueTask<bool> PerFileHintsExistAsync(CancellationToken cancellationToken)
+    {
+        if (_perFileHintsExist is { } known)
+        {
+            return known;
+        }
+
+        var options = new ListOptions { PageSizeHint = 1 };
+        await foreach (var _ in store.ListAsync(MetadataStoreKeys.SourceIdentityHintsPrefix, options, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            _perFileHintsExist = true;
+            return true;
+        }
+
+        _perFileHintsExist = false;
+        return false;
     }
 }

@@ -4,8 +4,9 @@ namespace FallbackPlan.Web.Tests;
 /// The overview's destination cards, pinned structurally: a completion ring
 /// per destination, read from the service's own figures (contract 1.24) and
 /// never re-derived, with the uncounted case drawn as uncounted rather than
-/// as empty; and the deep sweep's row (contract 1.46), the console half of
-/// FR-VER-003's report of a circuit.
+/// as empty; the deep sweep's row (contract 1.46), the console half of
+/// FR-VER-003's report of a circuit; and the drill's row with its drill-now
+/// button (contract 1.58), the console half of FR-DRL-003.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleProgressScriptTests"/>: no browser, just the
@@ -237,6 +238,32 @@ public sealed class ConsoleDestinationCardTests
         // can carry a captured file's path, which is attacker-influenced
         // content by definition.
         Assert.Contains("esc(d.drillFailure)", body, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void Drill_TheDestinationBody_OffersADrillNow_ForItsOwnSetAndDestination()
+    {
+        var script = AppJs();
+        var body = FunctionBody(script, "renderSetCard");
+
+        // FR-DRL-003: the button sits under the drill's row, names its own
+        // pair, and is never drawn disabled by a re-derived rule; the service
+        // says when a pair has nothing there to drill (ADR-0028 §8).
+        Assert.Contains("data-action=\"drill\"", body, StringComparison.Ordinal);
+        Assert.Contains("data-set=\"${esc(set.setName)}\" data-destination=\"${esc(d.name)}\"", body, StringComparison.Ordinal);
+        Assert.IsTrue(
+            body.IndexOf("drillLabel(d)", StringComparison.Ordinal)
+                < body.IndexOf("data-action=\"drill\"", StringComparison.Ordinal),
+            "the drill button belongs under the drill's own row");
+
+        // The action asks the service for that pair, and reports its lines.
+        var action = script[script.IndexOf("async \"drill\"(el)", StringComparison.Ordinal)..];
+        action = action[..action.IndexOf("\n  },", StringComparison.Ordinal)];
+        Assert.Contains("command: \"run_drill\"", action, StringComparison.Ordinal);
+        Assert.Contains("backupSetName: el.dataset.set", action, StringComparison.Ordinal);
+        Assert.Contains("destinationName: el.dataset.destination", action, StringComparison.Ordinal);
+        Assert.Contains("result.lines", action, StringComparison.Ordinal);
+        Assert.Contains("refreshStatus()", action, StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -34,11 +34,86 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AwaitingTheFirstBackup_IsRecordedAtOneFiftySeven()
+    public void ContractVersion_AnS3CompatibleDestination_IsRecordedAtOneSixty()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.57", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.60", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void AnS3Destination_CrossesWithItsAddress_AndWhetherItsAccessKeyIsHeld()
+    {
+        // ADR-0091, FR-DEST-005: an S3-compatible destination is declared over
+        // the wire like any other, with the fields that address it. Whether the
+        // service holds its access key crosses; the key never does.
+        var declared = JsonSerializer.Serialize(
+            new DestinationDescriptor(
+                null, "cloud", "s3", Path: null, Fingerprint: null, Endpoint: "https://objects.example.net",
+                Bucket: "family-backups", Region: "eu-test-1", Prefix: "site-a", Addressing: "virtual-host",
+                AccessKeyStored: true),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"bucket\":\"family-backups\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"region\":\"eu-test-1\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"prefix\":\"site-a\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"addressing\":\"virtual-host\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"access_key_stored\":true", declared, StringComparison.Ordinal);
+
+        // A pre-1.60 descriptor names none of them and reads as before.
+        var old = JsonSerializer.Deserialize<DestinationDescriptor>(
+            """{"id":null,"name":"usb","kind":"local-path","path":"/mnt/vault","fingerprint":null,"endpoint":null}""",
+            FrameCodec.SerializerOptions)!;
+        Assert.IsNull(old.Bucket);
+        Assert.IsNull(old.AccessKeyStored);
+    }
+
+    [TestMethod]
+    public void SetDestinationCredentials_CrossesUnderItsWireNames_WithTheSecretOnlyAsAnEnvelope()
+    {
+        // NFR-SEC-009: the secret access key crosses only sealed, as hex, in
+        // the field every sealed secret on this surface takes.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new SetDestinationCredentialsCommand("cloud", "AKIDCLOUD0001", "00ff"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"set_destination_credentials\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"destination_name\":\"cloud\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"access_key_id\":\"AKIDCLOUD0001\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"envelope\":\"00ff\"", asked, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RunDrillCommand_CrossesUnderItsWireNames_AndItsAnswerComesBackAsItself()
+    {
+        // FR-DRL-003: a drill on request names its pair the way sync and
+        // verify_destination do, and either name left out means every one.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new RunDrillCommand("docs", "vault"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"command\":\"run_drill\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"backup_set_name\":\"docs\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"destination_name\":\"vault\"", asked, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<RunDrillCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>("""{"command":"run_drill"}""", FrameCodec.SerializerOptions),
+            out var every);
+        Assert.IsNull(every.BackupSetName);
+        Assert.IsNull(every.DestinationName);
+
+        // The counts cross beside the lines, so an exit code never has to be
+        // recovered by parsing prose.
+        var answered = JsonSerializer.Serialize<ServiceResult>(
+            new DrillResult(["docs -> vault: could not restore — the replica would not open"], Failed: 1, NotDrilled: 2),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"result\":\"drill\"", answered, StringComparison.Ordinal);
+        Assert.Contains("\"failed\":1", answered, StringComparison.Ordinal);
+        Assert.Contains("\"not_drilled\":2", answered, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<DrillResult>(
+            JsonSerializer.Deserialize<ServiceResult>(answered, FrameCodec.SerializerOptions), out var back);
+        Assert.AreEqual(1, back.Failed);
+        Assert.AreEqual(2, back.NotDrilled);
+        Assert.ContainsSingle(back.Lines);
     }
 
     [TestMethod]

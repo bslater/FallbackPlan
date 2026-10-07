@@ -12,8 +12,9 @@ namespace FallbackPlan.Web.DomTests;
 /// editor, the set editor's selection tree, the typed-word delete, the
 /// acknowledgement of a claim held on a replica stored here (FR-DR-005), the
 /// write-only provisioning ceremony, the adoption ceremony's preview and
-/// confirmation (FR-DR-009), and the service-settings card with the
-/// destination form's limit and cadence (FR-SVC-021) — each asserting the
+/// confirmation (FR-DR-009), the service-settings card with the
+/// destination form's limit and cadence (FR-SVC-021), and an S3-compatible
+/// store's address and access key (FR-DEST-005) — each asserting the
 /// command its dialog claims to send.
 /// </summary>
 /// <remarks>
@@ -61,6 +62,93 @@ public sealed class ConfigEditingDomTests
         Assert.AreEqual("/backups", upsert.Destination.Path);
 
         await Expect(page.GetByText("Destination 'vault' saved.")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task DestinationEditor_AnS3Store_SendsItsAddress_ThenItsKeySealedInTheConsole()
+    {
+        // The address rides the upsert like any destination's; the secret
+        // goes to the console's own endpoint, which seals it to the service
+        // for this destination and key id, so the relay is never sent it
+        // (FR-DEST-005, ADR-0091).
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([]),
+            UpsertDestinationCommand => new AcknowledgedResult(),
+            SetDestinationCredentialsCommand => new ConfigurationChangeResult(
+                ["Access key FBPKEYID0001 stored for destination 'cloud'."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-add-s3\"]");
+        await page.FillAsync("#dest-name", "cloud");
+        await page.FillAsync("#dest-endpoint", "https://objects.example.net");
+        await page.FillAsync("#dest-bucket", "family-backups");
+        await page.FillAsync("#dest-region", "eu-test-1");
+        await page.FillAsync("#dest-prefix", "site-a");
+        await page.SelectOptionAsync("#dest-addressing", "virtual-host");
+        await page.FillAsync("#dest-key-id", "FBPKEYID0001");
+        await page.FillAsync("#dest-secret", "fbp/dom+secret=key/0123456789abcdef");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("s3", upsert.Destination.Kind);
+        Assert.AreEqual("https://objects.example.net", upsert.Destination.Endpoint);
+        Assert.AreEqual("family-backups", upsert.Destination.Bucket);
+        Assert.AreEqual("eu-test-1", upsert.Destination.Region);
+        Assert.AreEqual("site-a", upsert.Destination.Prefix);
+        Assert.AreEqual("virtual-host", upsert.Destination.Addressing);
+        Assert.IsNull(upsert.Destination.Path);
+        Assert.IsNull(upsert.Destination.Fingerprint);
+
+        var stored = await harness.ReceivedAsync<SetDestinationCredentialsCommand>();
+        Assert.AreEqual("cloud", stored.DestinationName);
+        Assert.AreEqual("FBPKEYID0001", stored.AccessKeyId);
+        Assert.AreEqual(
+            "fbp/dom+secret=key/0123456789abcdef",
+            WriteOnlyProvisioning.OpenAccessKeySecret(
+                Wire.RecipientScalar, Convert.FromHexString(stored.Envelope), "cloud", "FBPKEYID0001"));
+
+        await Expect(page.GetByText("Access key FBPKEYID0001 stored for destination 'cloud'.")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task DestinationEditor_EditingAnS3Store_ShowsWhetherAKeyIsHeld_AndSendsNoneUntilOneIsTyped()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult(
+            [
+                new DestinationDescriptor(
+                    "dest-s3", "cloud", "s3", null, null, "https://objects.example.net",
+                    Bucket: "family-backups", AccessKeyStored: true),
+            ]),
+            UpsertDestinationCommand => new AcknowledgedResult(),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-dest\"][data-id=\"dest-s3\"]");
+        await Expect(page.Locator("#dest-bucket")).ToHaveValueAsync("family-backups");
+        await Expect(page.Locator("#dest-key-held")).ToContainTextAsync("An access key is held");
+        await Expect(page.Locator("#dest-secret")).ToHaveValueAsync("");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("dest-s3", upsert.Destination.Id);
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>(),
+            "a key nobody typed is not sent, and the one held stays");
     }
 
     [TestMethod]

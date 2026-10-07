@@ -1608,6 +1608,53 @@ public static class CliApplication
                 cancellationToken)));
         }
 
+        // ---------------------------------------------------------------- drill
+
+        {
+            var setOption = new Option<string>("--set")
+            {
+                Description = "Drill only this backup set; every configured set otherwise.",
+            };
+            var destinationOption = new Option<string>("--destination")
+            {
+                Description = "Drill only this declared destination; each set's every destination otherwise.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "drill",
+                "Run a restore drill now, outside its cadence (FR-DRL-003): restore a sample of files from each "
+                + "destination's own copy, the way a stranger would open it, and record the answer where the "
+                + "scheduled drill records it. Exits non-zero unless every pair asked about was drilled and restored."));
+            command.Options.Add(setOption);
+            command.Options.Add(destinationOption);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.DrillAsync(
+                    parse.GetValue(setOption), parse.GetValue(destinationOption), token),
+                cancellationToken)));
+        }
+
+        // --------------------------------------------------------- notice-names
+
+        {
+            var noticeArgument = new Argument<string>("notice")
+            {
+                Description = "The notice, by the identifier the notices listing gives it.",
+            };
+            var command = WithRemoteCapableSession(new Command(
+                "notice-names",
+                "Name the backup's files a notice left out (FR-WOR-007): a notice counts what it found, and the "
+                + "names need the set's passphrase, read from --passphrase-env."));
+            command.Arguments.Add(noticeArgument);
+            command.Options.Add(directOption);
+
+            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
+                parse,
+                (gateway, token) => gateway.NoticeNamesAsync(parse.GetValue(noticeArgument)!, token),
+                cancellationToken)));
+        }
+
         // ------------------------------------------------------------ retention
 
         {
@@ -2008,6 +2055,85 @@ public static class CliApplication
                 }
 
                 output.WriteLine($"destination '{name}' saved.");
+                return 0;
+            }));
+        }
+
+        {
+            // The access key an S3-compatible destination's requests are
+            // signed with (contract 1.60, ADR-0091). The secret is read from
+            // a named environment variable, never an argument a process
+            // listing or a shell history keeps, and leaves this process only
+            // sealed to the service's recipient key for this destination and
+            // key id (NFR-SEC-009).
+            var storeName = new Argument<string>("name")
+            {
+                Description = "The s3 destination, by the name its declaration gives it.",
+            };
+            var storeState = new Option<string?>("--state")
+            {
+                Description = "The service's state directory; the machine-wide installation when absent.",
+            };
+            var accessKeyIdOption = new Option<string>("--access-key-id")
+            {
+                Description = "The access key id the store knows the key by.",
+                Required = true,
+            };
+            var secretEnvOption = new Option<string>("--secret-env")
+            {
+                Description = "The environment variable holding the secret access key. Read here, sealed to the "
+                    + "service, and never printed.",
+                Required = true,
+            };
+            var destinationCredentials = new Command(
+                "destination-credentials",
+                "Store the access key an s3 destination's requests are signed with.");
+            destinationCredentials.Arguments.Add(storeName);
+            destinationCredentials.Options.Add(storeState);
+            destinationCredentials.Options.Add(accessKeyIdOption);
+            destinationCredentials.Options.Add(secretEnvOption);
+            root.Subcommands.Add(destinationCredentials);
+
+            destinationCredentials.SetAction((parse, cancellationToken) => GuardAsync(async () =>
+            {
+                var name = parse.GetValue(storeName)!;
+                var state = parse.GetValue(storeState);
+                var accessKeyId = parse.GetValue(accessKeyIdOption)!;
+                var secretVariable = parse.GetValue(secretEnvOption)!;
+                if (Environment.GetEnvironmentVariable(secretVariable) is not { Length: > 0 } secret)
+                {
+                    throw new CliFailureException(
+                        $"the environment variable '{secretVariable}' holds no secret access key; set it to the "
+                        + "secret the provider issued for this key id.");
+                }
+
+                var description = await QueryLocalServiceAsync<ServiceDescriptionResult>(
+                    state, new DescribeServiceCommand(), cancellationToken).ConfigureAwait(false);
+                if (description.RestoreGrantRecipient is not { Length: > 0 } recipientHex)
+                {
+                    throw new CliFailureException(
+                        "the service does not publish a recipient key to seal to; run first-run setup first.");
+                }
+
+                string envelope;
+                try
+                {
+                    envelope = Convert.ToHexStringLower(WriteOnlyProvisioning.SealAccessKeySecret(
+                        Convert.FromHexString(recipientHex), name, accessKeyId, secret));
+                }
+                catch (ArgumentException malformed)
+                {
+                    throw new CliFailureException(malformed.Message);
+                }
+
+                var stored = await QueryLocalServiceAsync<ConfigurationChangeResult>(
+                    state, new SetDestinationCredentialsCommand(name, accessKeyId, envelope), cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var line in stored.Lines)
+                {
+                    output.WriteLine(line);
+                }
+
                 return 0;
             }));
         }

@@ -8,8 +8,8 @@ namespace FallbackPlan.Agent;
 /// <summary>
 /// The copies of one set's blobs other than the one being repaired or read,
 /// nearest and cheapest first: the staging archive when it is not itself the
-/// one, the set's local-path destinations by priority, then its paired peers
-/// over the retrieval session. What a repair replaces a damaged replica
+/// one, the set's local-path destinations by priority, its S3-compatible
+/// stores, then its paired peers over the retrieval session. What a repair replaces a damaged replica
 /// object from (FR-VER-007), and what a restore reads a record from when its
 /// own store will not serve it (FR-RST-007).
 /// </summary>
@@ -76,6 +76,11 @@ internal sealed class SetCopies : IAsyncDisposable
             sources.Add(Once(sibling, _ => OpenLocal(sibling)));
         }
 
+        foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.S3))
+        {
+            sources.Add(Once(sibling, _ => OpenS3(sibling)));
+        }
+
         foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.Peer))
         {
             sources.Add(Once(sibling, token => DialAsync(sibling, token)));
@@ -123,6 +128,25 @@ internal sealed class SetCopies : IAsyncDisposable
             Directory.Exists(root)
                 ? PacedObjectStore.Over(new LocalFileSystemObjectStore(root), Limiter(destination))
                 : null);
+    }
+
+    private ValueTask<IObjectStore?> OpenS3(DestinationConfiguration destination)
+    {
+        // A store with no key stored, or one whose key is damaged, is a copy
+        // that cannot be reached; the next copy, or none, is the truth.
+        Storage.S3.S3ObjectStore? store;
+        try
+        {
+            store = StoreComposition.OpenS3(
+                _runtime, destination, _archive.Repository.RepositoryId.ToString(), out _);
+        }
+        catch (Domain.ClientStateException)
+        {
+            store = null;
+        }
+
+        return ValueTask.FromResult<IObjectStore?>(
+            store is null ? null : PacedObjectStore.Over(store, Limiter(destination)));
     }
 
     private async ValueTask<IObjectStore?> DialAsync(DestinationConfiguration destination, CancellationToken cancellationToken)

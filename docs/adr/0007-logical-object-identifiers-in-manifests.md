@@ -1,6 +1,6 @@
 # ADR-0007 — Manifests reference logical object identifiers only
 
-**Status:** Accepted (amended 2026-08 — Q11 resolved) · Implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Accepted (amended 2026-08 — Q11 resolved; Amendment 2's per-file hint superseded for writing by [ADR-0090](0090-a-backups-hints-are-one-pack.md), 2026-10) · Implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** FR-ARCH-010, FR-MAN-003, FR-MAN-007, FR-GC-004
 **Review finding:** [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes)
@@ -117,6 +117,15 @@ about. The price is object count rather than bytes — one small object per
 changed file — and it is the cheaper side of the trade from the second capture
 onward. → [Q21](../open-questions.md#closed)
 
+> **Amended 2026-10 ([ADR-0090](0090-a-backups-hints-are-one-pack.md)).** The
+> price named here is a store request per changed file, and on a metered store
+> it was most of a first backup's bill: about 2 000 requests per GB against
+> NFR-PERF-008's 20. The trade above compared two shapes. A third — a pack per
+> backup naming only the versions it created — costs what changed, as this one
+> does, and one request a backup. A writer now publishes that pack, and the
+> per-file objects described here are read, never written. The identity rule,
+> the keying and the reason identity lives outside the manifest are unchanged.
+
 `hardlink_group` remains the one device-specific value inside a manifest. That
 exception is narrow and accepted — it is present only for files with multiple
 links, and there is nowhere else it can live if hardlinks are to be
@@ -155,3 +164,4 @@ This was a maintainer decision, tracked as Q11 and **now closed** — see the am
 |------|--------|------|
 | 2026-08 | Proposed | |
 | 2026-08 | Proposed (core confirmed) | Pressure test confirmed the core decision and found two understated costs: index-lost restore latency (PT-10) and repository-side index growth (PT-14). The hint rejection is reopened as [Q11](../open-questions.md#q11--physical-hints-in-segment-references) — the only reason this ADR is not Accepted. |
+| 2026-10 | Amended | Amendment 2's per-file hint superseded for writing by [ADR-0090](0090-a-backups-hints-are-one-pack.md): a backup writes its hints as one pack (`Repository/SourceIdentityPackIndex` reads it), and the per-file objects stay readable |

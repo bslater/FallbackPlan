@@ -103,6 +103,11 @@ public sealed class GrantRecipient : IDisposable
     public byte[] OpenGrant(ReadOnlySpan<byte> sealedBytes) =>
         WriteOnlyProvisioning.OpenGrant(_privateKey, sealedBytes);
 
+    /// <summary>Opens an access-key envelope sealed to this recipient for one destination and key id (ADR-0091).</summary>
+    /// <exception cref="SealedContentException">The envelope does not open, or was sealed for another destination or key id.</exception>
+    public string OpenAccessKeySecret(ReadOnlySpan<byte> sealedBytes, string destinationName, string accessKeyId) =>
+        WriteOnlyProvisioning.OpenAccessKeySecret(_privateKey, sealedBytes, destinationName, accessKeyId);
+
     /// <inheritdoc />
     public void Dispose() => CryptographicOperations.ZeroMemory(_privateKey);
 }

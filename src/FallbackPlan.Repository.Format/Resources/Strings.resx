@@ -322,6 +322,39 @@
   <data name="SourceIdentityHintCodec_SourceKeyExactlyBytes" xml:space="preserve">
     <value>A source key is exactly {0} bytes.</value>
   </data>
+  <data name="SourceIdentityPackCodec_DeviceIdentifierExactlyBytes" xml:space="preserve">
+    <value>A device identifier is exactly 16 bytes.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_EntriesAscendBySourceKey" xml:space="preserve">
+    <value>A source-identity pack's entries ascend by source key and name each one once (specification 06 §11.5).</value>
+  </data>
+  <data name="SourceIdentityPackCodec_EntryCountOutOfRange" xml:space="preserve">
+    <value>A source-identity pack names between 1 and {0} file versions; this one names {1}.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_EntryIsSourceKeyAndObject" xml:space="preserve">
+    <value>A source-identity pack entry is a source key and an object identifier, and nothing else.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SnapshotIdentifierExactlyBytes" xml:space="preserve">
+    <value>A snapshot identifier is exactly 16 bytes.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceIdentityPackCarriesExactly" xml:space="preserve">
+    <value>A source-identity pack carries exactly keys 1-6 (specification 06 §11.5).</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceIdentityPackKeyOutOfPlace" xml:space="preserve">
+    <value>A source-identity pack carries key {0} where key {1} belongs.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceIdentityPackNotCanonical" xml:space="preserve">
+    <value>The source-identity pack is not canonical CBOR: {0}</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceIdentityPackSchemaUnknownReader" xml:space="preserve">
+    <value>Source-identity pack schema {0} is unknown; this reader implements {1}.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceKeyExactlyBytes" xml:space="preserve">
+    <value>A source key is exactly {0} bytes.</value>
+  </data>
+  <data name="SourceIdentityPackCodec_SourceKeyRepeated" xml:space="preserve">
+    <value>A source-identity pack names each source key once; this one names a key twice (specification 06 §11).</value>
+  </data>
   <data name="StandaloneRecordFraming_BlobSaltExactlyBytes" xml:space="preserve">
     <value>The blob salt is exactly {0} bytes.</value>
   </data>

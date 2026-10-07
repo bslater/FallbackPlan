@@ -1127,6 +1127,18 @@ public sealed partial class ServiceCommandHandler
             return (destination, null);
         }
 
+        if (destination.Kind == DestinationKind.S3)
+        {
+            // Adoption discovers and claims an archive this service did not
+            // make. A store's replica is restored from (ADR-0091); adopting
+            // from it is not built, and saying so beats a refusal that reads
+            // like an inability to read the store at all.
+            return (null, new ServiceError(
+                ServiceErrorReason.Refused,
+                $"Destination '{name}' is an s3 destination: its replicas restore through `restore`, and adopting "
+                + "an archive from one is not built yet."));
+        }
+
         if (destination.Kind != DestinationKind.LocalPath)
         {
             return (null, new ServiceError(

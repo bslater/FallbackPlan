@@ -45,6 +45,11 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, Frame_UnknownScanEvent, arg0);
 
     /// <summary>
+    /// One publication names a source key twice; a hardlink group's names publish no hint at all (specification 06 §11).
+    /// </summary>
+    internal static string ManifestBuilder_SourceKeyNamedTwice => Get(nameof(ManifestBuilder_SourceKeyNamedTwice));
+
+    /// <summary>
     /// The store refused snapshot object '{0}' with a failed precondition.
     /// </summary>
     private static string ManifestBuilder_StoreRefusedSnapshotObjectWith => Get(nameof(ManifestBuilder_StoreRefusedSnapshotObjectWith));
