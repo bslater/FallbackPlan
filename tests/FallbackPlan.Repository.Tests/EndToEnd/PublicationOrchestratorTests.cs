@@ -97,8 +97,8 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         // put) precedes the first blob put (08 §3.1).
         Assert.IsTrue(FirstIndex("journal/") < FirstIndex("blobs/"), "the intent must be durable before any blob byte");
 
-        // Every blob put is preceded by a journal put covering it — an
-        // extension published immediately before the upload (08 §4).
+        // Every blob put is preceded by a journal put covering it — the
+        // intent, which names a backup's first blobs (ADR-0092, 08 §4).
         for (var i = 0; i < puts.Count; i++)
         {
             if (puts[i].StartsWith("blobs/", StringComparison.Ordinal))

@@ -49,9 +49,10 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
 
         // The covering record for each blob, by content rather than by
         // count: "some journal record preceded it" holds even when blob A
-        // rides on blob B's extension, which is exactly the interleaving a
-        // concurrent uploader could produce. The extension that names THIS
-        // blob id is the one 08 §3.1 requires to be durable first.
+        // rides on blob B's record, which is exactly the interleaving a
+        // concurrent uploader could produce. The record that names THIS blob
+        // id — the intent, or the extension that named its batch (ADR-0092)
+        // — is the one 08 §3.1 requires to be durable first.
         using var journalReader = new JournalReader(store, Repo, credential);
         var (records, unparseable, _) = await journalReader.LoadAsync(maxGeneration: 0, TestCancellation);
         Assert.AreEqual(0, unparseable);
@@ -62,17 +63,20 @@ public sealed class ConcurrentUploadTests : InterruptionHarness
             var blobIndex = observed.Keys.IndexOf(blobKey);
             Assert.IsTrue(blobIndex >= 0, $"blob '{blobKey}' was never put");
 
-            var covering = records.FirstOrDefault(record =>
-                record.Payload is JournalPayload.IntentExtension extension &&
-                extension.AdditionalBlobIds.Contains(blob.BlobId));
-            Assert.IsNotNull(covering, $"no intent extension names blob '{blobKey}'");
+            var covering = records.FirstOrDefault(record => record.Payload switch
+            {
+                JournalPayload.WriteIntent intent => intent.IntendedBlobIds.Contains(blob.BlobId),
+                JournalPayload.IntentExtension extension => extension.AdditionalBlobIds.Contains(blob.BlobId),
+                _ => false,
+            });
+            Assert.IsNotNull(covering, $"no intent or extension names blob '{blobKey}'");
 
             var coveringKey = MetadataStoreKeys.Journal(covering.WriterId, covering.Sequence).ToString();
             var coveringIndex = observed.Keys.IndexOf(coveringKey);
 
             Assert.IsTrue(
                 coveringIndex >= 0 && coveringIndex < blobIndex,
-                $"blob '{blobKey}' was uploaded before the extension that names it was durable (08 §3.1, C4).");
+                $"blob '{blobKey}' was uploaded before the record that names it was durable (08 §3.1, C4).");
         }
     }
 

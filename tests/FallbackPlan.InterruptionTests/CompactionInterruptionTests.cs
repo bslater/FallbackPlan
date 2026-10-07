@@ -132,6 +132,30 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
         }
     }
 
+    /// <summary>
+    /// A pass names what it produced in one extension (ADR-0092): its blobs
+    /// are all sealed before the first is put, so the batch is known whole,
+    /// and that one record is durable before any of them is uploaded
+    /// (08 §3.1).
+    /// </summary>
+    [TestMethod]
+    public async Task APassThatProducesSeveralBlobs_NamesThemAllInOneExtension()
+    {
+        using var world = await CompactionWorld.CreateAsync(this, CompactionStep.Complete);
+        var outcome = await world.CompactEveryDataBlobAsync();
+        Assert.IsGreaterThanOrEqualTo(2, outcome.Published.Count, "the premise: the pass produced more than one blob");
+
+        using var journal = new JournalReader(world.Store, world.Repository.RepositoryId, world.Credential);
+        var (records, unparseable, _) = await journal.LoadAsync(0, CancellationToken.None);
+        Assert.AreEqual(0, unparseable);
+
+        var extension = (JournalPayload.IntentExtension)Assert.ContainsSingle(
+            records.Where(record => record.Payload is JournalPayload.IntentExtension extension
+                && extension.ExtendsSequence == outcome.IntentSequence),
+            "one extension names everything the pass produced").Payload;
+        CollectionAssert.AreEquivalent(outcome.Published.ToList(), extension.AdditionalBlobIds.ToList());
+    }
+
     private static async Task<IntentSurvey> LoadIntentsAsync(CompactionWorld world)
     {
         using var journal = new JournalReader(world.Store, world.Repository.RepositoryId, world.Credential);
@@ -270,6 +294,23 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
 
         /// <summary>The same pass, run to the end — what a resumed compaction does.</summary>
         public Task CompleteAsync() => CompactAsync(observer: null);
+
+        /// <summary>A pass over every data blob the capture left, run to the end.</summary>
+        public async Task<CompactionOutcome> CompactEveryDataBlobAsync()
+        {
+            using var reader = new RepositoryReader(Repository.RepositoryId, Keys, Store);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+
+            var candidates = reader.Blobs
+                .Where(blob => blob.StoreKey.ToString().StartsWith("blobs/data/", StringComparison.Ordinal))
+                .OrderBy(blob => blob.StoreKey.ToString(), StringComparer.Ordinal)
+                .Select(blob => new CompactionSource(blob.StoreKey, blob.BlobId, blob.Records))
+                .ToList();
+
+            return await CompactionPass.RunAsync(
+                candidates, Repository, Store, Store, Writer, SmallBlobPolicy, Sequence, Catalogue, _spool,
+                NowMs, declaredMaxDurationMs: 3_600_000, expiryGeneration: 5, CancellationToken.None);
+        }
 
         private async Task CompactAsync(ICompactionObserver? observer)
         {

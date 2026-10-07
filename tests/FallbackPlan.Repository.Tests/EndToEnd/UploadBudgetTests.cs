@@ -42,13 +42,14 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// One pack per backup makes it a per-backup term.
 /// </para>
 /// <para>
-/// The blob covers are named rather than absorbed. Every blob is preceded by
-/// the intent extension that covers it, each its own journal record, so blobs
-/// cost two requests each: at the object-store target that is 8 data blobs
-/// and their 8 covers before anything else, and the total stays over 20 until
-/// a cover stops costing a request of its own. That is GC-safety machinery
-/// (ADR-0009, 08 §4) and is owed separately; this suite pins the term — one
-/// cover a blob — and holds everything beside it to the 20.
+/// The blob covers are named rather than absorbed. A blob must be named by a
+/// durable intent before it is uploaded (08 §3.1), and naming each in an
+/// extension of its own once made every blob two requests: at the
+/// object-store target, 8 data blobs and their 8 covers before anything else.
+/// The intent now names a backup's first blobs and each extension a batch
+/// (ADR-0092), so a GiB's covers are the extensions its blob count calls for
+/// — none for a backup within the first batch — and the whole total is held
+/// to the 20.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -171,8 +172,8 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
 
         // Per file: what more, smaller files cost beyond the same bytes in
         // fewer. Per backup: everything beside the blobs, less their covers —
-        // the journal holds the intent, its retirement and an extension a
-        // blob — and less the per-file term.
+        // the journal holds the intent, its retirement and the extensions a
+        // blob count calls for — and less the per-file term.
         var perFile = (double)(many.BesideBlobs - few.BesideBlobs) / (many.Files - few.Files);
         var perBackup = few.BesideBlobs - (few.JournalPuts - 2) - (perFile * few.Files);
 
@@ -182,7 +183,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             Math.Max(
                 Math.Ceiling(files * many.MetadataBytes / many.Files / profile.TargetSizeBytes),
                 Math.Ceiling(files * many.MetadataRecords / many.Files / profile.MaximumRecordCount)));
-        var covers = data + metadata;
+        var covers = BlobCounterReservation.ExtensionsFor((int)(data + metadata));
 
         return (data, covers, data + metadata + covers + perBackup + (perFile * files));
     }
@@ -202,8 +203,9 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             $"64 files cost {few.BesideBlobs} requests beside their blobs and 1 024 cost {many.BesideBlobs}; "
             + $"hints {few.HintPuts} and {many.HintPuts}");
 
-        // The term that remains: one journal extension covers each blob.
-        Assert.AreEqual(few.BlobPuts + 2, few.JournalPuts, "a blob is covered by one intent extension of its own");
+        // The blobs' covers: the intent names a backup's first blobs, so a
+        // backup within the first batch writes no extension at all.
+        Assert.AreEqual(2, few.JournalPuts, "the intent and its retirement, and no blob covered on its own");
 
         foreach (var averageFileBytes in new[] { MeasuredAverageFileBytes, SmallAverageFileBytes })
         {
@@ -211,7 +213,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             Assert.IsLessThanOrEqualTo(10, data, $"data PUTs per GiB at {averageFileBytes} bytes a file");
             Assert.IsLessThanOrEqualTo(
                 20,
-                total - covers,
+                total,
                 $"{total:F1} requests per GiB at {averageFileBytes} bytes a file, {covers} of them blob covers");
         }
     }
@@ -255,7 +257,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             many.BesideBlobs,
             $"16 changed files cost {few.BesideBlobs} requests beside their blobs and 256 cost {many.BesideBlobs}; "
             + $"hints {few.HintPuts} and {many.HintPuts}");
-        Assert.AreEqual(few.BlobPuts + 2, few.JournalPuts, "a blob is covered by one intent extension of its own");
+        Assert.AreEqual(2, few.JournalPuts, "the intent and its retirement, and no blob covered on its own");
 
         foreach (var averageFileBytes in new[] { MeasuredAverageFileBytes, SmallAverageFileBytes })
         {
@@ -263,7 +265,7 @@ public sealed class UploadBudgetTests : ArchiveTestHarness
             Assert.IsLessThanOrEqualTo(10, data, $"data PUTs per GiB changed at {averageFileBytes} bytes a file");
             Assert.IsLessThanOrEqualTo(
                 20,
-                total - covers,
+                total,
                 $"{total:F1} requests per GiB changed at {averageFileBytes} bytes a file, {covers} of them blob covers");
         }
     }
