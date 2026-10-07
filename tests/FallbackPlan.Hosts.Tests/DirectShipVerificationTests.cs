@@ -37,6 +37,12 @@ namespace FallbackPlan.Hosts.Tests;
 /// (contract 1.32).
 /// </para>
 /// <para>
+/// <b>And that it reads those digests where a backup cannot be.</b> A sync
+/// may run while the set's backup is writing to the catalogue, so it reads
+/// the digests on a catalogue connection of its own (FR-SVC-012,
+/// [ADR-0010](../../docs/adr/0010-local-store-separation.md) Amendment 5).
+/// </para>
+/// <para>
 /// This does not establish FR-DRL-001 — nothing here restores anything.
 /// </para>
 /// </remarks>
@@ -152,6 +158,39 @@ public sealed class DirectShipVerificationTests : IDisposable
         var row = Assert.ContainsSingle(Assert.ContainsSingle(status.Sets).Destinations);
         Assert.AreEqual(record.VerifiedDigest, row.VerifiedDigest, "the tiers reach the matrix (contract 1.32)");
         Assert.AreEqual(record.VerifiedSealed, row.VerifiedSealed);
+    }
+
+    [TestMethod]
+    public async Task Sync_ReadsTheSignedDigestsOnAConnectionOfItsOwn_NotTheBackups()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/content.txt", new string('c', 80_000) + "the bytes a restore needs");
+
+        await using var runtime = await StartAsync();
+        var first = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        Assert.AreEqual(1, first.Ran);
+        await first.Transfers.WaitAsync(Timeout);
+
+        // The connection the set's backup reads and writes through, which a
+        // sync can run beside at any moment. Sharing it fails only when the
+        // two threads meet, which is rarely; closed, any use of it fails at
+        // once.
+        var set = runtime.Configuration.BackupSets.Single();
+        (await runtime.ArchiveForAsync(set, Timeout)).Catalogue.Dispose();
+
+        var at = DateTimeOffset.Now.AddMinutes(30);
+        var sync = FanOut.Enqueue(runtime, set, "vault", at, userInitiated: true);
+        Assert.IsNotNull(sync, "the sync must have been queued for this to test anything");
+        await sync.WaitAsync(Timeout);
+
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "vault");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(
+            (ulong)at.ToUnixTimeMilliseconds(), record.VerifiedAt,
+            $"this sync must have proved the replica itself: state={record.State} error={record.LastError}");
+        Assert.IsGreaterThan(
+            0, record.VerifiedDigest, "the sealed blobs are proved by digests the sync read for itself");
     }
 
     [TestMethod]
