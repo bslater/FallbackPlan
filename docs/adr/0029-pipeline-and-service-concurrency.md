@@ -212,6 +212,13 @@ trim re-verifies each replica-probed copy at the moment of deletion, and both
 convergence drop paths list staging immediately before condemning rather than
 trusting an opening inventory an hours-long push has made stale.
 
+> **Amended (2026-10):** the gate keeps a sync from a retention apply, and
+> keeps neither from the set's backup, which may be running beside both. A
+> sync, retention, a snapshot deletion and a heal all used the backup's own
+> catalogue connection, which is not safe to share between threads. Each
+> now opens a connection of its own
+> ([ADR-0010 Amendment 5](0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)).
+
 #### Amendment 3 (2026-08): a third scheduler phase, on the transfer lane
 
 The pass had two phases — backups, then fan-out. It gains a third: the deep
@@ -535,3 +542,4 @@ cost is no longer a question worth asking.
 | 2026-09 | Accepted (amended) | Amendment 5: a job cancelled before it has started is taken out of the queue and journalled `Cancelled` at the command, when it carries its own record of cancellation; started jobs, and queued ones without that record, keep the cooperative path. `Agent/JobScheduler`, `Agent/Scheduler`; `Hosts.Tests/JobSchedulerTests` |
 | 2026-09 | Accepted (amended) | Amendment 6: a job answers whoever waits on it only once the queue has released its identity, so the next request for the same pair is queued rather than coalesced into a run that has already ended. `Agent/JobScheduler`, `Agent/FanOut`, `Agent/ReplicaSweepJob`; `Hosts.Tests/JobSchedulerTests` |
 | 2026-09 | Accepted (amended) | Two more of the four are built: the **disk** and **network** limits ([ADR-0074](0074-background-byte-rate-limits.md)), byte rates pacing the same scheduler-started work the window governs. CPU alone remains unbuilt, for the reason the amendment gives |
+| 2026-10 | Accepted (amended) | Amendment 2 notes that the set gate keeps neither a sync nor a retention apply from the set's backup. The jobs that run beside a backup now use catalogue connections of their own ([ADR-0010 Amendment 5](0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)), held by `ArchitectureTests/CatalogueConnectionTests` |

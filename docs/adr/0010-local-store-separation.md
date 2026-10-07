@@ -43,6 +43,11 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 > opens the set, before anything reads it — see
 > [Amendment 4](#amendment-4-2026-09--a-catalogue-discarded-is-rebuilt-before-it-is-read).
 
+> **Amendment 5 (2026-10).** One catalogue file, several connections: a
+> set's backup has the archive's connection to itself, and every job that
+> may run beside it opens its own — see
+> [Amendment 5](#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself).
+
 **Durable local state:** separate store, OS-key-store protected where available. The device *private key* is never written to the recovery kit — a recovering device establishes a new identity and is re-authorised.
 
 **Configuration:** file-based, schema-versioned, validated before use, exportable without secrets. Files rather than a database because users edit, version-control, and diff them.
@@ -242,6 +247,94 @@ catalogue stamped with an older schema, and a direct-ship set's deleted
 while the service was stopped, both list their snapshots and files again,
 and a rebuild with the destination away is tried again at the next open.
 
+## Amendment 5 (2026-10) — a set's backup has the catalogue's connection to itself
+
+The service opens one connection to a set's catalogue when it opens the
+set's archive, and keeps it on the archive handle. The set's backup reads
+and writes through it. Four other jobs used it too, and each can run while
+that backup does:
+
+- **A sync's verification**, reading the digests and Merkle roots it proves
+  a replica against. Syncs run on the transfer lane, beside the writer pool.
+- **Retention**, looking up where objects now live, forgetting the
+  snapshots a deletion took, and compacting. It runs on the writer pool,
+  whose default width is two. One run per set at a time is a rule for
+  backups, and retention is not one.
+- **A snapshot deletion**, the same way.
+- **The heal after a rollback**
+  ([ADR-0062](0062-the-destination-is-the-rollback-witness.md)), which
+  rebuilds the catalogue from inside a sync.
+
+The set gate
+([ADR-0029 Amendment 2](0029-pipeline-and-service-concurrency.md#amendment-2-2026-08-the-transfer-lanes-premise-and-the-set-gate))
+keeps a sync from a retention apply. It keeps neither from a backup.
+
+A Microsoft.Data.Sqlite connection is not safe to share between threads,
+and sharing one does not fail where it happens. Two threads creating and
+disposing commands at once can corrupt the connection's own bookkeeping, so
+that a later call fails somewhere else. It showed once, in one full run of
+the suite: a `NullReferenceException` from inside the connection's close
+as the runtime disposed. A probe then logged each digest lookup a sync made
+while the same set had a backup in progress: 36 in five runs of
+`SetChangeTests`, and 21 in three runs of them on the main branch of the
+time. Sharing
+has a quieter cost too. On one connection every command joins whatever
+transaction is open, so a job could read a backup's write that was never
+committed.
+
+Now:
+
+- **The set's backup has the archive's connection to itself.** The runtime
+  uses it as well while it opens the archive and, under Amendment 4,
+  rebuilds a discarded catalogue, both before the handle is shared. Nothing
+  else uses it.
+- **Every job that may run beside the backup opens a connection of its
+  own.** A sync's verification reads through one, as `SetChangeScan`
+  already did for the same reason. Retention, a deletion and the heal write
+  through one opened by `ArchiveHandle.OpenWritableCatalogue`, which
+  differs from the read opener only in the name it gives its caller.
+- **SQLite keeps the connections apart.** In WAL mode (Amendment 2) one
+  connection writes at a time, and Microsoft.Data.Sqlite retries a busy
+  database until the command timeout, thirty seconds. A reader sees the
+  last commit and never waits behind a writer.
+
+What it costs:
+
+- **An open per job.** Each costs about half a millisecond on the container
+  Amendment 3 measured.
+- **A write can now wait.** A write behind another connection's waits for
+  it to commit, where before it went ahead and was unsafe. Every catalogue
+  call commits before it returns, so a write waits for the other side's
+  calls, never for the whole of its job. On the container this was built
+  in, three connections wrote in tight loops for ten seconds each, two of
+  them one-row commits and one 500-row transactions. The longest any single
+  write waited was 4.4 s, and none failed. The product's worst case, a
+  backup and a heal of one set projecting at once, was not measured. It is
+  two writers rather than three, and each does other work between its
+  writes.
+
+How it is held:
+
+- `ArchitectureTests/CatalogueConnectionTests` reads the compiled service
+  and names every method that uses the backup's connection. A call written
+  in a lambda, a local function or an async method is charged to the
+  method it was written in. Against the code before this amendment it
+  named seven: two in the sync's verification, four in retention and
+  deletion, and the heal.
+- The race itself is not raced. It is rare enough that a test setting two
+  jobs against each other would pass on the code it should fail. Instead
+  `Hosts.Tests/DirectShipVerificationTests`,
+  `Hosts.Tests/PeerReadBackVerificationTests` and
+  `Retention.Tests/SnapshotDeletionServiceTests` close the backup's
+  connection, then run a sync at a local path, a sync at a peer and a
+  deletion. A closed connection fails at once where a shared one fails only
+  when two threads meet. Each failed before this amendment and passes
+  after.
+- `Repository.Tests/Catalogue/CatalogueConnectionsTests` holds the SQLite
+  behaviour the rule relies on. A write behind another connection's waits
+  for it and then commits, and a read beside another connection's
+  uncommitted write sees the last commit at once.
+
 ## Status history
 
 | Date | Status | Note |
@@ -252,3 +345,4 @@ and a rebuild with the destination away is tried again at the next open.
 | 2026-09 | Accepted (amended) | Amendment 2: the catalogue's commits are atomic but no longer flushed one by one, so a power loss can take the newest of them and leave it behind the store, which costs a rewrite. Set in `Repository.Catalogue/Catalogue`, read back from SQLite by `CatalogueTests`. |
 | 2026-09 | Accepted (amended) | Amendment 3: the catalogue's connections are not pooled, so a pool clear anywhere in the process cannot dispose one under the operation that opened it, and the service no longer clears pools to delete a catalogue file. Set in `Repository.Catalogue/Catalogue`, held by `CataloguePoolingTests`. |
 | 2026-09 | Accepted (amended) | Amendment 4: a catalogue the service finds discarded or lost is rebuilt from the repository when it opens the set, before anything reads it, and a rebuild that could not see every record it needed is tried again at the next open. Marked by `Repository.Catalogue/Catalogue`, rebuilt by `Agent/ServiceRuntime` through `Agent/CatalogueRebuild`, held by `Hosts.Tests/CatalogueRebuildAtOpenTests`. |
+| 2026-10 | Accepted (amended) | Amendment 5: a set's backup has the archive's catalogue connection to itself. A sync's verification, retention, a snapshot deletion and the heal each open one of their own (`Agent/ArchiveHandle`), and SQLite keeps the connections apart. Held by `ArchitectureTests/CatalogueConnectionTests`, by three tests run with the backup's connection closed, and by `Repository.Tests/Catalogue/CatalogueConnectionsTests`. |
