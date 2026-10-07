@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.10, §8.1–8.2 · **Resolves:** [C4](../review/2026-08-architecture-review.md#c4--garbage-collection-can-delete-blobs-belonging-to-an-in-flight-snapshot), [C5](../review/2026-08-architecture-review.md#c5--snapshot-commit-is-defined-so-that-one-offline-destination-stalls-all-protection), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
 
-**Built:** Publication yes — including the direct-ship shape ([ADR-0046](../adr/0046-direct-to-destination-publication.md)), where step 4 fans one sealed spool file to N destinations through the ship sink; the writer pool and preemption of [ADR-0047](../adr/0047-backup-pool-and-priorities.md) are built (§9, §5.1); the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead; each snapshot records how far its machine's clock stood from a peer's where one was read (§7, [ADR-0077](../adr/0077-observed-clock-skew.md)); a snapshot whose recorded time does not fit its writer's publication order is flagged and kept (§7, [ADR-0078](../adr/0078-implausible-capture-times.md)); and a write intent names its blobs a batch at a time (§4.2, [ADR-0092](../adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md)) — see [implementation status](../implementation-status.md).
+**Built:** Publication yes — including the direct-ship shape ([ADR-0046](../adr/0046-direct-to-destination-publication.md)), where step 4 fans one sealed spool file to N destinations through the ship sink; the writer pool and preemption of [ADR-0047](../adr/0047-backup-pool-and-priorities.md) are built (§9, §5.1); the collector this section also constrains is built too — deletion-only, in `FallbackPlan.Retention`, honouring the write-intent rules below; compaction remains ahead; each snapshot records how far its machine's clock stood from a peer's where one was read (§7, [ADR-0077](../adr/0077-observed-clock-skew.md)); a snapshot whose recorded time does not fit its writer's publication order is flagged and kept (§7, [ADR-0078](../adr/0078-implausible-capture-times.md)); a write intent names its blobs a batch at a time (§4.2, [ADR-0092](../adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md)); and a set's backup has the archive's catalogue connection to itself, with every job that may run beside it opening its own (§9, [ADR-0010 Amendment 5](../adr/0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -307,6 +307,16 @@ writer identity. The repository itself stays lock-free, so §8's guarantee — n
 routine operation requires a global exclusive lock — is untouched: a second
 device may still back up to the same repository at the same moment, from
 anywhere, with no coordination at all.
+
+Inside the process there is one more sharing to keep apart. A set's backup is
+not the only work on its set: its sync runs on the transfer lane beside it,
+retention and a snapshot deletion take the pool's other worker, and the set
+gate keeps a sync from a retention apply but neither from the backup. So the
+set's backup has the archive's catalogue connection to itself, and each of
+the others opens one of its own. A SQLite connection shared between threads
+corrupts its own bookkeeping; separate connections are kept apart by SQLite,
+which lets one write at a time and shows a reader the last commit
+([ADR-0010 Amendment 5](../adr/0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)).
 
 ---
 

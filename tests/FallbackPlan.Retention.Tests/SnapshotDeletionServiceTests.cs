@@ -5,6 +5,7 @@ using FallbackPlan.Repository;
 using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
+using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -16,7 +17,10 @@ namespace FallbackPlan.Retention.Tests;
 /// what only they held out of staging. A copy that cannot be reached holds the
 /// deletion, and the listing says which. Nothing else the set's policy would
 /// expire is touched, the last complete snapshot is never deleted, and an id
-/// the set does not hold is refused by name before anything is written.
+/// the set does not hold is refused by name before anything is written. And
+/// it reads and writes the set's catalogue on a connection of its own, since
+/// the set's backup may be writing through the archive's while it runs
+/// (FR-SVC-012).
 /// </summary>
 [TestClass]
 public sealed class SnapshotDeletionServiceTests : IDisposable
@@ -217,6 +221,47 @@ public sealed class SnapshotDeletionServiceTests : IDisposable
         Assert.AreEqual(ServiceErrorReason.NotFound, refused.Reason);
         Assert.Contains(stranger, refused.Message, StringComparison.Ordinal);
         Assert.IsEmpty(await ListAsync(Staging, "tombstones/"));
+    }
+
+    [TestMethod]
+    public async Task Apply_ReadsAndWritesTheCatalogueOnAConnectionOfItsOwn_NotTheBackups()
+    {
+        var snapshots = await BackUpThreeAsync();
+        string cataloguePath;
+        Domain.Identifiers.RepositoryId repositoryId;
+
+        await using (var runtime = await StartAsync())
+        {
+            // The connection the set's backup reads and writes through. A
+            // deletion runs on the writer pool, whose other worker can be
+            // running that backup. Sharing the connection fails only when the
+            // two threads meet, which is rarely; closed, any use of it fails
+            // at once.
+            var archive = await runtime.ArchiveForAsync(runtime.Configuration.BackupSets.Single(), CancellationToken.None);
+            cataloguePath = archive.CataloguePath;
+            repositoryId = archive.Repository.RepositoryId;
+            archive.Catalogue.Dispose();
+
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var description = (ServiceDescriptionResult)await handler.ExecuteAsync(
+                new DescribeServiceCommand(), CancellationToken.None);
+            var result = await handler.ExecuteAsync(
+                new DeleteSnapshotsCommand(
+                    SetId, [snapshots[1]], Apply: true,
+                    WriteOnlyInstallation.ReclaimGrant(StateDirectory, PassphraseText, description.RestoreGrantRecipient!)),
+                CancellationToken.None);
+
+            Assert.IsInstanceOfType<DeleteSnapshotsResult>(
+                result, out var deleted, (result as ServiceError)?.Message ?? result.GetType().Name);
+            Assert.AreEqual("deleted", Assert.ContainsSingle(deleted.Snapshots).State);
+        }
+
+        // What the deletion wrote is the set's catalogue: the snapshot it took
+        // is gone from the file the backup reads.
+        using var catalogue = CatalogueDb.Open(cataloguePath, repositoryId);
+        CollectionAssert.AreEquivalent(
+            new[] { snapshots[0], snapshots[2] },
+            catalogue.EnumerateSnapshots().Select(row => Convert.ToHexStringLower(row.SnapshotId.Span)).ToArray());
     }
 
     [TestMethod]

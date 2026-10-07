@@ -228,6 +228,11 @@ public static class FanOut
                 runtime, destination, archive.Repository.RepositoryId.ToArray(), cancellationToken)
                 .ConfigureAwait(false);
 
+            // Read on a connection of the sync's own: the set's backup may be
+            // writing through the archive's while this runs (ADR-0010
+            // Amendment 5).
+            using var commitments = archive.OpenReadCatalogue();
+
             // The catalogue's signed digests feed the digest tier, which is
             // what proves a write-only set's sealed data plane at a peer: the
             // whole blob read back over retrieval and hashed here, under the
@@ -245,8 +250,8 @@ public static class FanOut
             verification = await Replication.ReplicaVerifier.ProveSealedAsync(
                 PacedObjectStore.Over(new PeerRetrievalObjectStore(client), limiter), sample, archive.Repository,
                 cancellationToken,
-                archive.Catalogue.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget,
-                archive.Catalogue.SignedMerkleRootOf,
+                commitments.SignedDigestOf, Replication.ReplicaVerifier.PeerDigestByteBudget,
+                commitments.SignedMerkleRootOf,
                 client.SupportsChunkPossession ? ChunkProverFor(client) : null)
                 .ConfigureAwait(false);
         }
@@ -1401,10 +1406,18 @@ public static class FanOut
             // write-only set's data records are sealed to a key this
             // service does not hold, so the whole-blob digest the writer
             // signed into the index is what proves them at the replica.
-            var verification = await Replication.ReplicaVerifier.VerifyAsync(
-                archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
-                archive.Catalogue.SignedDigestOf)
-                .ConfigureAwait(false);
+            // Read on a connection of the sync's own: the set's backup may
+            // be writing through the archive's while this runs (ADR-0010
+            // Amendment 5).
+            Replication.VerificationOutcome verification;
+            using (var digests = archive.OpenReadCatalogue())
+            {
+                verification = await Replication.ReplicaVerifier.VerifyAsync(
+                    archive.Store, replica, plan.Samples, cancellationToken, archive.Repository,
+                    digests.SignedDigestOf)
+                    .ConfigureAwait(false);
+            }
+
             if (verification.Failed.Count > 0)
             {
                 RecordVerificationFailure(runtime, set, destination.Name, verification, plan.Samples.Count, nowMs);

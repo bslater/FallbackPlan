@@ -36,6 +36,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// omits to avoid being asked about is a key the same session re-ships, so
 /// hiding a loss repairs it.
 /// </para>
+/// <para>
+/// What a sampled blob is proved against — the Merkle root and the digest
+/// the writer signed — is read from the catalogue on a connection of the
+/// sync's own, since the set's backup may be writing through the archive's
+/// while the sync runs (FR-SVC-012,
+/// [ADR-0010](../../docs/adr/0010-local-store-separation.md) Amendment 5).
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class PeerReadBackVerificationTests : IDisposable
@@ -175,6 +182,39 @@ public sealed class PeerReadBackVerificationTests : IDisposable
         Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
         Assert.IsGreaterThan(0, record.VerifiedDigest, "the sealed data plane at the peer is proved by digest, and the ledger must say so");
         Assert.IsGreaterThanOrEqualTo(record.VerifiedSealed + record.VerifiedDigest, record.VerifiedObjects);
+    }
+
+    [TestMethod]
+    public async Task Pass_ReadsTheSignedCommitmentsOnAConnectionOfItsOwn_NotTheBackups()
+    {
+        // Format 2, so the read-back asks the catalogue for a blob's Merkle
+        // root, finds none, and asks for its digest: both answers are read.
+        ServiceRuntime.ArchiveFormatVersion = FallbackPlan.Domain.FormatVersions.SealedDataPlane;
+        await SeedAsync();
+
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = _harness.ArchivesRoot, StateDirectory = _harness.StateDirectory },
+            Timeout);
+
+        // The connection the set's backup reads and writes through, which a
+        // sync can run beside at any moment. Sharing it fails only when the
+        // two threads meet, which is rarely; closed, any use of it fails at
+        // once.
+        var set = runtime.Configuration.BackupSets.Single();
+        (await runtime.ArchiveForAsync(set, Timeout)).Catalogue.Dispose();
+
+        var at = DateTimeOffset.Now.AddMinutes(30);
+        var sync = FanOut.Enqueue(runtime, set, "friend", at, userInitiated: true);
+        Assert.IsNotNull(sync, "the sync must have been queued for this to test anything");
+        await sync.WaitAsync(Timeout);
+
+        var record = runtime.DestinationSync.Find(_harness.DocsSetId, "friend");
+        Assert.IsNotNull(record);
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
+        Assert.AreEqual(
+            (ulong)at.ToUnixTimeMilliseconds(), record.VerifiedAt, "this sync must have proved the peer's copy itself");
+        Assert.IsGreaterThan(
+            0, record.VerifiedDigest, "the sealed blobs are proved by digests the sync read for itself");
     }
 
     [TestMethod]

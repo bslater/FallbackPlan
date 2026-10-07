@@ -207,11 +207,11 @@ public sealed partial class ServiceCommandHandler(
 
     /// <summary>
     /// Runs a pass on the queue's writer lane and waits for it. Retention is
-    /// a writer: it tombstones and deletes in the sets' archives, so it takes
-    /// the writer lane rather than racing the captures that share it — and
-    /// the per-set exclusion, not the lane (now a pool, ADR-0047), is what
-    /// keeps one set's retention and its capture apart (ADR-0029 §4's
-    /// reasoning, applied to the one maintenance path that mutates).
+    /// a writer: it tombstones and deletes in the sets' archives, so it queues
+    /// with the captures. The lane is a pool (ADR-0047), so a pass can run
+    /// beside a capture of the same set: the write-intent rule keeps the
+    /// capture's blobs from the pass (FR-GC-003), and each uses a catalogue
+    /// connection of its own (ADR-0010 Amendment 5).
     /// </summary>
     private async ValueTask<ServiceResult> OnWriterLaneAsync(
         string description,
@@ -322,6 +322,13 @@ public sealed partial class ServiceCommandHandler(
 
         foreach (var (set, archive) in archives)
         {
+            // The set's catalogue on a connection of the pass's own: retention
+            // runs on the writer pool, whose other worker can be running this
+            // set's backup through the archive's (ADR-0010 Amendment 5).
+            // Opened ahead of the gate, so a catalogue that will not open
+            // never leaves it held.
+            using var catalogue = archive.OpenWritableCatalogue();
+
             // The set gate (ADR-0029 Amendment 2): the destructive half must
             // not run while a sync for this set is mid-flight — the two can
             // otherwise conspire to delete a trimmed blob's last copy. A sync
@@ -385,7 +392,7 @@ public sealed partial class ServiceCommandHandler(
                     // its records are still reachable and still physically
                     // present — and compaction would reclaim nothing, ever
                     // (ADR-0067).
-                    objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId,
+                    objectId => catalogue.ResolveLocation(objectId)?.BlobId,
                     clockSkewMargin: clockSkewMargin).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
@@ -410,7 +417,7 @@ public sealed partial class ServiceCommandHandler(
                 if (apply && report.CompactionCandidates.Count > 0)
                 {
                     lines.AddRange(
-                        (await CompactSetAsync(runtime, set, archive, report, now, cancellationToken)
+                        (await CompactSetAsync(runtime, set, archive, catalogue, report, now, cancellationToken)
                             .ConfigureAwait(false))
                         .Select(line => $"{set.Name}: {line}"));
                 }
@@ -428,7 +435,7 @@ public sealed partial class ServiceCommandHandler(
             // as it always has.
             foreach (var gone in report.Swept?.DeletedSnapshots.Where(fact => fact.DeletionRequest is not null) ?? [])
             {
-                archive.Catalogue.ForgetSnapshot(Convert.FromHexString(gone.SnapshotId));
+                catalogue.ForgetSnapshot(Convert.FromHexString(gone.SnapshotId));
             }
 
             if (ungranted.Contains(set.Id))
@@ -494,6 +501,7 @@ public sealed partial class ServiceCommandHandler(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         ArchiveHandle archive,
+        Repository.Catalogue.Catalogue catalogue,
         Retention.RetentionReport report,
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken)
@@ -509,7 +517,7 @@ public sealed partial class ServiceCommandHandler(
                 runtime.Writer,
                 CapturePolicy.Default,
                 archive.Sequence,
-                archive.Catalogue,
+                catalogue,
                 archive.SpoolDirectory,
                 nowUnixMilliseconds,
                 declaredMaxDurationMs: (ulong)TimeSpan.FromHours(6).TotalMilliseconds,
