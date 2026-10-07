@@ -90,6 +90,41 @@ public sealed partial class ServiceCommandHandler
             return new ArchivesDiscoveredResult(destination.Name, archives, warnings);
         }
 
+        if (destination.Kind == DestinationKind.S3)
+        {
+            // Each folder under the prefix that holds a descriptor is an
+            // archive, read exactly as a directory would be: the descriptor
+            // and the cleartext snapshot names, nothing keyed.
+            try
+            {
+                var prefix = StoreComposition.OpenS3(runtime, destination, repositoryIdHex: null, out var cannotOpen)
+                    ?? throw new IOException(cannotOpen);
+                await foreach (var candidate in prefix.ListChildrenAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    var replica = StoreComposition.OpenS3(runtime, destination, candidate, out _)!;
+                    if ((await replica.GetMetadataAsync(RepositoryLifecycle.DescriptorKey, cancellationToken)
+                            .ConfigureAwait(false)).Found)
+                    {
+                        await DescribeArchiveAsync(replica, candidate, archives, warnings, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Storage.S3.S3StoreUnreachableException unreachable)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable,
+                    $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
+            }
+            catch (Exception refused) when (refused is IOException or ClientStateException)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed, $"Destination '{destination.Name}' refused the read: {refused.Message}");
+            }
+
+            return new ArchivesDiscoveredResult(destination.Name, archives, warnings);
+        }
+
         foreach (var candidate in Directory.GetDirectories(destination.Path!).Order(StringComparer.Ordinal))
         {
             if (!File.Exists(Path.Combine(candidate, RepositoryLifecycle.DescriptorKey.Value)))
@@ -241,7 +276,37 @@ public sealed partial class ServiceCommandHandler
                 $"Destination '{destination.Name}' holds no archive '{repositoryIdHex}' — run discovery and pick one it lists.");
         }
 
-        if (replicaRoot is null)
+        Storage.S3.S3ObjectStore? bucketReplica = null;
+        if (destination.Kind == DestinationKind.S3)
+        {
+            // The folder under the prefix must hold a descriptor, as a local
+            // path's directory must, before any envelope is looked at.
+            try
+            {
+                bucketReplica = StoreComposition.OpenS3(runtime, destination, repositoryIdHex, out var cannotOpen)
+                    ?? throw new IOException(cannotOpen);
+                if (!(await bucketReplica.GetMetadataAsync(RepositoryLifecycle.DescriptorKey, cancellationToken)
+                        .ConfigureAwait(false)).Found)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.NotFound,
+                        $"Destination '{destination.Name}' holds no archive '{repositoryIdHex}' — run discovery and pick one it lists.");
+                }
+            }
+            catch (Storage.S3.S3StoreUnreachableException unreachable)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable,
+                    $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
+            }
+            catch (Exception refused) when (refused is IOException or ClientStateException)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Failed, $"Destination '{destination.Name}' refused the read: {refused.Message}");
+            }
+        }
+
+        if (destination.Kind == DestinationKind.Peer)
         {
             // A peer: the replica must be this device's there — claimed
             // (ADR-0053) — which the owner inventory says before any
@@ -302,7 +367,25 @@ public sealed partial class ServiceCommandHandler
 
         using (credential)
         {
-            if (replicaRoot is null)
+            if (bucketReplica is not null)
+            {
+                // Read over the store's API through the same steps a
+                // directory takes.
+                try
+                {
+                    return await OpenAdoptableArchiveAsync(
+                        destination, bucketReplica, repositoryIdHex, credential, body, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Storage.S3.S3StoreUnreachableException unreachable)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.Unavailable,
+                        $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
+                }
+            }
+
+            if (destination.Kind == DestinationKind.Peer)
             {
                 // Read over the retrieval session through the same steps a
                 // directory takes.
@@ -332,7 +415,7 @@ public sealed partial class ServiceCommandHandler
 
             return await OpenAdoptableArchiveAsync(
                 destination,
-                new LocalFileSystemObjectStore(replicaRoot, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+                new LocalFileSystemObjectStore(replicaRoot!, runtime.LoggerFor<LocalFileSystemObjectStore>()),
                 repositoryIdHex, credential, body, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -433,6 +516,7 @@ public sealed partial class ServiceCommandHandler
         }
 
         RecordedShape shape;
+        HashSet<string>? newestData = null;
         var survey = await FanOut.PublicationSurveyAsync(replicaStore, cancellationToken).ConfigureAwait(false);
         using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(replicaStore, repository, cancellationToken)
             .ConfigureAwait(false))
@@ -441,6 +525,10 @@ public sealed partial class ServiceCommandHandler
         {
             shape = await ReadRecordedShapeAsync(catalogue, reader, replicaStore, repository, cancellationToken)
                 .ConfigureAwait(false);
+            if (destination.Kind == DestinationKind.S3 && shape.NewestSnapshotId is { } newest)
+            {
+                newestData = NewestBackupData(catalogue, repository, newest);
+            }
         }
 
         // FR-DR-009: what takes effect is what the person was shown. An
@@ -544,6 +632,10 @@ public sealed partial class ServiceCommandHandler
             return new ServiceError(ServiceErrorReason.InvalidArgument, exception.Message);
         }
 
+        // A backup does not write through a store (ADR-0091), so a set
+        // adopted from one is staged here and synced to it; from anything a
+        // run writes through, it ships directly, as ADR-0061 decided.
+        var staged = destination.Kind == DestinationKind.S3;
         var replacement = new BackupSetConfiguration
         {
             Id = setId,
@@ -554,7 +646,7 @@ public sealed partial class ServiceCommandHandler
             Schedule = schedule,
             Retention = retention,
             Priority = command.Priority,
-            DirectShip = true,
+            DirectShip = !staged,
             Destinations = [new SetDestinationReference { Ref = destination.Name }],
         };
 
@@ -586,11 +678,33 @@ public sealed partial class ServiceCommandHandler
 
         // ---- writes ----
 
-        var metadataPath = runtime.SetMetadataPath(setId);
-        Directory.CreateDirectory(metadataPath);
-        await ServiceRuntime.CopyMetadataAsync(
-            replicaStore, new LocalFileSystemObjectStore(metadataPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
-            cancellationToken).ConfigureAwait(false);
+        string? stagedLine = null;
+        if (staged)
+        {
+            // What a trimmed staging archive holds (ADR-0034 §6): every
+            // metadata object and blob, and the data the newest backup's
+            // files are read from, which the next backup's reuse probes for.
+            // Older data stays at the store, which a restore reads it from.
+            var stagingPath = runtime.ArchivePath(setId);
+            Directory.CreateDirectory(stagingPath);
+            var copied = await ServiceRuntime.CopyBackAsync(
+                replicaStore,
+                new LocalFileSystemObjectStore(stagingPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+                key => key.StartsWith("blobs/meta/", StringComparison.Ordinal) || newestData?.Contains(key) == true,
+                cancellationToken).ConfigureAwait(false);
+            stagedLine = $"Destination '{destination.Name}' is an S3-compatible store, which a backup does not write "
+                + $"through (ADR-0091), so the set is staged here: {copied.Objects} object(s), {copied.Bytes} bytes — "
+                + "the archive's metadata and its newest backup's data — were copied into its staging archive, and "
+                + "each backup is synced to the store after it runs.";
+        }
+        else
+        {
+            var metadataPath = runtime.SetMetadataPath(setId);
+            Directory.CreateDirectory(metadataPath);
+            await ServiceRuntime.CopyMetadataAsync(
+                replicaStore, new LocalFileSystemObjectStore(metadataPath, runtime.LoggerFor<LocalFileSystemObjectStore>()),
+                cancellationToken).ConfigureAwait(false);
+        }
 
         var writerResumed = await ResumeWriterIdentityAsync(replicaStore, lines, cancellationToken).ConfigureAwait(false);
 
@@ -613,6 +727,10 @@ public sealed partial class ServiceCommandHandler
         var missingRoots = resolvedRoots.Where(root => !Directory.Exists(root.Path)).Select(root => root.Path).ToList();
         lines.Insert(0, $"Set '{name}' adopted from destination '{destination.Name}' under its original id; "
             + $"{shape.SnapshotCount} snapshot(s) resume here, and the next backup is incremental.");
+        if (stagedLine is not null)
+        {
+            lines.Insert(1, stagedLine);
+        }
         if (missingRoots.Count > 0)
         {
             lines.Add($"Recorded root folder(s) not found on this machine: {string.Join(", ", missingRoots)} — "
@@ -812,6 +930,14 @@ public sealed partial class ServiceCommandHandler
             lines.Add($"A backup set named '{name}' already exists — give the adopted set another name when you confirm.");
         }
 
+        if (destination.Kind == DestinationKind.S3)
+        {
+            lines.Add(
+                $"Destination '{destination.Name}' is an S3-compatible store, which a backup does not write through "
+                + "(ADR-0091), so the set would be staged on this machine: the archive's metadata and its newest "
+                + "backup's data are copied into its staging archive, and each backup is synced back to the store.");
+        }
+
         lines.AddRange(warnings.Select(warning => $"Catalogue rebuild: {warning}"));
         lines.Add("Confirming adopts the set as shown, and its next backup is incremental against this archive.");
 
@@ -968,6 +1094,24 @@ public sealed partial class ServiceCommandHandler
     }
 
     /// <summary>
+    /// The data blobs a staging archive adopted from a store holds beside its
+    /// metadata: those the newest backup's files are read from, as the
+    /// catalogue just rebuilt from the store's index places them. A trimmed
+    /// staging archive keeps the same (ADR-0034 §6), because the next
+    /// backup's reuse is confirmed against staging.
+    /// </summary>
+    private static HashSet<string> NewestBackupData(
+        CatalogueDb catalogue, OpenedRepository repository, string newestSnapshotId)
+    {
+        using var keys = new StoreBlobKeyDeriver(repository.Keys.KeyIdKey);
+        return
+        [
+            .. catalogue.ContentOf(Convert.FromHexString(newestSnapshotId)).Blobs
+                .Select(blob => BlobStoreKeys.ForBlob(blob.Class, blob.StoreBlobKey ?? keys.Derive(blob.BlobId)).Value),
+        ];
+    }
+
+    /// <summary>
     /// Seeds the destination's ledger row as a completed baseline at the
     /// replica's own publication head: the sink then admits the destination
     /// on the next run, and the first fan-out pass reconciles by listing
@@ -1101,9 +1245,10 @@ public sealed partial class ServiceCommandHandler
         IReadOnlyList<string> OtherSetIds);
 
     /// <summary>
-    /// The destination adoption can read from: declared, and either a
-    /// reachable local path or a peer. A peer's reachability is learned by
-    /// dialling it, where the refusal can name what the peer said.
+    /// The destination adoption can read from: declared, and a reachable
+    /// local path, a peer, or an S3-compatible store whose access key this
+    /// service holds. A peer's reachability, and a store's, is learned by
+    /// asking it, where the refusal can name what it said.
     /// </summary>
     private (DestinationConfiguration? Destination, ServiceError? Refusal) ResolveAdoptableDestination(string name)
     {
@@ -1129,14 +1274,18 @@ public sealed partial class ServiceCommandHandler
 
         if (destination.Kind == DestinationKind.S3)
         {
-            // Adoption discovers and claims an archive this service did not
-            // make. A store's replica is restored from (ADR-0091); adopting
-            // from it is not built, and saying so beats a refusal that reads
-            // like an inability to read the store at all.
-            return (null, new ServiceError(
-                ServiceErrorReason.Refused,
-                $"Destination '{name}' is an s3 destination: its replicas restore through `restore`, and adopting "
-                + "an archive from one is not built yet."));
+            // Read over the store's API (ADR-0091 Amendment 1), with the key
+            // this service holds for it: none stored, or an address the
+            // configuration calls defective, is said before anything is asked.
+            if (destination.AddressDefect is { } defect)
+            {
+                return (null, new ServiceError(
+                    ServiceErrorReason.Failed, $"Destination '{name}' cannot be read: {defect}."));
+            }
+
+            return runtime.DestinationCredentials.Holds(destination.Id)
+                ? (destination, null)
+                : (null, new ServiceError(ServiceErrorReason.Failed, StoreComposition.NoAccessKey(name) + "."));
         }
 
         if (destination.Kind != DestinationKind.LocalPath)

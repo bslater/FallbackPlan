@@ -522,9 +522,12 @@ public static class Scheduler
     /// (ADR-0035 Amendment 2): re-reading all of a replica is a standing cost
     /// on somebody else's link, which this service does not incur by default
     /// — the drill's rule, for the drill's reason. Until one is stated, the
-    /// range challenge and the read-back sample a peer instead. A peer the
-    /// fan-out last found unreachable is not dialled for its sweep, because a
-    /// dial that fails holds the one transfer worker until it does.
+    /// range challenge and the read-back sample a peer instead. An
+    /// S3-compatible store keeps the same rule, because every read there is
+    /// a request its provider may charge for (ADR-0091 Amendment 1). A peer
+    /// or a store the fan-out last found unreachable is not read for its
+    /// sweep, because a request that fails holds the one transfer worker
+    /// until it does.
     /// </para>
     /// <para>
     /// A circuit that has not begun waits the interval from the last segment,
@@ -549,7 +552,8 @@ public static class Scheduler
             return false;
         }
 
-        if (destination.Kind == DestinationKind.Peer && record.State == DestinationSyncState.Unavailable)
+        if (destination.Kind is DestinationKind.Peer or DestinationKind.S3
+            && record.State == DestinationSyncState.Unavailable)
         {
             return false;
         }
