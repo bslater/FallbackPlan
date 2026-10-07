@@ -267,6 +267,84 @@ public sealed class IntentReservationTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task EveryNumberACompletedBackupTook_IsAccountedFor_TheUnusedOnesByItsRetirementAlone()
+    {
+        // A reader that consults the journal accounts for a number by
+        // ADR-0022 §Decision 7's cases; the index's own deltas are cases 1
+        // and 3. Without the fifth, exactly the numbers the intent named and
+        // the backup never used are unaccounted for; with it, nothing is.
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        using var catalogue = CatalogueDb.Open(Path.Combine(SpoolDirectory, "accounted.db"), Repo);
+
+        var published = await Orchestrator(store, keys, credential, Sequence("accounted"), catalogue)
+            .PublishAsync(Job(Tree(files: 3, seed: 700), 0xA7, Now), CancellationToken.None);
+        var used = Blobs(published).Count();
+        Assert.IsLessThan(
+            BlobCounterReservation.FirstBatch, used, "the premise: the intent named numbers the backup did not use");
+
+        var records = await JournalAsync(store, credential);
+        var journalNumbers = records.Select(record => record.Sequence).ToHashSet();
+        var completed = records
+            .Where(record => record.Payload is JournalPayload.IntentRetirement { Outcome: IntentOutcome.Completed })
+            .Select(record => ((JournalPayload.IntentRetirement)record.Payload).RetiresSequence)
+            .ToHashSet();
+        HashSet<BlobId> namedByAny = [];
+        HashSet<BlobId> namedByCompleted = [];
+        foreach (var record in records)
+        {
+            var (intent, named) = record.Payload switch
+            {
+                JournalPayload.WriteIntent written => (record.Sequence, written.IntendedBlobIds),
+                JournalPayload.IntentExtension extension => (extension.ExtendsSequence, extension.AdditionalBlobIds),
+                _ => (0UL, (IReadOnlyList<BlobId>)[]),
+            };
+            namedByAny.UnionWith(named);
+            if (completed.Contains(intent))
+            {
+                namedByCompleted.UnionWith(named);
+            }
+        }
+
+        using var storeKeys = new StoreBlobKeyDeriver(keys.KeyIdKey);
+        var stored = store.ListAsync(Storage.Abstractions.ObjectPrefix.Parse("blobs/"), Storage.Abstractions.ListOptions.Default, CancellationToken.None)
+            .ToBlockingEnumerable()
+            .Select(entry => entry.Key.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        bool Durable(BlobId blob) => new[] { BlobClass.Data, BlobClass.Metadata }
+            .Any(blobClass => stored.Contains(BlobStoreKeys.ForBlob(blobClass, storeKeys.Derive(blob)).ToString()));
+
+        async Task<IndexState> LoadAsync(bool retirementAccounts)
+        {
+            using var loader = new IndexLoader(store, Repo, credential);
+            return await loader.LoadAsync(
+                currentGeneration: 0,
+                gapPatienceGenerations: 0,
+                isSequenceAccountedAsync: (writer, number) =>
+                {
+                    var blob = BlobId.FromWriterCounter(writer, number);
+                    return ValueTask.FromResult(
+                        journalNumbers.Contains(number)
+                        || (namedByAny.Contains(blob) && Durable(blob))
+                        || (retirementAccounts && namedByCompleted.Contains(blob)));
+                },
+                blobState: null,
+                CancellationToken.None);
+        }
+
+        var fourCases = await LoadAsync(retirementAccounts: false);
+        Assert.HasCount(
+            BlobCounterReservation.FirstBatch - used,
+            fourCases.Findings,
+            "without the fifth case, each number named and never used is a gap");
+
+        var fiveCases = await LoadAsync(retirementAccounts: true);
+        Assert.IsEmpty(fiveCases.Findings, string.Join(" | ", fiveCases.Findings.Select(finding => finding.Detail)));
+        Assert.IsEmpty(fiveCases.UnresolvedGaps);
+    }
+
+    [TestMethod]
     public void TheReservationSchedule_DoublesFromTheFirstBatch_AndStopsAtTheLargest()
     {
         Assert.AreEqual(8, BlobCounterReservation.FirstBatch);
