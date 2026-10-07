@@ -125,6 +125,18 @@ public sealed class S3CompatibleTestServer : IAsyncDisposable
         }
     }
 
+    /// <summary>Deletes an object behind the API's back, as anyone else holding a key to the bucket could.</summary>
+    /// <param name="bucket">The bucket.</param>
+    /// <param name="key">The object's full key.</param>
+    public void Remove(string bucket, string key)
+    {
+        var objects = _buckets[bucket];
+        lock (objects)
+        {
+            objects.Remove(key);
+        }
+    }
+
     /// <summary>
     /// Answers the next <paramref name="count"/> requests with an error of
     /// the API's own shape instead of serving them.
