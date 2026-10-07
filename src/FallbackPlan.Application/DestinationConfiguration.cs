@@ -200,7 +200,10 @@ public sealed record DestinationConfiguration
     /// takes the default; for a peer, absent means <b>never</b> — a peer's
     /// replica is re-read over its link only on a cadence written here
     /// ([ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 2),
-    /// which is the drill's rule, for the drill's reason.
+    /// which is the drill's rule, for the drill's reason. An S3-compatible
+    /// store keeps the peer's rule, because each read there is a request its
+    /// provider may charge for ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)
+    /// Amendment 1).
     /// </summary>
     /// <remarks>
     /// The days rest between circuits, counted from when the last one closed.

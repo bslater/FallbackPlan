@@ -119,6 +119,68 @@ public sealed class ConfigEditingDomTests
     }
 
     [TestMethod]
+    public async Task DestinationEditor_AnS3Store_TakesADeepVerifyCadence_AndSaysAnEmptyOneMeansNever()
+    {
+        // A store is swept only on a cadence its operator states, because
+        // every read there is a request its provider may charge for (ADR-0091
+        // Amendment 1): the field is offered, and empty means never.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([]),
+            UpsertDestinationCommand => new AcknowledgedResult(),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-add-s3\"]");
+        await Expect(page.Locator("#dest-sweep")).ToHaveAttributeAsync("placeholder", "never");
+        await page.FillAsync("#dest-name", "cloud");
+        await page.FillAsync("#dest-endpoint", "https://objects.example.net");
+        await page.FillAsync("#dest-bucket", "family-backups");
+        await page.FillAsync("#dest-sweep", "30");
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("s3", upsert.Destination.Kind);
+        Assert.AreEqual(30, upsert.Destination.DeepVerifyIntervalDays);
+    }
+
+    [TestMethod]
+    public async Task DestinationsTable_AnS3Store_OffersToFindTheBackupsItHolds()
+    {
+        // The recovery path on a fresh machine (ADR-0091 Amendment 1):
+        // declare the bucket, store its key, find what it holds, adopt.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult(
+            [
+                new DestinationDescriptor(
+                    "dest-s3", "cloud", "s3", null, null, "https://objects.example.net",
+                    Bucket: "family-backups", AccessKeyStored: true),
+            ]),
+            DiscoverArchivesCommand => new ArchivesDiscoveredResult("cloud", [], []),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-discover\"][data-name=\"cloud\"]");
+
+        var discover = await harness.ReceivedAsync<DiscoverArchivesCommand>();
+        Assert.AreEqual("cloud", discover.DestinationName);
+        await Expect(page.GetByText("Backups at 'cloud'")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
     public async Task DestinationEditor_EditingAnS3Store_ShowsWhetherAKeyIsHeld_AndSendsNoneUntilOneIsTyped()
     {
         await using var harness = await DomHarness.StartAsync();

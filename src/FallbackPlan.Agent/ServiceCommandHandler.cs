@@ -2038,9 +2038,10 @@ public sealed partial class ServiceCommandHandler(
                 }
 
                 // A person asked, so the read goes through no limit. A peer's
-                // replica is read over the retrieval session with no cadence
-                // needed: a person asking is consent for the read, as a
-                // restore is (ADR-0035 Amendment 2).
+                // replica is read over the retrieval session, and a store's
+                // over its API, with no cadence needed: a person asking is
+                // consent for the reads, as a restore is (ADR-0035
+                // Amendment 2, ADR-0091 Amendment 1).
                 var outcome = command.Full
                     ? await ReplicaSweepJob.RunFullAsync(runtime, set, reference.Ref, now, cancellationToken)
                         .ConfigureAwait(false)
@@ -2069,9 +2070,9 @@ public sealed partial class ServiceCommandHandler(
                     : stalledOn is null ? $"its replica could not be read: {stall}"
                     : $"blob {stalledOn} could not be read: {stall}";
 
-                // A peer whose operator stated no cadence is read only when a
-                // person asks (ADR-0035 Amendment 2), so nothing scheduled
-                // carries on from here.
+                // A peer or a store whose operator stated no cadence is read
+                // only when a person asks (ADR-0035 Amendment 2, ADR-0091
+                // Amendment 1), so nothing scheduled carries on from here.
                 var swept = ReplicaSweepJob.ScheduledIntervalDays(declared) is not null;
 
                 // What the damage still standing there reaches, by name
@@ -2092,13 +2093,13 @@ public sealed partial class ServiceCommandHandler(
                             + (examined == 0 ? $"nothing confirmed — {stopped}" : $"{examined} object(s) confirmed, then {stopped}")
                             + (swept
                                 ? "; the sweep tries it again after a pause"
-                                : "; nothing sweeps this peer on a schedule, so the next verify-destination tries it again")
+                                : "; nothing sweeps this destination on a schedule, so the next verify-destination tries it again")
                     : $"{set.Name} -> {reference.Ref}: {examined} object(s) confirmed"
                         + (record?.SweepCompletedAt is not null && record.SweepCursor is null
                             ? " — every stored object has now been checked"
                             : swept
                                 ? " — more remain; the sweep resumes next pass"
-                                : " — more remain; nothing sweeps this peer on a schedule, so the next verify-destination continues from here"));
+                                : " — more remain; nothing sweeps this destination on a schedule, so the next verify-destination continues from here"));
             }
         }
 

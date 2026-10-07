@@ -505,14 +505,17 @@ public sealed class DestinationConvergenceTests : IDisposable
         // perfectly but was handed null every pass would look identical from
         // inside the sampler and cover the same sixteen objects forever.
         //
-        // The archive has to hold more objects than two passes sample, or a
+        // The archive has to hold more objects than the pass samples, or a
         // pass could honestly close the circuit and leave the cursor null.
         // Files no longer add an object each — a backup's source-identity
-        // hints are one pack (ADR-0090) — so it is backups that grow it:
-        // nine objects each here, and four make more than two budgets.
+        // hints are one pack (ADR-0090) — and a blob no longer brings a
+        // journal extension of its own (ADR-0092), so it is backups that grow
+        // it, seven objects each here. A pass takes the fifteen keys after the
+        // cursor beside the newest snapshot, so the first, second and fourth
+        // syncs close the circuit and the fifth leaves it part-way round.
         SeedWideArchive(files: 24, bytesEach: 512 * 1024);
         var day1 = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero);
-        for (var day = 0; day < 4; day++)
+        for (var day = 0; day < 5; day++)
         {
             File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), $"day {day + 1} content");
             await BackUpAsync(day1.AddDays(day));
@@ -522,8 +525,8 @@ public sealed class DestinationConvergenceTests : IDisposable
         Assert.IsNotNull(
             first.SampleCursor, "an archive larger than one budget leaves the rotation part-way round");
 
-        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day five content");
-        await BackUpAsync(day1.AddDays(4));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day six content");
+        await BackUpAsync(day1.AddDays(5));
 
         var second = DestinationSyncStore.Open(StateDirectory).Find(SetId, "wide")!;
         Assert.IsNotNull(second.SampleCursor);

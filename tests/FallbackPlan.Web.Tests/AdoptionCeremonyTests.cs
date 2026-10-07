@@ -199,7 +199,7 @@ public sealed class AdoptionCeremonyTests
     }
 
     [TestMethod]
-    public void Script_OffersDiscoveryOnLocalPathDestinationsOnly_AndDeclaresTheCeremony()
+    public void Script_OffersDiscoveryOnLocalPathAndS3Destinations_AndDeclaresTheCeremony()
     {
         var script = SetupWizardScriptTests.AppJs();
 
@@ -223,12 +223,13 @@ public sealed class AdoptionCeremonyTests
             "the confirmation is sent from somewhere other than the confirming action");
         Assert.Contains("discover_archives", script, StringComparison.Ordinal);
 
-        // The button rides on the destination row, and only a local path
-        // gets one: a peer is refused by the service, and offering it would
-        // be a button that only ever says no.
+        // The button rides on the destination row, for the kinds the console
+        // adopts from: a local path, and since ADR-0091 Amendment 1 an
+        // S3-compatible store. A peer is left to the CLI, as it was.
         var row = script.IndexOf("data-action=\"dest-discover\"", StringComparison.Ordinal);
         Assert.IsTrue(row >= 0, "the destinations table offers no discover button");
-        var guard = script.LastIndexOf("destination.kind === \"local-path\"", row, StringComparison.Ordinal);
+        var guard = script.LastIndexOf(
+            "destination.kind === \"local-path\" || destination.kind === \"s3\"", row, StringComparison.Ordinal);
         Assert.IsTrue(guard >= 0 && row - guard < 200, "the discover button is not guarded by the destination's kind");
     }
 }

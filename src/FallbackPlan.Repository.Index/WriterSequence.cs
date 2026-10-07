@@ -125,9 +125,10 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
 /// (specification 08 §2, 02 §4): journal records, index deltas, and blob
 /// counters all draw from it, so a gap is detectable regardless of which
 /// kind of object is missing. A number is <em>pending</em> from allocation
-/// until its accounting object — a delta, a journal record, a void delta, or
-/// a blob named by a durable intent — exists (ADR-0022 §Decision 7); numbers
-/// still pending after a crash are void-delta obligations (07 §4).
+/// until its accounting object — a delta, a journal record, a void delta, a
+/// blob named by a durable intent, or the Completed retirement of an intent
+/// that named it (ADR-0022 §Decision 7, ADR-0092) — exists; numbers still
+/// pending after a crash are void-delta obligations (07 §4).
 /// </summary>
 public sealed class WriterSequence : IBlobCounterAllocator
 {
@@ -257,6 +258,36 @@ public sealed class WriterSequence : IBlobCounterAllocator
     }
 
     /// <summary>
+    /// Allocates <paramref name="count"/> numbers at once, every one pending
+    /// and the whole batch durable before any is returned, as
+    /// <see cref="AllocateNext"/> is for one.
+    /// </summary>
+    /// <remarks>
+    /// A publication reserves its blob numbers this way so its write intent
+    /// can name them before they are used (ADR-0092). One write of the state
+    /// file covers the batch, where a number at a time would cost one each.
+    /// </remarks>
+    /// <param name="count">How many numbers to allocate.</param>
+    /// <returns>The numbers, in the order allocated.</returns>
+    public IReadOnlyList<ulong> AllocateBatch(int count)
+    {
+        ThrowHelper.ThrowIfZeroOrNegative(count);
+
+        lock (_gate)
+        {
+            var batch = new ulong[count];
+            for (var index = 0; index < batch.Length; index++)
+            {
+                batch[index] = _next++;
+                _pending.Add(batch[index]);
+            }
+
+            Persist();
+            return batch;
+        }
+    }
+
+    /// <summary>
     /// Marks <paramref name="sequence"/> accounted for — its delta, journal
     /// record, void delta, or intent-covered blob is durable.
     /// </summary>
@@ -272,6 +303,29 @@ public sealed class WriterSequence : IBlobCounterAllocator
             }
 
             Persist();
+        }
+    }
+
+    /// <summary>
+    /// Marks every number in <paramref name="sequences"/> accounted for, with
+    /// one write of the state file. A number not pending is passed over.
+    /// </summary>
+    /// <remarks>
+    /// What a Completed retirement settles (ADR-0092): every number its
+    /// intent and the intent's extensions named, used or not.
+    /// </remarks>
+    /// <param name="sequences">The numbers now accounted for.</param>
+    public void MarkAccounted(IReadOnlyCollection<ulong> sequences)
+    {
+        ThrowHelper.ThrowIfNull(sequences);
+
+        lock (_gate)
+        {
+            var accounted = sequences.ToHashSet();
+            if (_pending.RemoveAll(accounted.Contains) > 0)
+            {
+                Persist();
+            }
         }
     }
 

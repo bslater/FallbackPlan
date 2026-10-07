@@ -308,7 +308,7 @@ public static class FanOut
     /// <param name="store">The store to ask.</param>
     /// <param name="prefix">The namespace prefix.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    private static async ValueTask<bool> HoldsAnyAsync(
+    internal static async ValueTask<bool> HoldsAnyAsync(
         Storage.Abstractions.IObjectStore store, string prefix, CancellationToken cancellationToken)
     {
         await foreach (var _ in store

@@ -119,6 +119,13 @@ destination and the first fan-out pass reconciles by listing rather than by
 bytes. The same placement and circular-capture guards an upsert applies
 apply here.
 
+> **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1).**
+> A set adopted from an S3-compatible store is appended as a staging set,
+> not direct-ship, because a run never writes through a store. In place of
+> the metadata store, its staging archive is seeded with what a trimmed one
+> keeps: the metadata, and the data the newest snapshot's files are read
+> from.
+
 A recorded root missing on this machine is **reported, never refused**: the
 person edits the set, and nothing silently rewrites a path. A set already
 configured against this very archive is acknowledged rather than repeated —
@@ -177,6 +184,12 @@ names what this device owns there — after a claim
 candidate is read over the retrieval object store. Before any claim the
 inventory names nothing and discovery answers an empty list rather than a
 refusal; the remedy is the claim, not a different verb.
+
+> **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1).**
+> An S3-compatible store takes the same steps through the same abstraction:
+> discovery lists the folders under its prefix that hold a descriptor, with
+> the key this service holds for the store, and the console offers "Find
+> backups…" on a store's row as on a local path's.
 
 ### 7. What is given up, and the bounds
 
@@ -378,3 +391,4 @@ verb guarantees an adoption as shown, not as understood.
 | 2026-09 | Accepted | Built end to end over six commits: the policy manifest's keys 10–12 (`Repository.Format/Manifests/PolicyManifest`, `Repository/SnapshotPublication`, `Agent/BackupRunner`); contract 1.30 and the service's `Agent/ServiceCommandHandler.Adoption.cs` with the writer-identity resume in `Application/LocalState`; the console's `/api/adopt-archive` through `Web/ConsoleRestoreGate`; the CLI's `discover` and `adopt` in `Cli/CliApplication` with the per-set restore grant in `Cli/OperationGateway`; the peer half over `Agent/PeerRetrievalClient`; `eng/recovery-drill.sh` step 8 green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests` and `Hosts.Tests/PeerAdoptionTests` as the in-process drills |
 | 2026-09 | Accepted (amended) | Amendment 1: the set's own retention recorded as policy-manifest key 13 and re-declared on adoption, reported in the answer (FR-DR-006, contract 1.40); a destination's override still unrecorded (FR-DEST-006). `Repository.Format/Manifests/PolicyManifest`, `Agent/RecordedRetentionMapping`; `Hosts.Tests/DestinationAdoptionTests` |
 | 2026-09 | Accepted (amended) | Amendment 2: a recovered configuration is previewed and takes effect only with the confirmation the preview answered (FR-DR-009, contract 1.42); an unconfirmed adoption is refused by name, and one the archive has moved on from is refused as changed. The preview and the check in `Agent/ServiceCommandHandler.Adoption.cs`; the CLI's `adopt --confirm` in `Cli/CliApplication`; the console's two phases in `Web/WebConsoleHost`; `eng/recovery-drill.sh` green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |
+| 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an archive is discovered, previewed and adopted from an S3-compatible store by the same steps (§6), and the set it adopts is a staging set seeded with what a trimmed staging archive keeps, since a run never writes through a store (§3). `Agent/ServiceCommandHandler`; `Hosts.Tests/S3AdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |

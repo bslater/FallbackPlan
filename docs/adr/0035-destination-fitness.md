@@ -459,6 +459,13 @@ somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
    a peer it did nothing; a peer whose declaration already states one is swept
    from the first pass after this change, because the value says what its
    operator asked for.
+
+   > **Amended 2026-10 ([ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1).**
+   > An S3-compatible store keeps this rule for a reason of its own: every
+   > read at a provider is a request it may charge for. Its segment reads the
+   > peer's share, and a store that refuses is a stall waited out under the
+   > back-off. What the sweep finds there is repaired, as at a local path,
+   > because this side can write to a store.
 2. **The read is the local path's read, over the wire.** Every blob is read
    back whole over the retrieval session and checked against the digest sealed
    into its own footer, with the length comparison against the source where the
@@ -583,3 +590,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-09 | Amended (related) | [ADR-0075](0075-a-restore-reads-around-damage.md) makes a restore a detector too: damage a restore of the set's own archive reads around is put on the destination's ledger row as the sweep's findings are, so the next sync repairs a local path's and holds a peer's. `Agent/ServiceCommandHandler`; `Hosts.Tests/RestoreReadAroundTests` |
 | 2026-09 | Amended (related) | [ADR-0076](0076-damage-is-traced-to-what-needs-it.md) gives the findings a scope: the sweep's notice and verify-destination's line name the files and snapshots the damage reaches, a peer's finding says whether a copy here holds the objects sound, and a pair failed for its damage alone degrades only the snapshots that need it. `Agent/ReplicaSweepJob`, `Agent/FanOut` |
 | 2026-09 | Amended | [Amendment 3](#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is): each destination's status row carries its deep sweep — when a circuit last closed, how far the one under way has read, whether it has stopped, and the cadence the scheduler keeps — as contract 1.46's `deep_sweep` (`Api/Results`, `Agent/ServiceCommandHandler`), and the CLI (`Cli/CliApplication`) and the console say it. The cadence rule is stated once for the scheduler and the status (`Agent/ReplicaSweepJob`, `Agent/Scheduler`). Built tests first, with each rule's removal confirmed to turn its tests red: a stall checked after the close, and a reserved kind reported as swept. Held by `Hosts.Tests/DeepSweepTests`, `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepCadenceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/StatusSweepTokenTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` and `Web.Tests/ConsoleDestinationCardTests` |
+| 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an S3-compatible store is swept on Amendment 2's rule, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put, as Amendment 1 repairs a local path's; a store that does not answer is recorded unavailable, and one that refuses is a stall under the back-off. `Agent/ReplicaSweepJob`, `Agent/Scheduler`; `Hosts.Tests/S3DestinationTests`, `Hosts.Tests/DeepSweepCadenceTests` |

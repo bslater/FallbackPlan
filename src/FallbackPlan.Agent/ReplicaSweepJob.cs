@@ -41,17 +41,15 @@ internal static class ReplicaSweepJob
     /// <summary>
     /// Whether this service reads a destination of <paramref name="kind"/>
     /// back in full: a local path off its disk, a peer over the retrieval
-    /// session. An S3-compatible store is read back by sample at every sync
-    /// and not swept (ADR-0091); the reserved kinds are not served, so
-    /// nothing reads them.
+    /// session, an S3-compatible store over its API (ADR-0091 Amendment 1).
+    /// The reserved kinds are not served, so nothing reads them.
     /// </summary>
-    internal static bool Sweeps(DestinationKind kind) => kind is DestinationKind.LocalPath or DestinationKind.Peer;
+    internal static bool Sweeps(DestinationKind kind) =>
+        kind is DestinationKind.LocalPath or DestinationKind.Peer or DestinationKind.S3;
 
     /// <summary>Why a destination of <paramref name="kind"/> is not swept, as a person asking is told.</summary>
     /// <param name="kind">A kind <see cref="Sweeps"/> refuses.</param>
-    internal static string NotSweptBecause(DestinationKind kind) => kind == DestinationKind.S3
-        ? "the deep sweep does not read an s3 destination; every sync reads a sample of it back (ADR-0091)"
-        : $"a {kind} destination is not served yet";
+    internal static string NotSweptBecause(DestinationKind kind) => $"a {kind} destination is not served yet";
 
     /// <summary>
     /// The days the scheduler rests between one circuit's close and the next
@@ -62,8 +60,11 @@ internal static class ReplicaSweepJob
     /// A local path is swept on its stated interval or the default. A peer is
     /// swept only on a cadence its source's operator states, because
     /// re-reading all of a replica is a standing cost on somebody else's link
-    /// (ADR-0035 Amendment 2). The scheduler keeps this and the status matrix
-    /// reports it, so a row cannot promise a cadence the scheduler never keeps.
+    /// (ADR-0035 Amendment 2), and an S3-compatible store for the same
+    /// reason, since every read there is a request its provider may charge
+    /// for (ADR-0091 Amendment 1). The scheduler keeps this and the status
+    /// matrix reports it, so a row cannot promise a cadence the scheduler
+    /// never keeps.
     /// </remarks>
     internal static int? ScheduledIntervalDays(DestinationConfiguration destination)
     {
@@ -72,10 +73,22 @@ internal static class ReplicaSweepJob
         return destination.Kind switch
         {
             DestinationKind.LocalPath => destination.DeepVerifyIntervalDays ?? DefaultIntervalDays,
-            DestinationKind.Peer => destination.DeepVerifyIntervalDays,
+            DestinationKind.Peer or DestinationKind.S3 => destination.DeepVerifyIntervalDays,
             _ => null,
         };
     }
+
+    /// <summary>
+    /// The bytes one segment reads: about <see cref="SegmentSeconds"/> at a
+    /// transfer limit's rate, a peer's share where the replica is across a
+    /// link, and the engine's default off a local disk.
+    /// </summary>
+    /// <param name="kind">The destination's kind.</param>
+    /// <param name="bytesPerSecond">The rate a background segment reads at, or null when nothing limits it.</param>
+    internal static long SegmentByteBudget(DestinationKind kind, long? bytesPerSecond) =>
+        bytesPerSecond is { } rate ? Math.Max(1, rate * SegmentSeconds)
+        : kind is DestinationKind.Peer or DestinationKind.S3 ? PeerSegmentByteBudget
+        : ReplicaSweep.DefaultByteBudget;
 
     /// <summary>
     /// How long a background segment of a limited destination reads for: a
@@ -99,10 +112,11 @@ internal static class ReplicaSweepJob
     private static readonly AsyncLocal<int?> SegmentBudgetInFlow = new();
 
     /// <summary>
-    /// Bytes a segment of a peer's replica reads when no transfer limit sets a
-    /// smaller share: four blobs at the default target. The worker a segment
-    /// holds is the one every other transfer waits on, and a peer is read
-    /// over a link where a local path is read off a disk.
+    /// Bytes a segment of a peer's or an S3-compatible store's replica reads
+    /// when no transfer limit sets a smaller share: four blobs at the default
+    /// target. The worker a segment holds is the one every other transfer
+    /// waits on, and either is read over a link where a local path is read
+    /// off a disk.
     /// </summary>
     public const long PeerSegmentByteBudget = 256L * 1024 * 1024;
 
@@ -248,9 +262,10 @@ internal static class ReplicaSweepJob
     }
 
     /// <summary>
-    /// Reads the next segment of a local path's replica, or of a peer's over
-    /// the retrieval session, records what it found, and says where it
-    /// stopped short, or why the replica could not be opened to read at all.
+    /// Reads the next segment of a local path's replica, of a peer's over the
+    /// retrieval session, or of an S3-compatible store's over its API, records
+    /// what it found, and says where it stopped short, or why the replica
+    /// could not be opened to read at all.
     /// </summary>
     /// <inheritdoc cref="RunAsync" path="/param"/>
     public static async Task<SegmentOutcome> SweepAsync(
@@ -261,8 +276,8 @@ internal static class ReplicaSweepJob
         bool userInitiated,
         CancellationToken cancellationToken)
     {
-        if (runtime.Configuration.FindDestination(destinationName) is not
-            { Kind: DestinationKind.LocalPath or DestinationKind.Peer } destination)
+        if (runtime.Configuration.FindDestination(destinationName) is not { } destination
+            || !Sweeps(destination.Kind))
         {
             return Nothing;
         }
@@ -290,6 +305,66 @@ internal static class ReplicaSweepJob
             }
 
             replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
+        }
+        else if (destination.Kind == DestinationKind.S3)
+        {
+            Storage.S3.S3ObjectStore? store;
+            string? refusal;
+            try
+            {
+                store = StoreComposition.OpenS3(
+                    runtime, destination, archive.Repository.RepositoryId.ToString(), out refusal);
+            }
+            catch (Domain.ClientStateException damaged)
+            {
+                (store, refusal) = (null, damaged.Message);
+            }
+
+            if (store is null)
+            {
+                // No key stored, or an address the configuration already
+                // calls defective: the sync says so on the pair's row, and a
+                // person asking is told why nothing was read.
+                return Nothing with { Unreadable = refusal };
+            }
+
+            try
+            {
+                if (!await FanOut.HoldsAnyAsync(store, string.Empty, cancellationToken).ConfigureAwait(false))
+                {
+                    // As a local path's missing directory: nothing to read,
+                    // and the sync is what puts it back. But each look is a
+                    // request here, so a scheduled segment waits the back-off
+                    // before the next rather than looking on every pass.
+                    const string gone = "its replica is not there";
+                    return userInitiated
+                        ? Nothing with { Unreadable = gone }
+                        : StalledUnread(runtime, set, destination.Name, gone, nowMs);
+                }
+            }
+            catch (Storage.S3.S3StoreUnreachableException unreachable)
+            {
+                // A store that does not answer, recorded as the sync would
+                // record it: unavailable, a gap that closes itself, and never
+                // a stall on a blob nothing was read from. A person's read
+                // records nothing it did not read.
+                if (!userInitiated)
+                {
+                    runtime.DestinationSync.RecordFailure(
+                        set.Id, destination.Name, DestinationSyncState.Unavailable, unreachable.Message, nowMs);
+                }
+
+                return Nothing with { Unreadable = unreachable.Message };
+            }
+            catch (IOException refused)
+            {
+                // A store that answers and refuses, which lasts until a
+                // person changes something: as a listing that fails, waited
+                // out under the back-off rather than asked again every pass.
+                return StalledUnread(runtime, set, destination.Name, refused.Message, nowMs);
+            }
+
+            replica = PacedObjectStore.Over(store, limiter);
         }
         else
         {
@@ -393,21 +468,15 @@ internal static class ReplicaSweepJob
                 archive.Store,
                 previous?.SweepCursor,
                 SegmentBudget,
-                limiter is not null ? Math.Max(1, limiter.Rate.BytesPerSecond * SegmentSeconds)
-                    : destination.Kind == DestinationKind.Peer ? PeerSegmentByteBudget
-                    : ReplicaSweep.DefaultByteBudget,
+                SegmentByteBudget(destination.Kind, limiter?.Rate.BytesPerSecond),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or Protocol.PeerProtocolException)
         {
             // The replica could not be listed, or the peer ended the session
-            // outside any one blob's read, so nothing was read: a stall with no
-            // blob to name, waited out as any other is.
-            Stalled(runtime, set, destinationName,
-                ledger.RecordSweepStall(set.Id, destinationName, cursor: null, examined: 0, stalledOn: null, nowMs),
-                exception.Message, nowMs);
-            return Nothing with { Stall = exception.Message };
+            // outside any one blob's read, so nothing was read.
+            return StalledUnread(runtime, set, destinationName, exception.Message, nowMs);
         }
 
         // Keys an earlier finding left on the ledger that this segment has
@@ -451,8 +520,11 @@ internal static class ReplicaSweepJob
             ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, readSound, nowMs);
 
             IReadOnlyList<ReplicaRepairOutcome> outcomes;
-            if (destination.Kind == DestinationKind.LocalPath)
+            if (destination.Kind is DestinationKind.LocalPath or DestinationKind.S3)
             {
+                // A store is repaired as a local path is: the damaged object
+                // deleted and created again from a sound copy, so nothing
+                // there is ever overwritten (ADR-0091 Amendment 1).
                 await using var repairer = new ReplicaRepairer(runtime, set, destinationName, archive, userInitiated);
                 outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
                     .ConfigureAwait(false);
@@ -482,16 +554,16 @@ internal static class ReplicaSweepJob
                 nowMs,
                 damageOnly: true);
 
-            // What the damage still standing reaches: at a local path what no
-            // sound copy could replace, at a peer all of it. Counted in the
-            // words, and the files kept beside them for whoever unlocks the
-            // set (ADR-0089 Amendment 1).
+            // What the damage still standing reaches: at a local path or a
+            // store what no sound copy could replace, at a peer all of it.
+            // Counted in the words, and the files kept beside them for whoever
+            // unlocks the set (ADR-0089 Amendment 1).
             List<string> standing = [.. outcomes.Where(outcome => !outcome.Repaired).Select(outcome => outcome.Key)];
             var reach = standing.Count > 0 ? archive.TraceDamage(standing) : null;
             runtime.Notices.Raise(
                 $"deep-verify-failed:{set.Id}:{destinationName}",
-                destination.Kind == DestinationKind.LocalPath
-                    ? Finding(set, destinationName, result.Findings, outcomes, reach)
+                destination.Kind != DestinationKind.Peer
+                    ? Finding(set, destination, result.Findings, outcomes, reach)
                     : PeerFinding(
                         set, destinationName, archive, result, reach,
                         await SoundHereAsync(runtime, set, destinationName, archive, standing, userInitiated, cancellationToken)
@@ -528,6 +600,20 @@ internal static class ReplicaSweepJob
     /// times in a row: a condition, not a finding, since nothing has been
     /// shown altered — so it is withdrawn by the next segment that finishes.
     /// </summary>
+    /// <summary>
+    /// A replica nothing could be read from: a stall with no blob to name,
+    /// waited out under the back-off as any other is.
+    /// </summary>
+    private static SegmentOutcome StalledUnread(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, string reason, ulong nowMs)
+    {
+        Stalled(runtime, set, destinationName,
+            runtime.DestinationSync.RecordSweepStall(
+                set.Id, destinationName, cursor: null, examined: 0, stalledOn: null, nowMs),
+            reason, nowMs);
+        return Nothing with { Stall = reason };
+    }
+
     private static void Stalled(
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, DestinationSyncRecord row,
         string reason, ulong nowMs)
@@ -665,13 +751,14 @@ internal static class ReplicaSweepJob
 
     /// <summary>
     /// The notice a finding raises: what no longer matched, what replaced it,
-    /// and what nothing could — then the device, which is the person's to
-    /// look at whatever the service managed to tidy up.
+    /// and what nothing could — then the device or the store, which is the
+    /// person's to look at whatever the service managed to tidy up.
     /// </summary>
     private static string Finding(
-        BackupSetConfiguration set, string destinationName, IReadOnlyList<string> findings,
+        BackupSetConfiguration set, DestinationConfiguration destination, IReadOnlyList<string> findings,
         IReadOnlyList<ReplicaRepairOutcome> outcomes, Repository.Catalogue.DamageReach? reach)
     {
+        var destinationName = destination.Name;
         var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
         var unrepaired = outcomes.Where(outcome => !outcome.Repaired).ToList();
         var sources = string.Join(", ", repaired.Select(outcome => outcome.RepairedFrom).Distinct(StringComparer.Ordinal));
@@ -687,7 +774,12 @@ internal static class ReplicaSweepJob
                 + $"{unrepaired.Count} could not be, because no sound copy of them could be found "
                 + $"({unrepaired[0].Detail}). Those bytes cannot be restored from there until they are replaced. "
                 + (reach is null ? string.Empty : DamageReachText.Sentences(reach) + " ");
-        return said + "Its storage altered a backup once and may again: check the device, the filesystem, and "
-            + "anything else that writes there before counting on it.";
+        return said + (destination.Kind == DestinationKind.S3
+            // Nothing this service writes overwrites anything at a store, so
+            // what altered it holds a key to the bucket or runs the store.
+            ? "The store altered a backup once and may again: check who else holds a key to the bucket, and the "
+                + "provider's object lock or versioning, before counting on it."
+            : "Its storage altered a backup once and may again: check the device, the filesystem, and "
+                + "anything else that writes there before counting on it.");
     }
 }

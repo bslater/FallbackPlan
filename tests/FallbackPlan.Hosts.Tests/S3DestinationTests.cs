@@ -19,9 +19,11 @@ namespace FallbackPlan.Hosts.Tests;
 /// of the sample drawn at random because a provider is on the far side
 /// (FR-VER-001); a direct-ship set's run leaves it to the sync that follows;
 /// a restore and a drill read from it, and the schedule drills it only on a
-/// cadence somebody stated (FR-DRL-002); and what goes wrong is told apart —
-/// no access key, a store that refuses the signature, a store that does not
-/// answer.
+/// cadence somebody stated (FR-DRL-002); the deep sweep reads it back whole
+/// on a cadence somebody stated, or when a person asks, and replaces what the
+/// store altered from a sound copy (FR-VER-002, FR-VER-004, FR-VER-007,
+/// FR-VER-008); and what goes wrong is told apart — no access key, a store
+/// that refuses the signature, a store that does not answer.
 /// </summary>
 /// <remarks>
 /// The access key reaches the service only as an envelope sealed to its
@@ -321,6 +323,251 @@ public sealed class S3DestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Sweep_TheScheduleLeavesAnS3DestinationWithNoStatedCadence_Unread()
+    {
+        // Re-reading a whole replica is a request per object its provider may
+        // charge for: a standing cost the person who declared the store
+        // chooses, so absent means never, as for a peer (ADR-0091
+        // Amendment 1).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var record = Pair(runtime, "cloud");
+        Assert.IsNotNull(record.LastSuccessAt, "the sync must have reached the store, or the case proves nothing");
+        Assert.IsNull(record.SweptAt, "a store with no stated cadence must not be swept");
+    }
+
+    [TestMethod]
+    public async Task Sweep_AnS3DestinationWithAStatedCadence_ReadsTheWholeReplica_ThenLeavesItAloneInsideIt()
+    {
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var record = Pair(runtime, "cloud");
+        Assert.IsNotNull(record.SweepCompletedAt, $"a store with a stated cadence is due its first circuit: {record.LastError}");
+        Assert.IsNull(record.SweepCursor, "a small replica closes its circuit in one segment");
+        Assert.AreEqual(DestinationSyncState.InSync, record.State, record.LastError);
+
+        var soon = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now.AddDays(2), Timeout);
+        await soon.Transfers.WaitAsync(Timeout);
+        Assert.AreEqual(record.SweptAt, Pair(runtime, "cloud").SweptAt, "inside its cadence the store is not read again");
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_OnAnS3Destination_ReadsEveryObjectWhenAPersonAsks()
+    {
+        // No cadence is stated: a person asking is consent for the reads, as
+        // it is at a peer (ADR-0035 Amendment 2).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var line = await VerifyAsync(runtime);
+        Assert.Contains("object(s) confirmed", line, StringComparison.Ordinal);
+        Assert.Contains("every stored object has now been checked", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_APartialReadOfAStoreWithNoCadence_NamesVerifyDestination_NotTheSweep()
+    {
+        // Nothing scheduled carries on a read of a store nobody stated a
+        // cadence for, so the line names what does, and calls it what it is.
+        ReplicaSweepJob.SegmentBudget = 1;
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand("docs", "cloud", Full: false), Timeout),
+            out var verified);
+
+        var line = Assert.ContainsSingle(verified.Lines);
+        Assert.Contains("more remain", line, StringComparison.Ordinal);
+        Assert.Contains("nothing sweeps this destination on a schedule", line, StringComparison.Ordinal);
+        Assert.Contains("verify-destination", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_AnObjectTheStoreAltered_IsFound_AndReplacedFromASoundCopy()
+    {
+        // The repair a local path gets (FR-VER-007): what the store holds is
+        // replaced by deleting it and creating it again from a copy proved
+        // sound, so no write overwrites anything at the store.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var archive = await runtime.ExistingArchiveAsync(_harness.DocsSetId, Timeout);
+        var root = $"{Prefix}/{archive!.Repository.RepositoryId}/";
+        var key = _store.KeysIn(Bucket).First(key => key.StartsWith(root + "blobs/data/", StringComparison.Ordinal));
+        var sound = _store.ObjectIn(Bucket, key)!;
+        var altered = (byte[])sound.Clone();
+        altered[altered.Length / 2] ^= 0x5A;
+        _store.Overwrite(Bucket, key, altered);
+
+        var line = await VerifyAsync(runtime);
+        Assert.Contains("1 damaged object(s)", line, StringComparison.Ordinal);
+        Assert.Contains("each was replaced from a sound copy and re-verified", line, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(sound, _store.ObjectIn(Bucket, key), "the store holds what was sealed again");
+
+        // Nothing this service writes alters an object at a store, so the
+        // notice points at what can.
+        var notice = runtime.Notices.Unacknowledged.Single(notice =>
+            notice.Key.StartsWith("deep-verify-failed:", StringComparison.Ordinal)).Message;
+        Assert.Contains("holds a key to the bucket", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task VerifyDestination_OfAStoreWithNoAccessKeyStored_SaysWhyNothingWasRead()
+    {
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await BackUpAsync(runtime);
+
+        var line = await VerifyAsync(runtime);
+        Assert.Contains("its replica could not be read", line, StringComparison.Ordinal);
+        Assert.Contains("no access key", line, StringComparison.Ordinal);
+        Assert.IsEmpty(_store.Requests, "nothing is sent to a store the service cannot sign for");
+    }
+
+    [TestMethod]
+    public async Task Sweep_OfAStoreThatStoppedAnswering_IsUnavailable_NotAStall()
+    {
+        // A store that does not answer is a gap that closes itself, as at a
+        // sync (FR-DEST-003): recorded as unavailable, never counted as a
+        // stall on a blob nothing was read from.
+        var dying = new S3CompatibleTestServer();
+        dying.CreateBucket(Bucket);
+        WriteConfiguration(directShip: false, endpoint: dying.Endpoint.ToString(), deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+        Assert.IsNotNull(Pair(runtime, "cloud").SweepCompletedAt, "the premise: the store was read while it answered");
+
+        await dying.DisposeAsync();
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        var segment = await ReplicaSweepJob.SweepAsync(
+            runtime, set, "cloud", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+
+        Assert.IsNotNull(segment.Unreadable, "nothing was read");
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, record.State, record.LastError);
+        Assert.AreEqual(0, record.SweepStalls, "a store that does not answer has stalled on nothing");
+    }
+
+    [TestMethod]
+    public async Task Sweep_AStoreLastFoundUnreachable_IsNotAskedForItsSweep()
+    {
+        // A request to a store that does not answer holds the one transfer
+        // worker through every retry, so a store the fan-out last found
+        // unreachable waits for a sync to reach it before its sweep goes on,
+        // as a peer does.
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        // A circuit under way, whose next segment is due at once, on a pair
+        // the last sync found unreachable.
+        var now = DateTimeOffset.Now;
+        var nowMs = (ulong)now.ToUnixTimeMilliseconds();
+        runtime.DestinationSync.RecordSweep(
+            _harness.DocsSetId, "cloud", cursor: "blobs/", examined: 1, completedCircuit: false, nowMs);
+        runtime.DestinationSync.RecordFailure(
+            _harness.DocsSetId, "cloud", DestinationSyncState.Unavailable, "not answering", nowMs);
+
+        var asked = _store.Requests.Count;
+        var pass = await Scheduler.RunPassAsync(runtime, now.AddMinutes(1), Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        Assert.AreEqual(asked, _store.Requests.Count, "nothing reads a store last found unreachable for its sweep");
+    }
+
+    [TestMethod]
+    public async Task Sweep_OfAStoreThatRefusesTheRead_StallsUnderTheBackOff_RatherThanAskingEveryPass()
+    {
+        // A refusal lasts until a person changes something, and every attempt
+        // is a request the provider may charge for. So it is what a listing
+        // that fails is at a local path: a stall with no blob to name, waited
+        // out under the back-off rather than met again on every pass.
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+        Assert.IsNotNull(Pair(runtime, "cloud").SweepCompletedAt, "the premise: the store was read while it took the key");
+
+        await StoreAccessKeyAsync(runtime, secret: "not/the+secret=this/store/knows/0000000");
+        var due = DateTimeOffset.Now.AddDays(31);
+        var pass = await Scheduler.RunPassAsync(runtime, due, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+
+        var refused = Pair(runtime, "cloud");
+        Assert.AreEqual(1, refused.SweepStalls, $"the refusal is counted as a stall: {refused.LastError}");
+        Assert.IsNull(refused.SweepStalledOn, "nothing was read, so no blob is named");
+
+        var asked = _store.Requests.Count;
+        var next = await Scheduler.RunPassAsync(runtime, due.AddMinutes(1), Timeout);
+        await next.Transfers.WaitAsync(Timeout);
+        Assert.AreEqual(asked, _store.Requests.Count, "inside the back-off nothing asks the store again");
+        Assert.AreEqual(1, Pair(runtime, "cloud").SweepStalls);
+    }
+
+    [TestMethod]
+    public async Task Sweep_OfAStoreWhoseReplicaHasGone_WaitsOutTheBackOff_RatherThanAskingEveryPass()
+    {
+        // A local path's missing directory costs nothing to look for again.
+        // At a store each look is a request, so until the sync puts the
+        // replica back a scheduled segment waits the back-off between looks.
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreAccessKeyAsync(runtime);
+        await BackUpAsync(runtime);
+
+        var archive = await runtime.ExistingArchiveAsync(_harness.DocsSetId, Timeout);
+        var root = $"{Prefix}/{archive!.Repository.RepositoryId}/";
+        foreach (var key in _store.KeysIn(Bucket).Where(key => key.StartsWith(root, StringComparison.Ordinal)))
+        {
+            _store.Remove(Bucket, key);
+        }
+
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        var segment = await ReplicaSweepJob.SweepAsync(
+            runtime, set, "cloud", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+
+        Assert.AreEqual(0, segment.Examined);
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(1, record.SweepStalls, "the next look waits the back-off");
+        Assert.IsNull(record.SweepStalledOn, "nothing was read, so no blob is named");
+    }
+
+    [TestMethod]
     public async Task SetDestinationCredentials_HoldsTheKeyOwnerOnly_AndNothingTheServiceSaysCarriesIt()
     {
         Directory.CreateDirectory(Vault);
@@ -512,6 +759,15 @@ public sealed class S3DestinationTests : IAsyncDisposable
         runtime.DestinationSync.Find(_harness.DocsSetId, name)
         ?? throw new AssertFailedException($"no ledger row for '{name}'");
 
+    private async Task<string> VerifyAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand("docs", "cloud", Full: true), Timeout),
+            out var verified);
+        return Assert.ContainsSingle(verified.Lines);
+    }
+
     private async Task SyncAsync(ServiceRuntime runtime)
     {
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
@@ -549,7 +805,8 @@ public sealed class S3DestinationTests : IAsyncDisposable
         string? endpoint = null,
         bool withVault = false,
         bool referenced = true,
-        int? drillIntervalDays = null)
+        int? drillIntervalDays = null,
+        int? deepVerifyIntervalDays = null)
     {
         List<DestinationConfiguration> destinations =
         [
@@ -563,6 +820,7 @@ public sealed class S3DestinationTests : IAsyncDisposable
                 Region = _store.Region,
                 Prefix = Prefix,
                 DrillIntervalDays = drillIntervalDays,
+                DeepVerifyIntervalDays = deepVerifyIntervalDays,
             },
         ];
         List<SetDestinationReference> references = referenced ? [new SetDestinationReference { Ref = "cloud" }] : [];

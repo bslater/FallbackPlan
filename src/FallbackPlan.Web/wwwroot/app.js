@@ -3308,7 +3308,7 @@ function renderConfigBody() {
       <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
       <td>
         <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
-        ${destination.kind === "local-path" ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
+        ${destination.kind === "local-path" || destination.kind === "s3" ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
         <button type="button" class="btn small" data-action="cfg-delete-dest" data-name="${esc(destination.name)}">Delete…</button>
       </td>
     </tr>`).join("");
@@ -5273,8 +5273,8 @@ function openDestEditor(kind, destination) {
         <select id="dest-domain">${domains.map(domain =>
           `<option value="${domain}" ${domain === (destination?.failureDomain ?? "") ? "selected" : ""}>${domain || "derive by kind"}</option>`).join("")}
         </select></label>
-      ${kind === "s3" ? "" : `<label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num"
-        value="${destination?.deepVerifyIntervalDays ?? ""}" placeholder="${kind === "peer" ? "never" : "default"}"></label>`}
+      <label class="mini">deep-verify every (days) <input type="text" id="dest-sweep" class="num"
+        value="${destination?.deepVerifyIntervalDays ?? ""}" placeholder="${kind === "local-path" ? "default" : "never"}"></label>
       <label class="mini">priority <input type="text" id="dest-priority" class="num" value="${destination?.priority ?? ""}"></label>
       <label class="mini">transfer limit <input type="text" id="dest-limit"
         value="${esc(destination?.transferLimit ?? "")}" placeholder="unlimited — e.g. 2 MiB/s"></label>

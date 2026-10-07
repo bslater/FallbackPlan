@@ -29,6 +29,8 @@ Journal records are metadata records ([04](04-record.md)) stored as standalone o
 
 > **Erratum (phase 0).** Two resolutions pending normative edits, per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) a standalone object has no blob envelope, so "metadata records" is under-specified — the `FBPKSREC` framing (Decision 1) supplies the encryption context, with object type `0x0A`; (2) the shared sequence space also feeds **blob counters** ([02 §4](02-identifiers.md#4-blob-identifier)), which publish no sequence-addressed object, so gap accounting needs a definition — Decision 7 gives it: a sequence number is accounted for by a delta, a journal record, a void delta, or a blob whose structured identifier embeds that counter named by an intent; nothing else.
 
+> **Erratum, amended (2026-10).** [ADR-0092](../../docs/adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md) adds a fifth to (2): a number an intent or one of its extensions named, once that intent's retirement with outcome 1, completed, is durable — whether or not a blob embeds it. A writer that names blob numbers before it uses them (§4) then owes no void delta for one it never used, once its intent is retired as completed.
+
 **Advisory hint objects are outside this space.** A placement hint ([06 §10](06-manifests.md#10-placement-hint)), a source-identity hint ([06 §11](06-manifests.md#11-source-identity)) or a source-identity pack ([06 §11.5](06-manifests.md#115-the-pack)) carries the sequence number of the write intent it was published under, and allocates none of its own. Drawing a number per hint would make a gapless space account for objects whose absence is never damage — and, where hints are per file version, would cost a durable allocation and a void-delta obligation for every changed file. Nothing is weakened by it: a hint sits under `/hints/`, no gap scan enumerates it, and record-key uniqueness rests on the per-object CSPRNG salt rather than on the counter ([03 §5](03-keys.md#5-per-blob-keys)).
 
 > **Erratum (phase 0).** "The repository's current generation" (§7 condition 1) is never defined in this specification. [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 5 defines it: the highest generation directory observed under `/index/…` — a lower bound that can only delay expiry, never hasten it. (The key bundle's two recorded generations, which the definition also took into account, went with format 1; a repository opens at generation zero and only the index moves it.)
@@ -70,6 +72,8 @@ Without this, a replacement blob is unreferenced between its creation and the pu
 | 3 | u64 | `declared_max_duration_ms` — revised, MAY extend the original |
 
 The ordering obligation of §3.1 applies to each extension independently: the extension naming a blob must be durable before that blob is uploaded.
+
+> **Implementation note ([ADR-0092](../../docs/adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md)).** This writer names blob numbers before it uses them, a batch at a time: the write intent names the first 8, and when they run out one extension names the next batch, twice the last up to 64, durable before the first blob numbered from it is uploaded. A compaction pass seals its output before uploading any of it and names it all in one extension. The obligation above holds blob by blob throughout; what changes is how many blobs one record names.
 
 ## 5 Intent retirement
 

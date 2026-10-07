@@ -6,17 +6,17 @@ namespace FallbackPlan.InterruptionTests;
 /// The in-step rows of the 04 §5.1 matrix, single-stream path: the step
 /// boundaries are five to nine specific moments, but a store can die at
 /// EVERY put, and each budget here kills a different one — mid-upload,
-/// between an extension and its blob, between delta and snapshot. The
+/// between the intent and the first blob, between delta and snapshot. The
 /// universal claims hold at all of them: nothing durable is collectable, no
 /// partial snapshot can exist, and a fresh process completes the job with
 /// no repair or operator action (NFR-REL-001).
 /// </summary>
 /// <remarks>
-/// At concurrency 1 the put order is deterministic: 1 the intent; 2–7 an
-/// extension then its blob, for each of three data blobs; 8–9 the metadata
-/// blob's extension then its blob; 10 the delta; 11 the snapshot; 12 the
-/// retirement. Budgets 1 through 11 therefore each fail a distinct put;
-/// budget 12 is the completed publication other suites hold.
+/// At concurrency 1 the put order is deterministic: 1 the intent, which names
+/// the blobs before they exist (ADR-0092); 2–4 the three data blobs; 5 the
+/// metadata blob; 6 the delta; 7 the snapshot; 8 the retirement. Budgets 1
+/// through 7 therefore each fail a distinct put; budget 8 is the completed
+/// publication other suites hold.
 /// </remarks>
 [TestClass]
 public sealed class StorePutSweepTests : InterruptionHarness
@@ -29,10 +29,6 @@ public sealed class StorePutSweepTests : InterruptionHarness
     [DataRow(5)]
     [DataRow(6)]
     [DataRow(7)]
-    [DataRow(8)]
-    [DataRow(9)]
-    [DataRow(10)]
-    [DataRow(11)]
     public async Task Publication_TheStoreDiesAfterAnyPut_LeavesARecoverableRepository(int putBudget)
     {
         var store = CreateStore();
@@ -49,8 +45,8 @@ public sealed class StorePutSweepTests : InterruptionHarness
         }
 
         // Nothing durable is collectable: whatever subset of blobs made it,
-        // each is covered by the live intent — or no blob made it at all
-        // because its covering extension is what died (08 §3.1, C4).
+        // each is named by the live intent — or no blob made it at all
+        // because the intent is what died (08 §3.1, C4).
         Assert.IsEmpty(await SimulateCollectorMarkAsync(store, credential, currentGeneration: 0, nowMs: 1_722_600_000_000));
 
         // No budget can leave a partial snapshot: the object either never

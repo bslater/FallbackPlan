@@ -316,17 +316,13 @@ public sealed partial class PublicationOrchestrator
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
         }
 
-        // Step 1: the write intent, durable before any blob byte moves.
-        var intentSequence = await journal.PublishAsync(
-            JournalRecordKind.WriteIntent,
-            new JournalPayload.WriteIntent(
-                job.BackupSetId, [], job.DeclaredMaxDurationMs, job.ExpiryGeneration, IntentPurpose.Backup),
-            job.NowUnixMilliseconds,
-            _generation.Value,
-            cancellationToken).ConfigureAwait(false);
-
-        using var scope = new ExtensionIntentScope(
-            journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
+        // Step 1: the write intent, durable before any blob byte moves. It
+        // names the backup's first blob numbers, and the scope numbers every
+        // blob from what a durable record names (ADR-0092).
+        using var scope = await ReservingIntentScope.OpenAsync(
+            journal, _sequence, _writerId, job.BackupSetId, job.DeclaredMaxDurationMs, job.ExpiryGeneration,
+            IntentPurpose.Backup, job.NowUnixMilliseconds, _generation.Value, cancellationToken).ConfigureAwait(false);
+        var intentSequence = scope.IntentSequence;
         _observer?.AfterStep(PublicationStep.PublishIntent);
 
         // Recorded here and not again until after the capture loop: steps
@@ -335,7 +331,7 @@ public sealed partial class PublicationOrchestrator
         RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, scope, _spoolDirectory,
             _repositoryFormatVersion, scope, _logger);
 
         // One targeted reader serves both things this publication reads back:
@@ -360,7 +356,7 @@ public sealed partial class PublicationOrchestrator
         var dedup = trust is null ? null : (ReusePredicate)trust.MayReuseAsync;
 
         var builder = new ManifestBuilder(
-            _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryId, _writerId, _generation, _keys, _store, scope, _spoolDirectory,
             _policy.BlobWriteProfile, _repositoryFormatVersion, scope, dedup, _logger);
 
         var session = archiver.OpenSession(dedup);
@@ -570,13 +566,16 @@ public sealed partial class PublicationOrchestrator
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
             RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
-            // Step 8: retirement — an event, not a heartbeat (08 §5).
+            // Step 8: retirement — an event, not a heartbeat (08 §5). Once it
+            // is durable it accounts for every number the intent named and
+            // the backup never used, so no later run voids them (ADR-0092).
             await journal.PublishAsync(
                 JournalRecordKind.IntentRetirement,
                 new JournalPayload.IntentRetirement(intentSequence, IntentOutcome.Completed),
                 job.NowUnixMilliseconds,
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
+            scope.Settle();
             _observer?.AfterStep(PublicationStep.RetireIntent);
             RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
