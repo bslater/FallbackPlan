@@ -24,7 +24,7 @@ public enum CompactionStep
     /// <summary>2 — the candidates are read and their live records sealed into new blobs, still local.</summary>
     SealBlobs = 2,
 
-    /// <summary>3 — every produced blob is durable, each covered by its own extension before its put.</summary>
+    /// <summary>3 — every produced blob is durable, all of them named by one extension before the first put.</summary>
     UploadBlobs = 3,
 
     /// <summary>4 — the supersessions are published and applied; readers now resolve to the new blobs.</summary>
@@ -70,13 +70,14 @@ public sealed record CompactionOutcome(
 /// <remarks>
 /// <para>
 /// The order is the whole of it, and every step is one the engine already
-/// had: the intent is durable before a blob byte moves, each blob is covered
-/// by its own extension before its put, the supersessions are published, and
-/// only then is the intent retired. Cut anywhere before the last step and the
-/// produced blobs are covered by an unretired intent, so a collector running
-/// concurrently treats them as reachable (08 §8, FR-GC-003) rather than as
-/// the unreferenced garbage they otherwise look exactly like; the drained
-/// blobs are untouched, so nothing a reader needs has moved.
+/// had: the intent is durable before a blob byte moves, one extension naming
+/// every blob the pass sealed is durable before the first of them is put
+/// (ADR-0092), the supersessions are published, and only then is the intent
+/// retired. Cut anywhere before the last step and the produced blobs are
+/// covered by an unretired intent, so a collector running concurrently treats
+/// them as reachable (08 §8, FR-GC-003) rather than as the unreferenced
+/// garbage they otherwise look exactly like; the drained blobs are untouched,
+/// so nothing a reader needs has moved.
 /// </para>
 /// <para>
 /// Retiring before publishing would invert that. The window between
@@ -193,6 +194,12 @@ public static class CompactionPass
             using var publisher = new IndexPublisher(
                 destination, repository.RepositoryId, writerId, repository.Credential, sequence, logger);
 
+            // Every blob is sealed before any is put, so one extension can
+            // name them all and be durable before the first upload
+            // (ADR-0092; 08 §3.1).
+            await scope.NameAllAsync(
+                [.. produced.Select(blob => blob.Sealed.BlobId)], cancellationToken).ConfigureAwait(false);
+
             // Steps 3 and 4. They are one call because the publication's own
             // order — every blob durable before any entry names one — is the
             // half of criterion 12 that lives inside it. The seam between
@@ -237,7 +244,9 @@ public static class CompactionPass
 
     /// <summary>
     /// Covers blobs by intent-extension (08 §4): the extension naming a blob
-    /// is durable before that blob is uploaded, each extension independently.
+    /// is durable before that blob is uploaded. The pass names everything it
+    /// sealed in one (<see cref="NameAllAsync"/>); a blob it did not name is
+    /// named alone.
     /// </summary>
     private sealed class ExtensionIntentScope(
         JournalPublisher journal,
@@ -248,19 +257,35 @@ public static class CompactionPass
     {
         private readonly HashSet<BlobId> _covered = [];
 
-        public async ValueTask EnsureCoveredAsync(BlobId blobId, CancellationToken cancellationToken)
+        public async ValueTask NameAllAsync(IReadOnlyList<BlobId> blobIds, CancellationToken cancellationToken)
         {
-            if (!_covered.Add(blobId))
+            IReadOnlyList<BlobId> unnamed = [.. blobIds.Where(blobId => !_covered.Contains(blobId)).Distinct()];
+            if (unnamed.Count == 0)
             {
                 return;
             }
 
-            await journal.PublishAsync(
+            await PublishAsync(unnamed, cancellationToken).ConfigureAwait(false);
+            _covered.UnionWith(unnamed);
+        }
+
+        public async ValueTask EnsureCoveredAsync(BlobId blobId, CancellationToken cancellationToken)
+        {
+            if (_covered.Contains(blobId))
+            {
+                return;
+            }
+
+            await PublishAsync([blobId], cancellationToken).ConfigureAwait(false);
+            _covered.Add(blobId);
+        }
+
+        private ValueTask<ulong> PublishAsync(IReadOnlyList<BlobId> blobIds, CancellationToken cancellationToken) =>
+            journal.PublishAsync(
                 JournalRecordKind.IntentExtension,
-                new JournalPayload.IntentExtension(intentSequence, [blobId], declaredMaxDurationMs),
+                new JournalPayload.IntentExtension(intentSequence, blobIds, declaredMaxDurationMs),
                 nowUnixMilliseconds,
                 generation,
-                cancellationToken).ConfigureAwait(false);
-        }
+                cancellationToken);
     }
 }

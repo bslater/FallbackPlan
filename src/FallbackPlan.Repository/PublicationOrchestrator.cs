@@ -270,17 +270,13 @@ public sealed partial class PublicationOrchestrator
             await indexPublisher.PublishVoidDeltaAsync(_generation.Value, obligation, cancellationToken).ConfigureAwait(false);
         }
 
-        // Step 1: the write intent, durable before any blob byte moves.
-        var intentSequence = await journal.PublishAsync(
-            JournalRecordKind.WriteIntent,
-            new JournalPayload.WriteIntent(
-                job.BackupSetId, [], job.DeclaredMaxDurationMs, job.ExpiryGeneration, IntentPurpose.Backup),
-            job.NowUnixMilliseconds,
-            _generation.Value,
-            cancellationToken).ConfigureAwait(false);
-
-        using var scope = new ExtensionIntentScope(
-            journal, intentSequence, job.DeclaredMaxDurationMs, job.NowUnixMilliseconds, _generation.Value);
+        // Step 1: the write intent, durable before any blob byte moves. It
+        // names the backup's first blob numbers, and the scope numbers every
+        // blob from what a durable record names (ADR-0092).
+        using var scope = await ReservingIntentScope.OpenAsync(
+            journal, _sequence, _writerId, job.BackupSetId, job.DeclaredMaxDurationMs, job.ExpiryGeneration,
+            IntentPurpose.Backup, job.NowUnixMilliseconds, _generation.Value, cancellationToken).ConfigureAwait(false);
+        var intentSequence = scope.IntentSequence;
         _observer?.AfterStep(PublicationStep.PublishIntent);
         RecordStep(PublicationStep.PublishIntent, snapshotForLog);
 
@@ -289,9 +285,9 @@ public sealed partial class PublicationOrchestrator
         RecordStep(PublicationStep.ScanSource, snapshotForLog);
 
         // Steps 3–4: segment, compare, compress, encrypt, assemble, seal,
-        // upload — each blob's covering extension durable before its put.
+        // upload — each blob named by a durable record before its put.
         var archiver = new FileArchiver(
-            _policy, _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _policy, _repositoryId, _writerId, _generation, _keys, _store, scope, _spoolDirectory,
             _repositoryFormatVersion, scope, _logger);
         var archive = await archiver.ArchiveAsync(job.Source, cancellationToken).ConfigureAwait(false);
         _observer?.AfterStep(PublicationStep.SegmentAndSeal);
@@ -300,7 +296,7 @@ public sealed partial class PublicationOrchestrator
         // The manifest graph rides in metadata blobs uploaded in the same
         // step-4 window; the snapshot's discoverable copy waits for step 7.
         var builder = new ManifestBuilder(
-            _repositoryId, _writerId, _generation, _keys, _store, _sequence, _spoolDirectory,
+            _repositoryId, _writerId, _generation, _keys, _store, scope, _spoolDirectory,
             _policy.BlobWriteProfile, _repositoryFormatVersion, scope, logger: _logger);
 
         ObjectId fileVersionId, rootTreeId, policyId, snapshotObjectId;
@@ -430,13 +426,16 @@ public sealed partial class PublicationOrchestrator
             _observer?.AfterStep(PublicationStep.PublishSnapshot);
             RecordStep(PublicationStep.PublishSnapshot, snapshotForLog);
 
-            // Step 8: retirement — an event, not a heartbeat (08 §5).
+            // Step 8: retirement — an event, not a heartbeat (08 §5) — and
+            // what accounts for the numbers the intent named and the backup
+            // never used (ADR-0092).
             await journal.PublishAsync(
                 JournalRecordKind.IntentRetirement,
                 new JournalPayload.IntentRetirement(intentSequence, IntentOutcome.Completed),
                 job.NowUnixMilliseconds,
                 _generation.Value,
                 cancellationToken).ConfigureAwait(false);
+            scope.Settle();
             _observer?.AfterStep(PublicationStep.RetireIntent);
             RecordStep(PublicationStep.RetireIntent, snapshotForLog);
 
@@ -454,52 +453,5 @@ public sealed partial class PublicationOrchestrator
             return new PublishedSnapshot(
                 snapshotObjectId, fileVersionId, rootTreeId, policyId, deltaId, intentSequence, archive, builder.Blobs);
         }
-    }
-
-    /// <summary>
-    /// Covers blobs by intent-extension (08 §4): the extension naming a blob
-    /// is durable before that blob is uploaded, each extension independently.
-    /// </summary>
-    private sealed class ExtensionIntentScope(
-        JournalPublisher journal,
-        ulong intentSequence,
-        ulong declaredMaxDurationMs,
-        ulong nowUnixMilliseconds,
-        uint generation) : IIntentScope, IDisposable
-    {
-        private readonly HashSet<BlobId> _covered = [];
-
-        // Uploads run concurrently now (ADR-0029 §2), so this is called from
-        // several workers at once. Serialising the whole method rather than
-        // just the set is deliberate: the journal allocates a writer sequence
-        // and PUTs, and one intent extension at a time is both simpler to
-        // reason about and immaterial to throughput next to the blob PUT it
-        // guards.
-        private readonly SemaphoreSlim _gate = new(1, 1);
-
-        public async ValueTask EnsureCoveredAsync(BlobId blobId, CancellationToken cancellationToken)
-        {
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                if (!_covered.Add(blobId))
-                {
-                    return;
-                }
-
-                await journal.PublishAsync(
-                    JournalRecordKind.IntentExtension,
-                    new JournalPayload.IntentExtension(intentSequence, [blobId], declaredMaxDurationMs),
-                    nowUnixMilliseconds,
-                    generation,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        }
-
-        public void Dispose() => _gate.Dispose();
     }
 }
