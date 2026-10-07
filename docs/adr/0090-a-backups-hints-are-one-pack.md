@@ -49,6 +49,8 @@ Q21 compared two shapes and there is a third. A **pack of what the backup create
 
    The first row was about 2 200 before this record. The **blob covers** are what remains over 20. Every blob is preceded by the journal's intent extension that covers it (08 §4), so a blob costs two requests. Covering several blobs with one extension is GC-safety machinery ([ADR-0009](0009-garbage-collection-safety.md)) and is owed separately. The suite pins the term at one cover per blob, so that change will show, and holds everything beside it to the 20.
 
+   > **Amended 2026-10 ([ADR-0092](0092-a-backup-names-its-blobs-a-batch-at-a-time.md)).** The blob covers are paid. A publication names its blob numbers a batch at a time, the first eight in its write intent and each later batch in one extension, so a GiB's 9 or 10 blobs cost one extension rather than 9 or 10. The totals are 15–18 per GiB, the suite holds the whole of each to 20, and NFR-PERF-008 is met.
+
 ## Consequences
 
 - **A first backup ends sooner.** On the owner's backup, 9 190 small writes at each location become one. On a metered store, a request per created file becomes a request per backup.
@@ -71,3 +73,4 @@ Q21 compared two shapes and there is a third. A **pack of what the backup create
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | The owner's choice of a pack per backup over per-file hints, and of reading old hints over migrating them; built with it: the pack and its codec (`Repository.Format/Manifests/SourceIdentityPack`), its key and type (`Repository.Packing/MetadataStoreKeys`, `Domain/ObjectType`), the writer (`Repository/ManifestBuilder`, `Repository/SnapshotPublication`) and the readers (`Repository/SourceIdentityPackIndex`, `Repository/SourceIdentityLookup`), measured by `Repository.Tests/UploadBudgetTests` |
+| 2026-10 | Amended | The blob covers decision 5 left owed are paid by [ADR-0092](0092-a-backup-names-its-blobs-a-batch-at-a-time.md): a backup names its blobs a batch at a time, and NFR-PERF-008 is met in total |

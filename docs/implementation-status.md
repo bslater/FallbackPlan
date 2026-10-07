@@ -4,7 +4,7 @@
 
 ---
 
-Ninety-one decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+Ninety-two decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -46,7 +46,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0019](adr/0019-third-party-dependency-policy.md) | Third-party dependency policy | **Applied** | `ArchitectureTests/DependencyRuleTests` — the policy is a test, not a promise |
 | [0020](adr/0020-ed25519-signing-key-semantics.md) | Ed25519 signing key semantics | **Built** | `Repository.Crypto/RepositorySigner` · `Repository.ConformanceTests/Ed25519ConformanceTests` |
 | [0021](adr/0021-consume-bodu-via-committed-package-feed.md) | Bodu as prebuilt packages — from nuget.org since Amendment 2, and a package released alone is taken alone since Amendment 3 | **Applied** | [`nuget.config`](../nuget.config), [`Directory.Packages.props`](../Directory.Packages.props), [`external/packages/`](../external/packages/README.md) |
-| [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) | Standalone records and index identifiers | **Built** | `Repository.Format/Records/*`, `Repository.Index/IndexDeltaCodec` · `Repository.FuzzTests/ParserFuzzTests`, `Repository.Tests/Index/IndexPlaneTests` |
+| [0022](adr/0022-standalone-metadata-records-and-index-identifiers.md) | Standalone records and index identifiers | **Built** | `Repository.Format/Records/*`, `Repository.Index/IndexDeltaCodec` · `Repository.FuzzTests/ParserFuzzTests`, `Repository.Tests/Index/IndexPlaneTests` · Decision 7's fifth case, a Completed retirement accounting for every number its intent named ([ADR-0092](adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md)): `Repository/ReservingIntentScope`, `Repository.Index/WriterSequence` · `Repository.Tests/IntentReservationTests` |
 | [0023](adr/0023-cdc-v1-rabin-parameters.md) | cdc-v1 Rabin fingerprint parameters | **Built** | `Repository.Segmentation/RabinFingerprint` · `Repository.FuzzTests/CdcPropertyTests` |
 | [0024](adr/0024-include-exclude-rule-dialect.md) | Include/exclude rule dialect | **Built** | `Domain/PathRules` · `Repository.ConformanceTests/PathRulesConformanceTests` |
 | [0025](adr/0025-compaction-reseals-records.md) | Compaction re-seals records | **Built** | `Repository/BlobCompactor`, `Repository/CompactionPublication`, `Repository/CompactionPass`, `Retention/CompactionPolicy` — but as [0067](#0067--the-rewrite-that-holds-no-key)'s keyless rewrite, not as this record's re-sealing, which format 3 superseded and format 2 never reached · `Repository.Tests/Index/CompactionIndexTests`, `InterruptionTests/CompactionInterruptionTests`, `Hosts.Tests/CompactionRetentionTests` · [notes](#0025--decrypt-and-reseal-superseded-for-format-3) |
@@ -114,8 +114,9 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0087](adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md) | A restore writes back the extended attributes it may: each captured attribute of a file or a folder is written alone by its captured name, never through a link, after its owner and group and before its permissions, and one left is named in the item's detail. An ACL that names accounts by number comes back only where this installation captured the snapshot, macOS gets no POSIX ACL, and a restore that is not root leaves the security and trusted namespaces. Where an ACL does not come back the group gets no more than it gave. The plan declares each with counts | **Built** | `Domain/ExtendedAttributes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestorePlan` · `Restore/RestoreAccount` · `Agent/ServiceCommandHandler` · `Cli/OperationGateway` · `Repository.Tests/RestoreExtendedAttributesTests`, `Domain.Tests/ExtendedAttributesTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0087--extended-attributes) |
 | [0088](adr/0088-a-backups-percentage-is-what-it-has-backed-up.md) | A backup's percentage is what it has backed up: the plan's bytes whose content the store has acknowledged at every destination the run writes to, or already held, counted in archive order once a blob and every earlier one have landed, with an unchanged or renamed file counted the moment it is reused and each planned file contributing exactly its planned length. Contract 1.54 carries the figure and the finishing work's count, and the source-identity hints went out up to sixteen at once, all before the snapshot record, until [0090](adr/0090-a-backups-hints-are-one-pack.md) made them one pack. Amendment 1 makes two figures of it: a job's bar is its three stages over the plan's files (scanned, processed, backed up, contract 1.55), and each destination's circle is how many of the newest backup's files it holds, worked out from its ledger watermark at rest, counted live during a sync, with a live run folded in by the console; the set's circle is its least complete destination's | **Built** | `Repository/BackedUpTally` · `Repository/ArchiveSession` · `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Domain/JobProgress` · `Api/ContractVersion` · `Application/JobStateStore` · `Agent/BackupRunner` · `Repository.Catalogue/Catalogue` · `Agent/DeliveredFiles` · `Agent/FileHoldingCounter` · `Agent/LiveHoldings` · `Agent/DestinationShipSink` · `Repository.Tests/BackedUpProgressTests`, `Hosts.Tests/DestinationFilesHeldTests`, `Web.DomTests/BackupProgressDomTests`, `Web.Tests/ConsoleProgressScriptTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Hosts.Tests/JobsVerbServiceTests` · [notes](#0088--what-is-backed-up) |
 | [0089](adr/0089-a-backups-file-names-need-the-passphrase.md) | A backup's file names need the passphrase: the service names a file a backup holds only through a restore source opened under a verified grant, held by the session that opened it and of the set asked about, refusing a snapshot's listing, a restore's plan and run, and a run's changes and failures without one; a change preview without one counts what only the backup names and leaves the names out (contract 1.56). The console derives a grant per set under the published facts and asks at every look, slowing a run of wrong passphrases per account; the CLI derives under `--passphrase-env`. Amendment 1: the notices the service raises, a drill's failure on the status matrix and verify-destination's line count the files they concern, and a notice's files are answered only through a source the set's passphrase unlocked (contract 1.59) | **Built** | `Agent/ServiceCommandHandler` · `Agent/AuthenticatingService` · `Agent/RestoreSourceRegistry` · `Agent/RecoveryDrillJob` · `Agent/DamageReachText` · `Application/NoticeStore` · `Api/ContractVersion` · `Web/ConsoleRestoreGate` · `Web/RestoreGateThrottle` · `Web/WebConsoleHost` · `Cli/GrantedSources` · `Cli/OperationGateway` · `Hosts.Tests/PassphraseGateTests`, `Hosts.Tests/NoticeNamesTests`, `Application.Tests/NoticeStoreTests`, `Cli.Tests/NoticeNamesVerbTests`, `Web.Tests/RestoreGateTests`, `Web.DomTests/PassphraseGateDomTests`, `Web.DomTests/RestoreWizardDomTests`, `Web.Tests/ConsolePassphraseGateScriptTests`, `Api.Tests/ContractAdditiveFieldsTests` · [notes](#0089--the-names-behind-the-passphrase) |
-| [0090](adr/0090-a-backups-hints-are-one-pack.md) | A backup's hints are one pack: a publication writes the source-identity hints of the versions it created as one object, type `0x11`, before its snapshot record, rather than one object a version, so they cost a request a backup rather than a request a file. After a catalogue rebuild a reader takes its device's packs once and asks the per-file hints older backups left only for a source key no pack names. NFR-PERF-008 is measured for the first time: no request grows with the number of files, and everything but the blob covers is within the budget | **Built** | `Repository.Format/Manifests/SourceIdentityPack` · `Domain/ObjectType` · `Repository.Packing/MetadataStoreKeys` · `Repository/ManifestBuilder` · `Repository/SnapshotPublication` · `Repository/SourceIdentityPackIndex` · `Repository/SourceIdentityLookup` · `Repository.Tests/UploadBudgetTests`, `Repository.Tests/HintPackTests`, `Repository.Tests/SourceIdentityPackCodecTests`, `Domain.Tests/ObjectTypeTests`, `Repository.Tests/BackedUpProgressTests`, `InterruptionTests/TreeSnapshotInterruptionTests` · [notes](#0090--one-pack-a-backup) |
+| [0090](adr/0090-a-backups-hints-are-one-pack.md) | A backup's hints are one pack: a publication writes the source-identity hints of the versions it created as one object, type `0x11`, before its snapshot record, rather than one object a version, so they cost a request a backup rather than a request a file. After a catalogue rebuild a reader takes its device's packs once and asks the per-file hints older backups left only for a source key no pack names. NFR-PERF-008 is measured for the first time: no request grows with the number of files, and everything but the blob covers is within the budget. The covers are paid by [0092](adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md) | **Built** | `Repository.Format/Manifests/SourceIdentityPack` · `Domain/ObjectType` · `Repository.Packing/MetadataStoreKeys` · `Repository/ManifestBuilder` · `Repository/SnapshotPublication` · `Repository/SourceIdentityPackIndex` · `Repository/SourceIdentityLookup` · `Repository.Tests/UploadBudgetTests`, `Repository.Tests/HintPackTests`, `Repository.Tests/SourceIdentityPackCodecTests`, `Domain.Tests/ObjectTypeTests`, `Repository.Tests/BackedUpProgressTests`, `InterruptionTests/TreeSnapshotInterruptionTests` · [notes](#0090--one-pack-a-backup) |
 | [0091](adr/0091-an-s3-compatible-destination.md) | An S3-compatible destination: the `s3` kind is served by a provider over the platform's HTTP client with a request signer of its own, the one assembly allowed an HTTP client, every put a create and the shared contract suite passed against a store that speaks the API in process. The address is in the configuration (schema 9) and the access key in the service's state directory, owner-only, arriving only as an envelope sealed to the service for that destination and key id (contract 1.60) from the CLI's `destination-credentials` or the console's editor. A store is synced through the local path's copy and read back with the peer's random share, restored from by listing its prefix when staging is lost, drilled on a stated cadence, probed with one listing and trusted for the staging trim through its ledger; a direct-ship run leaves it behind for the sync after the run. Not swept and not adopted from | **Built** | `Storage.S3/S3ObjectStore` · `Storage.S3/S3RequestSigner` · `Storage.S3/S3Location` · `Repository.Crypto/WriteOnlyProvisioning` · `Agent/DestinationCredentialStore` · `Agent/StoreComposition` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/DestinationProbe` · `Agent/RecoveryDrillJob` · `Agent/SetCopies` · `Application/DestinationConfiguration` · `Application/ClientConfiguration` · `Api/ContractVersion` · `Cli/CliApplication` · `Web/ConsoleRestoreGate` · `Web/WebConsoleHost` · `Storage.ContractTests/S3ObjectStoreContractTests`, `Storage.ContractTests/S3RequestSigningTests`, `Storage.ContractTests/S3ObjectStoreTests`, `Application.Tests/S3DestinationConfigurationTests`, `Repository.Tests/Crypto/AccessKeyEnvelopeTests`, `Hosts.Tests/S3DestinationTests`, `Hosts.Tests/ClientModeTests`, `Web.Tests/DestinationCredentialsCeremonyTests`, `Web.DomTests/ConfigEditingDomTests`, `Api.Tests/KeyMaterialConfinementTests`, `ArchitectureTests/TelemetrySilenceTests` · [notes](#0091--a-bucket-as-a-destination) |
+| [0092](adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md) | A backup names its blobs a batch at a time: a publication reserves blob numbers before it uses them, its write intent naming the first eight and one extension each later batch, doubling up to 64, durable before the first blob numbered from it is put; a blob it did not number, a resumed spool, is named alone. A Completed retirement accounts for every number the intent named, used or not (ADR-0022 §Decision 7, fifth case), so a completed backup owes nothing and one that dies owes only what it reserved and did not upload. A compaction pass names its whole output in one extension. NFR-PERF-008 is met: 15–18 requests per GiB | **Built** | `Repository/BlobCounterReservation` · `Repository/ReservingIntentScope` · `Repository.Index/WriterSequence` · `Repository/SnapshotPublication` · `Repository/PublicationOrchestrator` · `Repository/CompactionPass` · `Repository.Tests/IntentReservationTests`, `Repository.Tests/UploadBudgetTests`, `InterruptionTests/CompactionInterruptionTests`, `InterruptionTests/StorePutSweepTests`, `InterruptionTests/TreeSnapshotInterruptionTests`, `InterruptionTests/ConcurrentUploadTests` · [notes](#0092--a-batch-at-a-time) |
 
 ---
 
@@ -2564,12 +2565,12 @@ blob profile:
 | Incremental, ~490 KB a file | 25 | 9 | 16 |
 | Incremental, 16 KiB a file | 27 | 10 | 17 |
 
-So NFR-PERF-008 is met for data blobs (8 per GiB against 10) and for
-everything beside the blob covers. It is not met in total. Every blob is
+So NFR-PERF-008 was met for data blobs (8 per GiB against 10) and for
+everything beside the blob covers, but not in total. Every blob was
 preceded by the journal's intent extension that covers it, each its own
-request. Covering several blobs with one is a change to the machinery
-garbage collection depends on, and is owed separately. The suite pins one
-cover per blob, so that change will show.
+request. Covering several blobs with one was a change to the machinery
+garbage collection depends on, and was owed separately; it is
+[0092](#0092--a-batch-at-a-time), and the total is now 15–18 per GiB.
 
 Repositories keep the per-file hints every earlier backup wrote, and they
 are still read. The reader that runs after a catalogue rebuild takes its
@@ -2613,3 +2614,39 @@ store (the sync after the run fills it); the deep sweep does not read one
 real store can be put through the contract suite by naming it in
 `FALLBACKPLAN_S3_TEST_*` (`TestSupport/ConfiguredS3Store`); without that, the
 suite runs against the in-process store, which checks every signature itself.
+
+### 0092 — a batch at a time
+
+Built. ADR-0090's measurement left one term over NFR-PERF-008's 20 requests
+per GiB: the blob covers. A blob must be named by a durable intent before it
+is put (08 §3.1), and each blob had been named by a journal extension of its
+own, so every blob cost two requests.
+
+A blob's identity is the writer's number, so it can be named before the blob
+exists. A publication now reserves numbers in batches and names each batch
+once: its write intent names the first eight, and when they run out one
+extension names the next batch, twice the last up to 64. The extension is
+durable before the first blob numbered from it is put, and uploads running
+together wait for it. A compaction pass seals everything before it puts
+anything, so it names its whole output in one extension.
+
+The cost was accounting. A number named and never used is in no blob, and
+ADR-0022 §Decision 7's four cases could not account for it, so every next run
+would have voided it. A fifth case closes that: a Completed retirement
+accounts for every number its intent and the intent's extensions named, used
+or not. A completed backup therefore owes nothing. One that dies owes what it
+reserved and did not upload, at most the rest of one batch beyond the blobs it
+had in flight, and the next run voids those as it voids any leftover.
+
+| Backup | Requests per GiB | Blob covers | Everything else |
+|---|---|---|---|
+| First backup, ~490 KB a file | 15 | 1 | 14 |
+| First backup, 16 KiB a file | 16 | 1 | 15 |
+| Incremental, ~490 KB a file | 17 | 1 | 16 |
+| Incremental, 16 KiB a file | 18 | 1 | 17 |
+
+`Repository.Tests/UploadBudgetTests` now holds each whole total to 20, so
+NFR-PERF-008 is met. `Repository.Tests/IntentReservationTests` holds the
+order blob by blob, the doubling, what a completed backup owes and what a
+killed one owes. No format changed: an intent always named blobs that did not
+exist yet.

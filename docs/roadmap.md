@@ -102,7 +102,7 @@ Reframed by [ADR-0034](adr/0034-hub-and-spoke-destinations.md) and again by [ADR
 
 **Features:** Azure Blob provider · ~~S3 and S3-compatible provider~~ *(built: [ADR-0091](adr/0091-an-s3-compatible-destination.md), FR-REP-002's S3 half — synced, read back, restored from and drilled as a local path is; a direct-ship run leaves it to the sync after it)* · credential integrations *(an S3-compatible store's access key: sealed to the service and held in its state directory, ADR-0091)* · multipart and staged-block uploads · request and cost telemetry · tier and lifecycle guidance · replication between peer and cloud stores.
 
-**Exit criteria:** provider contract suites pass, including eventual-visibility and quota simulation · large interrupted uploads resume or safely restart · no object listing required per segment · PUTs per GB within NFR-PERF-008 · documented and tested restore from a clean machine.
+**Exit criteria:** provider contract suites pass, including eventual-visibility and quota simulation · large interrupted uploads resume or safely restart · no object listing required per segment · ~~PUTs per GB within NFR-PERF-008~~ *(met: 15–18 requests per GiB at the object-store blob profile, once a backup's source-identity hints became one pack and its blobs are named a batch at a time — [ADR-0090](adr/0090-a-backups-hints-are-one-pack.md), [ADR-0092](adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md))* · documented and tested restore from a clean machine.
 
 ---
 
