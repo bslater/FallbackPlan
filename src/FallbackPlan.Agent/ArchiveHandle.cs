@@ -43,7 +43,18 @@ public sealed class ArchiveHandle : IDisposable
     /// <summary>The unlocked repository.</summary>
     public required OpenedRepository Repository { get; init; }
 
-    /// <summary>The writer-side catalogue. Read paths open their own connection.</summary>
+    /// <summary>
+    /// The catalogue connection the set's backup reads and writes through,
+    /// and nothing else does once the handle is shared.
+    /// </summary>
+    /// <remarks>
+    /// A sync, retention, a snapshot deletion and a heal can each run while
+    /// the set's backup is running, and a SQLite connection is not safe to
+    /// share between threads: shared, it corrupts its own bookkeeping and
+    /// fails later and elsewhere. Each opens a connection of its own instead
+    /// — <see cref="OpenReadCatalogue"/> to read, <see cref="OpenWritableCatalogue"/>
+    /// to write — and SQLite keeps the connections apart (ADR-0010 Amendment 5).
+    /// </remarks>
     public required FallbackPlan.Repository.Catalogue.Catalogue Catalogue { get; init; }
 
     /// <summary>The archive's sequence allocator — one per writer role, held here and nowhere else.</summary>
@@ -73,8 +84,28 @@ public sealed class ArchiveHandle : IDisposable
     public bool OpenedWithPassphrase { get; init; }
 
     /// <summary>Opens a second catalogue connection for a read path (ADR-0029 §4).</summary>
+    /// <remarks>
+    /// A read on it sees the catalogue's last commit and never waits behind
+    /// the backup's write.
+    /// </remarks>
     /// <returns>A catalogue the caller owns and must dispose.</returns>
     public CatalogueDb OpenReadCatalogue() =>
+        CatalogueDb.Open(CataloguePath, Repository.RepositoryId, CatalogueLogger);
+
+    /// <summary>
+    /// Opens a catalogue connection for a path that writes the set's
+    /// catalogue while its backup may be running: retention, a snapshot
+    /// deletion, a heal (ADR-0010 Amendment 5).
+    /// </summary>
+    /// <remarks>
+    /// SQLite lets one connection write at a time. A write here behind the
+    /// backup's waits for it to commit, and the backup's behind this one's
+    /// waits likewise, up to the command timeout of thirty seconds. Every
+    /// catalogue call commits before it returns, so a write waits for the
+    /// other side's calls, never for the whole of its job.
+    /// </remarks>
+    /// <returns>A catalogue the caller owns and must dispose.</returns>
+    public CatalogueDb OpenWritableCatalogue() =>
         CatalogueDb.Open(CataloguePath, Repository.RepositoryId, CatalogueLogger);
 
     /// <summary>

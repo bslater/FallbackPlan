@@ -87,8 +87,8 @@ internal static class CatalogueRebuild
     /// <paramref name="store"/>. Every write the rebuild makes is an upsert
     /// or an insert-or-ignore, so re-projecting over a catalogue that
     /// already holds part of the history adds what is missing and disturbs
-    /// nothing that is there — which is what lets the heal run over the
-    /// runtime's live handle rather than evicting it.
+    /// nothing that is there — which is what lets the heal rebuild a set's
+    /// catalogue in place rather than evicting the archive.
     /// </summary>
     /// <remarks>
     /// A rebuild that read every record it needed marks the catalogue

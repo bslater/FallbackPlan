@@ -1168,10 +1168,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// still exceeds the local one.
     /// </para>
     /// <para>
-    /// Runs inside the fan-out pass, under the set gate, over the runtime's
-    /// live catalogue handle: the rebuild adds what is missing and disturbs
-    /// nothing, which is what lets it run without evicting the archive
-    /// under a read path.
+    /// Runs inside the fan-out pass, under the set gate, and rebuilds the
+    /// set's catalogue in place: the rebuild adds what is missing and
+    /// disturbs nothing, which is what lets it run without evicting the
+    /// archive under a read path. It writes on a connection of its own,
+    /// because the set gate does not keep the set's backup out, and that
+    /// backup may be writing through the archive's (ADR-0010 Amendment 5).
     /// </para>
     /// </remarks>
     /// <param name="setId">The set's 32-hex identity.</param>
@@ -1215,11 +1217,12 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
 
             var warnings = new List<string>();
+            using (var catalogue = archive.OpenWritableCatalogue())
             using (var reader = await CatalogueRebuild.OpenMetadataReaderAsync(rebuildFrom, archive.Repository, cancellationToken)
                 .ConfigureAwait(false))
             {
                 await CatalogueRebuild.RebuildIntoAsync(
-                    this, archive.Catalogue, rebuildFrom, archive.Repository, reader, warnings, cancellationToken)
+                    this, catalogue, rebuildFrom, archive.Repository, reader, warnings, cancellationToken)
                     .ConfigureAwait(false);
             }
 

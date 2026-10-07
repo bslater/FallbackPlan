@@ -47,6 +47,8 @@ public sealed class CatalogueConnectionTests
     [TestMethod]
     public void TheBackupsCatalogueConnection_IsUsedByTheBackupAndTheArchivesOpeningAlone()
     {
+        // The service's own assembly alone: no other source assembly
+        // references it, so nothing else can reach the handle.
         var connection = typeof(ArchiveHandle).GetProperty(nameof(ArchiveHandle.Catalogue))!.GetMethod!;
         var callers = CallSites.Of(connection, typeof(ArchiveHandle).Assembly);
 

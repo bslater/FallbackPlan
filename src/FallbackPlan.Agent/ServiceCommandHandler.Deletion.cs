@@ -165,6 +165,11 @@ public sealed partial class ServiceCommandHandler
         var actor = command.Actor ?? UnnamedActor;
         var lines = new List<string>();
 
+        // The set's catalogue on a connection of the command's own: a deletion
+        // runs on the writer pool, whose other worker can be running this
+        // set's backup through the archive's (ADR-0010 Amendment 5).
+        using var catalogue = archive.OpenWritableCatalogue();
+
         var request = await SnapshotDeletion.RequestAsync(
             archive.Store, archive.Repository, runtime.Writer, archive.Sequence, named, actor, now,
             cancellationToken, grant).ConfigureAwait(false);
@@ -181,7 +186,7 @@ public sealed partial class ServiceCommandHandler
                 .Select(line => $"{set.Name}: {line}"));
         }
 
-        var report = await DeletionPassAsync(set, archive, grant, now, cancellationToken).ConfigureAwait(false);
+        var report = await DeletionPassAsync(set, archive, catalogue, grant, now, cancellationToken).ConfigureAwait(false);
         lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
 
         // What only the deleted snapshots held was condemned by that pass and
@@ -201,7 +206,7 @@ public sealed partial class ServiceCommandHandler
                     cancellationToken).ConfigureAwait(false);
             }
 
-            report = await DeletionPassAsync(set, archive, grant, now, cancellationToken).ConfigureAwait(false);
+            report = await DeletionPassAsync(set, archive, catalogue, grant, now, cancellationToken).ConfigureAwait(false);
             lines.AddRange(report.Lines.Select(line => $"{set.Name}: {line}"));
         }
 
@@ -214,7 +219,7 @@ public sealed partial class ServiceCommandHandler
         {
             if (after.Snapshots.All(remaining => remaining.ManifestObjectId != snapshot.ManifestObjectId))
             {
-                archive.Catalogue.ForgetSnapshot(snapshot.Manifest.SnapshotId.Span);
+                catalogue.ForgetSnapshot(snapshot.Manifest.SnapshotId.Span);
                 outcomes.Add(new SnapshotDeletionOutcome(snapshot.Fact.SnapshotId, "deleted", []));
                 continue;
             }
@@ -230,6 +235,7 @@ public sealed partial class ServiceCommandHandler
     private async ValueTask<RetentionReport> DeletionPassAsync(
         Application.BackupSetConfiguration set,
         ArchiveHandle archive,
+        Repository.Catalogue.Catalogue catalogue,
         Repository.Crypto.ReclaimAuthority? grant,
         ulong now,
         CancellationToken cancellationToken) =>
@@ -247,7 +253,7 @@ public sealed partial class ServiceCommandHandler
             set.Name,
             runtime.LoggerFor(typeof(RetentionRunner)),
             grant,
-            objectId => archive.Catalogue.ResolveLocation(objectId)?.BlobId,
+            objectId => catalogue.ResolveLocation(objectId)?.BlobId,
             clockSkewMargin: runtime.Configuration.EffectiveClockSkewMargin,
             requestsOnly: true).ConfigureAwait(false);
 
