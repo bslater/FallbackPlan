@@ -211,15 +211,17 @@ public sealed class DestinationShipSink : IObjectStore
                 continue;
             }
 
-            if (destination.Kind == DestinationKind.S3)
+            if (destination.Kind.IsObjectStore())
             {
                 // A run writes through the destinations that keep up with a
-                // capture as it goes; an S3-compatible store is filled by the
-                // sync that follows the run, from what the run shipped
-                // (ADR-0091). Behind, never failed: the destination did
-                // nothing wrong, and a behind row syncs at once.
+                // capture as it goes; an object store, a bucket or a
+                // container, is filled by the sync that follows the run, from
+                // what the run shipped (ADR-0091, ADR-0093). Behind, never
+                // failed: the destination did nothing wrong, and a behind row
+                // syncs at once.
                 skipped.Add((destination.Name, DestinationSyncState.Behind,
-                    "an s3 destination is filled by the sync that follows the run, from what the run shipped"));
+                    (destination.Kind == DestinationKind.AzureBlob ? "an azure-blob" : "an s3")
+                    + " destination is filled by the sync that follows the run, from what the run shipped"));
                 continue;
             }
 

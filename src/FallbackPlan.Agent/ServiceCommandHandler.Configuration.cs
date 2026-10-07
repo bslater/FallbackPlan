@@ -80,7 +80,12 @@ public sealed partial class ServiceCommandHandler
     }
 
     private DestinationsResult ListDestinations() =>
-        new([.. runtime.Configuration.Destinations.Select(destination => new DestinationDescriptor(
+        new([.. runtime.Configuration.Destinations.Select(DescriptorOf)]);
+
+    private DestinationDescriptor DescriptorOf(DestinationConfiguration destination)
+    {
+        var credential = CredentialHeld(destination);
+        return new DestinationDescriptor(
             destination.Id,
             destination.Name,
             KindName(destination.Kind),
@@ -97,9 +102,12 @@ public sealed partial class ServiceCommandHandler
             destination.Region,
             destination.Prefix,
             AddressingName(destination.Addressing),
-            // Whether one is held, never what it is (ADR-0091); a kind that
-            // signs nothing is not said to lack a key.
-            destination.Kind == DestinationKind.S3 ? runtime.DestinationCredentials.Holds(destination.Id) : null))]);
+            credential.Stored,
+            destination.Account,
+            destination.Container,
+            credential.Kind,
+            credential.Expires);
+    }
 
     private ServiceResult UpsertDestination(UpsertDestinationCommand command)
     {
@@ -192,7 +200,11 @@ public sealed partial class ServiceCommandHandler
             Kind = kind,
             Path = path,
             Fingerprint = command.Destination.Fingerprint,
-            Endpoint = command.Destination.Endpoint,
+            // Only a container's endpoint may be left out, which names the
+            // account at the public service; an empty one is the same.
+            Endpoint = kind == DestinationKind.AzureBlob
+                ? NullIfEmpty(command.Destination.Endpoint)
+                : command.Destination.Endpoint,
             FailureDomain = domain,
             DeepVerifyIntervalDays = command.Destination.DeepVerifyIntervalDays,
             // Null preserves — a pre-1.17 client cannot see the field.
@@ -203,12 +215,14 @@ public sealed partial class ServiceCommandHandler
             DrillIntervalDays = drillIntervalDays,
             TransferLimit = transferLimit,
             // An empty text is no value, as the console's empty field is: the
-            // configuration's own validation then says which ones an s3
-            // destination cannot do without and which other kinds may not carry.
+            // configuration's own validation then says which ones an object
+            // store cannot do without and which other kinds may not carry.
             Bucket = NullIfEmpty(command.Destination.Bucket),
             Region = NullIfEmpty(command.Destination.Region),
             Prefix = NullIfEmpty(command.Destination.Prefix),
             Addressing = addressing,
+            Account = NullIfEmpty(command.Destination.Account),
+            Container = NullIfEmpty(command.Destination.Container),
         };
 
         // The circular-capture guard (FR-DEST-011), entered from this door:
@@ -461,15 +475,24 @@ public sealed partial class ServiceCommandHandler
                     + "peering is over too.");
                 break;
 
-            case DestinationKind.S3:
+            case DestinationKind.S3 or DestinationKind.AzureBlob:
                 lines.Add(
-                    $"Bucket '{destination.Bucket}' at {destination.Endpoint} keeps every object it was sent"
+                    $"The {StoreComposition.Describe(destination)} keeps every object it was sent"
                     + (destination.Prefix is { } prefix ? $" under '{prefix}'" : string.Empty) + ".");
+                var held = runtime.DestinationCredentials.KindHeld(destination.Id);
                 if (runtime.DestinationCredentials.Delete(destination.Id))
                 {
-                    lines.Add(
-                        "Its access key is forgotten: this service holds it no longer. Revoke it at the provider "
-                        + "too if nothing else uses it.");
+                    lines.Add(held switch
+                    {
+                        DestinationCredentialStore.SharedKeyKind =>
+                            "Its account key is forgotten: this service holds it no longer. Rotate it at the "
+                            + "account if anything other than this service ever held it.",
+                        DestinationCredentialStore.SharedAccessSignatureKind =>
+                            "Its shared access signature is forgotten: this service holds it no longer. Revoke it "
+                            + "at the account too, through the policy it was issued under, if nothing else uses it.",
+                        _ => "Its access key is forgotten: this service holds it no longer. Revoke it at the "
+                            + "provider too if nothing else uses it.",
+                    });
                 }
 
                 break;

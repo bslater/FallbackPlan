@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Translatable messages for FallbackPlan.Storage.AzureBlob.
+
+  Every entry is a message a person may read when something fails. Keys are
+  <Type>_<Subject>: the type that raises it, then what it says. The neutral
+  text here is the English original — a translated resx sits beside it as
+  Strings.<culture>.resx and is picked up by satellite assembly.
+
+  Placeholders are positional ({0}, {1}) rather than named, because a
+  translator may need to reorder them and a composite format string is the
+  only form that allows it.
+
+  Generated accessor: Strings.g.cs (eng/generate-resources.py).
+-->
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
+  </resheader>
+  <data name="AzureBlobCredentials_AccountKeyMalformed" xml:space="preserve">
+    <value>An account key is the base64 text the storage account issued, with no spaces in it; what was given is not one.</value>
+  </data>
+  <data name="AzureBlobCredentials_SignatureNotAToken" xml:space="preserve">
+    <value>A shared access signature is the query text the account issued, such as sv=…&amp;sp=…&amp;sig=…, at most {0} characters with no spaces and no address before it; what was given is not one.</value>
+  </data>
+  <data name="AzureBlobCredentials_SignatureLacksField" xml:space="preserve">
+    <value>A shared access signature carries '{0}', and this one does not: give the whole token the account issued, from sv= to the end of sig=.</value>
+  </data>
+  <data name="AzureBlobCredentials_SignatureExpiryUnreadable" xml:space="preserve">
+    <value>The shared access signature's expiry '{0}' is not a time.</value>
+  </data>
+  <data name="AzureBlobLocation_AccountInvalid" xml:space="preserve">
+    <value>'{0}' is not a storage account name: 3 to 24 lowercase letters and digits.</value>
+  </data>
+  <data name="AzureBlobLocation_ContainerInvalid" xml:space="preserve">
+    <value>'{0}' is not a container name: 3 to 63 lowercase letters, digits and hyphens, starting with a letter or a digit, with no two hyphens together and none at the end.</value>
+  </data>
+  <data name="AzureBlobLocation_PrefixInvalid" xml:space="preserve">
+    <value>'{0}' is not a prefix: folders of lowercase letters, digits, dots, underscores and hyphens, separated by '/', none starting with a dot.</value>
+  </data>
+  <data name="AzureBlobLocation_EndpointNotTheAccounts" xml:space="preserve">
+    <value>The endpoint '{0}' is not the account's blob endpoint: give a scheme, a host and, where it is not the scheme's own, a port, and at most the account's name as its path — for example https://{1}.objects.example.net, or http://127.0.0.1:10000/{1} for a store on this machine.</value>
+  </data>
+  <data name="AzureBlobLocation_EndpointInClear" xml:space="preserve">
+    <value>The endpoint '{0}' is not https. Only a store on this machine is spoken to in clear: anything further away is reached through whoever is in between.</value>
+  </data>
+  <data name="AzureBlobObjectStore_ObjectTooLarge" xml:space="preserve">
+    <value>'{0}' is {1} bytes; one request to an Azure Blob container carries at most {2}.</value>
+  </data>
+  <data name="AzureBlobObjectStore_ListingUnreadable" xml:space="preserve">
+    <value>The Azure Blob store answered a listing that cannot be read ({0}).</value>
+  </data>
+  <data name="AzureBlobObjectStore_Unreachable" xml:space="preserve">
+    <value>The Azure Blob store could not be reached for a {0} after {1} attempt(s): {2}</value>
+  </data>
+  <data name="AzureBlobObjectStore_Refused" xml:space="preserve">
+    <value>The Azure Blob store refused a {0} of '{1}': {2} {3}. {4}</value>
+  </data>
+  <data name="AzureBlobObjectStore_BodyEndedEarly" xml:space="preserve">
+    <value>The Azure Blob store's answer ended before the blob it was sending did.</value>
+  </data>
+  <data name="AzureBlobObjectStore_SignatureExpired" xml:space="preserve">
+    <value>The shared access signature for this container expired at {0} UTC, so nothing was asked of the store under it: store a new one.</value>
+  </data>
+</root>

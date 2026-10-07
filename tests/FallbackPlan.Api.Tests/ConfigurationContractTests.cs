@@ -52,13 +52,13 @@ public sealed class ConfigurationContractTests : IDisposable
             new DestinationDescriptor(
                 null, "cloud", "azure-blob", Path: null, Fingerprint: null, Endpoint: null,
                 Prefix: "site-a", AccessKeyStored: true, Account: "fbptestaccount", Container: "family-backups",
-                CredentialKind: "sas", CredentialExpires: "2026-12-31T00:00:00Z"),
+                AuthorisedBy: "sas", SignatureExpires: "2026-12-31T00:00:00Z"),
             FrameCodec.SerializerOptions);
 
         Assert.Contains("\"account\":\"fbptestaccount\"", declared, StringComparison.Ordinal);
         Assert.Contains("\"container\":\"family-backups\"", declared, StringComparison.Ordinal);
-        Assert.Contains("\"credential_kind\":\"sas\"", declared, StringComparison.Ordinal);
-        Assert.Contains("\"credential_expires\":\"2026-12-31T00:00:00Z\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"authorised_by\":\"sas\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"signature_expires\":\"2026-12-31T00:00:00Z\"", declared, StringComparison.Ordinal);
 
         // A pre-1.61 descriptor names none of them and reads as before.
         var old = JsonSerializer.Deserialize<DestinationDescriptor>(
@@ -66,8 +66,8 @@ public sealed class ConfigurationContractTests : IDisposable
             FrameCodec.SerializerOptions)!;
         Assert.IsNull(old.Account);
         Assert.IsNull(old.Container);
-        Assert.IsNull(old.CredentialKind);
-        Assert.IsNull(old.CredentialExpires);
+        Assert.IsNull(old.AuthorisedBy);
+        Assert.IsNull(old.SignatureExpires);
         Assert.IsTrue(old.AccessKeyStored);
     }
 
@@ -79,9 +79,9 @@ public sealed class ConfigurationContractTests : IDisposable
         // open it. Neither has a key id; a pre-1.61 request names no kind and
         // is the access key it always was.
         var asked = JsonSerializer.Serialize<ServiceCommand>(
-            new SetDestinationCredentialsCommand("cloud", null, "00ff", CredentialKind: "sas"), FrameCodec.SerializerOptions);
+            new SetDestinationCredentialsCommand("cloud", null, "00ff", Kind: "sas"), FrameCodec.SerializerOptions);
 
-        Assert.Contains("\"credential_kind\":\"sas\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"sas\"", asked, StringComparison.Ordinal);
         Assert.Contains("\"access_key_id\":null", asked, StringComparison.Ordinal);
 
         Assert.IsInstanceOfType<SetDestinationCredentialsCommand>(
@@ -89,7 +89,7 @@ public sealed class ConfigurationContractTests : IDisposable
                 """{"command":"set_destination_credentials","destination_name":"cloud","access_key_id":"AKIDCLOUD0001","envelope":"00ff"}""",
                 FrameCodec.SerializerOptions),
             out var older);
-        Assert.IsNull(older.CredentialKind);
+        Assert.IsNull(older.Kind);
         Assert.AreEqual("AKIDCLOUD0001", older.AccessKeyId);
     }
 

@@ -257,7 +257,7 @@ public sealed class ConfigEditingDomTests
 
         var stored = await harness.ReceivedAsync<SetDestinationCredentialsCommand>();
         Assert.AreEqual("cloud", stored.DestinationName);
-        Assert.AreEqual("shared-key", stored.CredentialKind);
+        Assert.AreEqual("shared-key", stored.Kind);
         Assert.IsNull(stored.AccessKeyId);
         Assert.AreEqual(
             accountKey, WriteOnlyProvisioning.OpenAccountKey(Wire.RecipientScalar, Convert.FromHexString(stored.Envelope), "cloud"));
@@ -278,7 +278,7 @@ public sealed class ConfigEditingDomTests
                 new DestinationDescriptor(
                     "dest-azure", "cloud", "azure-blob", null, null, null, Prefix: "site-a", AccessKeyStored: true,
                     Account: "fbptestaccount", Container: "family-backups",
-                    CredentialKind: "sas", CredentialExpires: "2026-12-31T00:00:00Z"),
+                    AuthorisedBy: "sas", SignatureExpires: "2026-12-31T00:00:00Z"),
             ]),
             UpsertDestinationCommand => new AcknowledgedResult(),
             SetDestinationCredentialsCommand => new ConfigurationChangeResult(["Shared access signature stored."]),
@@ -303,7 +303,7 @@ public sealed class ConfigEditingDomTests
         var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
         Assert.AreEqual("dest-azure", upsert.Destination.Id);
         var stored = await harness.ReceivedAsync<SetDestinationCredentialsCommand>();
-        Assert.AreEqual("sas", stored.CredentialKind);
+        Assert.AreEqual("sas", stored.Kind);
         Assert.AreEqual(
             token, WriteOnlyProvisioning.OpenSharedAccessSignature(Wire.RecipientScalar, Convert.FromHexString(stored.Envelope), "cloud"));
     }
@@ -320,7 +320,7 @@ public sealed class ConfigEditingDomTests
                 new DestinationDescriptor(
                     "dest-azure", "cloud", "azure-blob", null, null, null, Prefix: "site-a", AccessKeyStored: true,
                     Account: "fbptestaccount", Container: "family-backups",
-                    CredentialKind: "sas", CredentialExpires: "2020-01-01T00:00:00Z"),
+                    AuthorisedBy: "sas", SignatureExpires: "2020-01-01T00:00:00Z"),
             ]),
             DiscoverArchivesCommand => new ArchivesDiscoveredResult("cloud", [], []),
             _ => new AcknowledgedResult(),

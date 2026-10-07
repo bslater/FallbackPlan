@@ -56,7 +56,7 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
         $"{origin.GetLeftPart(UriPartial.Authority)}/{AzureBlobTestServer.DefaultAccount}";
 
     /// <inheritdoc />
-    protected override DestinationConfiguration Declare(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays) => new()
+    protected override DestinationConfiguration DeclareStore(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays) => new()
     {
         Id = CloudId,
         Name = "cloud",
@@ -75,7 +75,7 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var envelope = WriteOnlyProvisioning.SealAccountKey(await RecipientAsync(handler), "cloud", secret ?? Azure.AccountKey);
         var stored = await handler.ExecuteAsync(
-            new SetDestinationCredentialsCommand("cloud", null, Convert.ToHexStringLower(envelope), CredentialKind: "shared-key"),
+            new SetDestinationCredentialsCommand("cloud", null, Convert.ToHexStringLower(envelope), Kind: "shared-key"),
             Timeout);
         Assert.IsInstanceOfType<ConfigurationChangeResult>(stored, (stored as ServiceError)?.Message);
     }
@@ -85,8 +85,8 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
     {
         Assert.AreEqual(AzureBlobTestServer.DefaultAccount, listed.Account);
         Assert.AreEqual(Namespace, listed.Container);
-        Assert.AreEqual("shared-key", listed.CredentialKind);
-        Assert.IsNull(listed.CredentialExpires, "an account key does not lapse");
+        Assert.AreEqual("shared-key", listed.AuthorisedBy);
+        Assert.IsNull(listed.SignatureExpires, "an account key does not lapse");
         Assert.IsNull(listed.Bucket);
         Assert.IsNull(listed.Region);
     }
@@ -118,8 +118,8 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
             await handler.ExecuteAsync(new ListDestinationsCommand(), Timeout), out var listed);
         var described = listed.Destinations.Single(destination => destination.Name == "cloud");
         Assert.IsTrue(described.AccessKeyStored);
-        Assert.AreEqual("sas", described.CredentialKind);
-        Assert.AreEqual(expires.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture), described.CredentialExpires);
+        Assert.AreEqual("sas", described.AuthorisedBy);
+        Assert.AreEqual(expires.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture), described.SignatureExpires);
         var signature = token[(token.IndexOf("sig=", StringComparison.Ordinal) + 4)..];
         Assert.DoesNotContain(signature, System.Text.Json.JsonSerializer.Serialize<ServiceResult>(listed, Api.Transport.FrameCodec.SerializerOptions), StringComparison.Ordinal);
     }
@@ -158,6 +158,33 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
         Assert.AreEqual("failed", cloud.State);
         Assert.Contains("expired", cloud.Detail!, StringComparison.Ordinal);
         Assert.Contains("destination-credentials", cloud.Detail!, StringComparison.Ordinal);
+        Assert.IsEmpty(Store.Requests);
+    }
+
+    [TestMethod]
+    public async Task ACredentialOfAnotherApi_IsNotHeldForAContainer_AndNothingIsSentUnderIt()
+    {
+        // A destination whose kind was changed after its credential was
+        // stored holds an access key a container cannot use. It is told it
+        // holds none, the way it would be if nothing had been stored, rather
+        // than listed as ready and failing at the store.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        runtime.DestinationCredentials.Save(CloudId, new Storage.S3.S3Credentials("FBPKEYID0001", "not/a/key/for/this/api"));
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<DestinationsResult>(
+            await handler.ExecuteAsync(new ListDestinationsCommand(), Timeout), out var listed);
+        var described = listed.Destinations.Single(destination => destination.Name == "cloud");
+        Assert.IsFalse(described.AccessKeyStored);
+        Assert.IsNull(described.AuthorisedBy);
+
+        await BackUpAsync(runtime);
+        var cloud = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("failed", cloud.State);
+        Assert.Contains(MissingCredentialWords, cloud.Detail!, StringComparison.Ordinal);
         Assert.IsEmpty(Store.Requests);
     }
 
@@ -299,7 +326,7 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
     {
         var envelope = WriteOnlyProvisioning.SealSharedAccessSignature(await RecipientAsync(handler), "cloud", token);
         return await handler.ExecuteAsync(
-            new SetDestinationCredentialsCommand("cloud", null, Convert.ToHexStringLower(envelope), CredentialKind: "sas"),
+            new SetDestinationCredentialsCommand("cloud", null, Convert.ToHexStringLower(envelope), Kind: "sas"),
             Timeout);
     }
 

@@ -371,19 +371,30 @@ public sealed record AcknowledgeNoticeCommand(string Id) : ServiceCommand;
 public sealed record NoticeNamesCommand(string NoticeId, string? Source = null) : ServiceCommand;
 
 /// <summary>
-/// Stores the access key an S3-compatible destination's requests are signed
-/// with (contract 1.60, ADR-0091). The secret arrives only as an envelope
+/// Stores the credential an object-store destination's requests are
+/// authorised by (contract 1.60, ADR-0091; contract 1.61, ADR-0093): an
+/// S3-compatible store's access key, or an Azure Blob container's account
+/// key or shared access signature. The secret arrives only as an envelope
 /// sealed to the service's published recipient key, where it was typed, as
 /// every secret that crosses this surface does (NFR-SEC-009); the service
 /// opens it into its own state directory, owner-only, and never into the
 /// configuration file, an export, a diagnostic bundle or a log (NFR-SEC-006,
 /// NFR-SEC-012). Nothing ever answers it back.
 /// </summary>
-/// <param name="DestinationName">The <c>s3</c> destination, by name.</param>
-/// <param name="AccessKeyId">The access key id the store knows the key by, which every request carries in clear.</param>
-/// <param name="Envelope">The secret access key, sealed to the service's recipient key, as hex.</param>
+/// <param name="DestinationName">The <c>s3</c> or <c>azure-blob</c> destination, by name.</param>
+/// <param name="AccessKeyId">
+/// The access key id the store knows the key by, which every request carries
+/// in clear — for an access key, and for nothing else.
+/// </param>
+/// <param name="Envelope">The secret, sealed to the service's recipient key for its kind, as hex.</param>
+/// <param name="Kind">
+/// What the envelope carries: <c>access-key</c> (an S3-compatible store's
+/// secret access key, and what a pre-1.61 request that names no kind means),
+/// <c>shared-key</c> (an Azure Blob account key) or <c>sas</c> (a shared
+/// access signature for the container).
+/// </param>
 public sealed record SetDestinationCredentialsCommand(
-    string DestinationName, string AccessKeyId, string Envelope) : ServiceCommand;
+    string DestinationName, string? AccessKeyId, string Envelope, string? Kind = null) : ServiceCommand;
 
 /// <summary>
 /// Ends a pairing (ADR-0030 Amendment 2): announces the termination to the

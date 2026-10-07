@@ -61,7 +61,7 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
 
     /// <summary>The destination's declaration: its kind and its address.</summary>
     /// <param name="endpoint">Its endpoint.</param>
-    protected abstract DestinationConfiguration Declare(string endpoint);
+    protected abstract DestinationConfiguration DeclareStore(string endpoint);
 
     /// <summary>Stores the credential the way every client does: sealed to the service, where it was typed.</summary>
     /// <param name="runtime">The service.</param>
@@ -363,7 +363,7 @@ public abstract class ObjectStoreAdoptionTests : IAsyncDisposable
     private void WriteConfiguration(bool withDocsSet, string? endpoint = null) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
-        Destinations = [Declare(endpoint ?? EndpointAt(Store.Origin))],
+        Destinations = [DeclareStore(endpoint ?? EndpointAt(Store.Origin))],
         BackupSets = withDocsSet
             ?
             [

@@ -549,8 +549,8 @@ public static class StatusDeriver
             {
                 warnings.Add(
                     $"'{destination.Name}' was last proven {destination.VerificationAgeDays} days ago, past the "
-                    + $"{destination.VerificationBoundDays}-day bound for a "
-                    + $"{DestinationLabel(destination.Kind)} destination — the proof still covers what was sent, "
+                    + $"{destination.VerificationBoundDays}-day bound for {WithArticle(DestinationLabel(destination.Kind))} "
+                    + "destination — the proof still covers what was sent, "
                     + "but nothing has re-read those bytes since.");
             }
 
@@ -740,8 +740,13 @@ public static class StatusDeriver
     {
         DestinationKind.LocalPath => "local-path",
         DestinationKind.Peer => "peer",
+        DestinationKind.AzureBlob => "azure-blob",
         _ => kind.ToString().ToLowerInvariant(),
     };
+
+    /// <summary>A kind's spelling with the article it is read aloud with: an s3, an azure-blob, a peer.</summary>
+    private static string WithArticle(string label) =>
+        (label[0] is 'a' or 'e' or 'i' or 'o' or 'u' || label == "s3" ? "an " : "a ") + label;
 
     /// <summary>The configuration's spelling of a domain (FR-SNP-007).</summary>
     public static string DomainLabel(FailureDomain domain) => domain switch

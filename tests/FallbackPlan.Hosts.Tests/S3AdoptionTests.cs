@@ -24,7 +24,7 @@ public sealed class S3AdoptionTests() : ObjectStoreAdoptionTests(StartStore())
     protected override string EndpointAt(Uri origin) => origin.ToString();
 
     /// <inheritdoc />
-    protected override DestinationConfiguration Declare(string endpoint) => new()
+    protected override DestinationConfiguration DeclareStore(string endpoint) => new()
     {
         Id = CloudId,
         Name = Cloud,

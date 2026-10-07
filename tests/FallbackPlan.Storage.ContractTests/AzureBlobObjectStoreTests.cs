@@ -216,18 +216,20 @@ public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task OpenRead_ARangeRunningPastTheEnd_IsTheShortSlice_ReadFromContentRange()
+    public async Task OpenRead_ARangeRunningPastTheEnd_IsRangeNotSatisfiable_AsReadFromContentRange()
     {
+        // The API answers a range that starts inside the blob and runs past
+        // its end with a short 206. The contract calls that range
+        // unsatisfiable, as the local store does, so the served range is read
+        // from Content-Range rather than trusted to be the one asked for.
         var store = Store();
         await store.PutAsync(Key("blobs/data/ab/short"), Content("sealed blob"u8.ToArray()), PutConditions.IfNotExists, CancellationToken.None);
 
         using var read = await store.OpenReadAsync(Key("blobs/data/ab/short"), new ObjectRange(5, 100), CancellationToken.None);
 
-        Assert.AreEqual(OpenReadOutcome.Found, read.Outcome);
-        using var buffer = new MemoryStream();
-        await read.Content!.CopyToAsync(buffer);
-        SequenceAssert.AreEqual("d blob"u8.ToArray(), buffer.ToArray());
+        Assert.AreEqual(OpenReadOutcome.RangeNotSatisfiable, read.Outcome);
         var get = _server.Requests.Last(request => request.Method == "GET");
+        Assert.AreEqual(206, get.Status, "the store served what there was");
         Assert.AreEqual("bytes=5-104", get.Headers["x-ms-range"]);
     }
 

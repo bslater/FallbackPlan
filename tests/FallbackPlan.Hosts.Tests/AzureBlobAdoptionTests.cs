@@ -26,7 +26,7 @@ public sealed class AzureBlobAdoptionTests() : ObjectStoreAdoptionTests(StartSto
         $"{origin.GetLeftPart(UriPartial.Authority)}/{AzureBlobTestServer.DefaultAccount}";
 
     /// <inheritdoc />
-    protected override DestinationConfiguration Declare(string endpoint) => new()
+    protected override DestinationConfiguration DeclareStore(string endpoint) => new()
     {
         Id = CloudId,
         Name = Cloud,
@@ -44,7 +44,7 @@ public sealed class AzureBlobAdoptionTests() : ObjectStoreAdoptionTests(StartSto
         var envelope = WriteOnlyProvisioning.SealSharedAccessSignature(
             await RecipientAsync(handler), Cloud, Azure.IssueSas(Namespace));
         var stored = await handler.ExecuteAsync(
-            new SetDestinationCredentialsCommand(Cloud, null, Convert.ToHexStringLower(envelope), CredentialKind: "sas"), Timeout);
+            new SetDestinationCredentialsCommand(Cloud, null, Convert.ToHexStringLower(envelope), Kind: "sas"), Timeout);
         Assert.IsInstanceOfType<ConfigurationChangeResult>(stored, (stored as ServiceError)?.Message);
     }
 

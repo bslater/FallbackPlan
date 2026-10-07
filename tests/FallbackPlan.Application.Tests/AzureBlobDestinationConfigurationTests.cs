@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FallbackPlan.Application;
 using FallbackPlan.Domain;
 
@@ -72,7 +73,12 @@ public sealed class AzureBlobDestinationConfigurationTests
         var loaded = Assert.ContainsSingle(ClientConfiguration.Load(ConfigPath).Destinations);
         Assert.IsNull(loaded.Endpoint);
         Assert.IsNull(loaded.AddressDefect);
-        Assert.DoesNotContain("endpoint", File.ReadAllText(ConfigPath), StringComparison.Ordinal);
+
+        // The file names no endpoint for it to be read back as one: every
+        // kind writes the field, and none is written as null.
+        using var written = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+        var declared = Assert.ContainsSingle(written.RootElement.GetProperty("destinations").EnumerateArray());
+        Assert.AreEqual(JsonValueKind.Null, declared.GetProperty("endpoint").ValueKind);
     }
 
     [TestMethod]

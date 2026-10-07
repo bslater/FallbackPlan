@@ -118,8 +118,8 @@ internal static class RecoveryDrillJob
     /// <summary>
     /// Drills one (set, destination) pair and records the result, under the
     /// budget the destination's kind implies: none for a local path, the
-    /// peer budget for a peer and for an S3-compatible store, whose every
-    /// byte read back crosses a network and, at a provider, a bill.
+    /// peer budget for a peer and for an object store, whose every byte read
+    /// back crosses a network and, at a provider, a bill.
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set whose replica to read.</param>
@@ -134,7 +134,7 @@ internal static class RecoveryDrillJob
         CancellationToken cancellationToken)
     {
         var budget = runtime.Configuration.FindDestination(destinationName) is
-            { Kind: DestinationKind.Peer or DestinationKind.S3 }
+            { Kind: DestinationKind.Peer or DestinationKind.S3 or DestinationKind.AzureBlob }
             ? SampleBudget.Peer
             : null;
         return RunAsync(runtime, set, destinationName, nowMs, budget, cancellationToken);
@@ -187,7 +187,8 @@ internal static class RecoveryDrillJob
             return "the destination is no longer declared";
         }
 
-        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer or DestinationKind.S3))
+        if (destination.Kind is not (DestinationKind.LocalPath or DestinationKind.Peer)
+            && !destination.Kind.IsObjectStore())
         {
             return $"a {destination.Kind} destination is not served yet";
         }
@@ -229,7 +230,7 @@ internal static class RecoveryDrillJob
         CancellationToken cancellationToken)
     {
         var budget = runtime.Configuration.FindDestination(destinationName) is
-            { Kind: DestinationKind.Peer or DestinationKind.S3 }
+            { Kind: DestinationKind.Peer or DestinationKind.S3 or DestinationKind.AzureBlob }
             ? SampleBudget.Peer
             : null;
         return RunAsync(

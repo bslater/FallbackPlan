@@ -90,7 +90,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="endpoint">Its endpoint.</param>
     /// <param name="drillIntervalDays">Its drill cadence, if one is stated.</param>
     /// <param name="deepVerifyIntervalDays">Its sweep cadence, if one is stated.</param>
-    protected abstract DestinationConfiguration Declare(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays);
+    protected abstract DestinationConfiguration DeclareStore(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays);
 
     /// <summary>Stores the credential the way every client does: sealed to the service, where it was typed.</summary>
     /// <param name="runtime">The service.</param>
@@ -769,7 +769,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     {
         List<DestinationConfiguration> destinations =
         [
-            Declare(endpoint ?? EndpointAt(Store.Origin), drillIntervalDays, deepVerifyIntervalDays),
+            DeclareStore(endpoint ?? EndpointAt(Store.Origin), drillIntervalDays, deepVerifyIntervalDays),
         ];
         List<SetDestinationReference> references = referenced ? [new SetDestinationReference { Ref = "cloud" }] : [];
 

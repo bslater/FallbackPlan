@@ -3302,13 +3302,14 @@ function renderConfigBody() {
     <tr>
       <td><b>${esc(destination.name)}</b>
           ${destination.addressDefect ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "address defect")} ${esc(destination.addressDefect)}</div>` : ""}
-          ${destination.kind === "s3" && destination.accessKeyStored === false ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "no access key")} nothing is sent until one is stored</div>` : ""}</td>
+          ${isObjectStore(destination) && destination.accessKeyStored === false ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, destination.kind === "azure-blob" ? "no credential" : "no access key")} nothing is sent until one is stored</div>` : ""}
+          ${signatureLapsed(destination) ? `<div class="detail">${badge({ cls: "warn", icon: "⚠" }, "signature expired")} nothing is sent until a new one is stored</div>` : ""}</td>
       <td>${esc(destination.kind)}</td>
       <td class="mono detail">${esc(destinationAddress(destination))}</td>
       <td class="detail">${esc(destination.failureDomain ?? "derived")}</td>
       <td>
         <button type="button" class="btn small" data-action="cfg-edit-dest" data-id="${esc(destination.id)}">Edit</button>
-        ${destination.kind === "local-path" || destination.kind === "s3" ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
+        ${destination.kind === "local-path" || isObjectStore(destination) ? `<button type="button" class="btn small" data-action="dest-discover" data-name="${esc(destination.name)}">Find backups…</button>` : ""}
         <button type="button" class="btn small" data-action="cfg-delete-dest" data-name="${esc(destination.name)}">Delete…</button>
       </td>
     </tr>`).join("");
@@ -3374,6 +3375,7 @@ function renderConfigBody() {
           <button type="button" class="btn small" data-action="dest-add-local">＋ Local folder</button>
           <button type="button" class="btn small" data-action="dest-add-peer" ${S.pairings.length ? "" : "disabled title='Pair with a peer first'"}>＋ Peer destination</button>
           <button type="button" class="btn small" data-action="dest-add-s3">＋ S3-compatible storage</button>
+          <button type="button" class="btn small" data-action="dest-add-azure-blob">＋ Azure Blob container</button>
           <button type="button" class="btn small" data-action="invite-open">✉ Invite a peer</button>
           <button type="button" class="btn small" data-action="pair-open">🔗 Pair with a remote service</button>
         </span>
@@ -3786,7 +3788,7 @@ function setSectionHtml(key) {
         <p class="subtle">Ship straight to destinations — no local staging copy: each backup writes into every
         reachable destination as it runs, and this machine keeps only the catalogue. Needs at least one
         local-path or paired-peer destination, and a backup waits when none is reachable; an S3-compatible
-        store is filled by the sync after each run, from what the run shipped. With only a peer
+        store or an Azure Blob container is filled by the sync after each run, from what the run shipped. With only a peer
         to ship to, there is no second copy here to check its content against, so it is never reported as
         verified. Unticked, backups stage into a
         local archive first and copy outward after — a local buffer at the cost of a second copy on this
@@ -4923,6 +4925,7 @@ Object.assign(actions, {
   "dest-add-local"() { openDestEditor("local-path", null); },
   "dest-add-peer"() { openDestEditor("peer", null); },
   "dest-add-s3"() { openDestEditor("s3", null); },
+  "dest-add-azure-blob"() { openDestEditor("azure-blob", null); },
 
   "cfg-edit-dest"(el) {
     const destination = S.destinations.find(candidate => candidate.id === el.dataset.id);
@@ -4956,6 +4959,7 @@ Object.assign(actions, {
   async "dest-save"(el) {
     const kind = el.dataset.kind;
     const s3 = kind === "s3";
+    const azure = kind === "azure-blob";
     const drillText = document.getElementById("dest-drill").value.trim();
     const field = id => document.getElementById(id)?.value.trim() ?? "";
     const descriptor = {
@@ -4964,13 +4968,18 @@ Object.assign(actions, {
       kind,
       path: kind === "local-path" ? document.getElementById("dest-path").value.trim() : null,
       fingerprint: kind === "peer" ? document.getElementById("dest-fp").value.trim() : null,
-      endpoint: kind === "peer" || s3 ? document.getElementById("dest-endpoint").value.trim() : null,
-      // An S3-compatible store's address (ADR-0091); an emptied optional
+      // A container's endpoint is optional: none is the account at the
+      // public service (ADR-0093).
+      endpoint: kind === "peer" || s3 ? document.getElementById("dest-endpoint").value.trim()
+        : azure ? field("dest-endpoint") || null : null,
+      // An object store's address (ADR-0091, ADR-0093); an emptied optional
       // field goes as empty, which the service reads as none.
       bucket: s3 ? field("dest-bucket") : null,
       region: s3 ? field("dest-region") : null,
-      prefix: s3 ? field("dest-prefix") : null,
+      prefix: s3 || azure ? field("dest-prefix") : null,
       addressing: s3 ? field("dest-addressing") : null,
+      account: azure ? field("dest-account") : null,
+      container: azure ? field("dest-container") : null,
       failureDomain: document.getElementById("dest-domain").value || null,
       deepVerifyIntervalDays: Number(field("dest-sweep")) || null,
       priority: intOrNull(document.getElementById("dest-priority").value),
@@ -4989,8 +4998,9 @@ Object.assign(actions, {
     // The secret is read here and sent only to the console's own endpoint,
     // which seals it to the service; nothing typed is sent when nothing was.
     const keyId = s3 ? field("dest-key-id") : "";
-    const secret = s3 ? (document.getElementById("dest-secret")?.value ?? "") : "";
-    if (secret && !keyId) { toast("warn", "An access key needs its id too."); return; }
+    const secret = s3 || azure ? (document.getElementById("dest-secret")?.value ?? "") : "";
+    const credentialKind = azure ? document.getElementById("dest-credential-kind").value : "access-key";
+    if (s3 && secret && !keyId) { toast("warn", "An access key needs its id too."); return; }
 
     await withBusy(el, async () => {
       const result = await run(
@@ -5003,7 +5013,7 @@ Object.assign(actions, {
       // that only a Debug build lets stand (ADR-0051 Amendment 2).
       const lines = result.result === "configuration_change" ? [...(result.lines ?? [])] : [];
       if (secret) {
-        const stored = await storeAccessKey(descriptor.name, keyId, secret);
+        const stored = await storeCredential(descriptor.name, credentialKind, keyId, secret);
         if (stored) lines.push(...stored);
       }
       if (lines.length) reportDialog(`Destination '${descriptor.name}' saved`, lines);
@@ -5174,19 +5184,38 @@ Object.assign(actions, {
 /* ----- destination editor & root browser ----- */
 
 // Where a destination is, in one line: a folder, a peer's address and
-// fingerprint, or a store's endpoint, bucket and prefix.
+// fingerprint, a store's endpoint, bucket and prefix, or a container's
+// account, name and prefix, behind an endpoint only when one is declared.
 function destinationAddress(destination) {
   if (destination.kind === "s3") {
     return `${destination.endpoint ?? ""} · ${destination.bucket ?? ""}${destination.prefix ? "/" + destination.prefix : ""}`;
+  }
+  if (destination.kind === "azure-blob") {
+    return `${destination.endpoint ? destination.endpoint + " · " : ""}${destination.account ?? ""} · `
+      + `${destination.container ?? ""}${destination.prefix ? "/" + destination.prefix : ""}`;
   }
   return destination.path
     ?? (destination.endpoint ? destination.endpoint + " · " + (destination.fingerprint ?? "").slice(0, 10) + "…" : "—");
 }
 
-// The access key goes to the console's own endpoint, which seals it to the
-// service for this destination and key id (ADR-0091): the command relay is
-// never sent the secret. Answers the service's lines, or null when refused.
-async function storeAccessKey(destinationName, accessKeyId, secretAccessKey) {
+function isObjectStore(destination) {
+  return destination.kind === "s3" || destination.kind === "azure-blob";
+}
+
+// A held shared access signature past the expiry it states: every request
+// under it would be refused, so the service sends none (ADR-0093).
+function signatureLapsed(destination) {
+  return destination.kind === "azure-blob" && destination.authorisedBy === "sas"
+    && !!destination.signatureExpires && Date.parse(destination.signatureExpires) <= Date.now();
+}
+
+// The credential goes to the console's own endpoint, which seals it to the
+// service for this destination (and an access key's id) under its kind's
+// purpose (ADR-0091, ADR-0093): the command relay is never sent the secret.
+// Answers the service's lines, or null when refused.
+async function storeCredential(destinationName, credentialKind, accessKeyId, secret) {
+  const noun = credentialKind === "shared-key" ? "account key"
+    : credentialKind === "sas" ? "shared access signature" : "access key";
   let response;
   try {
     response = await fetch("/api/destination-credentials", {
@@ -5194,15 +5223,17 @@ async function storeAccessKey(destinationName, accessKeyId, secretAccessKey) {
       headers: session
         ? { "Content-Type": "application/json", "Authorization": "Bearer " + token, "X-FallbackPlan-Session": session }
         : { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-      body: JSON.stringify({ destinationName, accessKeyId, secretAccessKey }),
+      body: JSON.stringify(credentialKind === "access-key"
+        ? { destinationName, accessKeyId, secretAccessKey: secret }
+        : { destinationName, credentialKind, secret }),
     });
   } catch {
-    toast("warn", "The console process stopped answering; the access key was not stored.");
+    toast("warn", `The console process stopped answering; the ${noun} was not stored.`);
     return null;
   }
   const body = await safeJson(response);
   if (response.ok && body?.outcome === "stored") return body.lines ?? [];
-  toast("bad", body?.detail ?? body?.message ?? "The access key was not stored.");
+  toast("bad", body?.detail ?? body?.message ?? `The ${noun} was not stored.`);
   return null;
 }
 
@@ -5210,6 +5241,7 @@ function destinationHeading(kind, isNew) {
   if (!isNew) return "Edit destination";
   return kind === "peer" ? "New peer destination"
     : kind === "s3" ? "New S3-compatible destination"
+    : kind === "azure-blob" ? "New Azure Blob destination"
     : "New local destination";
 }
 
@@ -5242,6 +5274,38 @@ function s3Fields(destination) {
       </div>`;
 }
 
+function azureBlobFields(destination) {
+  const held = destination?.accessKeyStored === true ? destination?.authorisedBy : null;
+  const expires = destination?.signatureExpires ? destination.signatureExpires.slice(0, 10) : null;
+  const heldText = held === "sas"
+    ? `A shared access signature is held${expires ? `, honoured until ${expires}` : ""}${signatureLapsed(destination)
+      ? " — it has expired, and nothing is sent under it" : ""}. Type a credential only to replace it.`
+    : held === "shared-key" ? "The account key is held. Type a credential only to replace it."
+    : "No account key or shared access signature is held yet: nothing is sent to the container until one is.";
+  const kind = held === "sas" ? "sas" : "shared-key";
+  return `
+      <div class="field-row wrap">
+        <label class="mini">storage account <input type="text" id="dest-account" class="mono" spellcheck="false"
+          value="${esc(destination?.account ?? "")}"></label>
+        <label class="mini">container <input type="text" id="dest-container" class="mono" spellcheck="false"
+          value="${esc(destination?.container ?? "")}"></label>
+        <label class="mini">prefix <input type="text" id="dest-prefix" class="mono" spellcheck="false"
+          value="${esc(destination?.prefix ?? "")}" placeholder="the container's top"></label>
+      </div>
+      <label class="field" for="dest-endpoint">Endpoint <span class="plain">— only for an account the public service
+        does not host</span></label>
+      <input type="text" id="dest-endpoint" class="mono" spellcheck="false" value="${esc(destination?.endpoint ?? "")}"
+        placeholder="the account at the public service">
+      <p class="subtle" id="dest-key-held">${esc(heldText)}</p>
+      <div class="field-row wrap">
+        <label class="mini">credential
+          <select id="dest-credential-kind">${[["shared-key", "account key"], ["sas", "shared access signature"]].map(
+            ([value, label]) => `<option value="${value}" ${value === kind ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+        <label class="mini">secret <input type="password" id="dest-secret" autocomplete="new-password"></label>
+      </div>`;
+}
+
 function openDestEditor(kind, destination) {
   const isNew = !destination?.id;
   const domains = ["", "same-volume", "same-machine", "same-site", "independent"];
@@ -5252,6 +5316,9 @@ function openDestEditor(kind, destination) {
     ${kind === "s3" ? `<p class="dlg-sub">A bucket at any store that speaks the S3 API. Everything written there is
       sealed before it leaves this machine; the access key is sealed to the service here and held in its state
       directory, never in the configuration (ADR-0091).</p>` : ""}
+    ${kind === "azure-blob" ? `<p class="dlg-sub">A container in a storage account that speaks the Azure Blob API.
+      Everything written there is sealed before it leaves this machine; the account key or shared access signature
+      is sealed to the service here and held in its state directory, never in the configuration (ADR-0093).</p>` : ""}
     <label class="field" for="dest-name">Name <span class="plain">— what sets reference</span></label>
     <input type="text" id="dest-name" spellcheck="false" value="${esc(destination?.name ?? "")}">
     ${kind === "local-path" ? `
@@ -5260,7 +5327,8 @@ function openDestEditor(kind, destination) {
         <input type="text" id="dest-path" class="mono" spellcheck="false" value="${esc(destination?.path ?? "")}">
         <button type="button" class="btn" data-action="picker-browse" data-browser="dest-browser" data-input="dest-path">Browse…</button>
       </div>
-      <div id="dest-browser" hidden></div>` : kind === "s3" ? s3Fields(destination) : `
+      <div id="dest-browser" hidden></div>` : kind === "s3" ? s3Fields(destination)
+      : kind === "azure-blob" ? azureBlobFields(destination) : `
       <label class="field" for="dest-fp">Paired peer</label>
       <select id="dest-fp">${S.pairings.map(pairing =>
         `<option value="${esc(pairing.fingerprint)}" ${pairing.fingerprint === destination?.fingerprint ? "selected" : ""}>
@@ -5554,12 +5622,15 @@ function rstStep2() {
     <label class="radio-block"><input type="radio" name="rst-src" value="staging" ${W.destinationName === null ? "checked" : ""}>
       ${here}</label>`);
   for (const destination of W.dests) {
-    if (destination.kind !== "local-path" && destination.kind !== "peer" && destination.kind !== "s3") continue;
+    if (destination.kind !== "local-path" && destination.kind !== "peer" && !isObjectStore(destination)) continue;
     const label = destination.kind === "local-path"
       ? `replica at <span class="mono">${esc(destination.path ?? "")}</span>`
       : destination.kind === "s3"
         ? `replica in bucket <span class="mono">${esc(destination.bucket ?? "")}</span>, over the network`
-        : `replica at peer <span class="mono">${esc(destination.endpoint ?? "")}</span>, over the network`;
+        : destination.kind === "azure-blob"
+          ? `replica in container <span class="mono">${esc(destination.container ?? "")}</span> of account `
+            + `<span class="mono">${esc(destination.account ?? "")}</span>, over the network`
+          : `replica at peer <span class="mono">${esc(destination.endpoint ?? "")}</span>, over the network`;
     options.push(`
       <label class="radio-block"><input type="radio" name="rst-src" value="${esc(destination.name)}"
         ${W.destinationName === destination.name ? "checked" : ""}>

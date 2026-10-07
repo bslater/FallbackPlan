@@ -329,7 +329,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The per-set write credentials this service holds (ADR-0042 §5).</summary>
     internal WriteCredentialStore WriteCredentials { get; }
 
-    /// <summary>The access keys this service signs S3-compatible destinations' requests with (ADR-0091).</summary>
+    /// <summary>The credentials this service authorises object-store destinations' requests with (ADR-0091, ADR-0093).</summary>
     internal DestinationCredentialStore DestinationCredentials { get; }
 
     /// <summary>

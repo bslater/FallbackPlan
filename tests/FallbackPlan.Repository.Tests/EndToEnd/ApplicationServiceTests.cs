@@ -513,6 +513,27 @@ public sealed class ApplicationServiceTests : IDisposable
     }
 
     [TestMethod]
+    public void BackupSetStatus_AnOverdueProof_NamesTheKindAsTheConfigurationSpellsIt()
+    {
+        // The warning names the kind whose bound was passed. Spelled from the
+        // enum, Azure Blob's would read "azureblob", a word no configuration
+        // file, command or page uses (ADR-0093).
+        var status = StatusDeriver.Derive(HealthyInputs() with
+        {
+            Destinations =
+            [
+                Proven("bucket", ageDays: 40, boundDays: 7) with { Kind = DestinationKind.S3 },
+                Proven("container", ageDays: 40, boundDays: 7) with { Kind = DestinationKind.AzureBlob },
+            ],
+        });
+
+        Assert.Contains(
+            warning => warning.Contains("bound for an s3 destination", StringComparison.Ordinal), status.Warnings);
+        Assert.Contains(
+            warning => warning.Contains("bound for an azure-blob destination", StringComparison.Ordinal), status.Warnings);
+    }
+
+    [TestMethod]
     public void BackupSetStatus_AnOverdueProofAndAStaleOne_ReadDifferentlyInTheSameList()
     {
         // Both sentences are about verification and both appear in one list,

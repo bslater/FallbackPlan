@@ -41,11 +41,11 @@ internal static class ReplicaSweepJob
     /// <summary>
     /// Whether this service reads a destination of <paramref name="kind"/>
     /// back in full: a local path off its disk, a peer over the retrieval
-    /// session, an S3-compatible store over its API (ADR-0091 Amendment 1).
-    /// The reserved kinds are not served, so nothing reads them.
+    /// session, an object store over its API (ADR-0091 Amendment 1,
+    /// ADR-0093). The reserved kinds are not served, so nothing reads them.
     /// </summary>
     internal static bool Sweeps(DestinationKind kind) =>
-        kind is DestinationKind.LocalPath or DestinationKind.Peer or DestinationKind.S3;
+        kind is DestinationKind.LocalPath or DestinationKind.Peer || kind.IsObjectStore();
 
     /// <summary>Why a destination of <paramref name="kind"/> is not swept, as a person asking is told.</summary>
     /// <param name="kind">A kind <see cref="Sweeps"/> refuses.</param>
@@ -60,9 +60,9 @@ internal static class ReplicaSweepJob
     /// A local path is swept on its stated interval or the default. A peer is
     /// swept only on a cadence its source's operator states, because
     /// re-reading all of a replica is a standing cost on somebody else's link
-    /// (ADR-0035 Amendment 2), and an S3-compatible store for the same
-    /// reason, since every read there is a request its provider may charge
-    /// for (ADR-0091 Amendment 1). The scheduler keeps this and the status
+    /// (ADR-0035 Amendment 2), and an object store for the same reason,
+    /// since every read there is a request its provider may charge for
+    /// (ADR-0091 Amendment 1, ADR-0093). The scheduler keeps this and the status
     /// matrix reports it, so a row cannot promise a cadence the scheduler
     /// never keeps.
     /// </remarks>
@@ -73,7 +73,7 @@ internal static class ReplicaSweepJob
         return destination.Kind switch
         {
             DestinationKind.LocalPath => destination.DeepVerifyIntervalDays ?? DefaultIntervalDays,
-            DestinationKind.Peer or DestinationKind.S3 => destination.DeepVerifyIntervalDays,
+            DestinationKind.Peer or DestinationKind.S3 or DestinationKind.AzureBlob => destination.DeepVerifyIntervalDays,
             _ => null,
         };
     }
@@ -87,7 +87,7 @@ internal static class ReplicaSweepJob
     /// <param name="bytesPerSecond">The rate a background segment reads at, or null when nothing limits it.</param>
     internal static long SegmentByteBudget(DestinationKind kind, long? bytesPerSecond) =>
         bytesPerSecond is { } rate ? Math.Max(1, rate * SegmentSeconds)
-        : kind is DestinationKind.Peer or DestinationKind.S3 ? PeerSegmentByteBudget
+        : kind is DestinationKind.Peer || kind.IsObjectStore() ? PeerSegmentByteBudget
         : ReplicaSweep.DefaultByteBudget;
 
     /// <summary>
@@ -112,9 +112,8 @@ internal static class ReplicaSweepJob
     private static readonly AsyncLocal<int?> SegmentBudgetInFlow = new();
 
     /// <summary>
-    /// Bytes a segment of a peer's or an S3-compatible store's replica reads
-    /// when no transfer limit sets a smaller share: four blobs at the default
-    /// target. The worker a segment holds is the one every other transfer
+    /// Bytes a segment of a peer's or an object store's replica reads when no
+    /// transfer limit sets a smaller share: four blobs at the default target. The worker a segment holds is the one every other transfer
     /// waits on, and either is read over a link where a local path is read
     /// off a disk.
     /// </summary>
@@ -263,7 +262,7 @@ internal static class ReplicaSweepJob
 
     /// <summary>
     /// Reads the next segment of a local path's replica, of a peer's over the
-    /// retrieval session, or of an S3-compatible store's over its API, records
+    /// retrieval session, or of an object store's over its API, records
     /// what it found, and says where it stopped short, or why the replica
     /// could not be opened to read at all.
     /// </summary>
@@ -306,13 +305,13 @@ internal static class ReplicaSweepJob
 
             replica = PacedObjectStore.Over(StoreComposition.OpenLocal(replicaRoot), limiter);
         }
-        else if (destination.Kind == DestinationKind.S3)
+        else if (destination.Kind.IsObjectStore())
         {
-            Storage.S3.S3ObjectStore? store;
+            IPrefixedObjectStore? store;
             string? refusal;
             try
             {
-                store = StoreComposition.OpenS3(
+                store = StoreComposition.OpenObjectStore(
                     runtime, destination, archive.Repository.RepositoryId.ToString(), out refusal);
             }
             catch (Domain.ClientStateException damaged)
@@ -322,9 +321,10 @@ internal static class ReplicaSweepJob
 
             if (store is null)
             {
-                // No key stored, or an address the configuration already
-                // calls defective: the sync says so on the pair's row, and a
-                // person asking is told why nothing was read.
+                // No credential stored, a signature past its expiry, or an
+                // address the configuration already calls defective: the sync
+                // says so on the pair's row, and a person asking is told why
+                // nothing was read.
                 return Nothing with { Unreadable = refusal };
             }
 
@@ -342,7 +342,7 @@ internal static class ReplicaSweepJob
                         : StalledUnread(runtime, set, destination.Name, gone, nowMs);
                 }
             }
-            catch (Storage.S3.S3StoreUnreachableException unreachable)
+            catch (StoreUnreachableException unreachable)
             {
                 // A store that does not answer, recorded as the sync would
                 // record it: unavailable, a gap that closes itself, and never
@@ -520,11 +520,11 @@ internal static class ReplicaSweepJob
             ledger.RecordDamage(set.Id, destinationName, result.DamagedKeys, readSound, nowMs);
 
             IReadOnlyList<ReplicaRepairOutcome> outcomes;
-            if (destination.Kind is DestinationKind.LocalPath or DestinationKind.S3)
+            if (destination.Kind is DestinationKind.LocalPath || destination.Kind.IsObjectStore())
             {
                 // A store is repaired as a local path is: the damaged object
                 // deleted and created again from a sound copy, so nothing
-                // there is ever overwritten (ADR-0091 Amendment 1).
+                // there is ever overwritten (ADR-0091 Amendment 1, ADR-0093).
                 await using var repairer = new ReplicaRepairer(runtime, set, destinationName, archive, userInitiated);
                 outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
                     .ConfigureAwait(false);
@@ -774,12 +774,20 @@ internal static class ReplicaSweepJob
                 + $"{unrepaired.Count} could not be, because no sound copy of them could be found "
                 + $"({unrepaired[0].Detail}). Those bytes cannot be restored from there until they are replaced. "
                 + (reach is null ? string.Empty : DamageReachText.Sentences(reach) + " ");
-        return said + (destination.Kind == DestinationKind.S3
-            // Nothing this service writes overwrites anything at a store, so
-            // what altered it holds a key to the bucket or runs the store.
-            ? "The store altered a backup once and may again: check who else holds a key to the bucket, and the "
-                + "provider's object lock or versioning, before counting on it."
-            : "Its storage altered a backup once and may again: check the device, the filesystem, and "
-                + "anything else that writes there before counting on it.");
+        // Nothing this service writes overwrites anything at a store, so what
+        // altered it holds a credential for the bucket or container, or runs
+        // the store.
+        return said + destination.Kind switch
+        {
+            DestinationKind.S3 =>
+                "The store altered a backup once and may again: check who else holds a key to the bucket, and the "
+                + "provider's object lock or versioning, before counting on it.",
+            DestinationKind.AzureBlob =>
+                "The store altered a backup once and may again: check who else holds the account key or a shared "
+                + "access signature for the container, and the account's immutability policies or versioning, "
+                + "before counting on it.",
+            _ => "Its storage altered a backup once and may again: check the device, the filesystem, and "
+                + "anything else that writes there before counting on it.",
+        };
     }
 }

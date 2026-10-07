@@ -53,7 +53,7 @@ public sealed class S3DestinationTests() : ObjectStoreDestinationTests(StartStor
     protected override string EndpointAt(Uri origin) => origin.ToString();
 
     /// <inheritdoc />
-    protected override DestinationConfiguration Declare(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays) => new()
+    protected override DestinationConfiguration DeclareStore(string endpoint, int? drillIntervalDays, int? deepVerifyIntervalDays) => new()
     {
         Id = CloudId,
         Name = "cloud",
@@ -83,7 +83,7 @@ public sealed class S3DestinationTests() : ObjectStoreDestinationTests(StartStor
     {
         Assert.AreEqual(Namespace, listed.Bucket);
         Assert.AreEqual(S3.Region, listed.Region);
-        Assert.AreEqual("access-key", listed.CredentialKind);
+        Assert.AreEqual("access-key", listed.AuthorisedBy);
         Assert.IsNull(listed.Account);
         Assert.IsNull(listed.Container);
     }

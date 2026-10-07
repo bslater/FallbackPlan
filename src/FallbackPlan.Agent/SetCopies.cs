@@ -8,10 +8,10 @@ namespace FallbackPlan.Agent;
 /// <summary>
 /// The copies of one set's blobs other than the one being repaired or read,
 /// nearest and cheapest first: the staging archive when it is not itself the
-/// one, the set's local-path destinations by priority, its S3-compatible
-/// stores, then its paired peers over the retrieval session. What a repair replaces a damaged replica
-/// object from (FR-VER-007), and what a restore reads a record from when its
-/// own store will not serve it (FR-RST-007).
+/// one, the set's local-path destinations by priority, its object stores,
+/// then its paired peers over the retrieval session. What a repair replaces a
+/// damaged replica object from (FR-VER-007), and what a restore reads a
+/// record from when its own store will not serve it (FR-RST-007).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -76,9 +76,9 @@ internal sealed class SetCopies : IAsyncDisposable
             sources.Add(Once(sibling, _ => OpenLocal(sibling)));
         }
 
-        foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.S3))
+        foreach (var sibling in siblings.Where(sibling => sibling.Kind.IsObjectStore()))
         {
-            sources.Add(Once(sibling, _ => OpenS3(sibling)));
+            sources.Add(Once(sibling, _ => OpenObjectStore(sibling)));
         }
 
         foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.Peer))
@@ -130,14 +130,15 @@ internal sealed class SetCopies : IAsyncDisposable
                 : null);
     }
 
-    private ValueTask<IObjectStore?> OpenS3(DestinationConfiguration destination)
+    private ValueTask<IObjectStore?> OpenObjectStore(DestinationConfiguration destination)
     {
-        // A store with no key stored, or one whose key is damaged, is a copy
-        // that cannot be reached; the next copy, or none, is the truth.
-        Storage.S3.S3ObjectStore? store;
+        // A store with no credential stored, a damaged one, or a signature
+        // past its expiry, is a copy that cannot be reached; the next copy,
+        // or none, is the truth.
+        IPrefixedObjectStore? store;
         try
         {
-            store = StoreComposition.OpenS3(
+            store = StoreComposition.OpenObjectStore(
                 _runtime, destination, _archive.Repository.RepositoryId.ToString(), out _);
         }
         catch (Domain.ClientStateException)

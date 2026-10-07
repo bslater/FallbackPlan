@@ -74,7 +74,7 @@ public sealed class DestinationCredentialsCeremonyTests
         }
 
         var sent = Assert.ContainsSingle(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>());
-        Assert.AreEqual("shared-key", sent.CredentialKind);
+        Assert.AreEqual("shared-key", sent.Kind);
         Assert.IsNull(sent.AccessKeyId);
         Assert.AreEqual(accountKey, WriteOnlyProvisioning.OpenAccountKey(recipientScalar, Convert.FromHexString(sent.Envelope), "cloud"));
         Assert.IsFalse(
@@ -98,7 +98,7 @@ public sealed class DestinationCredentialsCeremonyTests
         }
 
         var sent = Assert.ContainsSingle(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>());
-        Assert.AreEqual("sas", sent.CredentialKind);
+        Assert.AreEqual("sas", sent.Kind);
         Assert.AreEqual(token, WriteOnlyProvisioning.OpenSharedAccessSignature(recipientScalar, Convert.FromHexString(sent.Envelope), "cloud"));
     }
 

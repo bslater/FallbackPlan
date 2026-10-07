@@ -618,8 +618,23 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// answers it back. Additive: a pre-1.60 client sends none of the fields,
     /// and its upsert of another kind is read as before.
     /// </para>
+    /// <para>
+    /// 1.61 serves the <c>azure-blob</c> destination kind (FR-DEST-005,
+    /// ADR-0093). `DestinationDescriptor` gains `account` and `container`,
+    /// which address it with the `prefix` and `endpoint` it already had — an
+    /// absent endpoint is the account's host at the public service — and
+    /// `authorised_by` and `signature_expires`, which say which credential
+    /// the service holds and when a shared access signature lapses;
+    /// `access_key_stored` now answers for both object-store kinds.
+    /// `set_destination_credentials` gains `kind`: `access-key`,
+    /// which is what a request naming none means, `shared-key` for the
+    /// account key, or `sas` for a shared access signature, each sealed under
+    /// a purpose of its own; `access_key_id` is required for an access key
+    /// and refused for the other two. Additive: a pre-1.61 client sends none
+    /// of the fields, and its access key is stored as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 60);
+    public static ContractVersion Current { get; } = new(1, 61);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

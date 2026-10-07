@@ -388,8 +388,8 @@ public static class FanOut
                         .ConfigureAwait(false);
                     return;
 
-                case DestinationKind.S3:
-                    await CopyToS3Async(
+                case DestinationKind.S3 or DestinationKind.AzureBlob:
+                    await CopyToObjectStoreAsync(
                             runtime, set, destination, archive, nowMs, limiter, userInitiated, cancellationToken)
                         .ConfigureAwait(false);
                     return;
@@ -996,32 +996,35 @@ public static class FanOut
     }
 
     /// <summary>
-    /// Copies the set's archive to an S3-compatible destination (ADR-0091):
+    /// Copies the set's archive to an object-store destination, an
+    /// S3-compatible bucket (ADR-0091) or an Azure Blob container (ADR-0093):
     /// the local path's sync over the provider's store, under the
     /// destination's prefix and the repository's id. What differs is only
     /// what a store cannot be asked: whether a directory exists, which is
     /// whether the prefix holds anything; and how much room is left, which a
-    /// store does not say and a bucket does not run out of the way a disk does.
+    /// store does not say and does not run out of the way a disk does.
     /// </summary>
     /// <remarks>
     /// A store that does not answer is <see cref="DestinationSyncState.Unavailable"/>,
     /// a gap that closes itself (FR-DEST-003). A store that answers and refuses
-    /// — a signature, a bucket that is not there — is failed, because waiting
-    /// does not change its answer; so is a destination with no access key
-    /// stored, which is sent nothing.
+    /// — a signature, a bucket or container that is not there — is failed,
+    /// because waiting does not change its answer; so is a destination with no
+    /// credential stored, or one whose shared access signature has lapsed,
+    /// which is sent nothing.
     /// </remarks>
-    private static async ValueTask CopyToS3Async(
+    private static async ValueTask CopyToObjectStoreAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, Application.ByteRateLimiter? limiter, bool userInitiated,
         CancellationToken cancellationToken)
     {
         var ledger = runtime.DestinationSync;
 
-        Storage.S3.S3ObjectStore? store;
+        Storage.Abstractions.IPrefixedObjectStore? store;
         string? refusal;
         try
         {
-            store = StoreComposition.OpenS3(runtime, destination, archive.Repository.RepositoryId.ToString(), out refusal);
+            store = StoreComposition.OpenObjectStore(
+                runtime, destination, archive.Repository.RepositoryId.ToString(), out refusal);
         }
         catch (Domain.ClientStateException damaged)
         {
@@ -1043,7 +1046,7 @@ public static class FanOut
                     shortOfSpace: null, nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        catch (Storage.Abstractions.StoreUnreachableException unreachable)
         {
             ledger.RecordFailure(
                 set.Id, destination.Name, DestinationSyncState.Unavailable, unreachable.Message, nowMs);
@@ -1061,8 +1064,8 @@ public static class FanOut
     /// destination that is ahead, the keep-set a retention policy or a
     /// person's deletion gives it, the copy or the converge, the repair of
     /// what a sweep found damaged, and a sample read back before the pair is
-    /// called in sync. A local path and an S3-compatible store are this one
-    /// pass behind their own opening.
+    /// called in sync. A local path and an object store are this one pass
+    /// behind their own opening.
     /// </summary>
     /// <param name="runtime">The service.</param>
     /// <param name="set">The set.</param>

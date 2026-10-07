@@ -6,10 +6,10 @@ namespace FallbackPlan.Application;
 
 /// <summary>
 /// The destination kinds a configuration may declare (ADR-0034 §5).
-/// <see cref="LocalPath"/>, <see cref="Peer"/> and <see cref="S3"/> are
-/// operational; the other cloud kinds are accepted by validation and refused
-/// at runtime as a stated incapacity until their providers exist
-/// (FR-DEST-005, ADR-0091).
+/// <see cref="LocalPath"/>, <see cref="Peer"/>, <see cref="S3"/> and
+/// <see cref="AzureBlob"/> are operational; <see cref="Dropbox"/> is accepted
+/// by validation and refused at runtime as a stated incapacity until its
+/// provider exists (FR-DEST-005, ADR-0091, ADR-0093).
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<DestinationKind>))]
 public enum DestinationKind
@@ -26,13 +26,29 @@ public enum DestinationKind
     [JsonStringEnumMemberName("s3")]
     S3,
 
-    /// <summary>Azure Blob Storage — reserved, not yet served.</summary>
+    /// <summary>A container of an Azure Blob storage account, spoken to over the Blob API (ADR-0093).</summary>
     [JsonStringEnumMemberName("azure-blob")]
     AzureBlob,
 
     /// <summary>Dropbox — reserved, not yet served.</summary>
     [JsonStringEnumMemberName("dropbox")]
     Dropbox,
+}
+
+/// <summary>What a destination's kind says about it, asked once rather than at each place that cares.</summary>
+public static class DestinationKinds
+{
+    /// <summary>
+    /// Whether the kind is an object store on the far side of a network — a
+    /// bucket or a container, spoken to over its API with a credential only
+    /// the service holds (ADR-0091, ADR-0093). Such a store is synced, read
+    /// back, restored from, drilled and swept as a local path is, except that
+    /// every read is a request its provider may charge for, so it is drilled
+    /// and swept only on a cadence its operator states, and a backup never
+    /// writes through it.
+    /// </summary>
+    /// <param name="kind">The kind.</param>
+    public static bool IsObjectStore(this DestinationKind kind) => kind is DestinationKind.S3 or DestinationKind.AzureBlob;
 }
 
 /// <summary>
@@ -134,7 +150,10 @@ public sealed record DestinationConfiguration
 
     /// <summary>
     /// The endpoint: the host and port to dial for <see cref="DestinationKind.Peer"/>,
-    /// or the store's base URL for <see cref="DestinationKind.S3"/>.
+    /// the store's base URL for <see cref="DestinationKind.S3"/>, or the
+    /// account's blob endpoint for <see cref="DestinationKind.AzureBlob"/> —
+    /// optional there, and absent means the account's host at the public
+    /// service.
     /// </summary>
     [JsonPropertyName("endpoint")]
     public string? Endpoint { get; init; }
@@ -157,9 +176,10 @@ public sealed record DestinationConfiguration
     public string? Region { get; init; }
 
     /// <summary>
-    /// Where in the bucket this destination writes, for <see cref="DestinationKind.S3"/>;
-    /// absent means the bucket's top. Each repository lands in a folder of
-    /// its own under it, as it does under a local path.
+    /// Where in the bucket or container this destination writes, for
+    /// <see cref="DestinationKind.S3"/> or <see cref="DestinationKind.AzureBlob"/>;
+    /// absent means its top. Each repository lands in a folder of its own
+    /// under it, as it does under a local path.
     /// </summary>
     [JsonPropertyName("prefix")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -169,6 +189,16 @@ public sealed record DestinationConfiguration
     [JsonPropertyName("addressing")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BucketAddressing? Addressing { get; init; }
+
+    /// <summary>The storage account, for <see cref="DestinationKind.AzureBlob"/> (ADR-0093).</summary>
+    [JsonPropertyName("account")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Account { get; init; }
+
+    /// <summary>The container in the account, for <see cref="DestinationKind.AzureBlob"/>.</summary>
+    [JsonPropertyName("container")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Container { get; init; }
 
     /// <summary>The region requests are signed for: the declared one, or the default.</summary>
     [JsonIgnore]
@@ -200,10 +230,11 @@ public sealed record DestinationConfiguration
     /// takes the default; for a peer, absent means <b>never</b> — a peer's
     /// replica is re-read over its link only on a cadence written here
     /// ([ADR-0035](../../docs/adr/0035-destination-fitness.md) Amendment 2),
-    /// which is the drill's rule, for the drill's reason. An S3-compatible
-    /// store keeps the peer's rule, because each read there is a request its
-    /// provider may charge for ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)
-    /// Amendment 1).
+    /// which is the drill's rule, for the drill's reason. An object store —
+    /// a bucket or a container — keeps the peer's rule, because each read
+    /// there is a request its provider may charge for
+    /// ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)
+    /// Amendment 1, [ADR-0093](../../docs/adr/0093-an-azure-blob-destination.md)).
     /// </summary>
     /// <remarks>
     /// The days rest between circuits, counted from when the last one closed.
@@ -307,6 +338,7 @@ public sealed record DestinationConfiguration
         DestinationKind.LocalPath => LocalPathDefect(),
         DestinationKind.Peer => PeerDefect(),
         DestinationKind.S3 => S3Defect(),
+        DestinationKind.AzureBlob => AzureBlobDefect(),
         _ => null,
     };
 
@@ -394,6 +426,66 @@ public sealed record DestinationConfiguration
             && (region.Length == 0 || !region.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-')))
         {
             return $"'{region}' is not a region: lowercase letters, digits and hyphens, such as us-east-1.";
+        }
+
+        return Prefix is not { } prefix
+            || (prefix.Length <= 512 && prefix.Split('/').All(component =>
+                component.Length is > 0 and <= 255
+                && component[0] != '.'
+                && component.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '.' or '_' or '-')))
+            ? null
+            : $"'{prefix}' is not a prefix: folders of lowercase letters, digits, dots, underscores and hyphens, "
+                + "separated by '/', none starting with a dot.";
+    }
+
+    /// <summary>What is wrong with an Azure Blob destination's address, or null when nothing is.</summary>
+    /// <remarks>
+    /// The provider makes the same checks when it opens the store, and
+    /// <c>Hosts.Tests/AzureBlobDestinationTests</c> holds the two to the same
+    /// answers, for the reason the S3-compatible rule is written twice.
+    /// </remarks>
+    private string? AzureBlobDefect()
+    {
+        if (Account is not { Length: > 0 } account || Container is not { Length: > 0 } container)
+        {
+            return "no account or container is declared.";
+        }
+
+        if (account.Length is < 3 or > 24 || !account.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9')))
+        {
+            return $"'{account}' is not a storage account name: 3 to 24 lowercase letters and digits.";
+        }
+
+        if (Endpoint is { } endpoint)
+        {
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+                || uri.Scheme is not ("https" or "http")
+                || uri.UserInfo.Length > 0
+                || uri.Query.Length > 0
+                || uri.Fragment.Length > 0
+                || uri.AbsolutePath.Trim('/') is var path && path.Length > 0 && path != account)
+            {
+                return $"endpoint '{endpoint}' is not the account's blob endpoint — give a scheme, a host and, where "
+                    + "it is not the scheme's own, a port, and at most the account's name as its path.";
+            }
+
+            if (uri.Scheme == "http" && !uri.IsLoopback)
+            {
+                // The blobs are sealed already; their names, their sizes and
+                // the account are not, and a store across a network is
+                // reached through whoever is in between.
+                return $"endpoint '{endpoint}' is not https; only a store on this machine is spoken to in clear.";
+            }
+        }
+
+        if (container.Length is < 3 or > 63
+            || !container.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '-')
+            || !char.IsAsciiLetterOrDigit(container[0])
+            || !char.IsAsciiLetterOrDigit(container[^1])
+            || container.Contains("--", StringComparison.Ordinal))
+        {
+            return $"'{container}' is not a container name: 3 to 63 lowercase letters, digits and hyphens, starting "
+                + "with a letter or a digit, with no two hyphens together and none at the end.";
         }
 
         return Prefix is not { } prefix

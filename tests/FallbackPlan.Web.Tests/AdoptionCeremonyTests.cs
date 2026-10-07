@@ -199,7 +199,7 @@ public sealed class AdoptionCeremonyTests
     }
 
     [TestMethod]
-    public void Script_OffersDiscoveryOnLocalPathAndS3Destinations_AndDeclaresTheCeremony()
+    public void Script_OffersDiscoveryOnLocalPathAndObjectStoreDestinations_AndDeclaresTheCeremony()
     {
         var script = SetupWizardScriptTests.AppJs();
 
@@ -225,11 +225,14 @@ public sealed class AdoptionCeremonyTests
 
         // The button rides on the destination row, for the kinds the console
         // adopts from: a local path, and since ADR-0091 Amendment 1 an
-        // S3-compatible store. A peer is left to the CLI, as it was.
+        // object store, which since ADR-0093 is a bucket or a container. A
+        // peer is left to the CLI, as it was.
         var row = script.IndexOf("data-action=\"dest-discover\"", StringComparison.Ordinal);
         Assert.IsTrue(row >= 0, "the destinations table offers no discover button");
         var guard = script.LastIndexOf(
-            "destination.kind === \"local-path\" || destination.kind === \"s3\"", row, StringComparison.Ordinal);
+            "destination.kind === \"local-path\" || isObjectStore(destination)", row, StringComparison.Ordinal);
         Assert.IsTrue(guard >= 0 && row - guard < 200, "the discover button is not guarded by the destination's kind");
+        Assert.Contains(
+            "return destination.kind === \"s3\" || destination.kind === \"azure-blob\";", script, StringComparison.Ordinal);
     }
 }

@@ -197,4 +197,26 @@ internal static class Strings
     /// </summary>
     internal static string FormatWriteOnlyProvisioning_AccessKeySecretMalformed(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, WriteOnlyProvisioning_AccessKeySecretMalformed, arg0);
+
+    /// <summary>
+    /// An account key is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    private static string WriteOnlyProvisioning_AccountKeyMalformed => Get(nameof(WriteOnlyProvisioning_AccountKeyMalformed));
+
+    /// <summary>
+    /// An account key is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    internal static string FormatWriteOnlyProvisioning_AccountKeyMalformed(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyProvisioning_AccountKeyMalformed, arg0);
+
+    /// <summary>
+    /// A shared access signature is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    private static string WriteOnlyProvisioning_SharedAccessSignatureMalformed => Get(nameof(WriteOnlyProvisioning_SharedAccessSignatureMalformed));
+
+    /// <summary>
+    /// A shared access signature is 1 to {0} characters with no control characters in it.
+    /// </summary>
+    internal static string FormatWriteOnlyProvisioning_SharedAccessSignatureMalformed(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, WriteOnlyProvisioning_SharedAccessSignatureMalformed, arg0);
 }

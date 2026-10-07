@@ -1,24 +1,24 @@
 using FallbackPlan.Storage.Abstractions;
 
-namespace FallbackPlan.Storage.S3;
+namespace FallbackPlan.Storage.AzureBlob;
 
 /// <summary>
-/// The S3-compatible store could not be reached at all — no connection, no
-/// answer — after every attempt (ADR-0091). The service catches the
+/// The Azure Blob store could not be reached at all — no connection, no
+/// answer — after every attempt (ADR-0093). The service catches the
 /// <see cref="StoreUnreachableException"/> it derives from, as it does every
 /// provider's, and records the pair unavailable rather than failed
 /// (FR-DEST-003).
 /// </summary>
-public sealed class S3StoreUnreachableException : StoreUnreachableException
+public sealed class AzureBlobStoreUnreachableException : StoreUnreachableException
 {
     /// <summary>Creates an empty exception.</summary>
-    public S3StoreUnreachableException()
+    public AzureBlobStoreUnreachableException()
     {
     }
 
     /// <summary>Creates the exception with its message.</summary>
     /// <param name="message">What could not be reached.</param>
-    public S3StoreUnreachableException(string message)
+    public AzureBlobStoreUnreachableException(string message)
         : base(message)
     {
     }
@@ -26,7 +26,7 @@ public sealed class S3StoreUnreachableException : StoreUnreachableException
     /// <summary>Creates the exception with its message and the transport's own failure.</summary>
     /// <param name="message">What could not be reached.</param>
     /// <param name="innerException">The transport's failure.</param>
-    public S3StoreUnreachableException(string message, Exception innerException)
+    public AzureBlobStoreUnreachableException(string message, Exception innerException)
         : base(message, innerException)
     {
     }

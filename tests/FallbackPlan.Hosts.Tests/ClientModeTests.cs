@@ -904,6 +904,31 @@ public sealed class ClientModeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task DestinationSettings_AnObjectStoreWithNoCadence_IsSaidNeverToBeDrilled()
+    {
+        // A bucket or a container is drilled only on a cadence written for
+        // it, as a peer is: every read there is a request its provider may
+        // charge for (ADR-0091, ADR-0093). The scheduler keeps that rule, so
+        // the read-out may not promise the local path's default instead.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        DeclareStore();
+        DeclareContainer();
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+        foreach (var name in new[] { "cloud", "container" })
+        {
+            var shown = await RunAgainstServiceAsync("destination-settings", name, "--state", _harness.StateDirectory);
+            Assert.AreEqual(0, shown.ExitCode, shown.All);
+            Assert.Contains("drill every: never", shown.All, StringComparison.Ordinal);
+            Assert.DoesNotContain("default", shown.All, StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
     public async Task DestinationSettings_ANameNothingDeclares_FailsNamingIt()
     {
         await _harness.CreateRepositoryAsync();
