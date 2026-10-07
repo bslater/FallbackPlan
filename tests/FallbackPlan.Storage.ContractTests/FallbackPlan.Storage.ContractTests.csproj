@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Local\FallbackPlan.Storage.Local.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.S3\FallbackPlan.Storage.S3.csproj" />
+    <ProjectReference Include="..\..\src\FallbackPlan.Storage.AzureBlob\FallbackPlan.Storage.AzureBlob.csproj" />
     <ProjectReference Include="..\..\src\FallbackPlan.Storage.Abstractions\FallbackPlan.Storage.Abstractions.csproj" />
   </ItemGroup>
 

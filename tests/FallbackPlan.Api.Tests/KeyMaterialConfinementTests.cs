@@ -173,6 +173,9 @@ public sealed class KeyMaterialConfinementTests
         // are in, and anyone holding it could delete them there (T-6). So it
         // takes the one shape this surface allows a secret: sealed where it
         // was typed, opened only by this service, into its state directory.
+        // An Azure Blob destination's account key or shared access signature
+        // crosses the same field of the same verb, each under a purpose of
+        // its own (ADR-0093): a second credential kind, not a second verb.
         var envelopeMembers = ContractTypes()
             .SelectMany(type => type
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)

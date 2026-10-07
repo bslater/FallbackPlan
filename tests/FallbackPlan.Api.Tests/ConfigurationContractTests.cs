@@ -34,11 +34,63 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AnS3CompatibleDestination_IsRecordedAtOneSixty()
+    public void ContractVersion_AnAzureBlobDestination_IsRecordedAtOneSixtyOne()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.60", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.61", ContractVersion.Current.ToString());
+    }
+
+    [TestMethod]
+    public void AnAzureBlobDestination_CrossesWithItsAddress_AndWhichCredentialIsHeld_AndWhenItLapses()
+    {
+        // ADR-0093, FR-DEST-005: an Azure Blob destination is declared over the
+        // wire like any other, with the fields that address it. Which kind of
+        // credential the service holds crosses, and when a shared access
+        // signature stops being honoured; the credential never does.
+        var declared = JsonSerializer.Serialize(
+            new DestinationDescriptor(
+                null, "cloud", "azure-blob", Path: null, Fingerprint: null, Endpoint: null,
+                Prefix: "site-a", AccessKeyStored: true, Account: "fbptestaccount", Container: "family-backups",
+                CredentialKind: "sas", CredentialExpires: "2026-12-31T00:00:00Z"),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"account\":\"fbptestaccount\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"container\":\"family-backups\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"credential_kind\":\"sas\"", declared, StringComparison.Ordinal);
+        Assert.Contains("\"credential_expires\":\"2026-12-31T00:00:00Z\"", declared, StringComparison.Ordinal);
+
+        // A pre-1.61 descriptor names none of them and reads as before.
+        var old = JsonSerializer.Deserialize<DestinationDescriptor>(
+            """{"id":null,"name":"cloud","kind":"s3","path":null,"fingerprint":null,"endpoint":"https://objects.example.net","bucket":"family-backups","access_key_stored":true}""",
+            FrameCodec.SerializerOptions)!;
+        Assert.IsNull(old.Account);
+        Assert.IsNull(old.Container);
+        Assert.IsNull(old.CredentialKind);
+        Assert.IsNull(old.CredentialExpires);
+        Assert.IsTrue(old.AccessKeyStored);
+    }
+
+    [TestMethod]
+    public void SetDestinationCredentials_AnAzureBlobCredential_CrossesWithItsKind_AndNoKeyId()
+    {
+        // NFR-SEC-009, ADR-0093: an account key or a shared access signature
+        // crosses in the same envelope field, under the kind that says how to
+        // open it. Neither has a key id; a pre-1.61 request names no kind and
+        // is the access key it always was.
+        var asked = JsonSerializer.Serialize<ServiceCommand>(
+            new SetDestinationCredentialsCommand("cloud", null, "00ff", CredentialKind: "sas"), FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"credential_kind\":\"sas\"", asked, StringComparison.Ordinal);
+        Assert.Contains("\"access_key_id\":null", asked, StringComparison.Ordinal);
+
+        Assert.IsInstanceOfType<SetDestinationCredentialsCommand>(
+            JsonSerializer.Deserialize<ServiceCommand>(
+                """{"command":"set_destination_credentials","destination_name":"cloud","access_key_id":"AKIDCLOUD0001","envelope":"00ff"}""",
+                FrameCodec.SerializerOptions),
+            out var older);
+        Assert.IsNull(older.CredentialKind);
+        Assert.AreEqual("AKIDCLOUD0001", older.AccessKeyId);
     }
 
     [TestMethod]

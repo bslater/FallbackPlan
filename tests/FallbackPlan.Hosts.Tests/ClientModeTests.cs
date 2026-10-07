@@ -6,6 +6,7 @@ using FallbackPlan.Api.Transport;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -974,6 +975,135 @@ public sealed class ClientModeTests : IDisposable
         Assert.AreNotEqual(0, result.ExitCode, result.All);
         Assert.Contains(unset, result.All, StringComparison.Ordinal);
         Assert.IsFalse(runtime.DestinationCredentials.Holds(StoreId));
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_AnAccountKeyFromTheEnvironment_IsSealed_AndTheServiceHoldsIt()
+    {
+        // An Azure Blob container's account key, read the way a secret
+        // access key is: from a variable the person names, never an argument
+        // (NFR-SEC-009, ADR-0093).
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        DeclareContainer();
+        var keyVariable = "FBP_HOST_TEST_AZURE_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(keyVariable, AzureBlobTestServer.DefaultAccountKey);
+        try
+        {
+            await using var runtime = await StartServiceAsync();
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+            var result = await RunAgainstServiceAsync(
+                "destination-credentials", "container", "--state", _harness.StateDirectory, "--account-key-env", keyVariable);
+
+            Assert.AreEqual(0, result.ExitCode, result.All);
+            Assert.Contains("account key", result.All, StringComparison.Ordinal);
+            Assert.DoesNotContain(AzureBlobTestServer.DefaultAccountKey, result.All, StringComparison.Ordinal);
+
+            var held = runtime.DestinationCredentials.TryLoadAzureBlob(ContainerId);
+            Assert.IsNotNull(held);
+            Assert.AreEqual(Storage.AzureBlob.AzureBlobCredentialKind.SharedKey, held.Kind);
+            Assert.AreEqual(AzureBlobTestServer.DefaultAccountKey, held.Secret);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(keyVariable, null);
+        }
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_ASharedAccessSignatureFromTheEnvironment_IsSealed_AndItsExpiryIsSaid()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        DeclareContainer();
+        const string token = "sv=2024-11-04&sr=c&sp=racwdl&se=2099-12-31T00%3A00%3A00Z&spr=https&sig=AbC%2Bd%2Fe%3D";
+        var tokenVariable = "FBP_HOST_TEST_AZURE_SAS_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(tokenVariable, token);
+        try
+        {
+            await using var runtime = await StartServiceAsync();
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+            var result = await RunAgainstServiceAsync(
+                "destination-credentials", "container", "--state", _harness.StateDirectory, "--sas-env", tokenVariable);
+
+            Assert.AreEqual(0, result.ExitCode, result.All);
+            Assert.Contains("2099-12-31", result.All, StringComparison.Ordinal);
+            Assert.DoesNotContain("AbC", result.All, StringComparison.Ordinal);
+
+            var held = runtime.DestinationCredentials.TryLoadAzureBlob(ContainerId);
+            Assert.IsNotNull(held);
+            Assert.AreEqual(Storage.AzureBlob.AzureBlobCredentialKind.SharedAccessSignature, held.Kind);
+            Assert.AreEqual(token, held.Secret);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(tokenVariable, null);
+        }
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_NamingTwoSecretsOrNone_IsRefusedBeforeAnythingIsSent()
+    {
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+        DeclareContainer();
+        var keyVariable = "FBP_HOST_TEST_AZURE_KEY_" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(keyVariable, AzureBlobTestServer.DefaultAccountKey);
+        try
+        {
+            await using var runtime = await StartServiceAsync();
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+
+            var both = await RunAgainstServiceAsync(
+                "destination-credentials", "container", "--state", _harness.StateDirectory,
+                "--account-key-env", keyVariable, "--sas-env", keyVariable);
+            Assert.AreNotEqual(0, both.ExitCode, both.All);
+            Assert.Contains("--account-key-env", both.All, StringComparison.Ordinal);
+            Assert.Contains("--sas-env", both.All, StringComparison.Ordinal);
+
+            var none = await RunAgainstServiceAsync(
+                "destination-credentials", "container", "--state", _harness.StateDirectory);
+            Assert.AreNotEqual(0, none.ExitCode, none.All);
+            Assert.Contains("--secret-env", none.All, StringComparison.Ordinal);
+
+            var orphanedId = await RunAgainstServiceAsync(
+                "destination-credentials", "container", "--state", _harness.StateDirectory,
+                "--access-key-id", "FBPKEYID0001", "--account-key-env", keyVariable);
+            Assert.AreNotEqual(0, orphanedId.ExitCode, orphanedId.All);
+            Assert.Contains("--access-key-id", orphanedId.All, StringComparison.Ordinal);
+
+            Assert.IsFalse(runtime.DestinationCredentials.Holds(ContainerId));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(keyVariable, null);
+        }
+    }
+
+    private const string ContainerId = "4141414141414141414141414141414a";
+
+    /// <summary>Adds an Azure Blob destination named "container" beside the harness's vault.</summary>
+    private void DeclareContainer()
+    {
+        var path = Path.Combine(_harness.StateDirectory, "config.json");
+        var configuration = ClientConfiguration.Load(path);
+        (configuration with
+        {
+            Destinations =
+            [
+                .. configuration.Destinations,
+                new DestinationConfiguration
+                {
+                    Id = ContainerId, Name = "container", Kind = DestinationKind.AzureBlob,
+                    Account = "fbptestaccount", Container = "family-backups",
+                },
+            ],
+        }).Save(path);
     }
 
     private const string StoreId = "5353535353535353535353535353535a";

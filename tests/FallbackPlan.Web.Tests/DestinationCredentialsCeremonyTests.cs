@@ -8,11 +8,12 @@ using FallbackPlan.Repository.Crypto;
 namespace FallbackPlan.Web.Tests;
 
 /// <summary>
-/// Storing an S3-compatible destination's access key from the console
-/// (FR-DEST-005, ADR-0091): the secret is typed into the page and sealed in
-/// the console's own process to the service's recipient key, for the one
-/// destination and key id it was typed for, and only the envelope reaches the
-/// service (NFR-SEC-009). The person's session is resumed first, so the change
+/// Storing an S3-compatible destination's access key, or an Azure Blob
+/// destination's account key or shared access signature, from the console
+/// (FR-DEST-005, ADR-0091, ADR-0093): the secret is typed into the page and
+/// sealed in the console's own process to the service's recipient key, for
+/// the one destination (and key id) it was typed for, and only the envelope
+/// reaches the service (NFR-SEC-009). The person's session is resumed first, so the change
 /// is theirs (ADR-0045). A request missing a part is refused here and the
 /// service is sent nothing.
 /// </summary>
@@ -51,6 +52,74 @@ public sealed class DestinationCredentialsCeremonyTests
             received.Any(command => JsonSerializer.Serialize(command, FrameCodec.SerializerOptions)
                 .Contains("console+secret", StringComparison.Ordinal)),
             "the secret reaches no command the service is sent");
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_AnAccountKey_IsSealedInTheConsoleForItsKind_AndCrossesWithNoKeyId()
+    {
+        // ADR-0093: an Azure Blob container's account key is sealed the same
+        // way, under its own purpose, and names no key id: the account is in
+        // the destination's declaration already.
+        const string accountKey = "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRg==";
+        var recipientScalar = RandomNumberGenerator.GetBytes(32);
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(recipientScalar);
+
+        using (var response = await harness.Http.SendAsync(
+            Post(harness, new { destinationName = "cloud", credentialKind = "shared-key", secret = accountKey })))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.AreEqual("stored", body.RootElement.GetProperty("outcome").GetString());
+        }
+
+        var sent = Assert.ContainsSingle(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>());
+        Assert.AreEqual("shared-key", sent.CredentialKind);
+        Assert.IsNull(sent.AccessKeyId);
+        Assert.AreEqual(accountKey, WriteOnlyProvisioning.OpenAccountKey(recipientScalar, Convert.FromHexString(sent.Envelope), "cloud"));
+        Assert.IsFalse(
+            harness.Clients.Client.Received.Any(command => JsonSerializer.Serialize(command, FrameCodec.SerializerOptions)
+                .Contains("BwgJCgsM", StringComparison.Ordinal)),
+            "the account key reaches no command the service is sent");
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_ASharedAccessSignature_IsSealedInTheConsoleForItsKind()
+    {
+        const string token = "sv=2024-11-04&sr=c&sp=racwdl&se=2099-12-31T00%3A00%3A00Z&sig=AbC%2Bd%2Fe%3D";
+        var recipientScalar = RandomNumberGenerator.GetBytes(32);
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(recipientScalar);
+
+        using (var response = await harness.Http.SendAsync(
+            Post(harness, new { destinationName = "cloud", credentialKind = "sas", secret = token })))
+        {
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var sent = Assert.ContainsSingle(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>());
+        Assert.AreEqual("sas", sent.CredentialKind);
+        Assert.AreEqual(token, WriteOnlyProvisioning.OpenSharedAccessSignature(recipientScalar, Convert.FromHexString(sent.Envelope), "cloud"));
+    }
+
+    [TestMethod]
+    public async Task DestinationCredentials_AKindThatCannotBe_OrAKeyIdItCannotTake_IsRefusedHere()
+    {
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(RandomNumberGenerator.GetBytes(32));
+
+        foreach (var wrong in new object[]
+        {
+            new { destinationName = "cloud", credentialKind = "password", secret = Secret },
+            new { destinationName = "cloud", credentialKind = "shared-key", accessKeyId = "FBPKEYID0001", secret = Secret },
+            new { destinationName = "cloud", credentialKind = "sas" },
+        })
+        {
+            using var response = await harness.Http.SendAsync(Post(harness, wrong));
+            Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        Assert.IsEmpty(harness.Clients.Client.Received);
     }
 
     [TestMethod]

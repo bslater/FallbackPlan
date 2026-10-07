@@ -629,11 +629,11 @@ public sealed class ApplicationServiceTests : IDisposable
         // manufactures a Degraded.
         var status = StatusDeriver.Derive(HealthyInputs() with
         {
-            Destinations = [Destination("blob-main", DestinationSyncState.NotSupported, kind: DestinationKind.AzureBlob)],
+            Destinations = [Destination("dropbox-main", DestinationSyncState.NotSupported, kind: DestinationKind.Dropbox)],
         });
 
         Assert.AreEqual(ProtectionState.Captured, status.State);
-        Assert.Contains(warning => warning.Contains("blob-main", StringComparison.Ordinal), status.Warnings);
+        Assert.Contains(warning => warning.Contains("dropbox-main", StringComparison.Ordinal), status.Warnings);
     }
 
     [TestMethod]

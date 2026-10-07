@@ -6,7 +6,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// Which destinations the deep sweep reads back in full, and on what cadence
 /// (FR-VER-002, FR-VER-008) — an S3-compatible store among them since
-/// ADR-0091 Amendment 1 — stated once: the scheduler keeps it and the
+/// ADR-0091 Amendment 1, and an Azure Blob container since ADR-0093 —
+/// stated once: the scheduler keeps it and the
 /// status matrix reports it (FR-VER-003, contract 1.46). A second copy of the
 /// rule is how the two would come to disagree, and a row that says "every
 /// seven days" of a destination the scheduler never sweeps is the kind of
@@ -30,15 +31,18 @@ public sealed class DeepSweepCadenceTests
     }
 
     [TestMethod]
-    public void AnS3Store_IsSweptOnlyOnACadenceItsOperatorStated()
+    public void AnObjectStore_IsSweptOnlyOnACadenceItsOperatorStated()
     {
         // Every read at a store is a request its provider may charge for, as
         // every read at a peer is a cost on somebody else's link: the cadence
         // is the operator's to state, and absent means never (ADR-0091
-        // Amendment 1).
-        Assert.IsTrue(ReplicaSweepJob.Sweeps(DestinationKind.S3));
-        Assert.IsNull(ReplicaSweepJob.ScheduledIntervalDays(Store(intervalDays: null)));
-        Assert.AreEqual(30, ReplicaSweepJob.ScheduledIntervalDays(Store(intervalDays: 30)));
+        // Amendment 1, ADR-0093), whichever API the store speaks.
+        foreach (var kind in new[] { DestinationKind.S3, DestinationKind.AzureBlob })
+        {
+            Assert.IsTrue(ReplicaSweepJob.Sweeps(kind), $"{kind} is read back in full on a stated cadence");
+            Assert.IsNull(ReplicaSweepJob.ScheduledIntervalDays(Declared(kind, intervalDays: null)), $"{kind} with no cadence stated");
+            Assert.AreEqual(30, ReplicaSweepJob.ScheduledIntervalDays(Declared(kind, intervalDays: 30)), $"{kind} with one stated");
+        }
     }
 
     [TestMethod]
@@ -46,9 +50,9 @@ public sealed class DeepSweepCadenceTests
     {
         Assert.IsTrue(ReplicaSweepJob.Sweeps(DestinationKind.LocalPath));
         Assert.IsTrue(ReplicaSweepJob.Sweeps(DestinationKind.Peer));
-        foreach (var kind in new[] { DestinationKind.AzureBlob, DestinationKind.Dropbox })
+        foreach (var kind in new[] { DestinationKind.Dropbox })
         {
-            // The reserved kinds are read by nothing.
+            // The reserved kind is read by nothing.
             Assert.IsFalse(ReplicaSweepJob.Sweeps(kind), $"nothing reads {kind} back in full");
             Assert.IsNull(
                 ReplicaSweepJob.ScheduledIntervalDays(Declared(kind, intervalDays: 7)),
@@ -62,7 +66,7 @@ public sealed class DeepSweepCadenceTests
         // Not a sweep that has not run: there is nothing to run. The client
         // draws no deep-verify line for it, as it draws none for a service
         // older than 1.46.
-        Assert.IsNull(ServiceCommandHandler.DescribeSweep(Declared(DestinationKind.AzureBlob, intervalDays: null), ledger: null));
+        Assert.IsNull(ServiceCommandHandler.DescribeSweep(Declared(DestinationKind.Dropbox, intervalDays: null), ledger: null));
         Assert.IsNull(ServiceCommandHandler.DescribeSweep(destination: null, ledger: null));
     }
 
@@ -84,6 +88,7 @@ public sealed class DeepSweepCadenceTests
         // across a link it reads a peer's share, off a local disk the
         // engine's default, and under a limit about a minute at the limit.
         Assert.AreEqual(ReplicaSweepJob.PeerSegmentByteBudget, ReplicaSweepJob.SegmentByteBudget(DestinationKind.S3, bytesPerSecond: null));
+        Assert.AreEqual(ReplicaSweepJob.PeerSegmentByteBudget, ReplicaSweepJob.SegmentByteBudget(DestinationKind.AzureBlob, bytesPerSecond: null));
         Assert.AreEqual(ReplicaSweepJob.PeerSegmentByteBudget, ReplicaSweepJob.SegmentByteBudget(DestinationKind.Peer, bytesPerSecond: null));
         Assert.AreEqual(
             Repository.ReplicaSweep.DefaultByteBudget, ReplicaSweepJob.SegmentByteBudget(DestinationKind.LocalPath, bytesPerSecond: null));

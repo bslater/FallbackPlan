@@ -237,15 +237,15 @@ public sealed class DestinationStatusTests
     [TestMethod]
     public void Describe_AReservedKind_AnswersItsRowRatherThanThrowing()
     {
-        // An `azure-blob` declaration is accepted by configuration and not
-        // yet served (FR-DEST-005): its ledger row says NotSupported, and
+        // A `dropbox` declaration is accepted by configuration and not yet
+        // served (FR-DEST-005): its ledger row says NotSupported, and
         // status must repeat that — a row, not an exception, and no invented
         // sync facts.
         var declared = new DestinationConfiguration
         {
             Id = new string('2', 32),
             Name = "cloud",
-            Kind = DestinationKind.AzureBlob,
+            Kind = DestinationKind.Dropbox,
         };
 
         var input = DestinationStatus.Describe(
@@ -256,11 +256,11 @@ public sealed class DestinationStatusTests
                 Destination = "cloud",
                 State = DestinationSyncState.NotSupported,
                 LastAttemptAt = 1_000,
-                LastError = "the 'azure-blob' kind is reserved and not yet served",
+                LastError = "the 'dropbox' kind is reserved and not yet served",
             },
             lastCompletedAt: 5_000, Now, DistinctDevice, hasSnapshot: true);
 
-        Assert.AreEqual(DestinationKind.AzureBlob, input.Kind);
+        Assert.AreEqual(DestinationKind.Dropbox, input.Kind);
         Assert.AreEqual(DestinationSyncState.NotSupported, input.Sync);
         Assert.IsNull(input.LastSuccessAt);
         Assert.Contains("reserved", input.Detail!, StringComparison.Ordinal);
