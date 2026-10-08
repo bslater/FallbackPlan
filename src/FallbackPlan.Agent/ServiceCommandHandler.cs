@@ -474,6 +474,23 @@ public sealed partial class ServiceCommandHandler(
     }
 
     /// <summary>
+    /// Watches each compaction pass the service runs. A test hook scoped to
+    /// the flow that sets it, as <see cref="ReplicaSweepJob.ReplicaDecorator"/>
+    /// is: no real process can be made to die after one step of a pass on
+    /// demand, and what the metadata store and the destination are left
+    /// holding then is what a test of it needs. Set it before the runtime
+    /// starts, so the lanes the runtime starts carry it. Null, the production
+    /// value, watches nothing.
+    /// </summary>
+    internal static ICompactionObserver? CompactionObserver
+    {
+        get => CompactionObserverInFlow.Value;
+        set => CompactionObserverInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<ICompactionObserver?> CompactionObserverInFlow = new();
+
+    /// <summary>
     /// Rewrites the blobs this pass's plan chose, and moves the index onto
     /// the result ([ADR-0067](../../docs/adr/0067-the-keyless-compactor.md)).
     /// </summary>
@@ -528,6 +545,7 @@ public sealed partial class ServiceCommandHandler(
                 declaredMaxDurationMs: (ulong)TimeSpan.FromHours(6).TotalMilliseconds,
                 expiryGeneration: archive.Repository.CurrentMetadataGeneration.Value + 1,
                 cancellationToken,
+                observer: CompactionObserver,
                 logger: runtime.LoggerFor(typeof(Repository.CompactionPass))).ConfigureAwait(false);
 
             var reclaimable = report.CompactionCandidates

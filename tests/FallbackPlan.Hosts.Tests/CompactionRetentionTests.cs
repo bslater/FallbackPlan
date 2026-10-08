@@ -248,6 +248,11 @@ public sealed class CompactionRetentionTests : IDisposable
     /// the produced blobs, the index deltas and the retirement are all
     /// written out through the ship sink, so a cut between two steps leaves
     /// the metadata store and the destination each partly written.
+    /// A pass cut after its upload leaves the blob it produced at the
+    /// destination with no index entry naming it. Its unretired intent
+    /// covers that blob (ADR-0067 §2) until the intent expires, and the
+    /// collector takes it as garbage after that; the next pass compacts again
+    /// into a blob of its own.
     /// </remarks>
     [TestMethod]
     public async Task ADirectShipCompaction_CutAfterEachStep_LeavesTheSetRestorable_AndTheNextPassFinishesIt()
