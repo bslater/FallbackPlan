@@ -304,6 +304,8 @@ adoption failing on a field the command gives no way to correct.
 
 Priority and destinations remain unrecorded, for §1's reasons.
 
+> **Amended 2026-10 ([ADR-0094](0094-a-deleted-file-stays-restorable.md)).** The retention map gains rule 6, `keep_deleted_days`: how many days a file deleted from the sources stays restorable. It is the set's own, recorded and re-declared with the rest of the policy; a destination's override of it is still not recorded. A reader that predates the rule refuses a map carrying it, as it refuses any key it does not know.
+
 ## Amendment 2 (2026-09) — a recovered configuration is confirmed before it takes effect
 
 §3 re-declared the set from its archive and acted on it in one call. A
@@ -393,3 +395,4 @@ verb guarantees an adoption as shown, not as understood.
 | 2026-09 | Accepted (amended) | Amendment 2: a recovered configuration is previewed and takes effect only with the confirmation the preview answered (FR-DR-009, contract 1.42); an unconfirmed adoption is refused by name, and one the archive has moved on from is refused as changed. The preview and the check in `Agent/ServiceCommandHandler.Adoption.cs`; the CLI's `adopt --confirm` in `Cli/CliApplication`; the console's two phases in `Web/WebConsoleHost`; `eng/recovery-drill.sh` green on the Release binaries, with `Hosts.Tests/DestinationAdoptionTests`, `Hosts.Tests/PeerAdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |
 | 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an archive is discovered, previewed and adopted from an S3-compatible store by the same steps (§6), and the set it adopts is a staging set seeded with what a trimmed staging archive keeps, since a run never writes through a store (§3). `Agent/ServiceCommandHandler`; `Hosts.Tests/S3AdoptionTests`, `Web.Tests/AdoptionCeremonyTests` and `Web.DomTests/ConfigEditingDomTests` |
 | 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md): an archive is discovered, previewed and adopted from an Azure Blob container by the same steps as from a bucket, into a staging set for the same reason (`Agent/ServiceCommandHandler`, `Hosts.Tests/AzureBlobAdoptionTests`) |
+| 2026-10 | Amended (related) | [ADR-0094](0094-a-deleted-file-stays-restorable.md): Amendment 1's retention map gains rule 6, keep_deleted_days, recorded and re-declared with the set's own policy and said in the adoption report (FR-GC-014, contract 1.62). `Repository.Format/Manifests/PolicyManifest`, `Agent/RecordedRetentionMapping`, `Agent/ServiceCommandHandler.Adoption.cs`; `Repository.Tests/Format/ManifestCodecTests`, `Hosts.Tests/DestinationAdoptionTests` |

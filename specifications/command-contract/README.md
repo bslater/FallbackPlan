@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.61
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.62
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.61 — 65 commands. One line each; parameters, results
+The register as of 1.62 — 65 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -240,3 +240,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.59 | A notice counts, and its names need the passphrase ([ADR-0089](../../docs/adr/0089-a-backups-file-names-need-the-passphrase.md) Amendment 1, FR-WOR-007). The notices the service raises about a drill or about damage, a drill's failure on the status matrix's `drill_failure` and in a `drill` answer, and verify-destination's lines count the backup's files they concern and name none. A listed notice gains `names_withheld`, how many files its message left out, and `set_id`, the set whose passphrase names them. `notice_names`, answered by `notice_names`, gives those files through `source`, a restore source of that set the caller's session opened under a verified grant, and is refused without one in the same words as the other looks; a notice that left nothing out answers none. Additive: a pre-1.59 service sends neither field and has no names to give, and its notices keep the names in their words |
 | 1.60 | An S3-compatible destination ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md), FR-DEST-005). `DestinationDescriptor` gains `bucket`, `region`, `prefix` and `addressing`, its `endpoint` is the store's base URL for an `s3` destination, and `access_key_stored` says whether the service holds that destination's access key. New verb `set_destination_credentials` (destination name, `access_key_id`, `envelope`): the secret crosses only sealed to the service's recipient key, bound to the destination and key id, joining the envelope verbs by decision (NFR-SEC-009); the service holds it in its state directory and never answers it back. Additive: a pre-1.60 client sends none of the fields, and its upsert of another kind is read as before. |
 | 1.61 | An Azure Blob destination ([ADR-0093](../../docs/adr/0093-an-azure-blob-destination.md), FR-DEST-005, FR-REP-002). `DestinationDescriptor` gains `account` and `container`, which address an `azure-blob` destination with the `prefix` and `endpoint` it already had, an absent endpoint being the account's host at the public service; `authorised_by`, which credential the service holds (`access-key`, `shared-key` or `sas`); and `signature_expires`, when a held shared access signature stops being honoured, ISO 8601 in UTC. `access_key_stored` now answers for both object-store kinds. `set_destination_credentials` gains `kind`: `access-key`, which is what a request naming none means, `shared-key` for the account key, or `sas` for a shared access signature, each sealed under a purpose of its own and bound to the destination; `access_key_id` is required for an access key and refused for the other two, and a signature already past its expiry is refused. No member is named for the secret, which keeps the key-material guard as narrow as it was. Additive: a pre-1.61 client sends none of the fields, and its access key is stored as before. |
+| 1.62 | Deleted-file history ([ADR-0094](../../docs/adr/0094-a-deleted-file-stays-restorable.md), FR-GC-014). `RetentionPolicyDescriptor` gains `keep_deleted_days`, on a set's retention and on a destination's override alike: how many days a file deleted from the sources stays restorable. On `upsert_backup_set`, null keeps what stands, because a pre-1.62 client cannot see the field to send it back, and zero clears it; a descriptor holding only a zero is still the empty "no policy". `list_backup_sets`, `archive_adopted` and `adoption_preview` carry it back. Additive: a pre-1.62 client's edits leave the duration as they found it. |
