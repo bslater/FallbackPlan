@@ -72,6 +72,25 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Measurement_MemoryFreedDuringTheRun_IsNotReadAsThePipelineGivingMemoryBack()
+    {
+        // What the shared array pool did to one run: arrays an earlier test
+        // had returned to it were live at the baseline and trimmed at a full
+        // collection the sampler forced, and the run read as retaining
+        // -105.9 MiB. Standing in for them, a graph held at the baseline and
+        // let go at the run's first sample.
+        var held = new List<byte[]> { new byte[96 * Mebibyte] };
+
+        var retained = await MeasurePeakLiveSetAsync(32 * Mebibyte, firstCounter: 50_000, duringRun: held.Clear);
+
+        Assert.IsTrue(
+            retained > 0,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"The run read as retaining {retained / (double)Mebibyte:f1} MiB: memory freed beside it was counted as the pipeline's."));
+    }
+
+    [TestMethod]
     public void Baseline_AGraphAwaitingItsFinalizer_IsNotCounted()
     {
         // A forced reading collects again only while a collection frees more
@@ -95,7 +114,14 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
                 $"The baseline counted {(baseline - next) / (double)Mebibyte:f1} MiB that the next reading freed."));
     }
 
-    private async Task<long> MeasurePeakLiveSetAsync(long inputBytes, ulong firstCounter)
+    /// <summary>
+    /// What the pipeline holds at most while it archives
+    /// <paramref name="inputBytes"/>, net of the live set before it starts.
+    /// </summary>
+    /// <param name="inputBytes">How much to archive.</param>
+    /// <param name="firstCounter">The first blob counter the run allocates from.</param>
+    /// <param name="duringRun">Run once, at the first sample: what a test frees beside the run.</param>
+    private async Task<long> MeasurePeakLiveSetAsync(long inputBytes, ulong firstCounter, Action? duringRun = null)
     {
         var policy = CapturePolicy.Default with
         {
@@ -114,7 +140,14 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         var baseline = SettledLiveSet();
         var peak = 0L;
         using (var sampler = new Timer(
-            _ => peak = Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)), null, 50, 100))
+            _ =>
+            {
+                Interlocked.Exchange(ref duringRun, null)?.Invoke();
+                peak = Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true));
+            },
+            null,
+            50,
+            100))
         {
             using var input = new SyntheticStream(inputBytes, seed: 42);
             var result = await archiver.ArchiveAsync(input, CancellationToken.None);
