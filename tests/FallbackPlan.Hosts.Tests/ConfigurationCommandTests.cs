@@ -292,6 +292,7 @@ public sealed class ConfigurationCommandTests : IDisposable
         "failure_domain", "deep_verify_interval_days", "priority",
         "transfer_limit", "drill_interval_days",
         "bucket", "region", "prefix", "addressing",
+        "account", "container",
     ];
 
     /// <summary>

@@ -2003,7 +2003,7 @@ public static class CliApplication
             var drillDaysOption = new Option<int?>("--drill-days")
             {
                 Description = "How often a restore drill reads from it, in days; 0 removes the cadence, which "
-                    + "means the default for a local path and never for a peer.",
+                    + "means the default for a local path and never for a peer, a bucket or a container.",
             };
             var destinationSettings = new Command(
                 "destination-settings",
@@ -2030,11 +2030,14 @@ public static class CliApplication
                 if (transferLimit is null && drillDays is null)
                 {
                     output.WriteLine($"transfer limit: {destination.TransferLimit ?? "none"}");
+                    // The scheduler's rule (ADR-0054 Amendment 3, ADR-0091,
+                    // ADR-0093): only a local path has a default.
                     output.WriteLine(destination.DrillIntervalDays is { } days
                         ? $"drill every: {days} days"
-                        : destination.Kind == "peer"
-                            ? "drill every: never — a peer is drilled only on a cadence written for it"
-                            : "drill every: the default cadence");
+                        : destination.Kind == "local-path"
+                            ? "drill every: the default cadence"
+                            : $"drill every: never — a {destination.Kind} destination is drilled only on a cadence "
+                                + "written for it");
                     return 0;
                 }
 
@@ -2060,51 +2063,94 @@ public static class CliApplication
         }
 
         {
-            // The access key an S3-compatible destination's requests are
-            // signed with (contract 1.60, ADR-0091). The secret is read from
-            // a named environment variable, never an argument a process
-            // listing or a shell history keeps, and leaves this process only
-            // sealed to the service's recipient key for this destination and
-            // key id (NFR-SEC-009).
+            // The credential an object-store destination's requests are
+            // authorised by (contract 1.60, ADR-0091; contract 1.61,
+            // ADR-0093): an s3 destination's access key, or an azure-blob
+            // destination's account key or shared access signature. The
+            // secret is read from a named environment variable, never an
+            // argument a process listing or a shell history keeps, and leaves
+            // this process only sealed to the service's recipient key for this
+            // destination, under the purpose of its kind (NFR-SEC-009).
             var storeName = new Argument<string>("name")
             {
-                Description = "The s3 destination, by the name its declaration gives it.",
+                Description = "The s3 or azure-blob destination, by the name its declaration gives it.",
             };
             var storeState = new Option<string?>("--state")
             {
                 Description = "The service's state directory; the machine-wide installation when absent.",
             };
-            var accessKeyIdOption = new Option<string>("--access-key-id")
+            var accessKeyIdOption = new Option<string?>("--access-key-id")
             {
-                Description = "The access key id the store knows the key by.",
-                Required = true,
+                Description = "With --secret-env: the access key id the store knows the key by.",
             };
-            var secretEnvOption = new Option<string>("--secret-env")
+            var secretEnvOption = new Option<string?>("--secret-env")
             {
-                Description = "The environment variable holding the secret access key. Read here, sealed to the "
-                    + "service, and never printed.",
-                Required = true,
+                Description = "For an s3 destination: the environment variable holding the secret access key. Read "
+                    + "here, sealed to the service, and never printed.",
+            };
+            var accountKeyEnvOption = new Option<string?>("--account-key-env")
+            {
+                Description = "For an azure-blob destination: the environment variable holding the storage "
+                    + "account's key. Read here, sealed to the service, and never printed.",
+            };
+            var signatureEnvOption = new Option<string?>("--sas-env")
+            {
+                Description = "For an azure-blob destination: the environment variable holding a shared access "
+                    + "signature for its container. Read here, sealed to the service, and never printed.",
             };
             var destinationCredentials = new Command(
                 "destination-credentials",
-                "Store the access key an s3 destination's requests are signed with.");
+                "Store the credential an s3 or azure-blob destination's requests are authorised by.");
             destinationCredentials.Arguments.Add(storeName);
             destinationCredentials.Options.Add(storeState);
             destinationCredentials.Options.Add(accessKeyIdOption);
             destinationCredentials.Options.Add(secretEnvOption);
+            destinationCredentials.Options.Add(accountKeyEnvOption);
+            destinationCredentials.Options.Add(signatureEnvOption);
             root.Subcommands.Add(destinationCredentials);
 
             destinationCredentials.SetAction((parse, cancellationToken) => GuardAsync(async () =>
             {
                 var name = parse.GetValue(storeName)!;
                 var state = parse.GetValue(storeState);
-                var accessKeyId = parse.GetValue(accessKeyIdOption)!;
-                var secretVariable = parse.GetValue(secretEnvOption)!;
-                if (Environment.GetEnvironmentVariable(secretVariable) is not { Length: > 0 } secret)
+                var accessKeyId = parse.GetValue(accessKeyIdOption);
+                (string Option, string? Variable, string? Kind, string Noun)[] secrets =
+                [
+                    ("--secret-env", parse.GetValue(secretEnvOption), null, "secret access key"),
+                    ("--account-key-env", parse.GetValue(accountKeyEnvOption), "shared-key", "account key"),
+                    ("--sas-env", parse.GetValue(signatureEnvOption), "sas", "shared access signature"),
+                ];
+
+                // One secret per call, named by the option that says what it
+                // is: the kind decides the envelope's purpose, so it is never
+                // guessed from the secret's shape.
+                var named = secrets.Where(secret => secret.Variable is not null).ToList();
+                if (named.Count != 1)
+                {
+                    throw new CliFailureException(named.Count == 0
+                        ? "name the secret to store: --secret-env with --access-key-id for an s3 destination, or "
+                            + "--account-key-env or --sas-env for an azure-blob one."
+                        : $"name one secret per call; {string.Join(", ", named.Select(secret => secret.Option))} "
+                            + "were given together.");
+                }
+
+                var (option, variable, kind, noun) = named[0];
+                if (kind is null && string.IsNullOrWhiteSpace(accessKeyId))
+                {
+                    throw new CliFailureException("--secret-env needs --access-key-id: the key id the store knows the key by.");
+                }
+
+                if (kind is not null && accessKeyId is not null)
                 {
                     throw new CliFailureException(
-                        $"the environment variable '{secretVariable}' holds no secret access key; set it to the "
-                        + "secret the provider issued for this key id.");
+                        $"--access-key-id goes with --secret-env only; an {noun} ({option}) is stored without one.");
+                }
+
+                if (Environment.GetEnvironmentVariable(variable!) is not { Length: > 0 } secret)
+                {
+                    throw new CliFailureException(
+                        $"the environment variable '{variable}' holds no {noun}; set it to the one "
+                        + (kind is null ? "the provider issued for this key id." : "the storage account issued."));
                 }
 
                 var description = await QueryLocalServiceAsync<ServiceDescriptionResult>(
@@ -2118,16 +2164,23 @@ public static class CliApplication
                 string envelope;
                 try
                 {
-                    envelope = Convert.ToHexStringLower(WriteOnlyProvisioning.SealAccessKeySecret(
-                        Convert.FromHexString(recipientHex), name, accessKeyId, secret));
+                    var recipient = Convert.FromHexString(recipientHex);
+                    envelope = Convert.ToHexStringLower(kind switch
+                    {
+                        null => WriteOnlyProvisioning.SealAccessKeySecret(recipient, name, accessKeyId!, secret),
+                        "shared-key" => WriteOnlyProvisioning.SealAccountKey(recipient, name, secret),
+                        _ => WriteOnlyProvisioning.SealSharedAccessSignature(recipient, name, secret),
+                    });
                 }
                 catch (ArgumentException malformed)
                 {
                     throw new CliFailureException(malformed.Message);
                 }
 
+                // An access key crosses naming no kind, as it did before 1.61,
+                // so a service that predates the other two still takes it.
                 var stored = await QueryLocalServiceAsync<ConfigurationChangeResult>(
-                    state, new SetDestinationCredentialsCommand(name, accessKeyId, envelope), cancellationToken)
+                    state, new SetDestinationCredentialsCommand(name, accessKeyId, envelope, kind), cancellationToken)
                     .ConfigureAwait(false);
                 foreach (var line in stored.Lines)
                 {

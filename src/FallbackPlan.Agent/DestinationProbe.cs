@@ -64,8 +64,8 @@ internal static class DestinationProbe
             DestinationKind.LocalPath => ProbeLocalPath(runtime, set, declared, nowMs),
             DestinationKind.Peer =>
                 await ProbePeerAsync(runtime, set, declared, nowMs, cancellationToken).ConfigureAwait(false),
-            DestinationKind.S3 =>
-                await ProbeS3Async(runtime, set, declared, nowMs, cancellationToken).ConfigureAwait(false),
+            _ when declared.Kind.IsObjectStore() =>
+                await ProbeObjectStoreAsync(runtime, set, declared, nowMs, cancellationToken).ConfigureAwait(false),
 
             // A reserved kind is a stated incapacity, never a failure
             // (FR-DEST-005), and the probe must not spell it like one.
@@ -182,21 +182,22 @@ internal static class DestinationProbe
 
     /// <summary>
     /// Asks the store for one key under the destination's prefix: the
-    /// cheapest request that proves the endpoint answers, the access key
-    /// signs and the bucket is there (ADR-0091). Nothing is written.
+    /// cheapest request that proves the endpoint answers, the credential is
+    /// taken and the bucket or container is there (ADR-0091, ADR-0093).
+    /// Nothing is written.
     /// </summary>
-    private static async ValueTask<ProbeOutcome> ProbeS3Async(
+    private static async ValueTask<ProbeOutcome> ProbeObjectStoreAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         DestinationConfiguration declared,
         ulong nowMs,
         CancellationToken cancellationToken)
     {
-        Storage.S3.S3ObjectStore? store;
+        Storage.Abstractions.IPrefixedObjectStore? store;
         string? refusal;
         try
         {
-            store = StoreComposition.OpenS3(runtime, declared, repositoryIdHex: null, out refusal);
+            store = StoreComposition.OpenObjectStore(runtime, declared, repositoryIdHex: null, out refusal);
         }
         catch (Domain.ClientStateException damaged)
         {
@@ -221,15 +222,15 @@ internal static class DestinationProbe
             }
 
             return new ProbeOutcome(
-                true, $"reached bucket '{declared.Bucket}' at {declared.Endpoint}, and the access key signs");
+                true, $"reached {StoreComposition.Describe(declared)}, and the credential is taken");
         }
-        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        catch (Storage.Abstractions.StoreUnreachableException unreachable)
         {
             // Not reached, so a gap that closes itself when it answers again
             // (FR-DEST-003).
             return Refuse(
                 runtime, set, declared, DestinationSyncState.Unavailable,
-                $"could not reach {declared.Endpoint}: {unreachable.Message}", nowMs);
+                $"could not reach {StoreComposition.Describe(declared)}: {unreachable.Message}", nowMs);
         }
         catch (IOException refused)
         {

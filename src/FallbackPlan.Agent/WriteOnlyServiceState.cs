@@ -108,6 +108,16 @@ public sealed class GrantRecipient : IDisposable
     public string OpenAccessKeySecret(ReadOnlySpan<byte> sealedBytes, string destinationName, string accessKeyId) =>
         WriteOnlyProvisioning.OpenAccessKeySecret(_privateKey, sealedBytes, destinationName, accessKeyId);
 
+    /// <summary>Opens an account-key envelope sealed to this recipient for one destination (ADR-0093).</summary>
+    /// <exception cref="SealedContentException">The envelope does not open, or was sealed for another destination or purpose.</exception>
+    public string OpenAccountKey(ReadOnlySpan<byte> sealedBytes, string destinationName) =>
+        WriteOnlyProvisioning.OpenAccountKey(_privateKey, sealedBytes, destinationName);
+
+    /// <summary>Opens a shared-access-signature envelope sealed to this recipient for one destination (ADR-0093).</summary>
+    /// <exception cref="SealedContentException">The envelope does not open, or was sealed for another destination or purpose.</exception>
+    public string OpenSharedAccessSignature(ReadOnlySpan<byte> sealedBytes, string destinationName) =>
+        WriteOnlyProvisioning.OpenSharedAccessSignature(_privateKey, sealedBytes, destinationName);
+
     /// <inheritdoc />
     public void Dispose() => CryptographicOperations.ZeroMemory(_privateKey);
 }

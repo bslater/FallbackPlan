@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider is built (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and passes the shared contract suite; Azure Blob is phase 3 — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and the Azure Blob provider (§4.3, [ADR-0093](../adr/0093-an-azure-blob-destination.md)) are built and pass the shared contract suite — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -121,9 +121,12 @@ forcing case rather than an assumption nobody made.
 A provider is how a **destination kind** ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md))
 touches bytes: `local-path` is the local filesystem provider aimed at a
 directory the user named, `peer` reaches a paired instance over the peer
-protocol, `s3` speaks the S3 API to a bucket (§4.4), and the other cloud kinds
-arrive in phase 3 as further `IObjectStore` implementations behind the same
-contract. Fan-out neither knows nor cares which
+protocol, `s3` speaks the S3 API to a bucket (§4.4), `azure-blob` speaks the
+Azure Blob API to a container (§4.3), and `dropbox`, the one kind still
+reserved, would arrive as a further `IObjectStore` implementation behind the
+same contract. The two that reach a store across a network are **object
+stores**: the service asks whether a destination is one, never which, so a
+container is served by every routine that serves a bucket. Fan-out neither knows nor cares which
 kind it is copying to — that indifference is the seam
 ([ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)),
 and it is why a cloud bucket is one more destination rather than a feature.
@@ -141,7 +144,21 @@ Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather 
 
 ### 4.3 Azure Blob Storage
 
-`Azure.Storage.Blobs` · block blobs with staged block uploads above the multipart threshold · conditional creation via ETag or if-none-match · managed identity, workload identity, connection strings, and SAS · access-tier policy expressed separately from repository correctness.
+> **Rewritten 2026-10 ([ADR-0093](../adr/0093-an-azure-blob-destination.md)).**
+> This section described a provider built on the vendor's SDK, with staged
+> block uploads, access tiers and every credential source the SDK knows. What
+> was built is narrower, and this is it.
+
+`Storage.AzureBlob` speaks the Blob REST API, pinned at one version, over the platform's HTTP client with a Shared Key signer of its own, so the product's package set is unchanged; it is the second assembly allowed an HTTP client, on the first's terms. A destination names a storage account, a container and an optional prefix, and an endpoint only for an account the public service does not host — whose path is the account's name, as a store on this machine is addressed. Its credential is the account key, which signs each request and is never sent, or a shared access signature for the container, which is sent with each request as issued and whose stated expiry the service reads and keeps to. Either is held in the service's state directory and arrives only sealed to the service.
+
+- **Every put is a create** (`If-None-Match: *`), and carries its body's `Content-MD5`; a 409 or a 412 is `AlreadyExists`.
+- **One request per blob**, up to 5000 MiB, so block lists are not used.
+- **A range is asked in `x-ms-range`**, and the range served is read back from the response; one the store answers short is refused as the contract says.
+- **A delete is one request**, a 404 being `NotFound`, and a missing container is a fault, never an empty replica.
+- **Listing pages by the store's own marker** and is declared strong; a resume after a named key is applied as the pages arrive.
+- **A refusal that may not last is retried** from the content already read, and a store that never answers is told apart from one that refuses.
+
+A replica lands under `<prefix>/<repository id>/`, the layout a bucket gives it. The shared suite (§6) runs against an in-process store that checks every signature, under each credential, and against any real container named in the environment.
 
 ### 4.4 S3-compatible object storage
 
@@ -179,10 +196,11 @@ holds the bytes — metadata locally, a blob from the first destination
 holding the key in priority order, a listing as the union across
 destinations. §2.1's re-openable content factory is what makes the fan-write
 affordable: one sealed spool file re-opens per destination instead of
-buffering N copies. An S3-compatible store is the one served kind the sink
-does not write through, by decision: a run records it behind, and the sync
-that follows the run fills it from what the run shipped
-([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).
+buffering N copies. An object store is the one served kind the sink does not
+write through, by decision: a run records it behind, and the sync that follows
+the run fills it from what the run shipped
+([ADR-0091](../adr/0091-an-s3-compatible-destination.md),
+[ADR-0093](../adr/0093-an-azure-blob-destination.md)).
 
 ## 5. Request economics
 

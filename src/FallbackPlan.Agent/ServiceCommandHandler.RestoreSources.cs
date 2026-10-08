@@ -269,8 +269,8 @@ public sealed partial class ServiceCommandHandler
                     handle = peerOpened;
                     break;
 
-                case Application.DestinationKind.S3:
-                    var (storeOpened, storeRefusal) = await OpenS3SourceAsync(
+                case Application.DestinationKind.S3 or Application.DestinationKind.AzureBlob:
+                    var (storeOpened, storeRefusal) = await OpenObjectStoreSourceAsync(
                         sourceId, set, destination, warnings, cancellationToken).ConfigureAwait(false);
                     if (storeOpened is null)
                     {
@@ -499,24 +499,24 @@ public sealed partial class ServiceCommandHandler
     }
 
     /// <summary>
-    /// Opens an S3-compatible destination's replica of one set as a source
-    /// (ADR-0091): the replica under the destination's prefix at the
+    /// Opens an object-store destination's replica of one set as a source
+    /// (ADR-0091, ADR-0093): the replica under the destination's prefix at the
     /// repository id the staging archive names, or — with staging lost — each
     /// folder the prefix holds, tried until one both unlocks and holds this
     /// set's snapshots. The local path's search, over a listing.
     /// </summary>
-    private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenS3SourceAsync(
+    private async ValueTask<(OpenRestoreSourceHandle? Handle, ServiceError? Refusal)> OpenObjectStoreSourceAsync(
         string sourceId,
         Application.BackupSetConfiguration set,
         Application.DestinationConfiguration destination,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        Storage.S3.S3ObjectStore? prefix;
+        Storage.Abstractions.IPrefixedObjectStore? prefix;
         string? refusal;
         try
         {
-            prefix = StoreComposition.OpenS3(runtime, destination, repositoryIdHex: null, out refusal);
+            prefix = StoreComposition.OpenObjectStore(runtime, destination, repositoryIdHex: null, out refusal);
         }
         catch (Domain.ClientStateException damaged)
         {
@@ -548,7 +548,7 @@ public sealed partial class ServiceCommandHandler
 
             foreach (var repositoryIdHex in candidates)
             {
-                var replica = StoreComposition.OpenS3(runtime, destination, repositoryIdHex, out _)!;
+                var replica = StoreComposition.OpenObjectStore(runtime, destination, repositoryIdHex, out _)!;
                 if (!(await replica.GetMetadataAsync(RepositoryLifecycle.DescriptorKey, cancellationToken)
                         .ConfigureAwait(false)).Found)
                 {
@@ -584,7 +584,7 @@ public sealed partial class ServiceCommandHandler
                 $"Destination '{destination.Name}' holds no readable replica of set '{set.Name}'."
                 + (warnings.Count == 0 ? string.Empty : $" ({string.Join("; ", warnings)})")));
         }
-        catch (Storage.S3.S3StoreUnreachableException unreachable)
+        catch (Storage.Abstractions.StoreUnreachableException unreachable)
         {
             return (null, new ServiceError(
                 ServiceErrorReason.Unavailable,

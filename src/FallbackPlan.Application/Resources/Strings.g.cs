@@ -226,12 +226,12 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationFieldNotForKind, arg0, arg1);
 
     /// <summary>
-    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket it writes to, and excusing the check costs the staging trim its licence to reclaim space.
+    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket or container it writes to, and excusing the check costs the staging trim its licence to reclaim space.
     /// </summary>
     private static string ClientConfiguration_DestinationCannotDeclineVerification => Get(nameof(ClientConfiguration_DestinationCannotDeclineVerification));
 
     /// <summary>
-    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket it writes to, and excusing the check costs the staging trim its licence to reclaim space.
+    /// Destination '{0}' cannot declare verification 'acknowledged-none': the hub can always read back a directory it owns or a bucket or container it writes to, and excusing the check costs the staging trim its licence to reclaim space.
     /// </summary>
     internal static string FormatClientConfiguration_DestinationCannotDeclineVerification(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationCannotDeclineVerification, arg0);
@@ -301,6 +301,17 @@ internal static class Strings
     /// </summary>
     internal static string FormatClientConfiguration_DestinationNeedsBucket(object? arg0) =>
         string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsBucket, arg0);
+
+    /// <summary>
+    /// Destination '{0}' is 'azure-blob' and must name an account and a container.
+    /// </summary>
+    private static string ClientConfiguration_DestinationNeedsContainer => Get(nameof(ClientConfiguration_DestinationNeedsContainer));
+
+    /// <summary>
+    /// Destination '{0}' is 'azure-blob' and must name an account and a container.
+    /// </summary>
+    internal static string FormatClientConfiguration_DestinationNeedsContainer(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, ClientConfiguration_DestinationNeedsContainer, arg0);
 
     /// <summary>
     /// Destination '{0}' is 'peer' and must name a fingerprint and an endpoint.

@@ -30,7 +30,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Retention/               ✓ planner, replication gate, mark, sweep, convergence, staging trim (ADR-0034; the traversal also runs through the sink for direct-ship sets, ADR-0046)
 │   ├── FallbackPlan.Verification/
 │   ├── FallbackPlan.Storage.Abstractions/    ✓ IObjectStore, capabilities
-│   ├── FallbackPlan.Storage.{Local ✓,S3 ✓,Peer,AzureBlob}/
+│   ├── FallbackPlan.Storage.{Local ✓,S3 ✓,AzureBlob ✓,Peer}/
 │   ├── FallbackPlan.Import.Abstractions/     ✓ neutral legacy model
 │   ├── FallbackPlan.Import.Legacy/           optional, separately licensed
 │   ├── FallbackPlan.Agent/                   ✓ the service host (ADR-0028); the ship sink
@@ -87,7 +87,7 @@ That policy needs the map to say which half is which, and for a while it did not
 
 - `Domain` has **no** infrastructure dependencies.
 - `Application` depends on domain abstractions, never on provider implementations.
-- Storage providers depend only on `Storage.Abstractions` and their provider SDK. `Storage.S3` has no SDK: it speaks the API over the platform's HTTP client, is the one assembly allowed one, and is composed by `Agent` alone ([ADR-0091](../adr/0091-an-s3-compatible-destination.md)).
+- Storage providers depend only on `Storage.Abstractions` and their provider SDK. `Storage.S3` and `Storage.AzureBlob` have no SDK: each speaks its API over the platform's HTTP client, they are the two assemblies allowed one, and `Agent` alone composes them ([ADR-0091](../adr/0091-an-s3-compatible-destination.md), [ADR-0093](../adr/0093-an-azure-blob-destination.md)).
 - `Repository.Format` has no UI, host, or provider dependencies. It must be usable by the standalone recovery tool.
 - `Protocol` depends on `Domain` alone — not `Application` (it did, for two utility types that now live in `Domain`), and never `Desktop` or `Web`.
 - **`Replication` may reference `Protocol`; storage providers still may not.** Fan-out serves two transport shapes — plain store-to-store copy for `local-path` and cloud kinds, the peer protocol for `peer` — and the second must live somewhere. It lives in `Replication`, so a provider stays a dumb byte store and the "providers depend only on `Storage.Abstractions` and their SDK" rule above survives hub-and-spoke intact ([ADR-0034](../adr/0034-hub-and-spoke-destinations.md), [ADR-0012 Amendment 2](../adr/0012-storage-provider-contract.md#amendment-2-2026-08--the-contract-is-also-the-fan-out-seam)).

@@ -861,11 +861,17 @@ public static class WebConsoleHost
     }
 
     /// <summary>What the destination-credentials endpoint reads from the page.</summary>
-    /// <param name="DestinationName">The s3 destination the key is for.</param>
-    /// <param name="AccessKeyId">The access key id.</param>
-    /// <param name="SecretAccessKey">The typed secret; sealed here, sent nowhere (ADR-0091).</param>
+    /// <param name="DestinationName">The s3 or azure-blob destination the credential is for.</param>
+    /// <param name="AccessKeyId">The access key id, for an access key and nothing else.</param>
+    /// <param name="SecretAccessKey">An access key's typed secret; sealed here, sent nowhere (ADR-0091).</param>
+    /// <param name="CredentialKind">
+    /// <c>access-key</c> (what a request naming none means), <c>shared-key</c>
+    /// or <c>sas</c> (ADR-0093).
+    /// </param>
+    /// <param name="Secret">An account key's or a shared access signature's typed text; sealed here, sent nowhere.</param>
     private sealed record DestinationCredentialsRequest(
-        string? DestinationName, string? AccessKeyId, string? SecretAccessKey);
+        string? DestinationName, string? AccessKeyId, string? SecretAccessKey, string? CredentialKind = null,
+        string? Secret = null);
 
     /// <summary>The destination-credentials endpoint's answer to the page.</summary>
     /// <param name="Outcome"><c>stored</c>, <c>refused</c>, or <c>unavailable</c>.</param>
@@ -875,13 +881,16 @@ public static class WebConsoleHost
         string Outcome, string? Detail = null, IReadOnlyList<string>? Lines = null);
 
     /// <summary>
-    /// Stores an S3-compatible destination's access key
-    /// ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)): the
+    /// Stores an object-store destination's credential: an S3-compatible
+    /// store's access key
+    /// ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md)), or
+    /// an Azure Blob container's account key or shared access signature
+    /// ([ADR-0093](../../docs/adr/0093-an-azure-blob-destination.md)). The
     /// third endpoint permitted a secret, and it holds the restore gate's
     /// line. The secret is sealed here, in the console's process, to the
-    /// service's published recipient key for the one destination and key id
-    /// it was typed for, and only the envelope reaches the service
-    /// (NFR-SEC-009).
+    /// service's published recipient key for the one destination (and key
+    /// id) it was typed for, under the purpose of its kind, and only the
+    /// envelope reaches the service (NFR-SEC-009).
     /// </summary>
     /// <remarks>
     /// The browser's session is resumed first, so the change is the person's
@@ -910,12 +919,25 @@ public static class WebConsoleHost
             return;
         }
 
-        if (request is not { DestinationName.Length: > 0, AccessKeyId.Length: > 0, SecretAccessKey.Length: > 0 })
+        // Each kind's parts, judged before the service is asked anything: an
+        // access key needs its key id and secret; an account key or a
+        // signature needs its text and takes no key id.
+        var kind = request?.CredentialKind ?? "access-key";
+        var secret = kind == "access-key" ? request?.SecretAccessKey ?? request?.Secret : request?.Secret;
+        var missing = (kind, request) switch
+        {
+            (_, null) => "a destination and a credential are required",
+            (not ("access-key" or "shared-key" or "sas"), _) => $"'{kind}' is not a credential kind (access-key, shared-key, sas)",
+            (_, { DestinationName: not { Length: > 0 } }) => "a destination is required",
+            ("access-key", { AccessKeyId: not { Length: > 0 } }) => "an access key needs its access key id",
+            ("shared-key" or "sas", { AccessKeyId: not null }) => "an access key id goes with an access key only",
+            _ when secret is not { Length: > 0 } => "the secret to store is required",
+            _ => null,
+        };
+        if (missing is not null)
         {
             await RefuseAsync(context, StatusCodes.Status400BadRequest, "malformed_command",
-                Strings.FormatWebConsoleHost_MalformedCommand(
-                    "a destination, an access key id and a secret access key are required"))
-                .ConfigureAwait(false);
+                Strings.FormatWebConsoleHost_MalformedCommand(missing)).ConfigureAwait(false);
             return;
         }
 
@@ -948,9 +970,8 @@ public static class WebConsoleHost
                 return;
             }
 
-            var sealedKey = ConsoleRestoreGate.SealAccessKey(
-                request.DestinationName, request.AccessKeyId, request.SecretAccessKey,
-                description.RestoreGrantRecipient);
+            var sealedKey = ConsoleRestoreGate.SealDestinationCredential(
+                request!.DestinationName!, kind, request.AccessKeyId, secret!, description.RestoreGrantRecipient);
             if (sealedKey.Outcome != ConsoleRestoreGate.GateOutcome.Verified)
             {
                 await AnswerAsync(new DestinationCredentialsResponse(
@@ -959,8 +980,11 @@ public static class WebConsoleHost
                 return;
             }
 
+            // An access key crosses naming no kind, as it did before 1.61.
             var result = await client.ExecuteAsync(
-                new SetDestinationCredentialsCommand(request.DestinationName, request.AccessKeyId, sealedKey.Envelope!),
+                new SetDestinationCredentialsCommand(
+                    request.DestinationName!, request.AccessKeyId, sealedKey.Envelope!,
+                    kind == "access-key" ? null : kind),
                 context.RequestAborted).ConfigureAwait(false);
             await AnswerAsync(result switch
             {

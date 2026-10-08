@@ -242,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     /// <summary>
     /// The clock skew margin, in hours, a configuration that states none
@@ -462,10 +462,16 @@ public sealed record ClientConfiguration
     /// <c>region</c>, <c>prefix</c> and <c>addressing</c>, and its
     /// <c>endpoint</c> is a URL. No other kind carries them, so nothing moves.
     /// </para>
+    /// <para>
+    /// <b>9 → 10</b> (ADR-0093): an <c>azure-blob</c> destination gains
+    /// <c>account</c> and <c>container</c>, and may carry a <c>prefix</c> and
+    /// an <c>endpoint</c>. The kind was reserved until now and carried no
+    /// address, so nothing moves.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }
@@ -757,6 +763,7 @@ public sealed record ClientConfiguration
             DestinationKind.S3 => (false, false, true),
             _ => (false, false, false),
         };
+        var requiresContainer = destination.Kind == DestinationKind.AzureBlob;
 
         if (requiresPath && string.IsNullOrWhiteSpace(destination.Path))
         {
@@ -773,6 +780,11 @@ public sealed record ClientConfiguration
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsBucket(destination.Name));
         }
 
+        if (requiresContainer && (string.IsNullOrWhiteSpace(destination.Account) || string.IsNullOrWhiteSpace(destination.Container)))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationNeedsContainer(destination.Name));
+        }
+
         if (!requiresPath && destination.Path is not null)
         {
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "path"));
@@ -783,16 +795,26 @@ public sealed record ClientConfiguration
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "fingerprint"));
         }
 
-        if (!requiresPeer && !requiresStore && destination.Endpoint is not null)
+        if (!requiresPeer && !requiresStore && !requiresContainer && destination.Endpoint is not null)
         {
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "endpoint"));
         }
 
-        if (!requiresStore && (destination.Bucket is not null || destination.Region is not null
-            || destination.Prefix is not null || destination.Addressing is not null))
+        if (!requiresStore && (destination.Bucket is not null || destination.Region is not null || destination.Addressing is not null))
         {
             throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(
-                destination.Name, "bucket/region/prefix/addressing"));
+                destination.Name, "bucket/region/addressing"));
+        }
+
+        if (!requiresContainer && (destination.Account is not null || destination.Container is not null))
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(
+                destination.Name, "account/container"));
+        }
+
+        if (!requiresStore && !requiresContainer && destination.Prefix is not null)
+        {
+            throw new ClientStateException(Strings.FormatClientConfiguration_DestinationFieldNotForKind(destination.Name, "prefix"));
         }
 
         // The acknowledgement exists for destinations that genuinely cannot be
@@ -801,8 +823,9 @@ public sealed record ClientConfiguration
         // and the check costs sixteen ranges of a few kilobytes. Accepting the
         // excuse here would buy nothing measurable and permanently forfeit the
         // staging trim, so it is refused at load rather than regretted later
-        // (FR-VER-006). A bucket is read back the same way, at the same cost.
-        if ((requiresPath || requiresStore) && !destination.RequiresVerification)
+        // (FR-VER-006). A bucket or a container is read back the same way, at
+        // the same cost.
+        if ((requiresPath || requiresStore || requiresContainer) && !destination.RequiresVerification)
         {
             throw new ClientStateException(
                 Strings.FormatClientConfiguration_DestinationCannotDeclineVerification(destination.Name));

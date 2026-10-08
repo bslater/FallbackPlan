@@ -549,7 +549,7 @@ public sealed partial class ServiceCommandHandler(
     /// <summary>
     /// How a destination's holdings can be verified for the staging trim
     /// (ADR-0034 §6): a reachable local-path replica is probed key by key —
-    /// direct evidence; a peer or an S3-compatible store is trusted through
+    /// direct evidence; a peer or an object store is trusted through
     /// its sync-ledger claim <b>backed by a verification stamp</b>
     /// (FR-VER-006); anything else — an
     /// unplugged drive, an unserved kind — cannot vouch, and every blob it is
@@ -582,8 +582,8 @@ public sealed partial class ServiceCommandHandler(
 
             // A store the hub cannot probe key by key without a request per
             // key: trusted, as a peer is, through its ledger claim backed by
-            // the read-back stamp every sync earns there (ADR-0091).
-            case DestinationKind.Peer or DestinationKind.S3:
+            // the read-back stamp every sync earns there (ADR-0091, ADR-0093).
+            case DestinationKind.Peer or DestinationKind.S3 or DestinationKind.AzureBlob:
                 return Retention.TrimVerification.Ledger;
 
             default:

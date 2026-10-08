@@ -42,6 +42,7 @@ public sealed class DependencyRuleTests
     private static Assembly StorageAbstractions => typeof(Storage.Abstractions.AssemblyMarker).Assembly;
     private static Assembly StorageLocal => typeof(Storage.Local.AssemblyMarker).Assembly;
     private static Assembly StorageS3 => typeof(Storage.S3.AssemblyMarker).Assembly;
+    private static Assembly StorageAzureBlob => typeof(Storage.AzureBlob.AssemblyMarker).Assembly;
     private static Assembly ImportAbstractions => typeof(Import.Abstractions.AssemblyMarker).Assembly;
     private static Assembly Filesystem => typeof(FallbackPlan.Filesystem.AssemblyMarker).Assembly;
     private static Assembly FilesystemLocal => typeof(FallbackPlan.Filesystem.Local.AssemblyMarker).Assembly;
@@ -98,7 +99,7 @@ public sealed class DependencyRuleTests
     /// </summary>
     internal static IEnumerable<Assembly> AllSourceAssemblies =>
         [Domain, Format, Crypto, Segmentation, Packing, Index, Catalogue,
-         RepositoryRootAssembly, StorageAbstractions, StorageLocal, StorageS3, ImportAbstractions,
+         RepositoryRootAssembly, StorageAbstractions, StorageLocal, StorageS3, StorageAzureBlob, ImportAbstractions,
          Filesystem, FilesystemLocal, Restore, Application, Api, Protocol, Cli, Recovery, Agent, Web,
          Diagnostics, Replication, Retention];
 
@@ -234,6 +235,7 @@ public sealed class DependencyRuleTests
                 .HaveDependencyOnAny(
                     "FallbackPlan.Repository",
                     "FallbackPlan.Storage.Local",
+                    "FallbackPlan.Storage.AzureBlob",
                     "FallbackPlan.Filesystem",
                     "FallbackPlan.Import",
                     "FallbackPlan.Application",
@@ -245,6 +247,40 @@ public sealed class DependencyRuleTests
                     "Microsoft.Data.Sqlite")
                 .GetResult(),
             "FallbackPlan.Storage.S3 must depend only on the store contract and Domain (ADR-0091; 11 §2).");
+    }
+
+    /// <summary>
+    /// The Azure Blob provider is held to the S3-compatible one's rule, for
+    /// its reasons (ADR-0093): it moves sealed objects it cannot read under
+    /// keys it did not choose, so it must not reach the engine that could
+    /// decode them, the use-case layer, the contract, or another provider —
+    /// the S3-compatible one included, though both speak HTTP to a store.
+    /// It is the second assembly allowed an HTTP client
+    /// (<c>TelemetrySilenceTests</c>), so a narrow closure here is part of
+    /// what keeps that allowance narrow.
+    /// </summary>
+    [TestMethod]
+    public void StorageAzureBlob_DependencyClosure_KnowsOnlyTheStoreContract()
+    {
+        AssertPasses(
+            Types.InAssembly(StorageAzureBlob)
+                .ShouldNot()
+                .HaveDependencyOnAny(
+                    "FallbackPlan.Repository",
+                    "FallbackPlan.Storage.Local",
+                    "FallbackPlan.Storage.S3",
+                    "FallbackPlan.Filesystem",
+                    "FallbackPlan.Import",
+                    "FallbackPlan.Application",
+                    "FallbackPlan.Api",
+                    "FallbackPlan.Protocol",
+                    "FallbackPlan.Replication",
+                    "FallbackPlan.Retention",
+                    "FallbackPlan.Cli",
+                    "Microsoft.Data.Sqlite",
+                    "Azure.Storage")
+                .GetResult(),
+            "FallbackPlan.Storage.AzureBlob must depend only on the store contract and Domain (ADR-0093; 11 §2).");
     }
 
     /// <summary>
@@ -263,6 +299,27 @@ public sealed class DependencyRuleTests
                 Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories)
             .Where(project => File.ReadAllText(project)
                 .Contains("FallbackPlan.Storage.S3.csproj", StringComparison.Ordinal))
+            .Select(Path.GetFileNameWithoutExtension)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        SequenceAssert.AreEqual(["FallbackPlan.Agent"], composers);
+    }
+
+    /// <summary>
+    /// Only the service composes an Azure Blob store (ADR-0093), as only it
+    /// composes an S3-compatible one: it is the one process that holds a
+    /// container's account key or shared access signature, and the requests
+    /// it makes go to the account a person declared. The CLI and the console
+    /// seal a credential to the service and never dial the store themselves.
+    /// </summary>
+    [TestMethod]
+    public void StorageAzureBlob_ProjectFileCanary_ComposedOnlyByTheService()
+    {
+        var composers = Directory.EnumerateFiles(
+                Path.Combine(RepositoryRoot(), "src"), "*.csproj", SearchOption.AllDirectories)
+            .Where(project => File.ReadAllText(project)
+                .Contains("FallbackPlan.Storage.AzureBlob.csproj", StringComparison.Ordinal))
             .Select(Path.GetFileNameWithoutExtension)
             .Order(StringComparer.Ordinal)
             .ToArray();

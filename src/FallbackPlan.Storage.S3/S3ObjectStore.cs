@@ -41,7 +41,7 @@ namespace FallbackPlan.Storage.S3;
 /// from a refusal.
 /// </para>
 /// </remarks>
-public sealed class S3ObjectStore : IObjectStore
+public sealed class S3ObjectStore : IPrefixedObjectStore
 {
     /// <summary>What one PUT may carry: five GiB, the API's single-request ceiling.</summary>
     public const long MaximumSinglePut = 5L * 1024 * 1024 * 1024;
@@ -318,12 +318,7 @@ public sealed class S3ObjectStore : IObjectStore
         while (continuation is not null);
     }
 
-    /// <summary>
-    /// The folders directly under this store's prefix, each named once — the
-    /// repositories a destination holds side by side, for a restore that
-    /// has to find its own among them.
-    /// </summary>
-    /// <param name="cancellationToken">Cancels the listing.</param>
+    /// <inheritdoc />
     public async IAsyncEnumerable<string> ListChildrenAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string? continuation = null;

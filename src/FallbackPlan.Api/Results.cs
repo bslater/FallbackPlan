@@ -217,7 +217,11 @@ public sealed record BackupSetDescriptor(
 /// <param name="Kind">Its kind, in the configuration's spelling.</param>
 /// <param name="Path">The directory, for <c>local-path</c>.</param>
 /// <param name="Fingerprint">The paired peer's fingerprint, for <c>peer</c>.</param>
-/// <param name="Endpoint">The peer's <c>host:port</c>, for <c>peer</c>.</param>
+/// <param name="Endpoint">
+/// The peer's <c>host:port</c>, for <c>peer</c>; the store's base URL, for
+/// <c>s3</c>; the account's blob endpoint, for <c>azure-blob</c>, where null
+/// means the account's host at the public service.
+/// </param>
 /// <param name="FailureDomain">The declared failure domain, or null to derive by kind (ADR-0018).</param>
 /// <param name="DeepVerifyIntervalDays">How often the deep sweep re-reads it; null takes the default.</param>
 /// <param name="AddressDefect">
@@ -243,12 +247,24 @@ public sealed record BackupSetDescriptor(
 /// </param>
 /// <param name="Bucket">The bucket, for <c>s3</c> (contract 1.60, ADR-0091).</param>
 /// <param name="Region">The region its signatures are scoped to, for <c>s3</c>; null means the API's default.</param>
-/// <param name="Prefix">Where in the bucket it writes, for <c>s3</c>; null means the bucket's top.</param>
+/// <param name="Prefix">Where in the bucket or container it writes, for <c>s3</c> or <c>azure-blob</c>; null means its top.</param>
 /// <param name="Addressing">How requests name the bucket, <c>path</c> or <c>virtual-host</c>, for <c>s3</c>.</param>
 /// <param name="AccessKeyStored">
-/// Whether the service holds an access key for it, for <c>s3</c>; the key
-/// itself never crosses back. Ignored on an upsert: <c>set_destination_credentials</c>
-/// is how a key arrives.
+/// Whether the service holds a credential for it, for <c>s3</c> and
+/// <c>azure-blob</c>; the credential itself never crosses back. Ignored on an
+/// upsert: <c>set_destination_credentials</c> is how one arrives.
+/// </param>
+/// <param name="Account">The storage account, for <c>azure-blob</c> (contract 1.61, ADR-0093).</param>
+/// <param name="Container">The container in the account, for <c>azure-blob</c>.</param>
+/// <param name="AuthorisedBy">
+/// Which credential the service holds: <c>access-key</c> for <c>s3</c>;
+/// <c>shared-key</c> (the account key) or <c>sas</c> (a shared access
+/// signature) for <c>azure-blob</c>; null when it holds none. Ignored on an upsert.
+/// </param>
+/// <param name="SignatureExpires">
+/// When the held shared access signature stops being honoured, as the token
+/// states it, ISO 8601 in UTC; null for any other credential or a signature
+/// that states none. Ignored on an upsert.
 /// </param>
 public sealed record DestinationDescriptor(
     string? Id,
@@ -267,7 +283,11 @@ public sealed record DestinationDescriptor(
     string? Region = null,
     string? Prefix = null,
     string? Addressing = null,
-    bool? AccessKeyStored = null);
+    bool? AccessKeyStored = null,
+    string? Account = null,
+    string? Container = null,
+    string? AuthorisedBy = null,
+    string? SignatureExpires = null);
 
 /// <summary>Every declared destination, referenced by a set or not.</summary>
 /// <param name="Destinations">The declarations, in configuration order.</param>

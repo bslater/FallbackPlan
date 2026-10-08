@@ -497,24 +497,23 @@ public sealed class ClientConfigurationTests
     }
 
     [TestMethod]
-    public void Validate_TheReservedCloudKinds_AreAcceptedBySchema()
+    public void Validate_TheReservedCloudKind_IsAcceptedBySchema()
     {
-        // FR-DEST-005: configuration models the cloud kinds still reserved;
-        // the runtime refuses to serve them until a provider exists — but
-        // that is the runtime's stated incapacity, never a configuration
-        // error. The S3 kind is served now and declares an address
-        // (S3DestinationConfigurationTests).
+        // FR-DEST-005: configuration models the cloud kind still reserved;
+        // the runtime refuses to serve it until a provider exists — but that
+        // is the runtime's stated incapacity, never a configuration error.
+        // The S3 and Azure Blob kinds are served now and declare an address
+        // (S3DestinationConfigurationTests, AzureBlobDestinationConfigurationTests).
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
             Destinations =
             [
-                new DestinationConfiguration { Id = new string('5', 32), Name = "az", Kind = DestinationKind.AzureBlob },
                 new DestinationConfiguration { Id = new string('6', 32), Name = "db", Kind = DestinationKind.Dropbox },
             ],
         }.Save(ConfigPath);
 
-        Assert.AreEqual(2, ClientConfiguration.Load(ConfigPath).Destinations.Count);
+        Assert.AreEqual(DestinationKind.Dropbox, Assert.ContainsSingle(ClientConfiguration.Load(ConfigPath).Destinations).Kind);
     }
 
     [TestMethod]

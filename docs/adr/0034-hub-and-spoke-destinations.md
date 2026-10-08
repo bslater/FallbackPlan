@@ -158,6 +158,13 @@ and the export guidance says so.
 > never here, so the address book names where backups go and still holds no
 > secret.
 
+> **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+> `azure-blob` is served too, and `dropbox` alone is refused as stated. An
+> `azure-blob` declaration's address is its account, container and prefix,
+> with an endpoint only for an account the public service does not host. Its
+> account key or shared access signature is held where an access key is,
+> never here.
+
 A set must reference at least one destination. **None of them has to be local**
 — the durability policy of architecture 09 §4 becomes "at least one configured
 destination outside the source's failure domain", and a local directory is just
@@ -351,3 +358,4 @@ folder stayed empty.
 | 2026-08 | Superseded in part | [ADR-0046](0046-direct-to-destination-publication.md) removes the staging archive for direct-ship sets: §1 and §6 no longer apply there, §3's fan-out becomes the catch-up/seeding pump rather than the write path (the blockquotes at each section scope the change), and the capture-never-blocks property is consciously traded away (ADR-0046 §4). §2, §4 and §5 stand for both shapes; this record remains authoritative for unflagged sets until the `direct_ship` default flips. |
 | 2026-09 | Built (amended) | §6's first residual cost retired by [ADR-0075](0075-a-restore-reads-around-damage.md): a restore of the set's own archive reads what staging trimmed from the set's destinations, and the plan counts a file missing only when no copy of the set holds it. `Agent/SetCopies`; `Hosts.Tests/RestoreReadAroundTests` |
 | 2026-10 | Amended (§5) | `s3` is served ([ADR-0091](0091-an-s3-compatible-destination.md)): its address is in the configuration and its access key in the service's state directory; `azure-blob` and `dropbox` stay reserved |
+| 2026-10 | Amended (§5) | `azure-blob` is served ([ADR-0093](0093-an-azure-blob-destination.md)): its address is in the configuration and its account key or shared access signature in the service's state directory; `dropbox` alone stays reserved |

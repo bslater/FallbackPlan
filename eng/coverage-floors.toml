@@ -65,6 +65,7 @@
 "FallbackPlan.Restore" = 83
 "FallbackPlan.Retention" = 89
 "FallbackPlan.Storage.Abstractions" = 81
+"FallbackPlan.Storage.AzureBlob" = 86
 "FallbackPlan.Storage.Local" = 84
 "FallbackPlan.Storage.S3" = 81
 "FallbackPlan.Web" = 65

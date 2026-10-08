@@ -168,6 +168,5 @@ public sealed class S3DestinationConfigurationTests
             """);
 
         Assert.AreEqual(ClientConfiguration.CurrentSchemaVersion, ClientConfiguration.Load(ConfigPath).SchemaVersion);
-        Assert.AreEqual(9, ClientConfiguration.CurrentSchemaVersion);
     }
 }

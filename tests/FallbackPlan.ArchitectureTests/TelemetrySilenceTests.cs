@@ -64,12 +64,14 @@ public sealed class TelemetrySilenceTests
     ];
 
     /// <summary>
-    /// The one assembly allowed an HTTP client: the S3-compatible provider
-    /// (ADR-0091). It is not a network owner — it opens no socket of its own
-    /// and names no address type — because the platform's HTTP stack does the
-    /// dialling for it, to the endpoint the destination declares.
+    /// The two assemblies allowed an HTTP client: the object-store providers,
+    /// S3-compatible (ADR-0091) and Azure Blob (ADR-0093). Neither is a
+    /// network owner — neither opens a socket of its own or names an address
+    /// type — because the platform's HTTP stack does the dialling for them,
+    /// to the endpoint the destination declares.
     /// </summary>
-    private static Assembly[] HttpClientOwners => [typeof(Storage.S3.AssemblyMarker).Assembly];
+    private static Assembly[] HttpClientOwners =>
+        [typeof(Storage.S3.AssemblyMarker).Assembly, typeof(Storage.AzureBlob.AssemblyMarker).Assembly];
 
     /// <summary>
     /// The allowance is not left standing after its reason goes. An allowlist
@@ -88,7 +90,7 @@ public sealed class TelemetrySilenceTests
                     .GetResult()
                     .IsSuccessful,
                 $"{assembly.GetName().Name} is allowed an HTTP client and no longer uses one: take it off "
-                + "the allowlist (ADR-0091).");
+                + "the allowlist (ADR-0091, ADR-0093).");
         }
     }
 
@@ -149,9 +151,14 @@ public sealed class TelemetrySilenceTests
     /// destination, with nothing in it but the objects that destination is
     /// owed.
     /// </para>
+    /// <para>
+    /// <b>Amended 2026-10 (ADR-0093).</b> The allowlist is two:
+    /// <c>FallbackPlan.Storage.AzureBlob</c> speaks the Blob API over HTTPS
+    /// to the account a person declared, under the same four rules.
+    /// </para>
     /// </summary>
     [TestMethod]
-    public void Telemetry_EverySourceAssemblyButTheS3Provider_ReachesForNoHttpClient()
+    public void Telemetry_EverySourceAssemblyButTheObjectStoreProviders_ReachesForNoHttpClient()
     {
         foreach (var assembly in DependencyRuleTests.AllSourceAssemblies.Where(a => !HttpClientOwners.Contains(a)))
         {

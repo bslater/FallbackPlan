@@ -121,4 +121,10 @@
   <data name="WriteOnlyProvisioning_AccessKeySecretMalformed" xml:space="preserve">
     <value>A secret access key is 1 to {0} characters with no control characters in it.</value>
   </data>
+  <data name="WriteOnlyProvisioning_AccountKeyMalformed" xml:space="preserve">
+    <value>An account key is 1 to {0} characters with no control characters in it.</value>
+  </data>
+  <data name="WriteOnlyProvisioning_SharedAccessSignatureMalformed" xml:space="preserve">
+    <value>A shared access signature is 1 to {0} characters with no control characters in it.</value>
+  </data>
 </root>

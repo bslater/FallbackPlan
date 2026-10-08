@@ -10,9 +10,11 @@ namespace FallbackPlan.Repository.Crypto;
 /// ADR-0070): <b>provisioning</b> carries the write bundle plus the KDF salt
 /// and parameters the descriptor must record, a <b>restore grant</b> carries
 /// the derived scalar alone, a <b>claim root</b> carries the Argon2id
-/// output a rebuilt machine proves a replica with, and an <b>access key</b>
+/// output a rebuilt machine proves a replica with, an <b>access key</b>
 /// carries the secret an S3-compatible destination's requests are signed with
-/// (ADR-0091). Each is sealed end-to-end to the service's published recipient
+/// (ADR-0091), and an <b>account key</b> or a <b>shared access signature</b>
+/// carries what an Azure Blob destination's requests are authorised by
+/// (ADR-0093). Each is sealed end-to-end to the service's published recipient
 /// key with its own associated-data purpose, so none can be replayed as
 /// another — and the passphrase itself is in none of them.
 /// </summary>
@@ -26,6 +28,16 @@ public static class WriteOnlyProvisioning
     /// </remarks>
     public const int MaximumAccessKeySecretLength = 256;
 
+    /// <summary>The longest Azure Blob account key an envelope carries: several times the 88 characters an account issues.</summary>
+    public const int MaximumAccountKeyLength = 256;
+
+    /// <summary>
+    /// The longest shared access signature an envelope carries. A token that
+    /// names a delegated key or a stored policy runs to a dozen fields, so the
+    /// bound is far above an access key's.
+    /// </summary>
+    public const int MaximumSharedAccessSignatureLength = 2048;
+
     private static ReadOnlySpan<byte> ProvisionMagic => "FBPPROV1"u8;
 
     private static ReadOnlySpan<byte> ProvisionAad => "fbp/provision/v2"u8;
@@ -33,6 +45,10 @@ public static class WriteOnlyProvisioning
     private static ReadOnlySpan<byte> GrantAad => "fbp/restore-grant/v2"u8;
 
     private static ReadOnlySpan<byte> AccessKeyPurpose => "fbp/destination-access-key/v1"u8;
+
+    private static ReadOnlySpan<byte> AccountKeyPurpose => "fbp/destination-account-key/v1"u8;
+
+    private static ReadOnlySpan<byte> SharedAccessSignaturePurpose => "fbp/destination-shared-access-signature/v1"u8;
 
     /// <summary>Everything in the provisioning payload except the credential: magic ‖ … ‖ salt ‖ memory ‖ iterations ‖ parallelism.</summary>
     /// <remarks>
@@ -208,16 +224,7 @@ public static class WriteOnlyProvisioning
                 nameof(secretAccessKey));
         }
 
-        var payload = System.Text.Encoding.UTF8.GetBytes(secretAccessKey);
-        try
-        {
-            return ContentSealing.SealPayload(
-                recipientPublicKey, payload, AccessKeyAssociatedData(destinationName, accessKeyId));
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(payload);
-        }
+        return SealSecret(recipientPublicKey, secretAccessKey, AccessKeyAssociatedData(destinationName, accessKeyId));
     }
 
     /// <summary>Opens an access-key envelope with the service's recipient scalar.</summary>
@@ -237,8 +244,124 @@ public static class WriteOnlyProvisioning
         ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
         ThrowHelper.ThrowIfNullOrWhiteSpace(accessKeyId);
 
-        var payload = ContentSealing.OpenPayload(
-            recipientPrivateKey, sealedBytes, AccessKeyAssociatedData(destinationName, accessKeyId));
+        return OpenSecret(
+            recipientPrivateKey, sealedBytes, AccessKeyAssociatedData(destinationName, accessKeyId),
+            MaximumAccessKeySecretLength);
+    }
+
+    /// <summary>
+    /// Seals an Azure Blob destination's account key for the service's
+    /// recipient key (ADR-0093), bound to the destination it was typed for.
+    /// </summary>
+    /// <remarks>
+    /// No key id is bound beside it: the account is in the destination's
+    /// declaration, and the purpose alone keeps the envelope from opening as
+    /// a shared access signature or an S3-compatible store's secret.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="destinationName">The destination the key is for, by its declared name.</param>
+    /// <param name="accountKey">The account key, as the account issued it.</param>
+    /// <exception cref="ArgumentException">
+    /// The name is blank, or the key is empty, longer than
+    /// <see cref="MaximumAccountKeyLength"/>, or carries a control character.
+    /// </exception>
+    public static byte[] SealAccountKey(ReadOnlySpan<byte> recipientPublicKey, string destinationName, string accountKey)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        ThrowHelper.ThrowIfNull(accountKey);
+        if (!IsSecret(accountKey, MaximumAccountKeyLength))
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyProvisioning_AccountKeyMalformed(MaximumAccountKeyLength),
+                nameof(accountKey));
+        }
+
+        return SealSecret(recipientPublicKey, accountKey, DestinationAssociatedData(AccountKeyPurpose, destinationName));
+    }
+
+    /// <summary>Opens an account-key envelope with the service's recipient scalar.</summary>
+    /// <param name="recipientPrivateKey">The service's recipient scalar.</param>
+    /// <param name="sealedBytes">The envelope.</param>
+    /// <param name="destinationName">The destination the envelope must have been sealed for.</param>
+    /// <exception cref="SealedContentException">
+    /// The envelope does not open — another recipient, another destination,
+    /// another purpose, tampered bytes — or what it carries is not a key.
+    /// </exception>
+    public static string OpenAccountKey(
+        ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes, string destinationName)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        return OpenSecret(
+            recipientPrivateKey, sealedBytes, DestinationAssociatedData(AccountKeyPurpose, destinationName),
+            MaximumAccountKeyLength);
+    }
+
+    /// <summary>
+    /// Seals an Azure Blob destination's shared access signature for the
+    /// service's recipient key (ADR-0093), bound to the destination it was
+    /// typed for.
+    /// </summary>
+    /// <remarks>
+    /// A signature is sent with every request it authorises, so it is no
+    /// secret from the store; it is one from everyone else, and whoever holds
+    /// it may do at the container whatever it permits until it lapses.
+    /// </remarks>
+    /// <param name="recipientPublicKey">The service's published recipient key.</param>
+    /// <param name="destinationName">The destination the signature is for, by its declared name.</param>
+    /// <param name="token">The signature's query text, as the account issued it.</param>
+    /// <exception cref="ArgumentException">
+    /// The name is blank, or the token is empty, longer than
+    /// <see cref="MaximumSharedAccessSignatureLength"/>, or carries a control character.
+    /// </exception>
+    public static byte[] SealSharedAccessSignature(ReadOnlySpan<byte> recipientPublicKey, string destinationName, string token)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        ThrowHelper.ThrowIfNull(token);
+        if (!IsSecret(token, MaximumSharedAccessSignatureLength))
+        {
+            throw new ArgumentException(
+                Resources.Strings.FormatWriteOnlyProvisioning_SharedAccessSignatureMalformed(MaximumSharedAccessSignatureLength),
+                nameof(token));
+        }
+
+        return SealSecret(
+            recipientPublicKey, token, DestinationAssociatedData(SharedAccessSignaturePurpose, destinationName));
+    }
+
+    /// <summary>Opens a shared-access-signature envelope with the service's recipient scalar.</summary>
+    /// <param name="recipientPrivateKey">The service's recipient scalar.</param>
+    /// <param name="sealedBytes">The envelope.</param>
+    /// <param name="destinationName">The destination the envelope must have been sealed for.</param>
+    /// <exception cref="SealedContentException">
+    /// The envelope does not open — another recipient, another destination,
+    /// another purpose, tampered bytes — or what it carries is not a token.
+    /// </exception>
+    public static string OpenSharedAccessSignature(
+        ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes, string destinationName)
+    {
+        ThrowHelper.ThrowIfNullOrWhiteSpace(destinationName);
+        return OpenSecret(
+            recipientPrivateKey, sealedBytes, DestinationAssociatedData(SharedAccessSignaturePurpose, destinationName),
+            MaximumSharedAccessSignatureLength);
+    }
+
+    private static byte[] SealSecret(ReadOnlySpan<byte> recipientPublicKey, string secret, byte[] associatedData)
+    {
+        var payload = System.Text.Encoding.UTF8.GetBytes(secret);
+        try
+        {
+            return ContentSealing.SealPayload(recipientPublicKey, payload, associatedData);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
+
+    private static string OpenSecret(
+        ReadOnlySpan<byte> recipientPrivateKey, ReadOnlySpan<byte> sealedBytes, byte[] associatedData, int maximumLength)
+    {
+        var payload = ContentSealing.OpenPayload(recipientPrivateKey, sealedBytes, associatedData);
         try
         {
             string secret;
@@ -253,7 +376,7 @@ public static class WriteOnlyProvisioning
 
             // One refusal shape for every envelope that is not this one,
             // as a provisioning envelope hiding garbage gets.
-            return IsAccessKeySecret(secret)
+            return IsSecret(secret, maximumLength)
                 ? secret
                 : throw new SealedContentException(Resources.Strings.ContentSealing_DoesNotOpen);
         }
@@ -263,8 +386,22 @@ public static class WriteOnlyProvisioning
         }
     }
 
-    private static bool IsAccessKeySecret(string candidate) =>
-        candidate.Length is > 0 and <= MaximumAccessKeySecretLength && !candidate.Any(char.IsControl);
+    private static bool IsSecret(string candidate, int maximumLength) =>
+        candidate.Length > 0 && candidate.Length <= maximumLength && !candidate.Any(char.IsControl);
+
+    private static byte[] DestinationAssociatedData(ReadOnlySpan<byte> purpose, string destinationName)
+    {
+        // Purpose, then the name with its length before it, as the access
+        // key's binds its pair.
+        var destination = System.Text.Encoding.UTF8.GetBytes(destinationName);
+        var data = new byte[purpose.Length + 4 + destination.Length];
+        purpose.CopyTo(data);
+        BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(purpose.Length), destination.Length);
+        destination.CopyTo(data, purpose.Length + 4);
+        return data;
+    }
+
+    private static bool IsAccessKeySecret(string candidate) => IsSecret(candidate, MaximumAccessKeySecretLength);
 
     private static byte[] AccessKeyAssociatedData(string destinationName, string accessKeyId)
     {

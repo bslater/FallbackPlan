@@ -447,10 +447,10 @@ public static class Scheduler
     /// service must not put on somebody else's link by default
     /// ([ADR-0054](../../docs/adr/0054-scheduled-restore-drills.md)
     /// Amendment 3). Absent means never, and the bytes one drill may pull
-    /// are capped in <see cref="RecoveryDrillJob"/>. An S3-compatible store
-    /// keeps the peer's rule for a reason of its own: every read is a request
-    /// a provider may charge for, a cost the person who declared it chooses
-    /// (ADR-0091).
+    /// are capped in <see cref="RecoveryDrillJob"/>. An object store keeps
+    /// the peer's rule for a reason of its own: every read is a request a
+    /// provider may charge for, a cost the person who declared it chooses
+    /// (ADR-0091, ADR-0093).
     /// </para>
     /// <para>
     /// A pair nothing has ever reached is not due one: there is nothing there
@@ -471,7 +471,8 @@ public static class Scheduler
             case DestinationKind.LocalPath:
                 break;
 
-            case DestinationKind.Peer or DestinationKind.S3 when destination.DrillIntervalDays is not null:
+            case DestinationKind.Peer or DestinationKind.S3 or DestinationKind.AzureBlob
+                when destination.DrillIntervalDays is not null:
                 break;
 
             default:
@@ -522,9 +523,9 @@ public static class Scheduler
     /// (ADR-0035 Amendment 2): re-reading all of a replica is a standing cost
     /// on somebody else's link, which this service does not incur by default
     /// — the drill's rule, for the drill's reason. Until one is stated, the
-    /// range challenge and the read-back sample a peer instead. An
-    /// S3-compatible store keeps the same rule, because every read there is
-    /// a request its provider may charge for (ADR-0091 Amendment 1). A peer
+    /// range challenge and the read-back sample a peer instead. An object
+    /// store keeps the same rule, because every read there is a request its
+    /// provider may charge for (ADR-0091 Amendment 1, ADR-0093). A peer
     /// or a store the fan-out last found unreachable is not read for its
     /// sweep, because a request that fails holds the one transfer worker
     /// until it does.
@@ -552,7 +553,7 @@ public static class Scheduler
             return false;
         }
 
-        if (destination.Kind is DestinationKind.Peer or DestinationKind.S3
+        if ((destination.Kind is DestinationKind.Peer || destination.Kind.IsObjectStore())
             && record.State == DestinationSyncState.Unavailable)
         {
             return false;

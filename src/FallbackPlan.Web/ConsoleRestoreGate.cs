@@ -251,20 +251,23 @@ public static class ConsoleRestoreGate
     }
 
     /// <summary>
-    /// Seals an S3-compatible destination's secret access key to the
-    /// service's recipient key, for the one destination and key id it was
-    /// typed for (ADR-0091). Nothing is derived and nothing is proved: the
-    /// store is what will say whether the key is right.
+    /// Seals an object-store destination's credential to the service's
+    /// recipient key, for the one destination it was typed for and under the
+    /// purpose of its kind: an S3-compatible store's secret access key, bound
+    /// to its key id too (ADR-0091), or an Azure Blob container's account key
+    /// or shared access signature (ADR-0093). Nothing is derived and nothing
+    /// is proved: the store is what will say whether the credential is right.
     /// </summary>
-    /// <param name="destinationName">The destination the key is for.</param>
-    /// <param name="accessKeyId">The access key id.</param>
-    /// <param name="secretAccessKey">The typed secret; sealed and released.</param>
+    /// <param name="destinationName">The destination the credential is for.</param>
+    /// <param name="kind"><c>access-key</c>, <c>shared-key</c> or <c>sas</c>, as the contract spells them.</param>
+    /// <param name="accessKeyId">The access key id, for an access key; null for the other two.</param>
+    /// <param name="secret">The typed secret; sealed and released.</param>
     /// <param name="grantRecipientHex">The service's grant-recipient public key, from <c>describe_service</c>.</param>
     /// <returns>The envelope, or why it could not be made.</returns>
-    public static SetupAnswer SealAccessKey(
-        string destinationName, string accessKeyId, string secretAccessKey, string grantRecipientHex)
+    public static SetupAnswer SealDestinationCredential(
+        string destinationName, string kind, string? accessKeyId, string secret, string grantRecipientHex)
     {
-        ThrowHelper.ThrowIfNull(secretAccessKey);
+        ThrowHelper.ThrowIfNull(secret);
         ThrowHelper.ThrowIfNullOrWhiteSpace(grantRecipientHex);
 
         if (!TryParseRecipient(grantRecipientHex, out var recipient))
@@ -272,15 +275,19 @@ public static class ConsoleRestoreGate
             return new SetupAnswer(
                 GateOutcome.Unavailable,
                 "The service's grant-recipient key is not a usable 32-byte hex key — restart the service "
-                + "and try again (ADR-0091).");
+                + "and try again (ADR-0091, ADR-0093).");
         }
 
         try
         {
             return new SetupAnswer(
                 GateOutcome.Verified,
-                Envelope: Convert.ToHexStringLower(WriteOnlyProvisioning.SealAccessKeySecret(
-                    recipient!, destinationName, accessKeyId, secretAccessKey)));
+                Envelope: Convert.ToHexStringLower(kind switch
+                {
+                    "shared-key" => WriteOnlyProvisioning.SealAccountKey(recipient!, destinationName, secret),
+                    "sas" => WriteOnlyProvisioning.SealSharedAccessSignature(recipient!, destinationName, secret),
+                    _ => WriteOnlyProvisioning.SealAccessKeySecret(recipient!, destinationName, accessKeyId!, secret),
+                }));
         }
         catch (ArgumentException malformed)
         {

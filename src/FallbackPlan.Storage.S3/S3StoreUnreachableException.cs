@@ -1,13 +1,15 @@
+using FallbackPlan.Storage.Abstractions;
+
 namespace FallbackPlan.Storage.S3;
 
 /// <summary>
-/// The store could not be reached at all — no connection, no answer — after
-/// every attempt (ADR-0091). An <see cref="IOException"/>, so every caller
-/// that survives a store fault survives this one; a caller that tells an
-/// outage from a refusal catches it first and records the pair unavailable,
-/// which closes itself, rather than failed (FR-DEST-003).
+/// The S3-compatible store could not be reached at all — no connection, no
+/// answer — after every attempt (ADR-0091). The service catches the
+/// <see cref="StoreUnreachableException"/> it derives from, as it does every
+/// provider's, and records the pair unavailable rather than failed
+/// (FR-DEST-003).
 /// </summary>
-public sealed class S3StoreUnreachableException : IOException
+public sealed class S3StoreUnreachableException : StoreUnreachableException
 {
     /// <summary>Creates an empty exception.</summary>
     public S3StoreUnreachableException()

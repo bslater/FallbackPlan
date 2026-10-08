@@ -45,6 +45,11 @@ Four things stood between the reservation and a served kind.
 
 1. **The platform's HTTP client and a signer of this product's own, in one assembly.** `Storage.S3` speaks the S3 API over `HttpClient` and signs each request with the API's version-4 signature, about a hundred lines checked against an independent implementation's vectors. No package is added. It is the one assembly allowed an HTTP client: an allowlist of one in `TelemetrySilenceTests`, which fails when the assembly stops needing it. It opens no socket of its own, depends on the store contract and Domain alone, and only the service composes it (`DependencyRuleTests`). Redirects, cookies and decompression are off, and a request is bounded by its caller's token rather than a clock. An endpoint must be `https`, except on this machine.
 
+   > **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+   > The allowlist has two entries now: `Storage.AzureBlob` joins it, held to
+   > the same closure, the same single composer and the same rule that an
+   > entry no longer needing its client loses its place.
+
 2. **The contract's semantics, bridged in the provider.**
    - Every put is a create, sent `If-None-Match: *` whatever its conditions, and a 412 is `AlreadyExists`. Nothing the service writes overwrites anything at the store.
    - The range served is read back from `Content-Range`, and a body that ends early is a fault.
@@ -83,6 +88,9 @@ Four things stood between the reservation and a served kind.
 ## Consequences
 
 - **`s3` is a served kind.** `azure-blob` and `dropbox` stay reserved, refused as before.
+
+  > **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+  > `azure-blob` is served too; `dropbox` alone stays reserved.
 - **The build has an HTTP client.** It is in one assembly, named, closed off from the engine, composed only by the service, and sent only to the endpoint a person declared for a destination. A default run still makes no HTTP request: `DefaultBuildSilenceTests` backs up to a local path and observes nothing, unchanged.
 - **What a store learns.** Object keys, which are keyed identifiers and never file names; their sizes and timing; and the access key id. Every object is sealed before it leaves the machine (T-9 unchanged).
 - **The access key is now in the service account's keeping.** Whoever holds the service account can use it to delete or alter objects at the store directly, which no repository key prevents (T-6, T-19). The service's own writes never overwrite. A key scoped by the operator to the bucket and prefix, and the provider's object lock or versioning, are the operator's measures. Provider object lock is still the later phase T-6 names.
@@ -92,6 +100,9 @@ Four things stood between the reservation and a served kind.
   > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-store-is-swept-on-a-stated-cadence-and-adopted-from)).**
   > The sweep and adoption are built. The Azure half of FR-REP-002 is still
   > owed.
+
+  > **Amended 2026-10 ([ADR-0093](0093-an-azure-blob-destination.md)).**
+  > The Azure half is built, so nothing of FR-REP-002 is owed.
 
 ## Alternatives considered
 
@@ -192,3 +203,4 @@ it. Both are built here.
 |------|--------|------|
 | 2026-10 | Accepted | Built end to end: the provider over the platform's HTTP client with a signer of its own, the shared contract suite against an in-process store, the access key sealed into the state directory (contract 1.60, schema 9), the service's sync, restore, drill, probe and direct-ship catch-up, the CLI verb and the console's editor; [ADR-0027](0027-services-scheduling-status-telemetry.md) §3, [ADR-0034](0034-hub-and-spoke-destinations.md) §5, [ADR-0042](0042-write-only-repositories.md) decision 6 and [ADR-0043](0043-structured-logging-and-diagnostics.md) amended |
 | 2026-10 | Amended | [Amendment 1](#amendment-1-2026-10--a-store-is-swept-on-a-stated-cadence-and-adopted-from): a store is swept on a cadence its operator states and never without one, over its API on the peer's segment share, repaired by delete and put, and recorded unavailable when it does not answer (`Agent/ReplicaSweepJob`, `Agent/Scheduler`, `Agent/ReplicaRepairer`); an archive is discovered, previewed and adopted from a store into a staging set seeded with what a trimmed staging archive keeps (`Agent/ServiceCommandHandler`); the console offers the cadence and "Find backups…" for a store. [ADR-0035](0035-destination-fitness.md) Amendment 2 and [ADR-0061](0061-adopt-a-destinations-archives.md) §3 and §6 amended (related). Held by `Hosts.Tests/S3DestinationTests`, `Hosts.Tests/S3AdoptionTests`, `Hosts.Tests/DeepSweepCadenceTests`, `Web.Tests/AdoptionCeremonyTests`, `Web.Tests/ConsoleServiceSettingsScriptTests` and `Web.DomTests/ConfigEditingDomTests` |
+| 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md) serves an Azure Blob container through every routine this record built for a bucket, asked for by one check rather than by the `s3` kind. The two stores now share `Storage.Abstractions/IPrefixedObjectStore` and `Storage.Abstractions/StoreUnreachableException`, which `Storage.S3/S3StoreUnreachableException` derives from; `Agent/StoreComposition` opens either through one method; and `set_destination_credentials` names the credential's kind, an access key being what a request naming none means (contract 1.61). The host cases of `Hosts.Tests/S3DestinationTests` and `Hosts.Tests/S3AdoptionTests` moved into `Hosts.Tests/ObjectStoreDestinationTests` and `Hosts.Tests/ObjectStoreAdoptionTests`, which both run against a bucket, unchanged in what they assert |

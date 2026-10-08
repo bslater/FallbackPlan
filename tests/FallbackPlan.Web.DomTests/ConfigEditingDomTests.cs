@@ -13,9 +13,10 @@ namespace FallbackPlan.Web.DomTests;
 /// acknowledgement of a claim held on a replica stored here (FR-DR-005), the
 /// write-only provisioning ceremony, the adoption ceremony's preview and
 /// confirmation (FR-DR-009), the service-settings card with the
-/// destination form's limit and cadence (FR-SVC-021), and an S3-compatible
-/// store's address and access key (FR-DEST-005) — each asserting the
-/// command its dialog claims to send.
+/// destination form's limit and cadence (FR-SVC-021), an S3-compatible
+/// store's address and access key (FR-DEST-005), and an Azure Blob
+/// container's address with either of its credentials (ADR-0093) — each
+/// asserting the command its dialog claims to send.
 /// </summary>
 /// <remarks>
 /// Re-homed onto the sectioned set editor when this line merged: the single
@@ -211,6 +212,130 @@ public sealed class ConfigEditingDomTests
         Assert.AreEqual("dest-s3", upsert.Destination.Id);
         Assert.IsEmpty(harness.Clients.Client.Received.OfType<SetDestinationCredentialsCommand>(),
             "a key nobody typed is not sent, and the one held stays");
+    }
+
+    [TestMethod]
+    public async Task DestinationEditor_AnAzureBlobContainer_SendsItsAddress_ThenItsAccountKeySealedInTheConsole()
+    {
+        // An account and a container, an optional endpoint, and the account
+        // key — sealed by the console's own endpoint for this destination, so
+        // the relay is never sent it (FR-DEST-005, ADR-0093).
+        const string accountKey = "BwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRg==";
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult([]),
+            UpsertDestinationCommand => new AcknowledgedResult(),
+            SetDestinationCredentialsCommand => new ConfigurationChangeResult(
+                ["Account key stored for destination 'cloud'."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"dest-add-azure-blob\"]");
+        await Expect(page.Locator("#dest-sweep")).ToHaveAttributeAsync("placeholder", "never");
+        await page.FillAsync("#dest-name", "cloud");
+        await page.FillAsync("#dest-account", "fbptestaccount");
+        await page.FillAsync("#dest-container", "family-backups");
+        await page.FillAsync("#dest-prefix", "site-a");
+        await page.SelectOptionAsync("#dest-credential-kind", "shared-key");
+        await page.FillAsync("#dest-secret", accountKey);
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("azure-blob", upsert.Destination.Kind);
+        Assert.AreEqual("fbptestaccount", upsert.Destination.Account);
+        Assert.AreEqual("family-backups", upsert.Destination.Container);
+        Assert.AreEqual("site-a", upsert.Destination.Prefix);
+        Assert.IsNull(upsert.Destination.Endpoint, "an empty endpoint is the account at the public service");
+        Assert.IsNull(upsert.Destination.Bucket);
+        Assert.IsNull(upsert.Destination.Region);
+
+        var stored = await harness.ReceivedAsync<SetDestinationCredentialsCommand>();
+        Assert.AreEqual("cloud", stored.DestinationName);
+        Assert.AreEqual("shared-key", stored.Kind);
+        Assert.IsNull(stored.AccessKeyId);
+        Assert.AreEqual(
+            accountKey, WriteOnlyProvisioning.OpenAccountKey(Wire.RecipientScalar, Convert.FromHexString(stored.Envelope), "cloud"));
+
+        await Expect(page.GetByText("Account key stored for destination 'cloud'.")).ToBeVisibleAsync();
+    }
+
+    [TestMethod]
+    public async Task DestinationEditor_EditingAnAzureBlobContainer_SaysWhichCredentialIsHeld_AndTakesASignature()
+    {
+        const string token = "sv=2024-11-04&sr=c&sp=racwdl&se=2099-12-31T00%3A00%3A00Z&sig=AbC%2Bd%2Fe%3D";
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult(
+            [
+                new DestinationDescriptor(
+                    "dest-azure", "cloud", "azure-blob", null, null, null, Prefix: "site-a", AccessKeyStored: true,
+                    Account: "fbptestaccount", Container: "family-backups",
+                    AuthorisedBy: "sas", SignatureExpires: "2026-12-31T00:00:00Z"),
+            ]),
+            UpsertDestinationCommand => new AcknowledgedResult(),
+            SetDestinationCredentialsCommand => new ConfigurationChangeResult(["Shared access signature stored."]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-dest\"][data-id=\"dest-azure\"]");
+        await Expect(page.Locator("#dest-account")).ToHaveValueAsync("fbptestaccount");
+        await Expect(page.Locator("#dest-container")).ToHaveValueAsync("family-backups");
+        await Expect(page.Locator("#dest-key-held")).ToContainTextAsync("A shared access signature is held");
+        await Expect(page.Locator("#dest-key-held")).ToContainTextAsync("2026-12-31");
+        await Expect(page.Locator("#dest-secret")).ToHaveValueAsync("");
+
+        await page.SelectOptionAsync("#dest-credential-kind", "sas");
+        await page.FillAsync("#dest-secret", token);
+        await page.ClickAsync("[data-action=\"dest-save\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertDestinationCommand>();
+        Assert.AreEqual("dest-azure", upsert.Destination.Id);
+        var stored = await harness.ReceivedAsync<SetDestinationCredentialsCommand>();
+        Assert.AreEqual("sas", stored.Kind);
+        Assert.AreEqual(
+            token, WriteOnlyProvisioning.OpenSharedAccessSignature(Wire.RecipientScalar, Convert.FromHexString(stored.Envelope), "cloud"));
+    }
+
+    [TestMethod]
+    public async Task DestinationsTable_AnAzureBlobContainer_OffersToFindItsBackups_AndSaysWhenItsSignatureLapsed()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            ListDestinationsCommand => new DestinationsResult(
+            [
+                new DestinationDescriptor(
+                    "dest-azure", "cloud", "azure-blob", null, null, null, Prefix: "site-a", AccessKeyStored: true,
+                    Account: "fbptestaccount", Container: "family-backups",
+                    AuthorisedBy: "sas", SignatureExpires: "2020-01-01T00:00:00Z"),
+            ]),
+            DiscoverArchivesCommand => new ArchivesDiscoveredResult("cloud", [], []),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await Expect(page.GetByText("fbptestaccount · family-backups/site-a")).ToBeVisibleAsync();
+        await Expect(page.GetByText("signature expired")).ToBeVisibleAsync();
+        await page.ClickAsync("[data-action=\"dest-discover\"][data-name=\"cloud\"]");
+
+        var discover = await harness.ReceivedAsync<DiscoverArchivesCommand>();
+        Assert.AreEqual("cloud", discover.DestinationName);
     }
 
     [TestMethod]

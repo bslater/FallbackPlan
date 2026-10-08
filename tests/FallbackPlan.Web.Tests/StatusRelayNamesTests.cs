@@ -82,7 +82,7 @@ public sealed class StatusRelayNamesTests
                                 IntervalDays: 7, CircuitClosedAt: 5_000, ReadThisCircuit: 3, LastReadAt: 8_000,
                                 Stalls: 1, StalledOn: "blobs/data/ab/abcdef")),
                         new DestinationStatusDescriptor(
-                            "cloud", "azure-blob", "not-supported", LastSuccessAt: null, Detail: null,
+                            "cloud", "dropbox", "not-supported", LastSuccessAt: null, Detail: null,
                             "other-site", "unproven"),
                     ]),
             ],
