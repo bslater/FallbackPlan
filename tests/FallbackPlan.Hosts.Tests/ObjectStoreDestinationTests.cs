@@ -22,11 +22,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// schedule drills it only on a cadence somebody stated (FR-DRL-002); the
 /// deep sweep reads it back whole on a cadence somebody stated, or when a
 /// person asks, and replaces what the store altered from a sound copy
-/// (FR-VER-002, FR-VER-004, FR-VER-007, FR-VER-008); and what goes wrong is
-/// told apart — no credential, a store that refuses it, a store that does
-/// not answer, one too busy to serve (FR-QUOTA-001) — through the faults the
-/// store contract names: a link cut partway, a credential refused partway,
-/// and listings that lag the store's writes.
+/// (FR-VER-002, FR-VER-004, FR-VER-007, FR-VER-008); a probe asks it for one
+/// key, leaves nothing there and records no success (FR-DEST-009); and what
+/// goes wrong is told apart, by a sync, a sweep and a probe alike — no
+/// credential, a store that refuses it, a store that does not answer, one too
+/// busy to serve (FR-QUOTA-001) — through the faults the store contract
+/// names: a link cut partway, a credential refused partway, and listings that
+/// lag the store's writes.
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -214,6 +216,90 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual("failed", cloud.State, "a refused credential needs a person, not a retry");
         Assert.Contains(RefusalCode, cloud.Detail!, StringComparison.Ordinal);
         Assert.DoesNotContain(RefusedSecret, cloud.Detail!, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Probe_OfAStoreThatServes_IsViable_LeavesNothingThere_AndRecordsNoSuccess()
+    {
+        // FR-DEST-009: the store could take a backup, confirmed without
+        // sending one, and reaching it is not syncing to it.
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var line = await ProbeAsync(runtime);
+
+        Assert.Contains("the credential is taken", line, StringComparison.Ordinal);
+        Assert.IsNotEmpty(Store.Listings, "the probe asked the store");
+        Assert.IsEmpty(Store.KeysIn(Namespace), "a probe leaves nothing there");
+        Assert.IsNull(runtime.DestinationSync.Find(Harness.DocsSetId, "cloud")?.LastSuccessAt);
+    }
+
+    [TestMethod]
+    public async Task Probe_WithNoCredentialStored_IsFailed_AndSaysHowToStoreOne()
+    {
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        var line = await ProbeAsync(runtime);
+
+        Assert.Contains(MissingCredentialWords, line, StringComparison.Ordinal);
+        Assert.Contains("destination-credentials", line, StringComparison.Ordinal);
+        Assert.AreEqual(DestinationSyncState.Failed, Pair(runtime, "cloud").State);
+        Assert.IsEmpty(Store.Requests, "nothing is sent to a store the service cannot sign for");
+    }
+
+    [TestMethod]
+    public async Task Probe_OfAnEndpointNothingAnswers_IsUnavailable_NotFailed()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var closed = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        WriteConfiguration(directShip: false, endpoint: EndpointAt(new Uri($"http://127.0.0.1:{closed}")));
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var line = await ProbeAsync(runtime);
+
+        Assert.Contains("could not reach", line, StringComparison.Ordinal);
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, record.State, record.LastError);
+    }
+
+    [TestMethod]
+    public async Task Probe_OfAStoreTooBusyToServe_IsUnavailable_NotFailed()
+    {
+        // The probe records what the sync would (ADR-0035): a store too busy
+        // to serve is a gap that closes itself (FR-DEST-003, FR-QUOTA-001),
+        // and nobody is sent looking for a fault to fix.
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.FailFrom(servedFirst: 0, 503, BusyCode);
+        var line = await ProbeAsync(runtime);
+
+        Assert.Contains("did not serve the probe", line, StringComparison.Ordinal);
+        Assert.Contains(BusyCode, line, StringComparison.Ordinal);
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, record.State, record.LastError);
+    }
+
+    [TestMethod]
+    public async Task Probe_WithACredentialTheStoreRefuses_IsFailed_InTheStoresWords_AndNeverTheSecret()
+    {
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime, RefusedSecret);
+        var line = await ProbeAsync(runtime);
+
+        Assert.Contains(RefusalCode, line, StringComparison.Ordinal);
+        Assert.DoesNotContain(RefusedSecret, line, StringComparison.Ordinal);
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Failed, record.State, "a refused credential needs a person, not a retry");
     }
 
     [TestMethod]
@@ -532,6 +618,33 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var record = Pair(runtime, "cloud");
         Assert.AreEqual(DestinationSyncState.Unavailable, record.State, record.LastError);
         Assert.AreEqual(0, record.SweepStalls, "a store that does not answer has stalled on nothing");
+    }
+
+    [TestMethod]
+    public async Task Sweep_OfAStoreTooBusyToServe_IsUnavailable_NotAStall()
+    {
+        // A store that answers every attempt that it is busy is a gap that
+        // closes itself just as one that does not answer is (FR-DEST-003,
+        // FR-QUOTA-001): never a stall waited out under the back-off, as a
+        // refusal is.
+        WriteConfiguration(directShip: false, deepVerifyIntervalDays: 30);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        await BackUpAsync(runtime);
+        Assert.IsNotNull(Pair(runtime, "cloud").SweepCompletedAt, "the premise: the store was read while it served");
+
+        Store.FailFrom(servedFirst: 0, 503, BusyCode);
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        var segment = await ReplicaSweepJob.SweepAsync(
+            runtime, set, "cloud", (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), userInitiated: false, Timeout);
+
+        Assert.IsNotNull(segment.Unreadable, "nothing was read");
+        var record = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, record.State, record.LastError);
+        Assert.Contains(BusyCode, record.LastError!, StringComparison.Ordinal);
+        Assert.AreEqual(0, record.SweepStalls, "a store too busy to serve has stalled on nothing");
     }
 
     [TestMethod]
@@ -898,6 +1011,17 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
             await handler.ExecuteAsync(new VerifyDestinationCommand("docs", "cloud", Full: true), Timeout),
             out var verified);
         return Assert.ContainsSingle(verified.Lines);
+    }
+
+    /// <summary>Probes the store, as <c>verify-destination --probe</c> does, and returns what it said.</summary>
+    /// <param name="runtime">The service.</param>
+    private async Task<string> ProbeAsync(ServiceRuntime runtime)
+    {
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        Assert.IsInstanceOfType<VerifyDestinationResult>(
+            await handler.ExecuteAsync(new VerifyDestinationCommand("docs", "cloud", Full: false, Probe: true), Timeout),
+            out var probed);
+        return Assert.ContainsSingle(probed.Lines);
     }
 
     /// <summary>Syncs the set to the store at a person's asking.</summary>
