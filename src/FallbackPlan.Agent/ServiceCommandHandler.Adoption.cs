@@ -1012,6 +1012,7 @@ public sealed partial class ServiceCommandHandler
         Count(retention?.KeepMonthly);
         Count(retention?.MinGenerations);
         Count(retention?.DeferralDays);
+        Count(retention?.KeepDeletedDays);
         Count(shape.SnapshotCount);
         Field(shape.NewestSnapshotId);
         Field(shape.NewestSnapshotAt?.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -1100,6 +1101,7 @@ public sealed partial class ServiceCommandHandler
         AddRule(retention.KeepMonthly, "{0} monthly");
         AddRule(retention.MinGenerations, "never fewer than {0} snapshots");
         AddRule(retention.DeferralDays, "a lagging destination warned about after {0} days");
+        AddRule(retention.KeepDeletedDays, "a deleted file kept for {0} days");
         return rules.Count == 0 ? "no rules" : string.Join(", ", rules);
 
         void AddRule(int? value, string format)

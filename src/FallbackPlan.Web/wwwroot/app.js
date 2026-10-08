@@ -3247,6 +3247,8 @@ function retentionSummary(policy) {
   if (policy.keepWeekly) parts.push(`${policy.keepWeekly}w`);
   if (policy.keepMonthly) parts.push(`${policy.keepMonthly}m`);
   if (policy.minGenerations) parts.push(`≥${policy.minGenerations}`);
+  // The deleted-file duration only keeps more, so beside no rule it says nothing.
+  if (policy.keepDeletedDays && parts.length) parts.push(`${policy.keepDeletedDays}d deleted`);
   return parts.length ? "retention " + parts.join("/") : "keeps everything";
 }
 
@@ -3499,6 +3501,10 @@ function retentionProse(policy, overrides) {
   let text = kept.length ? `keep ${kept.join(", ")} versions` : "";
   if (policy?.minGenerations != null) {
     text += `${text ? "; " : ""}always keep at least ${policy.minGenerations} backup${policy.minGenerations === 1 ? "" : "s"}`;
+  }
+  // Beside no rule the duration has nothing to keep that is not kept already.
+  if (text && policy?.keepDeletedDays) {
+    text += `; a deleted file stays restorable for ${policy.keepDeletedDays} day${policy.keepDeletedDays === 1 ? "" : "s"}`;
   }
   if (!text) text = "keeps everything — no rule ever expires a backup";
   const named = Object.keys(overrides ?? {}).length;
@@ -3786,6 +3792,8 @@ function setSectionHtml(key) {
             <input type="text" id="ret-min" class="num" value="${policy.minGenerations ?? ""}"> backups</label>
           <label class="ret-row">Hold expiry for a destination behind by up to
             <input type="text" id="ret-defer" class="num" value="${policy.deferralDays ?? ""}"> days before warning</label>
+          <label class="ret-row">Keep a deleted file restorable for
+            <input type="text" id="ret-deleted" class="num" value="${policy.keepDeletedDays ?? ""}"> days</label>
         </div>`;
     }
 
@@ -3904,9 +3912,9 @@ function stageSection(key, { lenient = false } = {}) {
       for (const name of E.destinations) {
         if (!document.querySelector(`[data-ovr-check="${CSS.escape(name)}"]`)?.checked) continue;
         const policy = {};
-        for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations"]) {
+        for (const field of ["keepDaily", "keepWeekly", "keepMonthly", "minGenerations", "keepDeletedDays"]) {
           const raw = document.querySelector(`[data-ovr="${CSS.escape(name)}:${field}"]`)?.value.trim() ?? "";
-          policy[field] = raw === "" ? null : Number(raw);
+          policy[field] = raw === "" ? emptyPolicyField(field) : Number(raw);
         }
         if (Object.values(policy).some(value => value !== null && !Number.isInteger(value))) {
           toast("warn", `The override for '${name}' has a non-numeric value.`); return false;
@@ -3962,6 +3970,7 @@ function renderDestChoice(destination) {
           <label class="mini">weekly <input type="text" class="num" data-ovr="${esc(destination.name)}:keepWeekly" value="${override.keepWeekly ?? ""}"></label>
           <label class="mini">monthly <input type="text" class="num" data-ovr="${esc(destination.name)}:keepMonthly" value="${override.keepMonthly ?? ""}"></label>
           <label class="mini">min gen <input type="text" class="num" data-ovr="${esc(destination.name)}:minGenerations" value="${override.minGenerations ?? ""}"></label>
+          <label class="mini">deleted days <input type="text" class="num" data-ovr="${esc(destination.name)}:keepDeletedDays" value="${override.keepDeletedDays ?? ""}"></label>
         </div>` : ""}
     </div>`;
 }
@@ -4449,7 +4458,15 @@ function readPolicyInputs(read) {
   return {
     keepDaily: value("daily"), keepWeekly: value("weekly"), keepMonthly: value("monthly"),
     minGenerations: value("min"), deferralDays: value("defer"),
+    keepDeletedDays: value("deleted") ?? emptyPolicyField("keepDeletedDays"),
   };
+}
+
+// What an emptied policy field sends. Absent is "no rule" for every rule but
+// the deleted-file duration (contract 1.62), whose absence keeps what stands
+// for clients that cannot see it; for that one, an emptied field says zero.
+function emptyPolicyField(field) {
+  return field === "keepDeletedDays" ? 0 : null;
 }
 
 /* ----- adopting a discovered archive (ADR-0061) ----- */

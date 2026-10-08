@@ -530,11 +530,22 @@ public sealed record RetentionConfiguration
     [JsonPropertyName("deferral_days")]
     public int? DeferralDays { get; init; }
 
+    /// <summary>
+    /// How many days a file deleted from the sources stays restorable
+    /// (FR-GC-014, ADR-0094): the newest snapshot still holding it is kept
+    /// for this long after the first snapshot without it. It only ever keeps
+    /// more, so alone it is no rule and deletes nothing.
+    /// </summary>
+    [JsonPropertyName("keep_deleted_days")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? KeepDeletedDays { get; init; }
+
     /// <summary>Whether every declared value is positive; a zero rule is a typo, not a policy.</summary>
     [JsonIgnore]
     public bool IsValid =>
         KeepDaily is null or > 0 && KeepWeekly is null or > 0 &&
-        KeepMonthly is null or > 0 && MinGenerations is null or > 0 && DeferralDays is null or > 0;
+        KeepMonthly is null or > 0 && MinGenerations is null or > 0 && DeferralDays is null or > 0
+        && KeepDeletedDays is null or > 0;
 }
 
 /// <summary>

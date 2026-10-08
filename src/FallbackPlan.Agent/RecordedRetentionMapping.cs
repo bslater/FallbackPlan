@@ -25,6 +25,7 @@ internal static class RecordedRetentionMapping
                 KeepMonthly = Recorded(retention.KeepMonthly),
                 MinGenerations = Recorded(retention.MinGenerations),
                 DeferralDays = Recorded(retention.DeferralDays),
+                KeepDeletedDays = Recorded(retention.KeepDeletedDays),
             };
 
     /// <summary>
@@ -49,6 +50,7 @@ internal static class RecordedRetentionMapping
                 KeepMonthly = Configured(recorded.KeepMonthly),
                 MinGenerations = Configured(recorded.MinGenerations),
                 DeferralDays = Configured(recorded.DeferralDays),
+                KeepDeletedDays = Configured(recorded.KeepDeletedDays),
             };
 
     // A configured rule is validated positive before it can reach a backup, so

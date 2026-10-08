@@ -334,7 +334,9 @@ internal static class DiagnosticBundle
     private static RetentionEntry? Retention(RetentionConfiguration? retention) =>
         retention is null
             ? null
-            : new RetentionEntry(retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly, retention.MinGenerations, retention.DeferralDays);
+            : new RetentionEntry(
+                retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly, retention.MinGenerations,
+                retention.DeferralDays, retention.KeepDeletedDays);
 
     private static StatusEntry Status(Inputs inputs, RenderMode mode)
     {
@@ -533,7 +535,8 @@ internal static class DiagnosticBundle
 
     private sealed record SetDestinationEntry(string? Ref, RetentionEntry? Retention, int? Priority);
 
-    private sealed record RetentionEntry(int? KeepDaily, int? KeepWeekly, int? KeepMonthly, int? MinGenerations, int? DeferralDays);
+    private sealed record RetentionEntry(
+        int? KeepDaily, int? KeepWeekly, int? KeepMonthly, int? MinGenerations, int? DeferralDays, int? KeepDeletedDays);
 
     private sealed record ConfiguredLoggingEntry(
         string? Level, IReadOnlyDictionary<string, string> Categories, int? RetainFiles, long? MaxFileBytes, int? RingCapacity);

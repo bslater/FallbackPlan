@@ -1239,31 +1239,49 @@ public sealed partial class ServiceCommandHandler
         or Domain.Jobs.JobState.FailedRecoverable
         or Domain.Jobs.JobState.FailedPermanent;
 
+    /// <summary>The policy an upsert declares, from what the client spoke of it.</summary>
+    /// <param name="descriptor">What the client spoke, or null.</param>
+    /// <param name="existing">What stands when the client spoke nothing.</param>
+    /// <param name="standingDeletedDays">
+    /// The deleted-file duration that stands for this policy (contract 1.62),
+    /// kept when a spoken policy is silent on it. An override's map replaces
+    /// the overrides whole, so its caller names the duration apart from the
+    /// policy it replaces.
+    /// </param>
     private static RetentionConfiguration? ToRetention(
-        RetentionPolicyDescriptor? descriptor, RetentionConfiguration? existing) => descriptor switch
-    {
-        // Not spoken: keep what stands. A 1.6 client never speaks.
-        null => existing,
-
-        // Spoken with every field absent: the explicit "no policy".
-        { IsEmpty: true } => null,
-
-        _ => new RetentionConfiguration
+        RetentionPolicyDescriptor? descriptor, RetentionConfiguration? existing, int? standingDeletedDays) =>
+        descriptor switch
         {
-            KeepDaily = descriptor.KeepDaily,
-            KeepWeekly = descriptor.KeepWeekly,
-            KeepMonthly = descriptor.KeepMonthly,
-            MinGenerations = descriptor.MinGenerations,
-            DeferralDays = descriptor.DeferralDays,
-        },
-    };
+            // Not spoken: keep what stands. A 1.6 client never speaks.
+            null => existing,
+
+            // Spoken with every field absent: the explicit "no policy".
+            { IsEmpty: true } => null,
+
+            _ => new RetentionConfiguration
+            {
+                KeepDaily = descriptor.KeepDaily,
+                KeepWeekly = descriptor.KeepWeekly,
+                KeepMonthly = descriptor.KeepMonthly,
+                MinGenerations = descriptor.MinGenerations,
+                DeferralDays = descriptor.DeferralDays,
+                // A pre-1.62 client cannot see the duration, so its silence
+                // keeps it; zero is how a client that can see it says none.
+                KeepDeletedDays = descriptor.KeepDeletedDays switch
+                {
+                    null => standingDeletedDays,
+                    0 => null,
+                    var days => days,
+                },
+            },
+        };
 
     private static RetentionPolicyDescriptor? ToPolicyDescriptor(RetentionConfiguration? retention) =>
         retention is null
             ? null
             : new RetentionPolicyDescriptor(
                 retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly,
-                retention.MinGenerations, retention.DeferralDays);
+                retention.MinGenerations, retention.DeferralDays, retention.KeepDeletedDays);
 
     private static Dictionary<string, RetentionPolicyDescriptor>? ToOverrideDescriptors(
         IReadOnlyList<SetDestinationReference> references)

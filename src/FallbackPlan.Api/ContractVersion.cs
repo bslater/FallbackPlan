@@ -633,8 +633,18 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// and refused for the other two. Additive: a pre-1.61 client sends none
     /// of the fields, and its access key is stored as before.
     /// </para>
+    /// <para>
+    /// 1.62 serves deleted-file history (FR-GC-014, ADR-0094).
+    /// `RetentionPolicyDescriptor` gains `keep_deleted_days`, on a set's
+    /// retention and on a destination's override alike: how many days a file
+    /// deleted from the sources stays restorable. Null keeps what stands,
+    /// because a pre-1.62 client cannot see the field to send it back; zero
+    /// clears it, and a descriptor holding only a zero is still the empty
+    /// "no policy". Additive: a pre-1.62 client's edits leave the duration as
+    /// they found it.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 61);
+    public static ContractVersion Current { get; } = new(1, 62);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

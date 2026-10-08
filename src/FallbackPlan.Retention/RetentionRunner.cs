@@ -145,13 +145,27 @@ public static class RetentionRunner
 
         Log.PlanningRetention(log, new LogLabel(set), survey.Snapshots.Count);
 
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
         // A policy with no rule keeps everything, so under it the requests are
         // all that expires.
+        var now = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds);
+        var setPolicy = requestsOnly ? new RetentionConfiguration() : policy ?? new RetentionConfiguration();
+
+        // Which neighbours lost a path (FR-GC-014), compared once for every
+        // policy that reads the answer: the set's own and each destination's.
+        // A pass carrying out requests alone expires nothing else, and no
+        // keep-set holds a requested snapshot, so it compares nothing.
+        var deletedFiles = requestsOnly
+            ? DeletedFiles.Unknown
+            : await DeletedFileSurvey.SurveyAsync(
+                reader, survey.Snapshots,
+                [setPolicy, .. destinations.Select(reference => reference.Retention ?? policy)],
+                now, cancellationToken, margin).ConfigureAwait(false);
+
         var selection = RetentionPlanner.Select(
-            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)],
-            requestsOnly ? new RetentionConfiguration() : policy ?? new RetentionConfiguration(),
-            DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds),
-            margin);
+            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], setPolicy, now, margin, deletedFiles);
 
         // Per-destination keep-awareness (FR-GC-010): a destination whose own
         // policy drops a snapshot never holds it, so it never holds up its
@@ -160,7 +174,7 @@ public static class RetentionRunner
         // shared helper, so the gate and the converge spare cannot disagree.
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
         var keptByDestination = DestinationConvergence.KeepSetsByDestination(
-            facts, destinations, policy, DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), margin);
+            facts, destinations, policy, now, margin, deletedFiles);
 
         var gate = ReplicationGate.Apply(
             selection.Expire,
@@ -179,9 +193,6 @@ public static class RetentionRunner
         var protectedSnapshots = survey.Snapshots
             .Where(snapshot => protectedIds.Contains(snapshot.Fact.SnapshotId))
             .ToList();
-
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, protectedSnapshots, cancellationToken)
             .ConfigureAwait(false);
@@ -219,7 +230,7 @@ public static class RetentionRunner
             ? new TrimPlan([], 0, 0, [])
             : await StagingTrim.PlanAsync(
                 store, reader, survey, policy, destinations, trimVerificationFor, syncRecordFor, intents,
-                DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds), cancellationToken, margin)
+                now, cancellationToken, margin, deletedFiles)
                 .ConfigureAwait(false);
         lines.AddRange(trim.Lines);
 

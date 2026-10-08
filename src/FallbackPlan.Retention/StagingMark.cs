@@ -240,8 +240,8 @@ public static class StagingMark
         // retention free nothing. A kept manifest may therefore name a
         // parent that no longer exists; that dangling lineage is accepted,
         // exactly as the snapshot's own ParentSnapshots may name expired
-        // snapshots. Deleted-file history (architecture 07 §2's separately
-        // configured duration) will bound-walk parents when it is built.
+        // snapshots. Deleted-file history keeps whole snapshots, never a
+        // version on its own (ADR-0094), so it gives no reason to walk them.
     }
 
     private static async ValueTask<T?> ReadAsync<T>(

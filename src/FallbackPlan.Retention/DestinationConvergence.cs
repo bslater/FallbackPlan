@@ -113,15 +113,17 @@ public static class DestinationConvergence
             return ConvergencePlan.Refused(ConvergenceRefusal.UndecodableSnapshots);
         }
 
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+
+        var deletedFiles = await DeletedFileSurvey.SurveyAsync(
+            reader, survey.Snapshots, [policy], now, cancellationToken, clockSkewMargin).ConfigureAwait(false);
         var selection = RetentionPlanner.Select(
-            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], policy, now, clockSkewMargin);
+            [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], policy, now, clockSkewMargin, deletedFiles);
         var keepIds = selection.Keep.Select(keep => keep.Snapshot.SnapshotId).ToHashSet(StringComparer.Ordinal);
         var keptSnapshots = survey.Snapshots
             .Where(snapshot => keepIds.Contains(snapshot.Fact.SnapshotId))
             .ToList();
-
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, keptSnapshots, cancellationToken)
             .ConfigureAwait(false);
@@ -228,13 +230,19 @@ public static class DestinationConvergence
     /// <param name="setPolicy">The set's policy — the fallback for a reference without an override.</param>
     /// <param name="now">The clock the policy windows evaluate against.</param>
     /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
+    /// <param name="deletedFiles">
+    /// Which neighbouring snapshots lost a path (FR-GC-014), compared for the
+    /// longest duration among the policies here; omitted, every pair counts
+    /// as one that did.
+    /// </param>
     /// <returns>Kept snapshot ids per destination name; null value means keeps-all.</returns>
     public static Dictionary<string, HashSet<string>?> KeepSetsByDestination(
         IReadOnlyList<SnapshotFact> facts,
         IReadOnlyList<SetDestinationReference> destinations,
         RetentionConfiguration? setPolicy,
         DateTimeOffset now,
-        TimeSpan? clockSkewMargin = null)
+        TimeSpan? clockSkewMargin = null,
+        DeletedFiles? deletedFiles = null)
     {
         ThrowHelper.ThrowIfNull(facts);
         ThrowHelper.ThrowIfNull(destinations);
@@ -249,7 +257,7 @@ public static class DestinationConvergence
             var effective = reference.Retention ?? setPolicy;
             keptByDestination[reference.Ref] = !HasRules(effective)
                 ? null
-                : RetentionPlanner.Select(facts, effective!, now, clockSkewMargin)
+                : RetentionPlanner.Select(facts, effective!, now, clockSkewMargin, deletedFiles)
                     .Keep.Select(keep => keep.Snapshot.SnapshotId)
                     .ToHashSet(StringComparer.Ordinal);
         }
@@ -307,7 +315,23 @@ public static class DestinationConvergence
 
         var now = DateTimeOffset.FromUnixTimeMilliseconds((long)nowUnixMilliseconds);
         var facts = survey.Snapshots.Select(snapshot => snapshot.Fact).ToList();
-        var keptByDestination = KeepSetsByDestination(facts, destinations, setPolicy, now, clockSkewMargin);
+
+        // The trees are read only when a duration is in force: without one
+        // the common case below still costs nothing.
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        var loaded = false;
+        var deletedFiles = DeletedFiles.Unknown;
+        var policies = destinations.Select(reference => reference.Retention ?? setPolicy).ToList();
+        if (DeletedFileSurvey.LongestDuration(policies) > 0)
+        {
+            await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+            loaded = true;
+            deletedFiles = await DeletedFileSurvey.SurveyAsync(
+                reader, survey.Snapshots, policies, now, cancellationToken, clockSkewMargin).ConfigureAwait(false);
+        }
+
+        var keptByDestination = KeepSetsByDestination(
+            facts, destinations, setPolicy, now, clockSkewMargin, deletedFiles);
 
         // The gate's own comparison — publication sequence against synced
         // sequence, proof over record of sending (FR-GC-009) — applied to
@@ -333,8 +357,10 @@ public static class DestinationConvergence
             .Where(snapshot => owedIds.Contains(snapshot.Fact.SnapshotId))
             .ToList();
 
-        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
-        await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        if (!loaded)
+        {
+            await reader.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, owedSnapshots, cancellationToken)
             .ConfigureAwait(false);

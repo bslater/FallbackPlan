@@ -125,6 +125,11 @@ public static class StagingTrim
     /// <param name="now">The clock the policy windows evaluate against.</param>
     /// <param name="cancellationToken">Cancels the pass.</param>
     /// <param name="clockSkewMargin">How far a capture time may stray before it is implausible (FR-GC-012); a day when omitted.</param>
+    /// <param name="deletedFiles">
+    /// Which neighbouring snapshots lost a path (FR-GC-014), compared for the
+    /// longest duration among the destinations' policies; omitted, every pair
+    /// counts as one that did, and each destination is entitled to more.
+    /// </param>
     /// <returns>The plan, with its report lines.</returns>
     public static async ValueTask<TrimPlan> PlanAsync(
         IObjectStore store,
@@ -137,7 +142,8 @@ public static class StagingTrim
         IntentSurvey intents,
         DateTimeOffset now,
         CancellationToken cancellationToken,
-        TimeSpan? clockSkewMargin = null)
+        TimeSpan? clockSkewMargin = null,
+        DeletedFiles? deletedFiles = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(reader);
@@ -202,7 +208,7 @@ public static class StagingTrim
             }
 
             var selection = RetentionPlanner.Select(
-                [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], effective!, now, clockSkewMargin);
+                [.. survey.Snapshots.Select(snapshot => snapshot.Fact)], effective!, now, clockSkewMargin, deletedFiles);
             var keepIds = selection.Keep.Select(keep => keep.Snapshot.SnapshotId).ToHashSet(StringComparer.Ordinal);
             var kept = survey.Snapshots.Where(snapshot => keepIds.Contains(snapshot.Fact.SnapshotId)).ToList();
 
