@@ -167,8 +167,12 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
 
     private bool Eligible(CompactableBlob blob)
     {
+        // Data blobs only: the compactor produces sealed data blobs, and a
+        // metadata record carries no sealed-key prefix to be relocated into
+        // one. A metadata blob kept whole waits for the collector instead.
         var total = blob.LiveBytes + blob.DeadBytes;
-        return total > 0
+        return BlobStoreKeys.ClassOf(blob.StoreKey) == BlobClass.Data
+            && total > 0
             && blob.DeadBytes >= MinimumReclaim
             && blob.DeadBytes >= (long)(total * DeadFraction);
     }

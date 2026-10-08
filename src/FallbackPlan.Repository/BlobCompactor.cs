@@ -160,6 +160,17 @@ public sealed class BlobCompactor : IDisposable
     {
         ThrowHelper.ThrowIfNull(candidates);
 
+        // Refused before anything is written: what this produces is a sealed
+        // data blob, and a metadata record has no sealed-key prefix to carry
+        // into one, so a metadata candidate is a planning error, said by name.
+        foreach (var candidate in candidates)
+        {
+            if (BlobStoreKeys.ClassOf(candidate.StoreKey) != BlobClass.Data)
+            {
+                throw new InvalidOperationException(Strings.FormatBlobCompactor_NotADataBlob(candidate.StoreKey));
+            }
+        }
+
         var produced = new List<CompactedBlob>();
         BlobWriter? writer = null;
         var drained = new List<BlobId>();

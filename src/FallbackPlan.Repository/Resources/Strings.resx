@@ -115,6 +115,9 @@
   <data name="BlobCompactor_CompactionNeedsFormatThree" xml:space="preserve">
     <value>Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).</value>
   </data>
+  <data name="BlobCompactor_NotADataBlob" xml:space="preserve">
+    <value>The compaction source '{0}' is not a data blob. Compaction produces sealed data blobs, and a metadata blob's records cannot be relocated into one; nothing was written.</value>
+  </data>
   <data name="BlobCompactor_SourceBlobMissing" xml:space="preserve">
     <value>The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.</value>
   </data>

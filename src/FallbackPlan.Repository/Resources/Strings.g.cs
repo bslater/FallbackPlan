@@ -189,6 +189,17 @@ internal static class Strings
     internal static string BlobCompactor_CompactionNeedsFormatThree => Get(nameof(BlobCompactor_CompactionNeedsFormatThree));
 
     /// <summary>
+    /// The compaction source '{0}' is not a data blob. Compaction produces sealed data blobs, and a metadata blob's records cannot be relocated into one; nothing was written.
+    /// </summary>
+    private static string BlobCompactor_NotADataBlob => Get(nameof(BlobCompactor_NotADataBlob));
+
+    /// <summary>
+    /// The compaction source '{0}' is not a data blob. Compaction produces sealed data blobs, and a metadata blob's records cannot be relocated into one; nothing was written.
+    /// </summary>
+    internal static string FormatBlobCompactor_NotADataBlob(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, BlobCompactor_NotADataBlob, arg0);
+
+    /// <summary>
     /// The compaction source '{0}' is not in the store it was planned from; nothing was relocated out of it.
     /// </summary>
     private static string BlobCompactor_SourceBlobMissing => Get(nameof(BlobCompactor_SourceBlobMissing));
