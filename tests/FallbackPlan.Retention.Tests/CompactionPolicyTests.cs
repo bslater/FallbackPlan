@@ -36,6 +36,17 @@ public sealed class CompactionPolicyTests
     }
 
     [TestMethod]
+    public void AMetadataBlob_HalfDeadAndPastTheFloor_IsLeftAlone()
+    {
+        // The compactor produces sealed data blobs, and a metadata blob's
+        // records cannot be relocated into one. Chosen, it fails the pass,
+        // and the next pass chooses it again.
+        var blob = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, "meta");
+
+        Assert.IsEmpty(Default.SelectCandidates([blob]));
+    }
+
+    [TestMethod]
     public void ABlobMostlyLive_IsLeftAlone()
     {
         // A tenth dead: rewriting it moves nine times the bytes it frees.
@@ -96,6 +107,31 @@ public sealed class CompactionPolicyTests
     }
 
     /// <summary>
+    /// A metadata blob is left whole because compaction takes data blobs
+    /// only, whatever its fraction and reclaim, so the description says that
+    /// rather than counting it among the blobs below the threshold or past
+    /// the budget (FR-GC-005).
+    /// </summary>
+    [TestMethod]
+    public void TheDescription_SaysAMetadataBlobIsLeftForTheCollector_NotThatItIsBelowTheThreshold()
+    {
+        var metadata = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, "meta");
+        var mostlyLive = Blob(liveBytes: 90L * 1024 * 1024, deadBytes: 10L * 1024 * 1024);
+
+        var lines = Default.Describe([metadata, mostlyLive], Default.SelectCandidates([metadata, mostlyLive]));
+
+        Assert.StartsWith("compaction would rewrite: 0 blob(s)", lines[0], StringComparison.Ordinal);
+        Assert.Contains(
+            "1 blob(s) left whole: below the threshold",
+            Assert.ContainsSingle(lines.Where(line => line.Contains("below the threshold", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "1 metadata blob(s) left whole",
+            Assert.ContainsSingle(lines.Where(line => line.Contains("metadata", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The format gate, and the whole of what it says: below format 3 a
     /// rewrite means decrypt-and-reseal, which needs a content key this
     /// service does not hold, so nothing is selected and the remedy is
@@ -150,14 +186,14 @@ public sealed class CompactionPolicyTests
 
     private static int _next;
 
-    private static CompactableBlob Blob(long liveBytes, long deadBytes)
+    private static CompactableBlob Blob(long liveBytes, long deadBytes, string blobClass = "data")
     {
         var n = Interlocked.Increment(ref _next);
         var bytes = new byte[BlobId.Size];
         BitConverter.TryWriteBytes(bytes, n);
         var id = BlobId.FromBytes(bytes);
         return new CompactableBlob(
-            ObjectKey.Parse($"blobs/data/abcd/blob{n}"),
+            ObjectKey.Parse($"blobs/{blobClass}/abcd/blob{n}"),
             id,
             [new RecordTableEntry(
                 ObjectId.FromBytes([.. Enumerable.Repeat((byte)7, 32)]),

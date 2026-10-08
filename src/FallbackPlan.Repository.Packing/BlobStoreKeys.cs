@@ -27,4 +27,14 @@ public static class BlobStoreKeys
 
         return ObjectKey.Parse($"blobs/{classSegment}/{rendered[..4]}/{rendered}");
     }
+
+    /// <summary>The class a blob's store key names, or null for a key that names no blob.</summary>
+    /// <param name="key">A store key.</param>
+    public static BlobClass? ClassOf(ObjectKey key)
+    {
+        var value = key.Value;
+        return value.StartsWith("blobs/data/", StringComparison.Ordinal) ? BlobClass.Data
+            : value.StartsWith("blobs/meta/", StringComparison.Ordinal) ? BlobClass.Metadata
+            : null;
+    }
 }

@@ -259,12 +259,13 @@ public sealed class CompactionCollectionTests : IDisposable
 
         var before = await StoredBlobIdsAsync(store);
 
-        // A floor this fixture's few kilobytes of garbage can clear. What
-        // the thresholds themselves are worth is CompactionPolicyTests', and
-        // what is asserted here is that a dry run reports the selection and
-        // touches nothing.
+        // Bounds this fixture's few dozen bytes of dead data can clear: its
+        // files compress to almost nothing, and only a data blob is ever a
+        // candidate. What the thresholds themselves are worth is
+        // CompactionPolicyTests', and what is asserted here is that a dry run
+        // reports the selection and touches nothing.
         var report = await PlanOnlyAsync(
-            store, Day1.AddDays(3).AddHours(1), CompactionPolicy.Default with { MinimumReclaim = 512 });
+            store, Day1.AddDays(3).AddHours(1), CompactionPolicy.Default with { MinimumReclaim = 1, DeadFraction = 0.01 });
 
         Assert.IsNotEmpty(report.CompactionCandidates);
         Assert.Contains(
