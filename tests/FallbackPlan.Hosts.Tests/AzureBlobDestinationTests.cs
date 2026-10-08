@@ -40,6 +40,9 @@ public sealed class AzureBlobDestinationTests() : ObjectStoreDestinationTests(St
     protected override string RefusalCode => "AuthenticationFailed";
 
     /// <inheritdoc />
+    protected override string BusyCode => "ServerBusy";
+
+    /// <inheritdoc />
     protected override string MissingCredentialWords => "no account key or shared access signature";
 
     /// <inheritdoc />

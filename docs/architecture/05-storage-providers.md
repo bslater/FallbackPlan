@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §9 · **Resolves:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
 
-**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and the Azure Blob provider (§4.3, [ADR-0093](../adr/0093-an-azure-blob-destination.md)) are built and pass the shared contract suite — see [implementation status](../implementation-status.md).
+**Built:** Contract and local provider built, and the capabilities the engine depends on are now **read** rather than declared and ignored: `Repository/StoreAdmission` refuses a store lacking conditional create or ranged reads by name, split by whether the caller writes or only reads, and `Retention/CollectionPlanner` and `Retention/DestinationConvergence` refuse to act on absence where a listing may lag ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 3, NFR-PORT-005). The S3-compatible provider (§4.4, [ADR-0091](../adr/0091-an-s3-compatible-destination.md)) and the Azure Blob provider (§4.3, [ADR-0093](../adr/0093-an-azure-blob-destination.md)) are built and pass the shared contract suite, every fault case §6 names answered for both, a resume token their entry's key and a store's refusals told apart where what a person can do differs ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5) — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -75,9 +75,18 @@ Conditional create is the primitive that publication and index compaction depend
 
 Exceptions remain for genuine faults: network failure, authentication failure, provider error. The distinction is *expected outcome* versus *fault*.
 
+Faults are typed where what a person can do differs ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5, FR-QUOTA-001). A `StoreUnavailableException` is a store that did not serve when nothing about the request was wrong. It is a gap that closes itself, recorded as unavailable (FR-DEST-003), and has three kinds:
+- **unreachable**: no connection or no answer;
+- **busy**: an answer, on every attempt, that it was too busy to serve;
+- **full**: no room for the object.
+
+A `StoreQuotaExceededException` is a limit the store's owner set. It holds until a person raises it or keeps less there, so it is a failure with a notice for that person. Any other refusal, such as a credential the store will not take, is a plain fault.
+
 ### 2.3 Continuation belongs to the enumerator
 
 `IAsyncEnumerable` already models resumable iteration. A continuation-token parameter alongside it forces every provider to decide which wins and leaves callers unable to tell whether re-enumerating resumes or restarts. Callers needing to persist a position across process restarts read a resume token from `ObjectEntry`.
+
+A resume token is its entry's key ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5). `ListOptions.ResumeAfter` takes any key and resumes strictly after it in ordinal order, whether or not an object still has the key. A provider asks its store to start there rather than reading the pages before it.
 
 ## 3. Capabilities
 
@@ -155,8 +164,8 @@ Speaks the [peer protocol](../../specifications/peer-protocol/README.md) rather 
 - **One request per blob**, up to 5000 MiB, so block lists are not used.
 - **A range is asked in `x-ms-range`**, and the range served is read back from the response; one the store answers short is refused as the contract says.
 - **A delete is one request**, a 404 being `NotFound`, and a missing container is a fault, never an empty replica.
-- **Listing pages by the store's own marker** and is declared strong; a resume after a named key is applied as the pages arrive.
-- **A refusal that may not last is retried** from the content already read, and a store that never answers is told apart from one that refuses.
+- **Listing pages by the store's own marker** and is declared strong. A resume after a named key asks the store to start there (`startFrom`), and asks for one entry more, because the API includes the key itself.
+- **A refusal that may not last is retried** from the content already read. A store that never answers, and one too busy to serve through every attempt, are each told apart from one that refuses. The API has no answer of its own for a container that is full or over a quota.
 
 A replica lands under `<prefix>/<repository id>/`, the layout a bucket gives it. The shared suite (§6) runs against an in-process store that checks every signature, under each credential, and against any real container named in the environment.
 
@@ -174,7 +183,7 @@ A replica lands under `<prefix>/<repository id>/`, the layout a bucket gives it.
 - **Content is hashed before it is sent**, which the signature needs: rewound when it can seek, spooled while it is hashed when it cannot, and read once either way (§2.1).
 - **A range that runs past the end is answered short**, and the range served is read back from the response; a body that ends early is a fault.
 - **Listing is declared strong**, which the API has promised of every operation since 2020.
-- **A refusal that may not last is retried** a few times from the content already read; one that will last is a fault at once, and a store that never answers is told apart from one that refuses.
+- **A refusal that may not last is retried** a few times from the content already read; one that will last is a fault at once. A store that never answers, one too busy to serve through every attempt, and one out of room (a 507) are each told apart from one that refuses. So is a quota: the S3-compatible stores that hold one each name it, 403 `QuotaExceeded` at one and 400 `XMinioAdminBucketQuotaExceeded` at another.
 
 A replica lands under `<prefix>/<repository id>/`, the layout a local path gives it. The shared suite (§6) runs against an in-process store that checks every signature, and against any real store named in the environment; a store that does not honour the conditional create fails it.
 
@@ -211,7 +220,8 @@ Object stores charge per request, so request count is a first-class design conce
 - **Range reads on restore** so a single needed segment does not drag its whole blob across the network.
 - **Never open a blob to read from it.** Opening one through its locator and recovery footer costs three ranged reads before a byte of payload, so a restore reads each record straight from the location the catalogue already holds, and opens the footer only when that read fails — which is also how damage keeps being described by the reader built to describe it ([ADR-0068](../adr/0068-the-catalogue-directed-restore-read.md); [`04-concurrency-and-publication.md` §7](04-concurrency-and-publication.md)).
 - **Coalesce neighbouring reads, under stated bounds.** A file's records sit next to each other in the blob they were written into, so they are fetched together — and the run that fetches the first of them reaches down to offset 0 to collect the blob's envelope on the way past, which is the difference between two requests a blob and one. The bounds are what keep the saving honest: a window, so a large file does not become one buffer (NFR-PERF-001); and a cap on the bytes a read may *waste*, so a gap between two wanted records is bridged only when bridging is cheaper than a second request. Without that second bound a request budget is simply paid for in bandwidth.
-- **Batch deletes** where supported, in bounded batches.
+- **Never list to find a place.** A resumed listing starts at the store, not at its first page (§2.3). The deep sweep lists from its cursor, a page a segment. It once listed every blob for each segment, which made a circuit's requests grow with the square of the archive ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5).
+- **Batch deletes** where a provider supports them, in bounded batches. Neither network provider does yet: deletion is rare, as retention's drops and a repair's replacement are, and each is one request.
 
 Requests and PUTs per GB are measured against explicit targets — see [`../requirements/non-functional.md`](../requirements/non-functional.md#performance) NFR-PERF-008/009 — because §23 of the original proposal named request amplification as a major risk and named packing as the mitigation, without any way to detect the mitigation ceasing to work. There is one now for the GET half: `Repository.Tests/RestoreBreadthTests` measures a whole-snapshot restore's requests against the blobs it needs, and the three terms that made the budget reachable are held apart so each can be lost on its own. The PUT half is measured too, since [ADR-0090](../adr/0090-a-backups-hints-are-one-pack.md): `Repository.Tests/UploadBudgetTests` counts every request a first backup and an incremental make, by the kind of object each was for, and builds the per-GiB figure from the terms. Two findings came out of it. One was a request per file: a hint per new file version (06 §11), about 2 000 per GB, now one pack per backup. The other was a request per blob: every blob was preceded by its own intent extension (08 §4), so blobs cost two requests each and the total was 23–27 per GiB against 20. Since [ADR-0092](../adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md) a backup names its blobs a batch at a time, the first eight in its write intent and each later batch in one extension, so a GiB's blobs cost one extension and the total is 15–18 per GiB. NFR-PERF-008 is met.
 
@@ -222,6 +232,8 @@ Every provider runs the same suite, including the simulated-fault cases. A provi
 conditional creation · range reads · interrupted upload · listing pagination · duplicate writes · stale metadata · eventual-visibility simulation · deletion batching · retries and throttling · checksum mismatch · credential expiry mid-operation · multipart abandonment and cleanup · object-size limits · **disk-full and quota exhaustion** (FR-QUOTA-001).
 
 The eventual-visibility and quota cases matter most: both are conditions the engine's correctness arguments explicitly depend on handling, and neither reproduces reliably against a real provider on demand.
+
+Every case is answered for both network providers, by a test or as not applicable ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5 has the table). The in-process stores the cases run against can hold a fault from a chosen request on, and can let their listings lag their writes under a prefix. Each fault case runs once per API.
 
 ---
 

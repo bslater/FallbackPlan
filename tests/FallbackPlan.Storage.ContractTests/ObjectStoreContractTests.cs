@@ -329,6 +329,34 @@ public abstract class ObjectStoreContractTests
     }
 
     [TestMethod]
+    public async Task List_ResumedAfterAKeyNoEntryHas_ContinuesAtTheNextKeyInOrder()
+    {
+        // A resume token is its entry's key, and resuming takes any key: a
+        // caller that kept only where it stopped, as the deep sweep keeps its
+        // cursor and a peer's retrieval keeps its page, resumes at the next
+        // key in ordinal order whether or not an object still has that key.
+        var store = CreateStore();
+        foreach (var key in new[] { "blobs/data/aa/one", "blobs/data/cc/three", "blobs/data/ee/five" })
+        {
+            await store.PutAsync(ObjectKey.Parse(key), ContentFactory([0x01]), PutConditions.None, CancellationToken.None);
+        }
+
+        var resumed = new List<string>();
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/"), ListOptions.Default with { ResumeAfter = "blobs/data/bb" }, CancellationToken.None))
+        {
+            resumed.Add(entry.Key.Value);
+        }
+
+        SequenceAssert.AreEqual(["blobs/data/cc/three", "blobs/data/ee/five"], resumed);
+
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, CancellationToken.None))
+        {
+            Assert.AreEqual(entry.Key.Value, entry.ResumeToken, "a resume token is the key it was given for");
+        }
+    }
+
+    [TestMethod]
     public async Task Delete_TheSameKeyTwice_ReportsDeletedThenNotFoundAsResults()
     {
         var store = CreateStore();

@@ -60,7 +60,13 @@ public sealed record ListOptions
     /// <summary>The default options: list everything from the start.</summary>
     public static readonly ListOptions Default = new();
 
-    /// <summary>Resume strictly after the entry that produced this token.</summary>
+    /// <summary>
+    /// Resume strictly after this key, in ordinal order: an entry's
+    /// <see cref="ObjectEntry.ResumeToken"/>, which is its key, or any key a
+    /// caller kept, whether or not an object still has it (ADR-0012
+    /// Amendment 5). A provider asks its store to start there rather than
+    /// reading the pages before it.
+    /// </summary>
     public string? ResumeAfter { get; init; }
 
     /// <summary>A page-size hint for providers that page; advisory only.</summary>
@@ -68,7 +74,8 @@ public sealed record ListOptions
 }
 
 /// <summary>
-/// One listing entry: the key, its length, and the opaque token that resumes a
-/// listing strictly after this entry.
+/// One listing entry: the key, its length, and the token that resumes a
+/// listing strictly after this entry, which is the key itself (ADR-0012
+/// Amendment 5).
 /// </summary>
 public sealed record ObjectEntry(ObjectKey Key, long Length, string ResumeToken);

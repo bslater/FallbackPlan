@@ -1038,6 +1038,7 @@ public static class FanOut
             return;
         }
 
+        var quotaNotice = $"quota-exceeded:{destination.Name}";
         try
         {
             var replicaRootMissing = !await HoldsAnyAsync(store, string.Empty, cancellationToken).ConfigureAwait(false);
@@ -1045,11 +1046,32 @@ public static class FanOut
                     runtime, set, destination, archive, PacedObjectStore.Over(store, limiter), replicaRootMissing,
                     shortOfSpace: null, nowMs, userInitiated, cancellationToken)
                 .ConfigureAwait(false);
+
+            // The store took this set's objects again: a quota it refused
+            // them under has been raised, or room made beneath it.
+            if (ledger.Find(set.Id, destination.Name) is { State: DestinationSyncState.InSync })
+            {
+                runtime.Notices.Resolve(quotaNotice, nowMs);
+            }
         }
-        catch (Storage.Abstractions.StoreUnreachableException unreachable)
+        catch (Storage.Abstractions.StoreUnavailableException unavailable)
         {
+            // Not reached, too busy to serve, or out of room: each a gap that
+            // closes itself when the store recovers (FR-DEST-003), told apart
+            // by what the message says a person can do (FR-QUOTA-001).
             ledger.RecordFailure(
-                set.Id, destination.Name, DestinationSyncState.Unavailable, unreachable.Message, nowMs);
+                set.Id, destination.Name, DestinationSyncState.Unavailable, unavailable.Message, nowMs);
+        }
+        catch (Storage.Abstractions.StoreQuotaExceededException quota)
+        {
+            // A limit the store's owner set, which holds until a person
+            // raises it or keeps less there: a failure, with a notice for that
+            // person, as a peer's refused terms are.
+            ledger.RecordFailure(set.Id, destination.Name, DestinationSyncState.Failed, quota.Message, nowMs);
+            runtime.Notices.Raise(
+                quotaNotice,
+                $"Destination '{destination.Name}' refused set '{set.Name}': {quota.Message}",
+                nowMs);
         }
         catch (IOException exception)
         {
@@ -1955,8 +1977,10 @@ public static class FanOut
                     break;
 
                 default:
-                    // Undeclared, or a kind this build does not serve: nothing
-                    // was ever written there to remove.
+                    // Undeclared, so nothing was ever written there to remove;
+                    // or an object store, whose next sync converges it to the
+                    // keep-set the pending request leaves, and the request is
+                    // held until it has (ADR-0080).
                     break;
             }
         }

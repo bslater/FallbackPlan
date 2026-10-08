@@ -85,6 +85,15 @@
   <data name="S3ObjectStore_Refused" xml:space="preserve">
     <value>The S3-compatible store refused a {0} of '{1}': {2} {3}. {4}</value>
   </data>
+  <data name="S3ObjectStore_Busy" xml:space="preserve">
+    <value>The S3-compatible store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.</value>
+  </data>
+  <data name="S3ObjectStore_Full" xml:space="preserve">
+    <value>The S3-compatible store has no room for '{1}': it answered a {0} with {2} {3}. {4} Once room is made there, the next pass goes on from where this one stopped.</value>
+  </data>
+  <data name="S3ObjectStore_QuotaExceeded" xml:space="preserve">
+    <value>The S3-compatible store's quota would be crossed by '{1}': it answered a {0} with {2} {3}. {4} Raise the quota, or keep less at this destination.</value>
+  </data>
   <data name="S3ObjectStore_BodyEndedEarly" xml:space="preserve">
     <value>The S3-compatible store's answer ended before the object it was sending did.</value>
   </data>

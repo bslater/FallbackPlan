@@ -90,11 +90,12 @@ public sealed record ReplicaSweepResult(
 /// The cursor is the <b>key</b>, and resumption takes the next key ordinally
 /// greater — never an index. A blob trimmed since the last segment therefore
 /// costs nothing: the cursor is only ever compared against, never looked up.
-/// Candidates are sorted here rather than taken in listing order, because the
-/// store contract does not promise an order (see
-/// <c>StoreToStoreCopier</c>'s note that listing order "carries no meaning") and
-/// a cursor resting on an unpromised order would silently skip and silently
-/// repeat.
+/// The store contract lists in ordinal key order and resumes after any key
+/// (ADR-0012 Amendment 5), so a segment asks the store for the keys after its
+/// cursor and reads only as far as it needs: its budget and one key past, to
+/// learn whether the circuit goes on. Listing every blob to find its place, as
+/// a segment once did, made a circuit over a store cost the square of the
+/// archive in requests.
 /// </para>
 /// </remarks>
 public static class ReplicaSweep
@@ -166,31 +167,26 @@ public static class ReplicaSweep
         ThrowHelper.ThrowIfLessThan(budget, 1);
         ThrowHelper.ThrowIfLessThan(byteBudget, 1L);
 
-        // The candidates: the `budget` smallest blob keys ordinally after the
-        // cursor. Held in a bounded sorted set so a large archive costs the
-        // budget in memory, not the archive.
-        var candidates = new SortedList<string, long>(StringComparer.Ordinal);
-        var seen = 0;
+        // The candidates: the `budget` blob keys ordinally after the cursor,
+        // which the listing gives first. One more key, if the store holds
+        // one, says the circuit goes on past this segment; the listing stops
+        // there rather than read the rest.
+        var candidates = new List<(string Key, long Length)>(budget);
+        var more = false;
         await foreach (var entry in replica
-            .ListAsync(ObjectPrefix.Parse("blobs/"), ListOptions.Default, cancellationToken)
+            .ListAsync(
+                ObjectPrefix.Parse("blobs/"),
+                new ListOptions { ResumeAfter = cursor, PageSizeHint = budget + 1 },
+                cancellationToken)
             .ConfigureAwait(false))
         {
-            var key = entry.Key.Value;
-            if (cursor is not null && string.CompareOrdinal(key, cursor) <= 0)
+            if (candidates.Count == budget)
             {
-                continue;
+                more = true;
+                break;
             }
 
-            seen++;
-            if (candidates.Count < budget)
-            {
-                candidates[key] = entry.Length;
-            }
-            else if (string.CompareOrdinal(key, candidates.Keys[^1]) < 0)
-            {
-                candidates.RemoveAt(candidates.Count - 1);
-                candidates[key] = entry.Length;
-            }
+            candidates.Add((entry.Key.Value, entry.Length));
         }
 
         if (candidates.Count == 0)
@@ -265,7 +261,7 @@ public static class ReplicaSweep
         // segment reached the end, so the circuit is closed and the next one
         // starts over. Fewer — the count or the bytes ended the segment — and
         // the next resumes after the last blob read.
-        var completed = examined == seen;
+        var completed = examined == candidates.Count && !more;
         return new ReplicaSweepResult(examined, findings, completed ? null : lastExamined, completed)
         {
             DamagedKeys = damaged,

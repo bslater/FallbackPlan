@@ -225,7 +225,7 @@ Every repository ([ADR-0042](../adr/0042-write-only-repositories.md); the only f
 
 | ID | Requirement | Acceptance |
 |----|-------------|-----------|
-| FR-QUOTA-001 **[new]** | Quota exhaustion, destination disk-full, and transient errors shall be reported as distinct conditions. | Each produces a distinct status and user action. |
+| FR-QUOTA-001 **[amended]** | Quota exhaustion, destination disk-full, and transient errors shall be reported as distinct conditions. **[amended]** An object store's own answers are read for which condition they are, where the store gives one. | Each produces a distinct status and user action. At an object store, a store too busy to serve through every attempt, and one with no room, are unavailable and named, a gap that closes itself; a quota the store holds is a failure with a notice for the person who can raise it, resolved by the next sync that lands ([ADR-0012](../adr/0012-storage-provider-contract.md) Amendment 5). |
 | FR-QUOTA-002 **[new]** | On exhaustion, transfer shall stop at a blob boundary leaving no partial object visible, and previously durable snapshots shall be unaffected. | Exhaustion mid-set leaves the repository consistent. |
 
 ## Service and clients

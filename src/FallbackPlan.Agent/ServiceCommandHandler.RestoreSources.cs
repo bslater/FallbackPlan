@@ -590,6 +590,12 @@ public sealed partial class ServiceCommandHandler
                 ServiceErrorReason.Unavailable,
                 $"Destination '{destination.Name}' is not reachable: {unreachable.Message}"));
         }
+        catch (Storage.Abstractions.StoreUnavailableException unavailable)
+        {
+            return (null, new ServiceError(
+                ServiceErrorReason.Unavailable,
+                $"Destination '{destination.Name}' is not available: {unavailable.Message}"));
+        }
         catch (IOException refused)
         {
             return (null, new ServiceError(
