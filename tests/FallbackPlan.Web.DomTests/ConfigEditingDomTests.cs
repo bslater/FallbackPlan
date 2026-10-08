@@ -16,7 +16,9 @@ namespace FallbackPlan.Web.DomTests;
 /// destination form's limit and cadence (FR-SVC-021), an S3-compatible
 /// store's address and access key (FR-DEST-005), and an Azure Blob
 /// container's address with either of its credentials (ADR-0093) — each
-/// asserting the command its dialog claims to send.
+/// asserting the command its dialog claims to send. And one thing about the
+/// view itself: a refresh that changes nothing leaves its controls in place,
+/// so a click in progress lands.
 /// </summary>
 /// <remarks>
 /// Re-homed onto the sectioned set editor when this line merged: the single
