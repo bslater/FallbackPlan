@@ -205,7 +205,8 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
         {
             foreach (var (key, stored) in objects)
             {
-                if (!key.StartsWith(prefix, StringComparison.Ordinal) || string.CompareOrdinal(key, after) <= 0)
+                if (!key.StartsWith(prefix, StringComparison.Ordinal) || string.CompareOrdinal(key, after) <= 0
+                    || !ListingShows(bucketName, key))
                 {
                     continue;
                 }
@@ -365,6 +366,13 @@ public sealed class S3CompatibleTestServer : ObjectStoreTestServer
 
     /// <inheritdoc />
     protected override Response Refusal(int status, string code, string message) => Error(status, code, message);
+
+    /// <inheritdoc />
+    protected override bool IsListing(RecordedRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return request.Method == "GET" && Split(request.Target).Query.GetValueOrDefault("list-type") == "2";
+    }
 
     private static Response Error(int status, string code, string message) => new(status)
     {

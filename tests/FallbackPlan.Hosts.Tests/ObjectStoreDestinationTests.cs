@@ -70,6 +70,9 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <summary>The store's word for a credential it refuses.</summary>
     protected abstract string RefusalCode { get; }
 
+    /// <summary>The store's word for a request it is too busy to serve: a throttle, answered with a 503.</summary>
+    protected abstract string BusyCode { get; }
+
     /// <summary>What a destination with no credential stored is told it lacks.</summary>
     protected abstract string MissingCredentialWords { get; }
 
@@ -684,6 +687,164 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
             string.Join(" | ", deleted.Lines));
     }
 
+    [TestMethod]
+    public async Task Sync_WhileTheStoreKeepsAskingToSlowDown_IsUnavailable_AndTheNextSyncFinishesIt()
+    {
+        // A store throttling every attempt of a request is still a store
+        // asking to be asked later: a gap that closes itself (FR-DEST-003),
+        // told apart from a refusal a person must act on (FR-QUOTA-001).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.FailFrom(servedFirst: 0, 503, BusyCode);
+        await BackUpAsync(runtime);
+
+        var busy = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, busy.State, busy.LastError);
+        Assert.Contains(BusyCode, busy.LastError!, StringComparison.Ordinal);
+
+        Store.Recover();
+        await SyncAsync(runtime);
+        var synced = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", synced.State, synced.Detail);
+    }
+
+    [TestMethod]
+    public async Task Sync_CutOffPartway_IsUnavailable_AndTheNextSyncFinishesTheReplica()
+    {
+        // A link that goes down in the middle of a copy leaves the objects
+        // already put, each one whole, because a put lands whole or not at
+        // all; the next sync puts the rest and the replica proves (Phase 3's
+        // "large interrupted uploads resume or safely restart").
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.DropFrom(servedFirst: 2, method: "PUT");
+        await BackUpAsync(runtime);
+
+        var cut = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, cut.State, cut.LastError);
+        Assert.HasCount(2, Store.Requests.Where(Landed), "the premise: two objects were put before the link went down");
+
+        Store.Recover();
+        await SyncAsync(runtime);
+        var synced = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", synced.State, synced.Detail);
+        Assert.AreEqual("proven", synced.Verification);
+    }
+
+    [TestMethod]
+    public async Task Sync_TheCredentialRefusedPartway_FailsNamingTheRefusal_AndTheNextSyncFinishesIt()
+    {
+        // A credential the store stops taking in the middle of a sync, as one
+        // revoked or lapsed then would be: what was put stays, whole, and the
+        // refusal is a failure, not a gap, because only a person can store a
+        // credential the store takes (ADR-0012's credential expiry
+        // mid-operation).
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        Store.FailFrom(servedFirst: 2, 403, RefusalCode, method: "PUT");
+        await BackUpAsync(runtime);
+
+        var refused = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Failed, refused.State, refused.LastError);
+        Assert.Contains(RefusalCode, refused.LastError!, StringComparison.Ordinal);
+        Assert.HasCount(2, Store.Requests.Where(Landed), "the premise: two objects were put before the refusals began");
+
+        Store.Recover();
+        await SyncAsync(runtime);
+        var synced = await RowAsync(runtime, "cloud");
+        Assert.AreEqual("in-sync", synced.State, synced.Detail);
+    }
+
+    [TestMethod]
+    public async Task Sync_WhileTheStoresListingsLagItsWrites_DeletesNothingAKeptSnapshotNeeds()
+    {
+        // A store whose listings lag its writes (ADR-0012's eventual
+        // visibility). The sync deletes only what the store's listing shows
+        // and the staging archive's keep-set rejects, so an object the
+        // listing hides is offered again rather than judged absent. Hidden
+        // here: the snapshots alone, the one shape in which a keep-set read
+        // off the store's own listing would take a new snapshot's blobs for
+        // garbage.
+        WriteConfiguration(directShip: false, retention: new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 });
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        var archive = await runtime.ExistingArchiveAsync(Harness.DocsSetId, Timeout);
+        var snapshots = $"{Prefix}/{archive!.Repository.RepositoryId}/snapshots/";
+        var before = Store.KeysIn(Namespace).Count(key => key.StartsWith(snapshots, StringComparison.Ordinal));
+        Store.LagListings(under: snapshots);
+
+        Harness.WriteSourceFile("docs/c.txt", "written after the first backup, so held by the second snapshot alone");
+        var mark = Store.Requests.Count;
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        var lagged = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, lagged.State, lagged.LastError);
+        Assert.IsTrue(
+            Store.Requests.Skip(mark).Any(request => request.Method == "DELETE"),
+            "the premise: the policy deleted at the store while its listing lagged");
+        Assert.IsTrue(
+            Store.KeysIn(Namespace).Count(key => key.StartsWith(snapshots, StringComparison.Ordinal)) >= before,
+            "the premise: the second snapshot reached the store, where no listing showed it");
+
+        // Caught up, the store is read back whole: a blob the second snapshot
+        // names that the sync had deleted would be found missing here.
+        Store.CatchUpListings();
+        var line = await VerifyAsync(runtime);
+        Assert.Contains("object(s) confirmed", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("damaged", line, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sweep_AWholeCircuit_ListsFromItsCursor_NotTheWholeStoreForEachSegment()
+    {
+        // A segment reads a few blobs. One that listed every blob to find
+        // where it resumes would make a circuit over n blobs ask for n
+        // listings of n entries, and at a store each page of a listing is a
+        // request its owner pays for: the cost would grow with the square of
+        // the archive (Phase 3's "no object listing required per segment").
+        ReplicaSweepJob.SegmentBudget = 1;
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        for (var backup = 0; backup < 5; backup++)
+        {
+            Harness.WriteSourceFile($"docs/part-{backup}.bin", new string((char)('k' + backup), 20_000 + backup));
+            await BackUpAsync(runtime, now.AddHours(backup));
+        }
+
+        var blobs = Store.KeysIn(Namespace).Count(key => key.Contains("/blobs/", StringComparison.Ordinal));
+        Assert.IsGreaterThanOrEqualTo(5, blobs, "the premise: a replica of several blobs, each a segment");
+
+        Store.ListPageLimit = 2;
+        var mark = Store.Listings.Count;
+        var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
+        var circuit = await ReplicaSweepJob.RunFullAsync(
+            runtime, set, "cloud", (ulong)now.ToUnixTimeMilliseconds(), Timeout);
+        Assert.AreEqual(blobs, circuit.Examined, "the circuit read every blob");
+
+        // A segment per blob and one that finds the circuit closed. Each
+        // looks for the replica (a page) and lists from its cursor (a page):
+        // the cost grows with the segments, not with segments times blobs.
+        var listings = Store.Listings.Count - mark;
+        Assert.IsLessThanOrEqualTo(2 * (blobs + 1), listings, $"{listings} listing page(s) for {blobs} blob(s)");
+    }
+
     /// <summary>Writes the set's two source files.</summary>
     protected void WriteFiles()
     {
@@ -693,9 +854,10 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
 
     /// <summary>Runs a pass that backs the set up and waits for its transfers.</summary>
     /// <param name="runtime">The service.</param>
-    protected async Task BackUpAsync(ServiceRuntime runtime)
+    /// <param name="at">The pass clock; now when not given.</param>
+    protected async Task BackUpAsync(ServiceRuntime runtime, DateTimeOffset? at = null)
     {
-        var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+        var pass = await Scheduler.RunPassAsync(runtime, at ?? DateTimeOffset.Now, Timeout);
         Assert.AreEqual(1, pass.Ran, "the pass ran no backup");
         await pass.Transfers.WaitAsync(Timeout);
     }
@@ -710,6 +872,11 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         Assert.AreEqual(DestinationSyncState.InSync, Pair(runtime, "vault").State, Pair(runtime, "vault").LastError);
     }
 
+    /// <summary>Whether a request was a put the store took.</summary>
+    /// <param name="request">The request as the store answered it.</param>
+    private static bool Landed(ObjectStoreTestServer.RecordedRequest request) =>
+        request.Method == "PUT" && request.Status is >= 200 and < 300;
+
     /// <summary>The ledger's row for the set and the named destination.</summary>
     /// <param name="runtime">The service.</param>
     /// <param name="name">The destination.</param>
@@ -717,7 +884,9 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         runtime.DestinationSync.Find(Harness.DocsSetId, name)
         ?? throw new AssertFailedException($"no ledger row for '{name}'");
 
-    private async Task<string> VerifyAsync(ServiceRuntime runtime)
+    /// <summary>Reads the store's replica back whole, as <c>verify-destination --full</c> does, and returns what it said.</summary>
+    /// <param name="runtime">The service.</param>
+    protected async Task<string> VerifyAsync(ServiceRuntime runtime)
     {
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<VerifyDestinationResult>(
@@ -726,7 +895,9 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         return Assert.ContainsSingle(verified.Lines);
     }
 
-    private async Task SyncAsync(ServiceRuntime runtime)
+    /// <summary>Syncs the set to the store at a person's asking.</summary>
+    /// <param name="runtime">The service.</param>
+    protected async Task SyncAsync(ServiceRuntime runtime)
     {
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         Assert.IsInstanceOfType<SyncResult>(await handler.ExecuteAsync(new SyncCommand("docs", "cloud"), Timeout));
@@ -759,19 +930,22 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     /// <param name="referenced">Whether the set references the store at all.</param>
     /// <param name="drillIntervalDays">The store's drill cadence, if one is stated.</param>
     /// <param name="deepVerifyIntervalDays">The store's sweep cadence, if one is stated.</param>
+    /// <param name="retention">The retention policy the set keeps at the store, if any.</param>
     protected void WriteConfiguration(
         bool directShip,
         string? endpoint = null,
         bool withVault = false,
         bool referenced = true,
         int? drillIntervalDays = null,
-        int? deepVerifyIntervalDays = null)
+        int? deepVerifyIntervalDays = null,
+        RetentionConfiguration? retention = null)
     {
         List<DestinationConfiguration> destinations =
         [
             DeclareStore(endpoint ?? EndpointAt(Store.Origin), drillIntervalDays, deepVerifyIntervalDays),
         ];
-        List<SetDestinationReference> references = referenced ? [new SetDestinationReference { Ref = "cloud" }] : [];
+        List<SetDestinationReference> references =
+            referenced ? [new SetDestinationReference { Ref = "cloud", Retention = retention }] : [];
 
         // A local path beside the store, which the set copies to as well: a
         // set that does not reference the store still protects something.

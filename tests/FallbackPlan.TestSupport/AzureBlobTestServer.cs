@@ -128,7 +128,7 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
         {
             return (request.Method, query.GetValueOrDefault("restype"), query.GetValueOrDefault("comp")) switch
             {
-                ("GET", "container", "list") => List(objects, query),
+                ("GET", "container", "list") => List(containerName, objects, query),
                 ("GET" or "HEAD", "container", null) => new Response(200),
                 _ => Error(400, "UnsupportedQueryParameter", "This server serves List Blobs on a container."),
             };
@@ -149,6 +149,15 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
 
     /// <inheritdoc />
     protected override Response Refusal(int status, string code, string message) => Error(status, code, message);
+
+    /// <inheritdoc />
+    protected override bool IsListing(RecordedRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var query = Split(request.Target).Query;
+        return request.Method == "GET" && query.GetValueOrDefault("restype") == "container"
+            && query.GetValueOrDefault("comp") == "list";
+    }
 
     private static Response Put(Request request, SortedDictionary<string, StoredObject> objects, string blob)
     {
@@ -240,9 +249,14 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
             ? new Response(202)
             : Error(404, "BlobNotFound", "The specified blob does not exist.");
 
-    private Response List(SortedDictionary<string, StoredObject> objects, IReadOnlyDictionary<string, string> query)
+    private Response List(
+        string containerName, SortedDictionary<string, StoredObject> objects, IReadOnlyDictionary<string, string> query)
     {
         var prefix = query.GetValueOrDefault("prefix") ?? string.Empty;
+
+        // Where the listing begins, the name itself included (List Blobs,
+        // version 2023-05-03 and later).
+        var startFrom = query.GetValueOrDefault("startFrom") ?? string.Empty;
         var delimiter = query.GetValueOrDefault("delimiter");
         var marker = query.GetValueOrDefault("marker") is { Length: > 0 } issued ? ReadMarker(issued) : string.Empty;
         if (marker is null)
@@ -262,7 +276,8 @@ public sealed class AzureBlobTestServer : ObjectStoreTestServer
         {
             foreach (var (name, stored) in objects)
             {
-                if (!name.StartsWith(prefix, StringComparison.Ordinal) || string.CompareOrdinal(name, marker) <= 0)
+                if (!name.StartsWith(prefix, StringComparison.Ordinal) || string.CompareOrdinal(name, marker) <= 0
+                    || string.CompareOrdinal(name, startFrom) < 0 || !ListingShows(containerName, name))
                 {
                     continue;
                 }
