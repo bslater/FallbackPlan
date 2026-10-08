@@ -3,8 +3,10 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Index.Journal;
+using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
@@ -20,7 +22,7 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 /// them: a compaction cut at any step leaves a repository that verifies and
 /// loses no live record, and no index entry it published ever names a blob
 /// the store does not hold — even with a collector running in the window.
-/// Establishes FR-GC-003 and FR-MAN-019.
+/// Establishes FR-GC-003, FR-GC-004 and FR-MAN-019.
 /// </summary>
 /// <remarks>
 /// The cut points are the pass's own steps rather than wall-clock moments:
@@ -154,6 +156,121 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
                 && extension.ExtendsSequence == outcome.IntentSequence),
             "one extension names everything the pass produced").Payload;
         CollectionAssert.AreEquivalent(outcome.Published.ToList(), extension.AdditionalBlobIds.ToList());
+    }
+
+    /// <summary>
+    /// FR-GC-004: compaction modifies no manifest. Every data blob the
+    /// capture left is rewritten whole. Every snapshot object is
+    /// byte-identical afterwards, every tree and file manifest is where it
+    /// was as the bytes it was, and every record the pass carried sits in a
+    /// produced blob as the same sealed bytes it was written as.
+    /// </summary>
+    [TestMethod]
+    public async Task ACompactionOfEveryDataBlob_ChangesNoSnapshotOrManifestByte()
+    {
+        using var world = await CompactionWorld.CreateAsync(this, CompactionStep.Complete);
+        var snapshotsBefore = await ObjectsUnderAsync(world.Store, "snapshots/");
+        var sealedBefore = await SealedRecordsAsync(world, inBlobs: null);
+        Assert.IsTrue(
+            sealedBefore.Values.Any(record => record.InMetadataBlob),
+            "the premise: the capture's manifests are in a metadata blob");
+
+        var outcome = await world.CompactEveryDataBlobAsync();
+        Assert.IsGreaterThanOrEqualTo(2, outcome.Published.Count, "the premise: the pass rewrote the data blobs");
+
+        var snapshotsAfter = await ObjectsUnderAsync(world.Store, "snapshots/");
+        CollectionAssert.AreEqual(snapshotsBefore.Keys.ToList(), snapshotsAfter.Keys.ToList());
+        foreach (var (key, bytes) in snapshotsBefore)
+        {
+            Assert.IsTrue(bytes.AsSpan().SequenceEqual(snapshotsAfter[key]), $"snapshot object {key} changed");
+        }
+
+        var manifestsAfter = await SealedRecordsAsync(world, inBlobs: null);
+        var relocated = await SealedRecordsAsync(world, inBlobs: [.. outcome.Published]);
+        foreach (var (objectId, before) in sealedBefore)
+        {
+            var after = before.InMetadataBlob ? manifestsAfter[objectId] : relocated[objectId];
+            Assert.AreEqual(before.Type, after.Type);
+            Assert.IsTrue(
+                before.Sealed.AsSpan().SequenceEqual(after.Sealed),
+                $"record {objectId}, a {before.Type}, is now other bytes");
+        }
+
+        var restored = await RestoreSnapshotAsync(
+            world.Store, world.Keys, CompactionWorld.SnapshotSeed, world.Repository.RepositoryId);
+        Assert.IsTrue(world.Original.AsSpan().SequenceEqual(restored), "the snapshot no longer restores byte for byte");
+    }
+
+    /// <summary>
+    /// The compactor rewrites data blobs only: what it produces is a sealed
+    /// data blob, and a metadata blob's records are not relocatable into
+    /// one. Handed a metadata blob, a pass says so by name and writes
+    /// nothing, rather than failing deep in the writer.
+    /// </summary>
+    [TestMethod]
+    public async Task ACompactionHandedAMetadataBlob_RefusesItByName_AndWritesNothing()
+    {
+        using var world = await CompactionWorld.CreateAsync(this, CompactionStep.Complete);
+        var before = await ObjectsUnderAsync(world.Store, "blobs/");
+
+        var refusal = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            async () => await world.CompactEveryMetadataBlobAsync());
+
+        Assert.Contains("blobs/meta/", refusal.Message, StringComparison.Ordinal);
+        CollectionAssert.AreEqual(before.Keys.ToList(), (await ObjectsUnderAsync(world.Store, "blobs/")).Keys.ToList());
+    }
+
+    private static async Task<SortedDictionary<string, byte[]>> ObjectsUnderAsync(LocalFileSystemObjectStore store, string prefix)
+    {
+        var objects = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+        await foreach (var entry in store.ListAsync(ObjectPrefix.Parse(prefix), ListOptions.Default, CancellationToken.None))
+        {
+            using var read = await store.OpenReadAsync(entry.Key, range: null, CancellationToken.None);
+            using var memory = new MemoryStream();
+            await read.Content!.CopyToAsync(memory);
+            objects[entry.Key.Value] = memory.ToArray();
+        }
+
+        return objects;
+    }
+
+    /// <summary>Every record's sealed bytes as its blob stores them, by object id.</summary>
+    /// <param name="world">The archive.</param>
+    /// <param name="inBlobs">Only the records these blobs hold; every blob when null.</param>
+    private static async Task<Dictionary<ObjectId, (byte[] Sealed, ObjectType Type, bool InMetadataBlob)>> SealedRecordsAsync(
+        CompactionWorld world, HashSet<BlobId>? inBlobs)
+    {
+        using var reader = new RepositoryReader(world.Repository.RepositoryId, world.Keys, world.Store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+
+        var records = new Dictionary<ObjectId, (byte[], ObjectType, bool)>();
+        foreach (var (storeKey, blobId, entries) in reader.Blobs)
+        {
+            if (inBlobs is not null && !inBlobs.Contains(blobId))
+            {
+                continue;
+            }
+
+            // Prefix, ciphertext and tag: what a relocation carries. The
+            // header before them is re-framed with the ordinal the new blob
+            // gives the record, so it is not the record's bytes.
+            var metadata = storeKey.Value.StartsWith("blobs/meta/", StringComparison.Ordinal);
+            var prefix = RecordFraming.PrefixLength(
+                FormatVersions.RelocatableRecords, metadata ? BlobClass.Metadata : BlobClass.Data);
+            foreach (var entry in entries)
+            {
+                var length = prefix + (int)entry.StoredLength + RecordCipher.TagLength;
+                using var read = await world.Store.OpenReadAsync(
+                    storeKey,
+                    new ObjectRange((long)entry.PhysicalOffset + RecordHeader.Length, length),
+                    CancellationToken.None);
+                var bytes = new byte[length];
+                await read.Content!.ReadExactlyAsync(bytes);
+                records[entry.ObjectId] = (bytes, entry.ObjectType, metadata);
+            }
+        }
+
+        return records;
     }
 
     private static async Task<IntentSurvey> LoadIntentsAsync(CompactionWorld world)
@@ -294,6 +411,23 @@ public sealed class CompactionInterruptionTests : InterruptionHarness
 
         /// <summary>The same pass, run to the end — what a resumed compaction does.</summary>
         public Task CompleteAsync() => CompactAsync(observer: null);
+
+        /// <summary>A pass over every metadata blob the capture left.</summary>
+        public async Task<CompactionOutcome> CompactEveryMetadataBlobAsync()
+        {
+            using var reader = new RepositoryReader(Repository.RepositoryId, Keys, Store);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+
+            var candidates = reader.Blobs
+                .Where(blob => blob.StoreKey.ToString().StartsWith("blobs/meta/", StringComparison.Ordinal))
+                .OrderBy(blob => blob.StoreKey.ToString(), StringComparer.Ordinal)
+                .Select(blob => new CompactionSource(blob.StoreKey, blob.BlobId, blob.Records))
+                .ToList();
+
+            return await CompactionPass.RunAsync(
+                candidates, Repository, Store, Store, Writer, SmallBlobPolicy, Sequence, Catalogue, _spool,
+                NowMs, declaredMaxDurationMs: 3_600_000, expiryGeneration: 5, CancellationToken.None);
+        }
 
         /// <summary>A pass over every data blob the capture left, run to the end.</summary>
         public async Task<CompactionOutcome> CompactEveryDataBlobAsync()

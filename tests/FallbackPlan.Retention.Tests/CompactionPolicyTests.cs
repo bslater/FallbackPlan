@@ -36,6 +36,17 @@ public sealed class CompactionPolicyTests
     }
 
     [TestMethod]
+    public void AMetadataBlob_HalfDeadAndPastTheFloor_IsLeftAlone()
+    {
+        // The compactor produces sealed data blobs, and a metadata blob's
+        // records cannot be relocated into one. Chosen, it fails the pass,
+        // and the next pass chooses it again.
+        var blob = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, "meta");
+
+        Assert.IsEmpty(Default.SelectCandidates([blob]));
+    }
+
+    [TestMethod]
     public void ABlobMostlyLive_IsLeftAlone()
     {
         // A tenth dead: rewriting it moves nine times the bytes it frees.
@@ -150,14 +161,14 @@ public sealed class CompactionPolicyTests
 
     private static int _next;
 
-    private static CompactableBlob Blob(long liveBytes, long deadBytes)
+    private static CompactableBlob Blob(long liveBytes, long deadBytes, string blobClass = "data")
     {
         var n = Interlocked.Increment(ref _next);
         var bytes = new byte[BlobId.Size];
         BitConverter.TryWriteBytes(bytes, n);
         var id = BlobId.FromBytes(bytes);
         return new CompactableBlob(
-            ObjectKey.Parse($"blobs/data/abcd/blob{n}"),
+            ObjectKey.Parse($"blobs/{blobClass}/abcd/blob{n}"),
             id,
             [new RecordTableEntry(
                 ObjectId.FromBytes([.. Enumerable.Repeat((byte)7, 32)]),
