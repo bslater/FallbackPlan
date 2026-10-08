@@ -144,6 +144,65 @@ public sealed class StagingTrimTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RetentionApply_CutInFrontOfEachTrimDelete_LeavesEveryBlobAtTheVault_AndTheNextPassFinishesIt()
+    {
+        // FR-GC-006: a trim cut at any step leaves every published snapshot
+        // recoverable. The trim deletes only what the vault proves it holds,
+        // so whatever a cut leaves, every snapshot is still listed here, the
+        // vault still walks clean, and the next pass trims the rest.
+        await BackUpThreeDaysAsync();
+        var pristine = Path.Combine(_root, "pristine");
+        CutOracle.CopyDirectory(RepoPath, pristine);
+        var replica = new LocalFileSystemObjectStore(Directory.GetDirectories(VaultPath).Single());
+        var atTheVault = await ListAsync(replica, "blobs/data/");
+        var now = Day1.AddDays(2).AddHours(1);
+
+        var asked = await RunCutAsync(int.MaxValue, now);
+        var trimmed = CutOracle.StoredKeys(RepoPath);
+        Assert.HasCount(2, asked, "the trim did not delete the two historic data blobs: " + string.Join(" | ", asked));
+        Assert.IsTrue(asked.All(write => write.StartsWith("delete blobs/data/", StringComparison.Ordinal)), string.Join(" | ", asked));
+
+        for (var cut = 1; cut <= asked.Count; cut++)
+        {
+            var at = $"cut in front of write {cut} of {asked.Count}, {asked[cut - 1]}";
+            CutOracle.ResetTo(pristine, RepoPath);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await RunCutAsync(cut, now), at);
+
+            var store = new LocalFileSystemObjectStore(RepoPath);
+            Assert.HasCount(3, await ListAsync(store, "snapshots/"), at);
+            var gone = asked.Take(cut - 1).Select(write => write["delete ".Length..]).ToList();
+            CollectionAssert.IsSubsetOf(gone, atTheVault, $"{at}: staging lost a blob the vault does not hold");
+            await AssertWalksCleanAsync(replica, expectedSnapshots: 3);
+
+            await RunCutAsync(int.MaxValue, now);
+            Assert.IsTrue(CutOracle.StoredKeys(RepoPath).SequenceEqual(trimmed), $"{at}: the next pass did not finish the trim");
+        }
+    }
+
+    /// <summary>An apply pass through a store that dies in front of write <paramref name="cut"/>.</summary>
+    private async Task<IReadOnlyList<string>> RunCutAsync(int cut, DateTimeOffset now)
+    {
+        var plain = new LocalFileSystemObjectStore(RepoPath);
+        using var opened = await WriteOnlyInstallation.OpenAsync(plain, PassphraseText, CancellationToken.None);
+        using var process = new CancellationTokenSource();
+        var store = new DiesBeforeWriteStore(plain, cut, process);
+
+        var sync = DestinationSyncStore.Open(StateDirectory);
+        await RetentionRunner.RunAsync(
+            store, opened.Repository,
+            policy: null,
+            [new SetDestinationReference { Ref = "vault", Retention = new RetentionConfiguration { MinGenerations = 10 } }],
+            name => sync.Find(SetId, name),
+            VaultVerification,
+            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
+            apply: true,
+            (ulong)now.ToUnixTimeMilliseconds(),
+            process.Token, reclaim: opened.Reclaim);
+        return store.Asked;
+    }
+
+    [TestMethod]
     public async Task RetentionApply_ADestinationNothingCanVouchFor_HoldsEveryBlobItIsEntitledTo()
     {
         await BackUpThreeDaysAsync();
