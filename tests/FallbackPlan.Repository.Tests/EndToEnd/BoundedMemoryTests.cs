@@ -52,6 +52,14 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     /// <summary>The NFR-PERF-001 live-set bound this reproduces at reduced scale.</summary>
     private const long LiveSetBound = 256 * Mebibyte;
 
+    /// <summary>
+    /// How far a reading may fall below its baseline before the baseline is
+    /// taken to have counted memory the run did not own. With nothing freed
+    /// beside a run, no reading has been seen below its baseline at all, and
+    /// one array the shared pool trims is sixteen mebibytes.
+    /// </summary>
+    private const long BaselineSlack = 8 * Mebibyte;
+
     [TestMethod]
     public async Task Archive_InputGrowsEightfold_KeepsPeakMemoryBounded()
     {
@@ -118,10 +126,32 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
     /// What the pipeline holds at most while it archives
     /// <paramref name="inputBytes"/>, net of the live set before it starts.
     /// </summary>
+    /// <remarks>
+    /// A reading below the baseline is memory the baseline counted and
+    /// something other than this run freed while it ran: arrays an earlier
+    /// test returned to the shared array pool, which trims them at one of the
+    /// full collections the sampler forces. Such a run says nothing about the
+    /// pipeline, so it is measured again from a baseline taken after that
+    /// memory went, up to twice more.
+    /// </remarks>
     /// <param name="inputBytes">How much to archive.</param>
     /// <param name="firstCounter">The first blob counter the run allocates from.</param>
-    /// <param name="duringRun">Run once, at the first sample: what a test frees beside the run.</param>
+    /// <param name="duringRun">Run once, at the first run's first sample: what a test frees beside the run.</param>
     private async Task<long> MeasurePeakLiveSetAsync(long inputBytes, ulong firstCounter, Action? duringRun = null)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var (retained, fellBelowBaseline) = await MeasureOnceAsync(
+                inputBytes, firstCounter + ((ulong)attempt * 100_000), attempt == 0 ? duringRun : null);
+            if (!fellBelowBaseline || attempt == 2)
+            {
+                return retained;
+            }
+        }
+    }
+
+    private async Task<(long Retained, bool FellBelowBaseline)> MeasureOnceAsync(
+        long inputBytes, ulong firstCounter, Action? duringRun)
     {
         var policy = CapturePolicy.Default with
         {
@@ -139,11 +169,18 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
 
         var baseline = SettledLiveSet();
         var peak = 0L;
+        var floor = long.MaxValue;
+        var readings = new Lock();
         using (var sampler = new Timer(
             _ =>
             {
                 Interlocked.Exchange(ref duringRun, null)?.Invoke();
-                peak = Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true));
+                var reading = GC.GetTotalMemory(forceFullCollection: true);
+                lock (readings)
+                {
+                    peak = Math.Max(peak, reading);
+                    floor = Math.Min(floor, reading);
+                }
             },
             null,
             50,
@@ -158,7 +195,11 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
             Assert.IsTrue(store.BytesConsumed > 0);
         }
 
-        return Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)) - baseline;
+        var last = GC.GetTotalMemory(forceFullCollection: true);
+        lock (readings)
+        {
+            return (Math.Max(peak, last) - baseline, Math.Min(floor, last) < baseline - BaselineSlack);
+        }
     }
 
     /// <summary>
