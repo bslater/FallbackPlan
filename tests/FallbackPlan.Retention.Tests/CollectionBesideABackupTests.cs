@@ -238,6 +238,31 @@ public sealed class CollectionBesideABackupTests : IDisposable
         Assert.IsGreaterThan(0, after.Swept.Deleted, "the blob the hold kept did not go once the hold ran out");
     }
 
+    [TestMethod]
+    public async Task RetentionPass_ToldABackupOfTheSetIsLive_HoldsItsBlobs_WhateverTheJournalShows()
+    {
+        // A backup parked outside its window can outlive the time it declared,
+        // and one still queued has published nothing. The service knows each
+        // is there and says so, and the pass holds on its word as on the
+        // journal's.
+        await TombstoneTheReturningBytesAsync();
+        await File.WriteAllBytesAsync(ReturningPath, Interim);
+        await BackUpAsync(Day1.AddDays(2));
+
+        var told = await RunAsync(Day1.AddDays(2).AddHours(1), backupInFlight: true);
+        Assert.Contains(
+            line => line.StartsWith("held beside a backup:", StringComparison.Ordinal),
+            told.Lines,
+            "a pass told a backup is live held nothing: " + string.Join(" | ", told.Lines));
+        Assert.IsGreaterThan(0, told.Swept!.HeldBlobs, "the premise: a blob's grace had run");
+
+        var untold = await RunAsync(Day1.AddDays(2).AddHours(2));
+        Assert.IsFalse(
+            untold.Lines.Any(line => line.StartsWith("held beside a backup:", StringComparison.Ordinal)),
+            string.Join(" | ", untold.Lines));
+        Assert.IsGreaterThan(0, untold.Swept!.Deleted, "the blob the hold kept did not go once nothing was live");
+    }
+
     /// <summary>Day one stores the bytes, day two replaces them, and a pass tombstones the blob that held them.</summary>
     private async Task TombstoneTheReturningBytesAsync()
     {
@@ -327,7 +352,8 @@ public sealed class CollectionBesideABackupTests : IDisposable
         return (snapshotId, published.ContentBlobs);
     }
 
-    private async Task<RetentionReport> RunAsync(DateTimeOffset now, IObjectStore? store = null)
+    private async Task<RetentionReport> RunAsync(
+        DateTimeOffset now, IObjectStore? store = null, bool backupInFlight = false)
     {
         var plain = new LocalFileSystemObjectStore(RepoPath);
         using var opened = await WriteOnlyInstallation.OpenAsync(plain, PassphraseText, CancellationToken.None);
@@ -336,7 +362,8 @@ public sealed class CollectionBesideABackupTests : IDisposable
             store ?? plain, opened.Repository, Policy, [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None,
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
-            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
+            (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim,
+            backupInFlight: backupInFlight);
     }
 
     private async Task BackUpAsync(DateTimeOffset now)
