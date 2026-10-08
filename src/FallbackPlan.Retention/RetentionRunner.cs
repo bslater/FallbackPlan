@@ -83,6 +83,13 @@ public static class RetentionRunner
     /// snapshots held is still condemned, because it is garbage under any
     /// policy once they have gone.
     /// </param>
+    /// <param name="backupInFlight">
+    /// Whether the caller knows a backup of this set is queued, running or
+    /// parked beside the pass (ADR-0009 Amendment 8). The journal shows a
+    /// backup's intent only while the time it declared runs, and a run parked
+    /// outside its window can outlive that; the service that holds the run
+    /// knows it is there whatever its intent shows.
+    /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -101,7 +108,8 @@ public static class RetentionRunner
         Func<ObjectId, BlobId?>? resolveLocation = null,
         CompactionPolicy? compactionPolicy = null,
         TimeSpan? clockSkewMargin = null,
-        bool requestsOnly = false)
+        bool requestsOnly = false,
+        bool backupInFlight = false)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -232,7 +240,7 @@ public static class RetentionRunner
         // deleted, by the sweep or the trim; snapshots still are (ADR-0009
         // Amendment 8).
         var inFlight = intents.PublicationsInFlight;
-        var holdBlobs = inFlight.Count > 0;
+        var holdBlobs = backupInFlight || inFlight.Count > 0;
 
         var written = 0;
         if (plan.Deletable && (plan.DeletableBlobs.Count > 0 || plan.ExpiredSnapshotKeys.Count > 0))
@@ -262,7 +270,9 @@ public static class RetentionRunner
             lines.Add(
                 $"held beside a backup: {notTombstoned} blob(s) not tombstoned, {swept.HeldBlobs} not deleted "
                 + (trim.Eligible.Count > 0 ? $"and {trim.Eligible.Count} not trimmed " : string.Empty)
-                + $"while write intent {string.Join(", ", inFlight.Select(intent => intent.Sequence))} is in flight; "
+                + (inFlight.Count > 0
+                    ? $"while write intent {string.Join(", ", inFlight.Select(intent => intent.Sequence))} is in flight; "
+                    : "while a backup of the set is queued, running or parked; ")
                 + "the next pass takes them up");
         }
 

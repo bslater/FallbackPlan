@@ -255,7 +255,8 @@ public sealed partial class ServiceCommandHandler
             grant,
             objectId => catalogue.ResolveLocation(objectId)?.BlobId,
             clockSkewMargin: runtime.Configuration.EffectiveClockSkewMargin,
-            requestsOnly: true).ConfigureAwait(false);
+            requestsOnly: true,
+            backupInFlight: Scheduler.LiveBackupOf(runtime, set.Id) is not null).ConfigureAwait(false);
 
     /// <summary>
     /// The destinations a deletion of <paramref name="snapshot"/> waits on:
