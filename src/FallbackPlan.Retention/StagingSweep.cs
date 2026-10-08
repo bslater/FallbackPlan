@@ -34,6 +34,13 @@ public sealed record SweepOutcome(
     /// can forget a requested one from what it caches (FR-GC-013).
     /// </summary>
     public IReadOnlyList<SnapshotFact> DeletedSnapshots { get; init; } = [];
+
+    /// <summary>
+    /// Blobs whose grace had run and which this pass left in place: beside a
+    /// publication in flight, or for a snapshot whose delete did not happen
+    /// (ADR-0009 Amendment 8). Their tombstones stand for the next pass.
+    /// </summary>
+    public int HeldBlobs { get; init; }
 }
 
 /// <summary>
@@ -76,6 +83,12 @@ public static class StagingSweep
     /// publishes with. Null only for a repository written before the feature,
     /// whose tombstones still sign under the signing key.
     /// </param>
+    /// <param name="holdBlobs">
+    /// Whether a publication is in flight beside this pass (ADR-0009
+    /// Amendment 8). It may have built on a blob the plan condemns, and its
+    /// snapshot is not one the plan could see, so no blob is tombstoned; the
+    /// snapshots still are.
+    /// </param>
     /// <returns>Tombstones written (or already present).</returns>
     public static async ValueTask<int> TombstoneAsync(
         IObjectStore store,
@@ -86,7 +99,8 @@ public static class StagingSweep
         ulong currentPublicationSequence,
         ulong nowUnixMilliseconds,
         CancellationToken cancellationToken,
-        ReclaimAuthority? reclaim = null)
+        ReclaimAuthority? reclaim = null,
+        bool holdBlobs = false)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -103,21 +117,31 @@ public static class StagingSweep
         var eligible = currentPublicationSequence + 1;
         var written = 0;
 
-        foreach (var blob in plan.DeletableBlobs)
-        {
-            var tombstone = new Tombstone(
-                Tombstone.BlobTypeCode, blob.BlobId.ToArray(), blob.Reason,
-                writerId.ToArray(), nowUnixMilliseconds, eligible);
-            written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
+        // Snapshots before the blobs they reach. A pass that stops between the
+        // two leaves a snapshot condemned and its blobs not yet, which the next
+        // pass finishes. The other way round, the next pass would tombstone the
+        // snapshot a generation later than its blobs, and the blobs' grace
+        // would run while the snapshot was still listed.
         var expiredKeys = plan.ExpiredSnapshotKeys.ToHashSet();
         foreach (var snapshot in survey.Snapshots.Where(candidate => expiredKeys.Contains(candidate.StoreKey)))
         {
             var tombstone = new Tombstone(
                 (byte)ObjectType.SnapshotManifest, snapshot.ManifestObjectId.ToArray(),
                 TombstoneReason.Unreferenced, writerId.ToArray(), nowUnixMilliseconds, eligible);
+            written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (holdBlobs)
+        {
+            return written;
+        }
+
+        foreach (var blob in plan.DeletableBlobs)
+        {
+            var tombstone = new Tombstone(
+                Tombstone.BlobTypeCode, blob.BlobId.ToArray(), blob.Reason,
+                writerId.ToArray(), nowUnixMilliseconds, eligible);
             written += await WriteAsync(store, repository, writerId, tombstone, reclaim, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -130,11 +154,15 @@ public static class StagingSweep
     /// verifies, the generation has arrived, and the object is revalidated as
     /// still condemned against the fresh plan the caller computed <b>after</b>
     /// this pass began. Deletes in bounded order; every refusal is a finding,
-    /// including one the store itself raises — a single object the platform
-    /// will not release defers that object and nothing else, because the walk
-    /// is in key order and abandoning it would abandon everything sorting
-    /// after it too.
+    /// including one the store itself raises — a refusal never stops the walk,
+    /// because abandoning it would abandon everything sorting after it too.
     /// </summary>
+    /// <remarks>
+    /// Snapshots go before blobs, and a snapshot whose delete was refused
+    /// holds back the blobs it reaches (ADR-0009 Amendment 8). It is still
+    /// listed, so it must still restore until its own delete succeeds; the
+    /// blobs it alone reached go on the pass after it does.
+    /// </remarks>
     /// <param name="store">The staging archive's store.</param>
     /// <param name="repository">The opened archive.</param>
     /// <param name="freshPlan">A plan recomputed now — the revalidation world.</param>
@@ -156,6 +184,15 @@ public static class StagingSweep
     /// pass to revalidate under the set's own policy, rather than reported as
     /// damage the narrower plan cannot judge.
     /// </param>
+    /// <param name="reader">
+    /// The fresh plan's reader, blobs loaded: how the sweep tells which blobs a
+    /// snapshot whose delete was refused still reaches. Without one, every
+    /// blob waits for such a snapshot.
+    /// </param>
+    /// <param name="holdBlobs">
+    /// Whether a publication is in flight beside this pass (ADR-0009
+    /// Amendment 8): no blob is deleted, whatever its grace says.
+    /// </param>
     /// <returns>What was deleted, deferred, cleared and found.</returns>
     public static async ValueTask<SweepOutcome> SweepAsync(
         IObjectStore store,
@@ -165,7 +202,9 @@ public static class StagingSweep
         ulong currentPublicationSequence,
         CancellationToken cancellationToken,
         ReclaimAuthority? reclaim = null,
-        bool requestsOnly = false)
+        bool requestsOnly = false,
+        RepositoryReader? reader = null,
+        bool holdBlobs = false)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
@@ -185,6 +224,11 @@ public static class StagingSweep
         var findings = new List<string>();
         var deletedSnapshots = new List<SnapshotFact>();
 
+        // Blob tombstones wait until every snapshot has been tried, so the
+        // blobs a refused snapshot still reaches are known before any goes.
+        var blobTombstones = new List<(ObjectKey Key, DecodedTombstone Tombstone)>();
+        var standing = new List<SurveyedSnapshot>();
+
         await foreach (var entry in store.ListAsync(
             ObjectPrefix.Parse("tombstones/"), ListOptions.Default, cancellationToken).ConfigureAwait(false))
         {
@@ -203,55 +247,7 @@ public static class StagingSweep
 
             if (tombstone.Value.ObjectTypeCode == Tombstone.BlobTypeCode)
             {
-                var blobId = BlobId.FromBytes(tombstone.Value.ObjectId.Span);
-                var dataKey = BlobStoreKeys.ForBlob(BlobClass.Data, deriver.Derive(blobId));
-                var metaKey = BlobStoreKeys.ForBlob(BlobClass.Metadata, deriver.Derive(blobId));
-
-                ObjectKey? present = await ExistsAsync(store, dataKey, cancellationToken).ConfigureAwait(false)
-                    ? dataKey
-                    : await ExistsAsync(store, metaKey, cancellationToken).ConfigureAwait(false)
-                        ? metaKey
-                        : null;
-
-                if (present is null)
-                {
-                    // The object is gone; the tombstone outlives it one
-                    // generation so a reader can tell a completed collection
-                    // from a missing object (11 §3.2).
-                    if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
-                        && await TryDeleteAsync(
-                            store, entry.Key, $"tombstone {entry.Key}", findings, cancellationToken)
-                            .ConfigureAwait(false))
-                    {
-                        cleared++;
-                    }
-
-                    continue;
-                }
-
-                if (!freshPlan.Deletable || !condemnedBlobs.Contains(blobId))
-                {
-                    if (requestsOnly)
-                    {
-                        // Condemned by a pass under the set's own policy, and
-                        // reached by a snapshot only that policy expires.
-                        continue;
-                    }
-
-                    // Revalidation disagrees with the tombstone: a snapshot
-                    // published since the decision reaches this blob, or the
-                    // fresh world is vetoed. Damage finding; never delete
-                    // (11 §3.2 step 3).
-                    findings.Add($"damage: tombstoned blob {blobId} is still reachable — not deleted");
-                    continue;
-                }
-
-                if (await TryDeleteAsync(store, present.Value, $"blob {blobId}", findings, cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    deleted++;
-                }
-
+                blobTombstones.Add((entry.Key, tombstone));
                 continue;
             }
 
@@ -263,7 +259,7 @@ public static class StagingSweep
                     if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
                         && await TryDeleteAsync(
                             store, entry.Key, $"tombstone {entry.Key}", findings, cancellationToken)
-                            .ConfigureAwait(false))
+                            .ConfigureAwait(false) == Removal.Deleted)
                     {
                         cleared++;
                     }
@@ -293,12 +289,18 @@ public static class StagingSweep
                     continue;
                 }
 
-                if (await TryDeleteAsync(
+                switch (await TryDeleteAsync(
                     store, snapshot.StoreKey, $"snapshot {snapshot.Fact.SnapshotId[..12]}…", findings, cancellationToken)
                     .ConfigureAwait(false))
                 {
-                    deleted++;
-                    deletedSnapshots.Add(snapshot.Fact);
+                    case Removal.Deleted:
+                        deleted++;
+                        deletedSnapshots.Add(snapshot.Fact);
+                        break;
+
+                    case Removal.Stands:
+                        standing.Add(snapshot);
+                        break;
                 }
 
                 continue;
@@ -307,12 +309,138 @@ public static class StagingSweep
             findings.Add($"damage: tombstone {entry.Key} names an object type this pass does not collect");
         }
 
-        return new SweepOutcome(deleted, notYet, cleared, findings) { DeletedSnapshots = deletedSnapshots };
+        var held = 0;
+        var heldForStanding = 0;
+        HashSet<BlobId>? reachedByStanding = null;
+        var standingUnwalkable = false;
+        foreach (var (key, tombstone) in blobTombstones)
+        {
+            if (holdBlobs)
+            {
+                held++;
+                continue;
+            }
+
+            var blobId = BlobId.FromBytes(tombstone.Value.ObjectId.Span);
+            var dataKey = BlobStoreKeys.ForBlob(BlobClass.Data, deriver.Derive(blobId));
+            var metaKey = BlobStoreKeys.ForBlob(BlobClass.Metadata, deriver.Derive(blobId));
+
+            ObjectKey? present = await ExistsAsync(store, dataKey, cancellationToken).ConfigureAwait(false)
+                ? dataKey
+                : await ExistsAsync(store, metaKey, cancellationToken).ConfigureAwait(false)
+                    ? metaKey
+                    : null;
+
+            if (present is null)
+            {
+                // The object is gone; the tombstone outlives it one
+                // generation so a reader can tell a completed collection
+                // from a missing object (11 §3.2).
+                if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
+                    && await TryDeleteAsync(store, key, $"tombstone {key}", findings, cancellationToken)
+                        .ConfigureAwait(false) == Removal.Deleted)
+                {
+                    cleared++;
+                }
+
+                continue;
+            }
+
+            if (!freshPlan.Deletable || !condemnedBlobs.Contains(blobId))
+            {
+                if (requestsOnly)
+                {
+                    // Condemned by a pass under the set's own policy, and
+                    // reached by a snapshot only that policy expires.
+                    continue;
+                }
+
+                // Revalidation disagrees with the tombstone: a snapshot
+                // published since the decision reaches this blob, or the
+                // fresh world is vetoed. Damage finding; never delete
+                // (11 §3.2 step 3).
+                findings.Add($"damage: tombstoned blob {blobId} is still reachable — not deleted");
+                continue;
+            }
+
+            if (standing.Count > 0 && reachedByStanding is null && !standingUnwalkable)
+            {
+                (reachedByStanding, standingUnwalkable) = await ReachedByAsync(reader, standing, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (standingUnwalkable || reachedByStanding?.Contains(blobId) == true)
+            {
+                heldForStanding++;
+                continue;
+            }
+
+            if (await TryDeleteAsync(store, present.Value, $"blob {blobId}", findings, cancellationToken)
+                .ConfigureAwait(false) == Removal.Deleted)
+            {
+                deleted++;
+            }
+        }
+
+        if (heldForStanding > 0)
+        {
+            findings.Add(
+                $"deferred: {heldForStanding} blob(s) wait for {standing.Count} snapshot(s) still listed after "
+                + "a delete that did not happen; they go once those snapshots do");
+        }
+
+        return new SweepOutcome(deleted, notYet, cleared, findings)
+        {
+            DeletedSnapshots = deletedSnapshots,
+            HeldBlobs = held + heldForStanding,
+        };
+    }
+
+    /// <summary>
+    /// The blobs the snapshots in <paramref name="standing"/> reach, and
+    /// whether that could be told at all. A snapshot whose closure will not
+    /// walk, or a sweep handed no reader, cannot say which blobs it needs, so
+    /// all of them wait.
+    /// </summary>
+    private static async ValueTask<(HashSet<BlobId>? Reached, bool Unknown)> ReachedByAsync(
+        RepositoryReader? reader, IReadOnlyList<SurveyedSnapshot> standing, CancellationToken cancellationToken)
+    {
+        if (reader is null)
+        {
+            return (null, true);
+        }
+
+        var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, standing, cancellationToken)
+            .ConfigureAwait(false);
+        if (unwalkable.Count > 0)
+        {
+            return (null, true);
+        }
+
+        return (
+            reader.Blobs
+                .Where(blob => blob.Records.Any(record => reachable.Contains(record.ObjectId)))
+                .Select(blob => blob.BlobId)
+                .ToHashSet(),
+            false);
+    }
+
+    /// <summary>What a delete left behind it.</summary>
+    private enum Removal
+    {
+        /// <summary>The store says the object went.</summary>
+        Deleted,
+
+        /// <summary>The store had nothing to delete: gone already, by an earlier pass or another.</summary>
+        AlreadyGone,
+
+        /// <summary>The delete threw or was refused, and the object is still there.</summary>
+        Stands,
     }
 
     /// <summary>
     /// Deletes one object, reporting rather than propagating whatever stops
-    /// it, and returning true only when the store says the object went.
+    /// it, and saying whether the object went, was already gone, or stands.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -333,7 +461,7 @@ public static class StagingSweep
     /// must not read as a completed pass.
     /// </para>
     /// </remarks>
-    private static async ValueTask<bool> TryDeleteAsync(
+    private static async ValueTask<Removal> TryDeleteAsync(
         IObjectStore store,
         ObjectKey key,
         string what,
@@ -355,23 +483,23 @@ public static class StagingSweep
             // every fault, while cancellation must keep escaping.
             findings.Add(
                 $"deferred: {what} could not be deleted — {exception.Message}; the tombstone stands for the next pass");
-            return false;
+            return Removal.Stands;
         }
 
         switch (result.Outcome)
         {
             case DeleteOutcome.Deleted:
-                return true;
+                return Removal.Deleted;
 
             case DeleteOutcome.NotFound:
                 // Already gone is the goal, and a concurrent pass or an
                 // interrupted earlier one reaches here honestly. Nothing was
                 // deleted by this call, so nothing is counted.
-                return false;
+                return Removal.AlreadyGone;
 
             default:
                 findings.Add($"deferred: {what} was refused by the store ({result.Outcome}); not deleted");
-                return false;
+                return Removal.Stands;
         }
     }
 
@@ -539,7 +667,7 @@ public static class StagingSweep
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(metadataKey);
         }
 
-        var key = KeyOf(tombstone.ObjectTypeCode, tombstone.ObjectId.Span);
+        var key = TombstoneKeys.For(tombstone.ObjectTypeCode, tombstone.ObjectId.Span);
         var put = await store.PutAsync(
             key,
             _ => ValueTask.FromResult<Stream>(new MemoryStream(sealedObject, writable: false)),
@@ -576,12 +704,6 @@ public static class StagingSweep
         using var signer = TombstoneSigner(repository, read.Generation, reclaim);
         return signer.Verify(read.Tombstone.SignedBytes.Span, read.Tombstone.Signature.Span) ? read.Tombstone : null;
     }
-
-    /// <summary>Where the tombstone for an object lives (11 §3).</summary>
-    /// <param name="objectTypeCode">The object's type, or the blob domain.</param>
-    /// <param name="objectId">The object's identifier.</param>
-    internal static ObjectKey KeyOf(byte objectTypeCode, ReadOnlySpan<byte> objectId) =>
-        ObjectKey.Parse($"tombstones/{objectTypeCode:x2}/{Base32.Encode(objectId.ToArray())}");
 
     /// <summary>
     /// Reads and decodes the tombstone at <paramref name="key"/>, signature

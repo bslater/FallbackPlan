@@ -209,6 +209,35 @@ public sealed class CollectionBesideABackupTests : IDisposable
         Assert.IsLessThan(snapshots, clock, "the pass read the snapshots before the clock: " + string.Join(", ", listings));
     }
 
+    [TestMethod]
+    public async Task RetentionPass_BesideABackupThatDied_HoldsOnlyUntilItsDeclaredDurationAndTheMarginRunOut()
+    {
+        // A backup that stops without retiring its intent leaves it live, and
+        // the generation half of its expiry can wait for a key rotation. A
+        // hold for as long as such an intent lives would stop collection for
+        // good after one crash, so the journal holds only while the time the
+        // backup declared for itself, and the margin, have not run out.
+        await TombstoneTheReturningBytesAsync();
+        await File.WriteAllBytesAsync(ReturningPath, Interim);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            async () => await BackUpThroughAsync(Day1.AddDays(2), new DiesAfter(PublicationStep.PublishIntent)));
+
+        var beside = await RunAsync(Day1.AddDays(2).AddHours(1));
+        Assert.Contains(
+            line => line.StartsWith("held beside a backup:", StringComparison.Ordinal),
+            beside.Lines,
+            "a pass inside the dead backup's declared duration held nothing: " + string.Join(" | ", beside.Lines));
+        Assert.IsGreaterThan(0, beside.Swept!.HeldBlobs, "the premise: a blob's grace had run");
+
+        // An hour declared, a day's margin, and a minute more.
+        var after = await RunAsync(Day1.AddDays(2).AddHours(1).AddDays(1).AddMinutes(1));
+        Assert.IsFalse(
+            after.Lines.Any(line => line.StartsWith("held beside a backup:", StringComparison.Ordinal)),
+            "a dead backup's intent held collection past the time it declared: " + string.Join(" | ", after.Lines));
+        Assert.AreEqual(0, after.Swept!.HeldBlobs);
+        Assert.IsGreaterThan(0, after.Swept.Deleted, "the blob the hold kept did not go once the hold ran out");
+    }
+
     /// <summary>Day one stores the bytes, day two replaces them, and a pass tombstones the blob that held them.</summary>
     private async Task TombstoneTheReturningBytesAsync()
     {
@@ -357,6 +386,18 @@ public sealed class CollectionBesideABackupTests : IDisposable
         var bytes = new byte[length];
         new Random(seed).NextBytes(bytes);
         return bytes;
+    }
+
+    /// <summary>Stops a publication once it completes the named step, as a crash would.</summary>
+    private sealed class DiesAfter(PublicationStep step) : IPublicationObserver
+    {
+        public void AfterStep(PublicationStep completedStep)
+        {
+            if (completedStep == step)
+            {
+                throw new InvalidOperationException($"the backup died after step {step}");
+            }
+        }
     }
 
     /// <summary>Runs a pass once, when a publication completes the named step.</summary>

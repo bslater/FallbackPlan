@@ -114,6 +114,25 @@ public static class RetentionRunner
         ThrowHelper.ThrowIfNull(trimVerificationFor);
         ArgumentOutOfRangeException.ThrowIfLessThan(margin, TimeSpan.Zero, nameof(clockSkewMargin));
 
+        // The journal before the snapshots (11 §3.2 step 3): the grace clock
+        // and the live intents are read first, and the snapshot set every
+        // condemnation is revalidated against after them. Read the other way
+        // round, a backup that published in between would count towards the
+        // grace and be missing from the world that decides.
+        var sealingGeneration = Math.Max(
+            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
+        IReadOnlyList<JournalRecord> records;
+        int unparseable;
+        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Credential))
+        {
+            (records, unparseable, _) = await journal.LoadAsync(sealingGeneration, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var intents = IntentSurveyor.Survey(
+            records, unparseable, sealingGeneration, nowUnixMilliseconds, (ulong)margin.TotalMilliseconds);
+        Log.IntentsSurveyed(log, new LogLabel(set), intents.LiveIntents.Count, sealingGeneration, margin);
+
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
 
         Log.PlanningRetention(log, new LogLabel(set), survey.Snapshots.Count);
@@ -158,20 +177,6 @@ public static class RetentionRunner
 
         var (reachable, unwalkable) = await StagingMark.MarkAsync(reader, protectedSnapshots, cancellationToken)
             .ConfigureAwait(false);
-
-        var sealingGeneration = Math.Max(
-            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
-        IReadOnlyList<JournalRecord> records;
-        int unparseable;
-        using (var journal = new JournalReader(store, repository.RepositoryId, repository.Credential))
-        {
-            (records, unparseable, _) = await journal.LoadAsync(sealingGeneration, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var intents = IntentSurveyor.Survey(
-            records, unparseable, sealingGeneration, nowUnixMilliseconds, (ulong)margin.TotalMilliseconds);
-        Log.IntentsSurveyed(log, new LogLabel(set), intents.LiveIntents.Count, sealingGeneration, margin);
 
         var plan = CollectionPlanner.Plan(
             survey, selection, gate, reader, reachable, unwalkable, intents,
@@ -221,12 +226,20 @@ public static class RetentionRunner
         // The grace clock: the single writer's highest published sequence.
         var publicationSequence = records.Count == 0 ? 0 : records.Max(record => record.Sequence);
 
+        // A publication in flight may have built on a blob this plan
+        // condemns, and its snapshot is in no survey yet, so revalidation
+        // could not save that blob. Beside one, no blob is tombstoned or
+        // deleted, by the sweep or the trim; snapshots still are (ADR-0009
+        // Amendment 8).
+        var inFlight = intents.PublicationsInFlight;
+        var holdBlobs = inFlight.Count > 0;
+
         var written = 0;
         if (plan.Deletable && (plan.DeletableBlobs.Count > 0 || plan.ExpiredSnapshotKeys.Count > 0))
         {
             written = await StagingSweep.TombstoneAsync(
                 store, repository, writerId, plan, survey, publicationSequence, nowUnixMilliseconds,
-                cancellationToken, reclaim)
+                cancellationToken, reclaim, holdBlobs)
                 .ConfigureAwait(false);
             lines.Add($"tombstoned: {written} object(s), eligible after the next publication");
         }
@@ -235,19 +248,30 @@ public static class RetentionRunner
         // pass's own tombstones never qualify, and earlier passes' are
         // revalidated against the world just computed (11 §3.2 step 3).
         var swept = await StagingSweep.SweepAsync(
-            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim, requestsOnly)
+            store, repository, plan, survey, publicationSequence, cancellationToken, reclaim, requestsOnly,
+            reader, holdBlobs)
             .ConfigureAwait(false);
         lines.Add(
             $"swept: {swept.Deleted} deleted, {swept.NotYetEligible} awaiting grace, "
             + $"{swept.TombstonesCleared} tombstone(s) cleared");
         lines.AddRange(swept.Findings);
 
+        if (holdBlobs)
+        {
+            var notTombstoned = plan.Deletable ? plan.DeletableBlobs.Count : 0;
+            lines.Add(
+                $"held beside a backup: {notTombstoned} blob(s) not tombstoned, {swept.HeldBlobs} not deleted "
+                + (trim.Eligible.Count > 0 ? $"and {trim.Eligible.Count} not trimmed " : string.Empty)
+                + $"while write intent {string.Join(", ", inFlight.Select(intent => intent.Sequence))} is in flight; "
+                + "the next pass takes them up");
+        }
+
         // The trim runs last: direct deletes of historic data blobs every
         // entitled destination verifiably holds (ADR-0034 §6). A blob the
         // sweep already removed counts nothing here.
         var trimmedBlobs = 0;
         var trimmedBytes = 0L;
-        if (trim.Eligible.Count > 0)
+        if (trim.Eligible.Count > 0 && !holdBlobs)
         {
             var (trimmed, bytes, refused) = await StagingTrim.ExecuteAsync(
                 store, trim, trimVerificationFor, syncRecordFor, cancellationToken)
