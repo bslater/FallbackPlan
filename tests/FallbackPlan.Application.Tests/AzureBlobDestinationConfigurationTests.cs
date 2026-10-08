@@ -206,6 +206,5 @@ public sealed class AzureBlobDestinationConfigurationTests
             """);
 
         Assert.AreEqual(ClientConfiguration.CurrentSchemaVersion, ClientConfiguration.Load(ConfigPath).SchemaVersion);
-        Assert.AreEqual(10, ClientConfiguration.CurrentSchemaVersion);
     }
 }

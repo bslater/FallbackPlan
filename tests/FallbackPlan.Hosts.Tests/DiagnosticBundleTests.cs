@@ -76,7 +76,8 @@ public sealed class DiagnosticBundleTests : IDisposable
     private static ServiceCommandHandler Handler(ServiceRuntime runtime, CallerScope scope) =>
         new(runtime, RemoteBindingState.Off, scope);
 
-    private async Task<ServiceRuntime> StartAsync(int ringCapacity = 1024, bool withLogging = true, bool durable = true)
+    private async Task<ServiceRuntime> StartAsync(
+        int ringCapacity = 1024, bool withLogging = true, bool durable = true, RetentionConfiguration? retention = null)
     {
         if (withLogging)
         {
@@ -114,6 +115,7 @@ public sealed class DiagnosticBundleTests : IDisposable
                     Roots = [new BackupRootConfiguration { Path = SourceFolder, Label = "scans" }],
                     ExcludeRules = [$"**/{TellingFolder}/drafts/**"],
                     Schedule = "every 1h",
+                    Retention = retention,
                     Destinations = [new SetDestinationReference { Ref = "vault" }],
                 },
             ],
@@ -309,6 +311,22 @@ public sealed class DiagnosticBundleTests : IDisposable
         Assert.IsFalse(bundle.IncludesPaths);
         AssertNowhere("scratch directory (so a path)", Canary, bundle, entries);
         AssertNowhere("telling folder name", TellingFolder, bundle, entries);
+    }
+
+    [TestMethod]
+    public async Task ExportDiagnostics_TheConfiguration_CarriesTheSetsRetention_DeletedFileDurationIncluded()
+    {
+        // What a set may delete, and how long it keeps a deleted file, is
+        // the first thing to ask about a snapshot that was not there.
+        await using var runtime = await StartAsync(
+            retention: new RetentionConfiguration { KeepDaily = 7, KeepDeletedDays = 90 });
+
+        var entries = Open(await ExportAsync(runtime, includePaths: false));
+
+        using var configuration = JsonDocument.Parse(entries["configuration.json"]);
+        var retention = configuration.RootElement.GetProperty("backup_sets")[0].GetProperty("retention");
+        Assert.AreEqual(7, retention.GetProperty("keep_daily").GetInt32());
+        Assert.AreEqual(90, retention.GetProperty("keep_deleted_days").GetInt32());
     }
 
     [TestMethod]

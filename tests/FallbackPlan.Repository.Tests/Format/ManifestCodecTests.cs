@@ -495,10 +495,44 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void PolicyManifest_TheDeletedFileDuration_IsRetentionKeySix()
+    {
+        // FR-GC-014: the deleted-file duration travels with the rest of the
+        // set's own policy, so a set re-declared from its archive keeps
+        // deleted files for as long as it did. A policy that declares none
+        // writes exactly what it wrote before the key was assigned.
+        var policy = NinePolicyKeys() with
+        {
+            Retention = new RecordedRetention { KeepDaily = 7, KeepDeletedDays = 90 },
+        };
+
+        var bytes = PolicyManifestCodec.Encode(policy);
+        var decoded = PolicyManifestCodec.Decode(bytes);
+
+        SequenceAssert.AreEqual(bytes, PolicyManifestCodec.Encode(decoded));
+        Assert.AreEqual(policy.Retention, decoded.Retention);
+        Assert.AreEqual(90u, decoded.Retention!.KeepDeletedDays);
+
+        var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
+        writer.WriteStartMap(10);
+        WriteNinePolicyKeys(writer);
+        writer.WriteKey(13);
+        writer.WriteStartMap(1);
+        writer.WriteKey(1);
+        writer.WriteUnsignedInteger(7);
+        writer.WriteEndMap();
+        writer.WriteEndMap();
+        SequenceAssert.AreEqual(
+            writer.Encode(),
+            PolicyManifestCodec.Encode(
+                NinePolicyKeys() with { ExcludeRules = [], Retention = new RecordedRetention { KeepDaily = 7 } }));
+    }
+
+    [TestMethod]
     public void PolicyManifest_ARetentionCarryingAnUnknownKey_IsRejected()
     {
-        // The retention map is pinned to keys 1-5; a sixth is refused as every
-        // other unknown key is, rather than read past.
+        // The retention map is pinned to keys 1-6; a seventh is refused as
+        // every other unknown key is, rather than read past.
         var writer = new FallbackPlan.Repository.Format.Cbor.CanonicalCborWriter();
         writer.WriteStartMap(10);
         WriteNinePolicyKeys(writer);
@@ -506,7 +540,7 @@ public sealed class ManifestCodecTests
         writer.WriteStartMap(2);
         writer.WriteKey(1);
         writer.WriteUnsignedInteger(7);
-        writer.WriteKey(6);
+        writer.WriteKey(7);
         writer.WriteUnsignedInteger(1);
         writer.WriteEndMap();
         writer.WriteEndMap();
