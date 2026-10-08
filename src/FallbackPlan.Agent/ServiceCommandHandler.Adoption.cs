@@ -116,6 +116,12 @@ public sealed partial class ServiceCommandHandler
                     ServiceErrorReason.Unavailable,
                     $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
             }
+            catch (StoreUnavailableException unavailable)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable,
+                    $"Destination '{destination.Name}' is not available: {unavailable.Message}");
+            }
             catch (Exception refused) when (refused is IOException or ClientStateException)
             {
                 return new ServiceError(
@@ -299,6 +305,12 @@ public sealed partial class ServiceCommandHandler
                     ServiceErrorReason.Unavailable,
                     $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
             }
+            catch (StoreUnavailableException unavailable)
+            {
+                return new ServiceError(
+                    ServiceErrorReason.Unavailable,
+                    $"Destination '{destination.Name}' is not available: {unavailable.Message}");
+            }
             catch (Exception refused) when (refused is IOException or ClientStateException)
             {
                 return new ServiceError(
@@ -382,6 +394,12 @@ public sealed partial class ServiceCommandHandler
                     return new ServiceError(
                         ServiceErrorReason.Unavailable,
                         $"Destination '{destination.Name}' is not reachable: {unreachable.Message}");
+                }
+                catch (StoreUnavailableException unavailable)
+                {
+                    return new ServiceError(
+                        ServiceErrorReason.Unavailable,
+                        $"Destination '{destination.Name}' is not available: {unavailable.Message}");
                 }
             }
 

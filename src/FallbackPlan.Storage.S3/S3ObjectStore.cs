@@ -543,13 +543,43 @@ public sealed class S3ObjectStore : IPrefixedObjectStore
         return Refused(response.StatusCode, operation, key, code, message);
     }
 
-    private static IOException Refused(HttpStatusCode status, string operation, ObjectKey? key, string? code, string? message) =>
-        new(Strings.FormatS3ObjectStore_Refused(
-            operation,
-            key?.Value ?? "(the bucket)",
-            ((int)status).ToString(CultureInfo.InvariantCulture),
-            code ?? status.ToString(),
-            message ?? string.Empty));
+    /// <summary>
+    /// The fault a refusal is, told apart where what a person can do differs
+    /// (FR-QUOTA-001; ADR-0012 Amendment 5): a store with no room, a quota
+    /// crossed, a store that stayed busy through every attempt, or a refusal
+    /// of the request itself.
+    /// </summary>
+    private static IOException Refused(HttpStatusCode status, string operation, ObjectKey? key, string? code, string? message)
+    {
+        var subject = key?.Value ?? "(the bucket)";
+        var answered = ((int)status).ToString(CultureInfo.InvariantCulture);
+        var word = code ?? status.ToString();
+        var said = message ?? string.Empty;
+
+        // 507, Insufficient Storage, whatever word the store has for it:
+        // XMinioStorageFull at one S3-compatible store, InsufficientCapacity
+        // at another.
+        if (status == HttpStatusCode.InsufficientStorage)
+        {
+            return new StoreFullException(Strings.FormatS3ObjectStore_Full(operation, subject, answered, word, said));
+        }
+
+        // The API itself has no quota; the S3-compatible stores that hold one
+        // each name it, with a status of their own.
+        if (code is "QuotaExceeded" or "XMinioAdminBucketQuotaExceeded")
+        {
+            return new StoreQuotaExceededException(
+                Strings.FormatS3ObjectStore_QuotaExceeded(operation, subject, answered, word, said));
+        }
+
+        // A transient answer reaches here only once the attempts have run out.
+        if (IsTransient(status))
+        {
+            return new StoreBusyException(Strings.FormatS3ObjectStore_Busy(operation, subject, answered, word, said));
+        }
+
+        return new IOException(Strings.FormatS3ObjectStore_Refused(operation, subject, answered, word, said));
+    }
 
     /// <summary>The error code and message an error answer carries, read as the API shapes them.</summary>
     private static async ValueTask<(string? Code, string? Message)> ErrorOfAsync(

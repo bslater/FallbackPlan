@@ -13,9 +13,11 @@ namespace FallbackPlan.Storage.ContractTests;
 /// unconditionally and the API would otherwise overwrite; a transient refusal
 /// is retried from content read once, so the factory is never asked again; a
 /// store that refuses the credentials is a fault that names its code and
-/// never the secret; a body cut short is an IOException rather than a short
-/// object; a listing spans pages and sees only its own root; and nothing is
-/// spoken in clear to anywhere but this machine.
+/// never the secret; a store too busy through every attempt, one with no
+/// room and one whose quota a put would cross are each a fault of its own
+/// (FR-QUOTA-001); a body cut short is an IOException rather than a short
+/// object; a listing spans pages, resumes where it is asked to, and sees only
+/// its own root; and nothing is spoken in clear to anywhere but this machine.
 /// </summary>
 [TestClass]
 public sealed class S3ObjectStoreTests : IAsyncDisposable

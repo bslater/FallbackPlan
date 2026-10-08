@@ -292,8 +292,12 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
 
     /// <inheritdoc />
     /// <remarks>
-    /// The API resumes a listing only from a marker it issued, so a resume
-    /// from a key reads the pages before it and passes over what they hold.
+    /// The API resumes from a marker it issued, which a caller that kept a
+    /// key does not have, or starts where it is asked to (startFrom, version
+    /// 2023-05-03 on). A resume from a key starts there, and the key itself,
+    /// which the API includes, is the one entry passed over; a store that
+    /// ignored the parameter would answer from the first page, and the same
+    /// test would pass over everything up to the key.
     /// </remarks>
     public async IAsyncEnumerable<ObjectEntry> ListAsync(
         ObjectPrefix prefix, ListOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -301,10 +305,16 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         ArgumentNullException.ThrowIfNull(options);
         var pageSize = Math.Clamp(options.PageSizeHint ?? 1000, 1, 5000);
         string? marker = null;
+        var startFrom = options.ResumeAfter is { Length: > 0 } resume ? _root + resume : null;
 
         do
         {
-            var page = await ListPageAsync(_root + prefix.Value, delimiter: null, marker, pageSize, cancellationToken)
+            // A page started at the key holds the key too, so it is asked for
+            // one entry more than the caller wanted, for the one passed over.
+            var starting = marker is null ? startFrom : null;
+            var page = await ListPageAsync(
+                    _root + prefix.Value, delimiter: null, marker,
+                    starting is null ? pageSize : Math.Min(pageSize + 1, 5000), cancellationToken, starting)
                 .ConfigureAwait(false);
             foreach (var (full, size) in page.Blobs)
             {
@@ -366,7 +376,8 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
     private string FullKey(ObjectKey key) => _root + key.Value;
 
     private async ValueTask<ListPage> ListPageAsync(
-        string prefix, string? delimiter, string? marker, int pageSize, CancellationToken cancellationToken)
+        string prefix, string? delimiter, string? marker, int pageSize, CancellationToken cancellationToken,
+        string? startFrom = null)
     {
         var query = new List<string>
         {
@@ -385,6 +396,11 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
         if (marker is not null)
         {
             query.Add("marker=" + AzureBlobLocation.Encode(marker));
+        }
+
+        if (startFrom is not null)
+        {
+            query.Add("startFrom=" + AzureBlobLocation.Encode(startFrom));
         }
 
         var uri = new Uri($"{_location.ContainerUri.AbsoluteUri}?{string.Join('&', query)}");
@@ -540,16 +556,25 @@ public sealed class AzureBlobObjectStore : IPrefixedObjectStore
     private static string? ErrorCodeHeader(HttpResponseMessage response) =>
         response.Headers.TryGetValues("x-ms-error-code", out var values) ? values.FirstOrDefault() : null;
 
+    /// <summary>
+    /// The fault a refusal is: a store that stayed busy through every
+    /// attempt, told apart from a refusal of the request itself
+    /// (FR-QUOTA-001; ADR-0012 Amendment 5). The API has no answer of its own
+    /// for a container that is full or over a quota.
+    /// </summary>
     private static async ValueTask<IOException> RefusedAsync(
         HttpResponseMessage response, string operation, ObjectKey? key, CancellationToken cancellationToken)
     {
         var (code, message) = await ErrorOfAsync(response, cancellationToken).ConfigureAwait(false);
-        return new IOException(Strings.FormatAzureBlobObjectStore_Refused(
-            operation,
-            key?.Value ?? "(the container)",
-            ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture),
-            code ?? response.StatusCode.ToString(),
-            message ?? string.Empty));
+        var subject = key?.Value ?? "(the container)";
+        var answered = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
+        var word = code ?? response.StatusCode.ToString();
+        var said = message ?? string.Empty;
+
+        // A transient answer reaches here only once the attempts have run out.
+        return IsTransient(response.StatusCode)
+            ? new StoreBusyException(Strings.FormatAzureBlobObjectStore_Busy(operation, subject, answered, word, said))
+            : new IOException(Strings.FormatAzureBlobObjectStore_Refused(operation, subject, answered, word, said));
     }
 
     /// <summary>

@@ -94,6 +94,9 @@
   <data name="AzureBlobObjectStore_Refused" xml:space="preserve">
     <value>The Azure Blob store refused a {0} of '{1}': {2} {3}. {4}</value>
   </data>
+  <data name="AzureBlobObjectStore_Busy" xml:space="preserve">
+    <value>The Azure Blob store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.</value>
+  </data>
   <data name="AzureBlobObjectStore_BodyEndedEarly" xml:space="preserve">
     <value>The Azure Blob store's answer ended before the blob it was sending did.</value>
   </data>

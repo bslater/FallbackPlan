@@ -24,7 +24,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// person asks, and replaces what the store altered from a sound copy
 /// (FR-VER-002, FR-VER-004, FR-VER-007, FR-VER-008); and what goes wrong is
 /// told apart — no credential, a store that refuses it, a store that does
-/// not answer.
+/// not answer, one too busy to serve (FR-QUOTA-001) — through the faults the
+/// store contract names: a link cut partway, a credential refused partway,
+/// and listings that lag the store's writes.
 /// </summary>
 /// <remarks>
 /// The credential reaches the service only as an envelope sealed to its
@@ -815,7 +817,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         // where it resumes would make a circuit over n blobs ask for n
         // listings of n entries, and at a store each page of a listing is a
         // request its owner pays for: the cost would grow with the square of
-        // the archive (Phase 3's "no object listing required per segment").
+        // the archive.
         ReplicaSweepJob.SegmentBudget = 1;
         WriteConfiguration(directShip: false);
 
@@ -831,7 +833,10 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
         var blobs = Store.KeysIn(Namespace).Count(key => key.Contains("/blobs/", StringComparison.Ordinal));
         Assert.IsGreaterThanOrEqualTo(5, blobs, "the premise: a replica of several blobs, each a segment");
 
-        Store.ListPageLimit = 2;
+        // Pages of three: room for a segment's one blob, the key past it that
+        // says the circuit goes on, and the key a store that starts a listing
+        // at the cursor itself answers with.
+        Store.ListPageLimit = 3;
         var mark = Store.Listings.Count;
         var set = Assert.ContainsSingle(runtime.Configuration.BackupSets);
         var circuit = await ReplicaSweepJob.RunFullAsync(
