@@ -152,7 +152,10 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
                 $"compaction would rewrite: {candidates.Count} blob(s), reclaiming {reclaim:N0} byte(s)"),
         };
 
-        var waiting = backlog.Count - candidates.Count;
+        // A metadata blob is never a candidate, whatever its bounds say, so
+        // counting it under the threshold line would give the wrong reason.
+        var metadata = backlog.Count(blob => BlobStoreKeys.ClassOf(blob.StoreKey) == BlobClass.Metadata);
+        var waiting = backlog.Count - candidates.Count - metadata;
         if (waiting > 0)
         {
             lines.Add(string.Create(
@@ -160,6 +163,14 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
                 $"  {waiting} blob(s) left whole: below the threshold ({DeadFraction:P0} dead and "
                 + $"{MinimumReclaim:N0} byte(s) reclaimed), or past this pass's budget of "
                 + $"{ByteBudget:N0} byte(s) read"));
+        }
+
+        if (metadata > 0)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {metadata} metadata blob(s) left whole: compaction rewrites data blobs only, and the "
+                + $"collector condemns a metadata blob once nothing in it is live"));
         }
 
         return lines;
