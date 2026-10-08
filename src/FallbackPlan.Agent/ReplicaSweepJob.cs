@@ -342,19 +342,20 @@ internal static class ReplicaSweepJob
                         : StalledUnread(runtime, set, destination.Name, gone, nowMs);
                 }
             }
-            catch (StoreUnreachableException unreachable)
+            catch (StoreUnavailableException unavailable)
             {
-                // A store that does not answer, recorded as the sync would
-                // record it: unavailable, a gap that closes itself, and never
-                // a stall on a blob nothing was read from. A person's read
-                // records nothing it did not read.
+                // A store that does not answer, or answers only that it is
+                // busy, recorded as the sync would record it: unavailable, a
+                // gap that closes itself, and never a stall on a blob nothing
+                // was read from. A person's read records nothing it did not
+                // read.
                 if (!userInitiated)
                 {
                     runtime.DestinationSync.RecordFailure(
-                        set.Id, destination.Name, DestinationSyncState.Unavailable, unreachable.Message, nowMs);
+                        set.Id, destination.Name, DestinationSyncState.Unavailable, unavailable.Message, nowMs);
                 }
 
-                return Nothing with { Unreadable = unreachable.Message };
+                return Nothing with { Unreadable = unavailable.Message };
             }
             catch (IOException refused)
             {

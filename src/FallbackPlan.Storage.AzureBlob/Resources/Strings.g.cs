@@ -160,6 +160,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, AzureBlobObjectStore_Refused, arg0, arg1, arg2, arg3, arg4);
 
     /// <summary>
+    /// The Azure Blob store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.
+    /// </summary>
+    private static string AzureBlobObjectStore_Busy => Get(nameof(AzureBlobObjectStore_Busy));
+
+    /// <summary>
+    /// The Azure Blob store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.
+    /// </summary>
+    internal static string FormatAzureBlobObjectStore_Busy(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, AzureBlobObjectStore_Busy, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
     /// The Azure Blob store's answer ended before the blob it was sending did.
     /// </summary>
     internal static string AzureBlobObjectStore_BodyEndedEarly => Get(nameof(AzureBlobObjectStore_BodyEndedEarly));

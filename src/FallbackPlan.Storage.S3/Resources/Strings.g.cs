@@ -127,6 +127,39 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, S3ObjectStore_Refused, arg0, arg1, arg2, arg3, arg4);
 
     /// <summary>
+    /// The S3-compatible store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.
+    /// </summary>
+    private static string S3ObjectStore_Busy => Get(nameof(S3ObjectStore_Busy));
+
+    /// <summary>
+    /// The S3-compatible store was too busy to serve a {0} of '{1}' on any attempt: {2} {3}. {4} The next pass asks again.
+    /// </summary>
+    internal static string FormatS3ObjectStore_Busy(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, S3ObjectStore_Busy, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
+    /// The S3-compatible store has no room for '{1}': it answered a {0} with {2} {3}. {4} Once room is made there, the next pass goes on from where this one stopped.
+    /// </summary>
+    private static string S3ObjectStore_Full => Get(nameof(S3ObjectStore_Full));
+
+    /// <summary>
+    /// The S3-compatible store has no room for '{1}': it answered a {0} with {2} {3}. {4} Once room is made there, the next pass goes on from where this one stopped.
+    /// </summary>
+    internal static string FormatS3ObjectStore_Full(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, S3ObjectStore_Full, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
+    /// The S3-compatible store's quota would be crossed by '{1}': it answered a {0} with {2} {3}. {4} Raise the quota, or keep less at this destination.
+    /// </summary>
+    private static string S3ObjectStore_QuotaExceeded => Get(nameof(S3ObjectStore_QuotaExceeded));
+
+    /// <summary>
+    /// The S3-compatible store's quota would be crossed by '{1}': it answered a {0} with {2} {3}. {4} Raise the quota, or keep less at this destination.
+    /// </summary>
+    internal static string FormatS3ObjectStore_QuotaExceeded(object? arg0, object? arg1, object? arg2, object? arg3, object? arg4) =>
+        string.Format(CultureInfo.CurrentCulture, S3ObjectStore_QuotaExceeded, arg0, arg1, arg2, arg3, arg4);
+
+    /// <summary>
     /// The S3-compatible store's answer ended before the object it was sending did.
     /// </summary>
     internal static string S3ObjectStore_BodyEndedEarly => Get(nameof(S3ObjectStore_BodyEndedEarly));

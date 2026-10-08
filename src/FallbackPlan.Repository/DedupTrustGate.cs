@@ -78,6 +78,15 @@ internal sealed class DedupTrustGate(
             return false;
         }
 
+        // Nor on a blob a collector has condemned. Its revalidation reads the
+        // snapshots already published, so it cannot see this one, and a
+        // reference to the blob would not save it (ADR-0009 Amendment 8).
+        // The bytes are stored again instead.
+        if (await reader.IsBlobCondemnedAsync(objectId, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
         // This device's own record. No domain requires a device to verify
         // bytes it wrote itself, and this branch is the whole of "a fresh
         // single-device repository performs no verification reads".

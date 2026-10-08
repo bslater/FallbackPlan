@@ -78,6 +78,11 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 **Positive**
 
 - GC concurrent with an in-flight backup is safe by construction, not by timing.
+
+  > **Narrowed 2026-10 ([Amendment 8](#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)).**
+  > By construction for the blobs a backup creates, which its intent names.
+  > The blobs it reuses needed two more rules: a backup builds on no
+  > tombstoned blob, and a pass collects no blob beside a backup in flight.
 - Safety survives clock skew, store latency, and writer suspension — the three things that actually happen.
 - A collector knows exactly which blobs are protected and why, so its dry-run report can say so.
 
@@ -101,6 +106,11 @@ Leases remain, advisory, for one purpose: stopping two collectors doing the same
 **Leases with generous timeouts.** Rejected. Makes the race less likely without eliminating it, and lengthening the timeout trades one failure (data loss) for another (collection never runs).
 
 **Refuse to collect while any writer is active.** Rejected. On a repository with several devices, some writer is nearly always active, so collection would effectively never happen.
+
+> **A narrower form adopted 2026-10 ([Amendment 8](#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)).**
+> A pass collects no blob beside the set's own backup in flight. Snapshots
+> still expire, and the staging archive has one writer, so the objection
+> above does not reach it.
 
 **Reference-count blobs at upload.** Rejected. Mutable counters on an eventually consistent store need atomic increment, which is not uniformly available, and a crashed writer leaks counts permanently.
 
@@ -240,6 +250,104 @@ each snapshot's manifest, is not part of this amendment.
 > recorded in the manifest of the set's next capture. It is a diagnostic:
 > nothing here, the margin included, reads it.
 
+## Amendment 8 (2026-10) — a backup builds on more than its intent names
+
+An intent names the blobs a writer creates (Amendment 2,
+[ADR-0092](0092-a-backup-names-its-blobs-a-batch-at-a-time.md)). A backup
+also builds on blobs it did not create: deduplication references every
+segment and manifest the archive already stores. Nothing named those. A
+pass running beside the backup lost one in three steps, found while proving
+Phase 4's exit criteria (`Retention.Tests/CollectionBesideABackupTests`):
+
+1. The pass condemned the blob from the snapshots already published, and the
+   backup's snapshot was not yet among them.
+2. The backup's own intent advanced the grace clock. That clock is the journal
+   sequence (Amendment 5), and an intent is a journal record.
+3. Revalidation read a snapshot survey taken before the journal, so the
+   snapshot that would have saved the blob was in neither reading.
+
+The pass deleted the blob, and the backup then published a snapshot that
+would not restore. "GC concurrent with an in-flight backup is safe by
+construction" held for what a backup creates. It did not hold for what a
+backup reuses.
+
+Four rules close the gap.
+
+1. **A backup never builds on a condemned blob.** The reuse gate already
+   refused a blob that was absent. It now also refuses one that carries a
+   tombstone, and the bytes are stored again. The check costs one metadata
+   call per distinct blob a publication reuses, memoized beside the presence
+   probe.
+2. **The journal is read before the snapshots.** A pass reads the grace clock
+   and the intents first, and then the snapshot set every condemnation is
+   revalidated against. [Specification 11 §3.2](../../specifications/repository-format/11-lifecycle-objects.md#32-what-a-collector-must-do-before-deleting)
+   step 3 already required this order. In the other order, a backup that
+   published between the two readings counted towards the grace but was
+   missing from the snapshots that decided.
+3. **No blob is collected beside a backup in flight.** While one is in
+   flight, a pass tombstones and deletes no blob, through the sweep or the
+   trim, and its report says so. Snapshots still expire. Either of two
+   signals is enough:
+   - **The journal's signal.** A live intent of any purpose but compaction,
+     still inside its declared duration and the skew margin. This is
+     Amendment 3's time condition on its own. It never expires an intent;
+     it only bounds the hold. The bound matters because a backup that dies
+     leaves its intent live until the key generation passes the intent's
+     expiry generation, which is a key rotation away (Amendment 5). A hold
+     that lasted as long as the intent would end collection after one
+     crash. Compaction is excluded because it builds on nothing it did not
+     copy.
+   - **The service's signal.** The set's backup is queued, running or
+     parked. This signal has no time bound. It needs none, because a backup
+     parked across a shut background window can outlive any bound, and a
+     queued backup has published nothing yet.
+4. **A refused snapshot delete holds back the blobs that snapshot reaches.**
+   A snapshot whose delete did not happen is still listed, so it must still
+   restore. The sweep therefore tries every snapshot before any blob. It
+   walks the snapshots that stand, and keeps the condemned blobs they reach
+   until those snapshots go. If a walk fails, every blob waits. Tombstones
+   are written in the same order, snapshots first. A pass that stops between
+   the two can then never leave blobs a grace ahead of a snapshot that
+   reaches them.
+
+**Why rule 3 is not the alternative this record rejected.** "Refuse to
+collect while any writer is active" was rejected because, on a repository
+with several devices, some writer is nearly always active. Rule 3 is
+narrower on each count:
+- It holds blobs, not snapshots.
+- It holds only for the set's own backup, in a staging archive that is
+  single-writer by construction
+  ([ADR-0034](0034-hub-and-spoke-destinations.md)). The writer it waits for
+  runs on the set's schedule, for as long as one backup takes.
+- A pass beside a backup defers its blob reclamation to the next pass, and
+  no further.
+
+**Why the intent does not name what it reuses.** If an intent named every
+blob its backup reused, Step 4's coverage rule would close the gap alone.
+That was not chosen, because a backup would then write journal records in
+proportion to what it builds on rather than to what it creates. On every
+incremental backup, what it builds on is most of the archive. ADR-0092 was
+written to bound that cost.
+
+**What remains open.**
+- A backup that starts after a pass has read both signals never reuses a
+  blob that already carries a tombstone. A blob the pass tombstones after
+  the backup reused it becomes eligible only once a later publication
+  advances the clock. The pass that would then delete it either holds,
+  because the backup is still live, or revalidates against the backup's
+  published snapshot.
+- The writer role ([ADR-0028 §2](0028-service-boundary-and-deployment-topologies.md#2-the-service-owns-the-local-writer-role-exclusively))
+  keeps a backup in one process from running beside a pass in another, so
+  within an installation the service's signal is complete. The journal's
+  signal is the one a collector other than the service can see.
+
+**What it costs.**
+- A pass beside a live backup reclaims no blob space.
+- A dead backup's intent defers blob collection for up to its declared hour
+  plus the margin, which is a day by default.
+- A refused snapshot keeps its blobs until it goes.
+- A backup stores again any bytes a pass has condemned.
+
 ## Status history
 
 | Date | Status | Note |
@@ -250,3 +358,4 @@ each snapshot's manifest, is not part of this amendment.
 | 2026-08 | Accepted (amended) | Amendment 6: for direct-ship sets the hub marks against the metadata store through the sink, convergence is the deleting half, and compaction's placement is deferred to ADR-0025's record ([ADR-0046](0046-direct-to-destination-publication.md)). |
 | 2026-09 | Accepted | NFR-TIME-001 proved for GC safety under injected skew: a collector a day ahead, a day behind or a year ahead of the writer sweeps nothing without a publication, keeps the newest snapshot the floor protects, and expires no intent whose generation has not passed (`Retention.Tests/ClockSkewTests`). "None of them a clock" holds for intents only by circumstance: expiry's duration half reads the collector's clock against the writer's stamp over a fixed five-minute margin, and is safe under skew today because the key generation never advances. A configured margin is NFR-TIME-002's |
 | 2026-09 | Accepted (amended) | Amendment 7: the skew margin is configured. It is `clock_skew_margin_hours`, a day when absent, where it was a fixed five minutes. Each retention pass and the check read it, and a pass logs it beside the generation it binds against (NFR-TIME-002, `Retention.Tests/ClockSkewTests`, `Hosts.Tests/ClockSkewMarginServiceTests`) |
+| 2026-10 | Accepted (amended) | Amendment 8: a backup builds on no tombstoned blob, a pass reads the journal before the snapshots and collects no blob beside a backup in flight, and a refused snapshot delete holds back the blobs that snapshot reaches (FR-GC-003, FR-GC-006, `Retention.Tests/CollectionBesideABackupTests`, `Retention.Tests/SweepFailureTests`, `Hosts.Tests/RetentionBesideABackupTests`) |

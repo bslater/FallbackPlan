@@ -171,11 +171,10 @@ public static class Scheduler
             // would queue another run behind a slow one. Enqueue enforces
             // the same rule for every caller; checking here first keeps the
             // per-set outcome row and skips the call.
-            var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
-            if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
+            if (LiveBackupOf(runtime, set.Id) is { } live)
             {
                 outcomes.Add(new AgentSetOutcome(
-                    set.Name, "already-running", $"job {latest.Id} is still queued or running"));
+                    set.Name, "already-running", $"job {live.Id} is still queued or running"));
                 continue;
             }
 
@@ -495,6 +494,22 @@ public static class Scheduler
         return (ulong)now.ToUnixTimeMilliseconds() >= drilled + RecoveryDrillJob.DrillWaitMs(record, interval);
     }
 
+    /// <summary>
+    /// The set's backup that is queued, running or parked in this service,
+    /// if there is one: the one-run-per-set rule's test (ADR-0027 §1). A
+    /// parked run counts, because it keeps its place in the queue and will
+    /// publish what it built before it parked. An unsettled journal row a
+    /// previous process left behind does not: only a job the live queue
+    /// still knows is a run.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="setId">The set.</param>
+    internal static JobRecord? LiveBackupOf(ServiceRuntime runtime, string setId)
+    {
+        var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == setId);
+        return latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id) ? latest : null;
+    }
+
     /// <summary>Whether a journal state is finished — the one-run-per-set rule's input.</summary>
     private static bool HasSettled(JobState state) => state is
         JobState.Complete
@@ -710,8 +725,7 @@ public static class Scheduler
             // unsettled journal row a previous process left behind from
             // blocking the set forever: only a job the live queue still
             // knows counts as running.
-            var latest = runtime.Jobs.Jobs.LastOrDefault(job => job.BackupSetId == set.Id);
-            if (latest is not null && !HasSettled(latest.State) && runtime.Queue.IsActive(latest.Id))
+            if (LiveBackupOf(runtime, set.Id) is { } live)
             {
                 // Asked here, inside the gate, so the run cannot settle between
                 // the check and the request and leave nothing to answer it.
@@ -721,7 +735,7 @@ public static class Scheduler
                 }
 
                 return Task.FromResult(new BackupOutcome(
-                    set.Name, "already-running", $"job {latest.Id} is still queued or running"));
+                    set.Name, "already-running", $"job {live.Id} is still queued or running"));
             }
 
             var job = runtime.Jobs.Begin(set.Id, (ulong)now.ToUnixTimeMilliseconds());

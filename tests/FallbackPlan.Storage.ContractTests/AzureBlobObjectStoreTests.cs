@@ -119,15 +119,21 @@ public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task Put_RefusedUntilTheRetriesRunOut_IsAFaultNamingTheStoresCode()
+    [DataRow(503, "ServerBusy")]
+    [DataRow(500, "OperationTimedOut")]
+    public async Task Put_ThrottledUntilTheRetriesRunOut_IsABusyStore_NamingTheStoresCode(int status, string code)
     {
+        // The API's two answers for a partition past its targets: a store
+        // asking to be asked later, which the next pass may find serving, so
+        // a gap that closes itself rather than a refusal (FR-QUOTA-001).
         var store = Store(options: new AzureBlobStoreOptions { MaxAttempts = 3, RetryDelay = TimeSpan.FromMilliseconds(5) });
-        _server.FailNext(3, 503, "ServerBusy");
+        _server.FailNext(3, status, code);
 
-        var fault = await Assert.ThrowsAsync<IOException>(async () => await store.PutAsync(
+        var fault = await Assert.ThrowsExactlyAsync<StoreBusyException>(async () => await store.PutAsync(
             Key("blobs/data/ab/never"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None));
 
-        Assert.Contains("ServerBusy", fault.Message, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<StoreUnavailableException>(fault, "a busy store is unavailable, as one that does not answer is");
+        Assert.Contains(code, fault.Message, StringComparison.Ordinal);
         Assert.HasCount(3, _server.Requests.Where(request => request.Method == "PUT"));
     }
 
@@ -289,6 +295,33 @@ public sealed class AzureBlobObjectStoreTests : IAsyncDisposable
         Assert.IsTrue(
             pages.Skip(1).All(page => page.Target.Contains("marker=2%21", StringComparison.Ordinal)),
             "each later page resumes from the marker the store issued, as issued");
+    }
+
+    [TestMethod]
+    public async Task List_ResumedAfterAKey_AsksTheStoreToStartThere_RatherThanWalkingFromTheFirstPage()
+    {
+        // The API resumes only from a marker it issued, which a caller that
+        // persisted a key does not have; walked from the first page instead,
+        // every resumed listing would pay for every page before its position.
+        // Asked to start at the key itself, the store answers from there, and
+        // the key, which the API includes, is the one entry passed over.
+        var store = Store();
+        _server.ListPageLimit = 2;
+        foreach (var key in new[] { "blobs/data/aa/one", "blobs/data/bb/two", "blobs/data/cc/three", "blobs/data/dd/four" })
+        {
+            await store.PutAsync(Key(key), Content([1]), PutConditions.IfNotExists, CancellationToken.None);
+        }
+
+        List<string> listed = [];
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/"), new ListOptions { ResumeAfter = "blobs/data/cc/three" }, CancellationToken.None))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        Assert.AreEqual("blobs/data/dd/four", Assert.ContainsSingle(listed));
+        var asked = Assert.ContainsSingle(_server.Listings, "one page, from the position: none of the two before it");
+        Assert.Contains("startFrom=root/blobs/data/cc/three", Uri.UnescapeDataString(asked.Target), StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -130,6 +130,7 @@ A collector MUST:
 
 - enumerate `/journal/` before marking, and treat **every blob covered by an unretired, unexpired intent as reachable** — no exceptions, no heuristics;
 - publish its own intent before creating compaction output (§3.2);
+- read `/journal/` before the snapshot set it revalidates against, and tombstone and delete no blob while a publication is in flight ([11 §3.2](11-lifecycle-objects.md#32-what-a-collector-must-do-before-deleting));
 - treat an intent it cannot parse as **live**, not as absent.
 
 The last rule matters. An unparseable intent means the collector is older than the writer, or the record is damaged. Both call for the conservative reading: failing to collect wastes space, and collecting wrongly loses data.

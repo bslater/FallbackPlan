@@ -25,6 +25,9 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     private readonly ConcurrentBag<Task> _connections = [];
     private readonly Lock _gate = new();
     private readonly Queue<Fault> _faults = new();
+    private StandingFault? _standing;
+    private Dictionary<string, HashSet<string>>? _listedAsOf;
+    private string _lagUnder = string.Empty;
 
     /// <summary>Starts listening on an ephemeral loopback port.</summary>
     protected ObjectStoreTestServer()
@@ -46,6 +49,9 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
 
     /// <summary>Every request answered so far, in order.</summary>
     public IReadOnlyList<RecordedRequest> Requests => [.. _requests];
+
+    /// <summary>Every listing page asked for so far, in order: each one a request the store's owner pays for.</summary>
+    public IReadOnlyList<RecordedRequest> Listings => [.. _requests.Where(IsListing)];
 
     /// <summary>The keys a bucket or container holds, in the order a listing gives them.</summary>
     /// <param name="name">The bucket or container.</param>
@@ -134,6 +140,84 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Serves the next <paramref name="servedFirst"/> requests, then answers
+    /// every one after them with an error of the API's own shape until
+    /// <see cref="Recover"/>: a store that goes on refusing, as one that is
+    /// throttling, full or no longer taking a credential does. Only
+    /// <paramref name="method"/> requests count and are refused, when one is
+    /// named; every other request is served throughout.
+    /// </summary>
+    /// <param name="servedFirst">How many matching requests to serve before the refusals begin.</param>
+    /// <param name="status">The HTTP status, e.g. 503.</param>
+    /// <param name="code">The API's error code.</param>
+    /// <param name="method">The method refused, or null for every request.</param>
+    public void FailFrom(int servedFirst, int status, string code, string? method = null)
+    {
+        lock (_gate)
+        {
+            _standing = new StandingFault(status, code, Drop: false, method, servedFirst);
+        }
+    }
+
+    /// <summary>
+    /// As <see cref="FailFrom"/>, but closes each refused request's
+    /// connection without answering it: a link that stays down from that
+    /// request on.
+    /// </summary>
+    /// <param name="servedFirst">How many matching requests to serve before the drops begin.</param>
+    /// <param name="method">The method dropped, or null for every request.</param>
+    public void DropFrom(int servedFirst, string? method = null)
+    {
+        lock (_gate)
+        {
+            _standing = new StandingFault(0, string.Empty, Drop: true, method, servedFirst);
+        }
+    }
+
+    /// <summary>Ends a standing fault: every request is served again.</summary>
+    public void Recover()
+    {
+        lock (_gate)
+        {
+            _standing = null;
+        }
+    }
+
+    /// <summary>
+    /// From now on, a listing leaves out every object written under
+    /// <paramref name="under"/> after this call, as a store whose listings
+    /// lag its writes does: the object reads, and a HEAD finds it, but no
+    /// listing shows it until <see cref="CatchUpListings"/>.
+    /// </summary>
+    /// <param name="under">The key prefix whose new objects listings lag behind; every key when empty.</param>
+    public void LagListings(string under = "")
+    {
+        lock (_gate)
+        {
+            _lagUnder = under;
+            _listedAsOf = _namespaces.ToDictionary(
+                pair => pair.Key,
+                pair =>
+                {
+                    lock (pair.Value)
+                    {
+                        return new HashSet<string>(pair.Value.Keys, StringComparer.Ordinal);
+                    }
+                },
+                StringComparer.Ordinal);
+        }
+    }
+
+    /// <summary>Ends a listing lag: every listing shows every object again.</summary>
+    public void CatchUpListings()
+    {
+        lock (_gate)
+        {
+            _listedAsOf = null;
+        }
+    }
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
@@ -169,6 +253,23 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     /// <param name="objects">Its objects, locked by the caller while it reads or writes them.</param>
     protected bool TryGetNamespace(string name, out SortedDictionary<string, StoredObject> objects) =>
         _namespaces.TryGetValue(name, out objects!);
+
+    /// <summary>Whether a listing shows <paramref name="key"/> yet, under any lag a test began.</summary>
+    /// <param name="name">The bucket or container.</param>
+    /// <param name="key">The object's full key.</param>
+    protected bool ListingShows(string name, string key)
+    {
+        lock (_gate)
+        {
+            return _listedAsOf is null
+                || !key.StartsWith(_lagUnder, StringComparison.Ordinal)
+                || (_listedAsOf.TryGetValue(name, out var listed) && listed.Contains(key));
+        }
+    }
+
+    /// <summary>Whether a request asked for a listing page, in the API's own terms.</summary>
+    /// <param name="request">The request as answered.</param>
+    protected abstract bool IsListing(RecordedRequest request);
 
     /// <summary>Authenticates, routes and answers one request in the API's own terms.</summary>
     /// <param name="request">The request as it arrived.</param>
@@ -236,7 +337,7 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
                         return;
                     }
 
-                    var fault = NextFault();
+                    var fault = NextFault(request);
                     if (fault is { Drop: true })
                     {
                         Record(request, 0);
@@ -262,11 +363,27 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
         }
     }
 
-    private Fault? NextFault()
+    private Fault? NextFault(Request request)
     {
         lock (_gate)
         {
-            return _faults.TryDequeue(out var fault) ? fault : null;
+            if (_faults.TryDequeue(out var fault))
+            {
+                return fault;
+            }
+
+            if (_standing is not { } standing || (standing.Method is { } method && method != request.Method))
+            {
+                return null;
+            }
+
+            if (standing.ServedFirst > 0)
+            {
+                _standing = standing with { ServedFirst = standing.ServedFirst - 1 };
+                return null;
+            }
+
+            return new Fault(standing.Status, standing.Code, standing.Drop, Truncate: false);
         }
     }
 
@@ -361,6 +478,8 @@ public abstract class ObjectStoreTestServer : IAsyncDisposable
     protected sealed record StoredObject(byte[] Bytes, DateTimeOffset LastModified);
 
     private sealed record Fault(int Status, string Code, bool Drop, bool Truncate);
+
+    private sealed record StandingFault(int Status, string Code, bool Drop, string? Method, int ServedFirst);
 
     /// <summary>An answer, before it is written to the wire.</summary>
     /// <param name="Status">The HTTP status.</param>

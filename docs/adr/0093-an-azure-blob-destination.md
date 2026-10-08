@@ -50,6 +50,8 @@ The Blob API is the S3 API's problem again, with different answers in places tha
    - A delete is one request: 202 is `Deleted`, and a 404 `BlobNotFound` is `NotFound`.
    - A 404 whose error code is `ContainerNotFound` is a fault, not an absence, so a container deleted or misspelt is never read as an empty replica.
    - Listing pages by the store's marker and is declared strongly consistent. A resume after a named key is applied as the pages arrive, because a marker cannot be made from a key.
+
+     > **Amended 2026-10 ([ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5).** The API can start a listing at a name (`startFrom`, version 2023-05-03 and later, which the pinned version is). A resume after a key now asks the store to start there and passes over the key itself, which the API includes, rather than reading the pages before it. A throttle that outlasts the attempts is a busy store, unavailable rather than failed.
    - A refusal that may not last is retried from the content already read, and a store that never answers is an `AzureBlobStoreUnreachableException`, which is a `StoreUnreachableException` and an `IOException`.
    - One request a blob, up to 5000 MiB, so block lists are not used.
 
@@ -95,3 +97,4 @@ The Blob API is the S3 API's problem again, with different answers in places tha
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built end to end: the provider over the platform's HTTP client with a Shared Key signer of its own, the shared contract suite against an in-process store under both credentials, the account key or shared access signature sealed into the state directory (contract 1.61, schema 10), every site that served a bucket serving a container through one check, the CLI's options and the console's editor; [ADR-0091](0091-an-s3-compatible-destination.md), [ADR-0012](0012-storage-provider-contract.md), [ADR-0027](0027-services-scheduling-status-telemetry.md) §3, [ADR-0034](0034-hub-and-spoke-destinations.md) §5, [ADR-0035](0035-destination-fitness.md), [ADR-0042](0042-write-only-repositories.md) decision 6, [ADR-0043](0043-structured-logging-and-diagnostics.md) and [ADR-0061](0061-adopt-a-destinations-archives.md) amended |
+| 2026-10 | Amended (related) | [ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5: a resumed listing starts at the store (`startFrom`) rather than reading the pages before the key, and a throttle that outlasts the attempts is a busy store, unavailable rather than failed |

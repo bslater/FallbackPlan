@@ -13,9 +13,11 @@ namespace FallbackPlan.Storage.ContractTests;
 /// unconditionally and the API would otherwise overwrite; a transient refusal
 /// is retried from content read once, so the factory is never asked again; a
 /// store that refuses the credentials is a fault that names its code and
-/// never the secret; a body cut short is an IOException rather than a short
-/// object; a listing spans pages and sees only its own root; and nothing is
-/// spoken in clear to anywhere but this machine.
+/// never the secret; a store too busy through every attempt, one with no
+/// room and one whose quota a put would cross are each a fault of its own
+/// (FR-QUOTA-001); a body cut short is an IOException rather than a short
+/// object; a listing spans pages, resumes where it is asked to, and sees only
+/// its own root; and nothing is spoken in clear to anywhere but this machine.
 /// </summary>
 [TestClass]
 public sealed class S3ObjectStoreTests : IAsyncDisposable
@@ -90,16 +92,67 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
     }
 
     [TestMethod]
-    public async Task Put_RefusedUntilTheRetriesRunOut_IsAFaultNamingTheStoresCode()
+    [DataRow("SlowDown")]
+    [DataRow("SlowDownWrite")]
+    public async Task Put_ThrottledUntilTheRetriesRunOut_IsABusyStore_NamingTheStoresCode(string code)
     {
+        // A throttle that outlasts this request's attempts is still a store
+        // asking to be asked later: the next pass may find it serving, so it
+        // is a gap that closes itself rather than a refusal (FR-QUOTA-001).
+        // SlowDown is the API's own word; SlowDownWrite is one an
+        // S3-compatible store uses for the same answer.
         var store = Store(options: new S3StoreOptions { MaxAttempts = 3, RetryDelay = TimeSpan.FromMilliseconds(5) });
-        _server.FailNext(3, 503, "SlowDown");
+        _server.FailNext(3, 503, code);
 
-        var fault = await Assert.ThrowsAsync<IOException>(async () => await store.PutAsync(
+        var fault = await Assert.ThrowsExactlyAsync<StoreBusyException>(async () => await store.PutAsync(
             Key("blobs/data/ab/never"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None));
 
-        Assert.Contains("SlowDown", fault.Message, StringComparison.Ordinal);
+        Assert.IsInstanceOfType<StoreUnavailableException>(fault, "a busy store is unavailable, as one that does not answer is");
+        Assert.Contains(code, fault.Message, StringComparison.Ordinal);
         Assert.HasCount(3, _server.Requests.Where(request => request.Method == "PUT"));
+    }
+
+    [TestMethod]
+    [DataRow("XMinioStorageFull")]
+    [DataRow("InsufficientCapacity")]
+    public async Task Put_ToAStoreOutOfRoom_IsAFullStore_AndIsNotRetried(string code)
+    {
+        // 507, Insufficient Storage: the store has no room for the object,
+        // which another attempt will not make. XMinioStorageFull is one
+        // S3-compatible store's word for it and InsufficientCapacity
+        // another's; the status is what they share (FR-QUOTA-001).
+        var store = Store();
+        _server.FailNext(1, 507, code);
+
+        var fault = await Assert.ThrowsExactlyAsync<StoreFullException>(async () => await store.PutAsync(
+            Key("blobs/data/ab/never"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None));
+
+        Assert.IsInstanceOfType<StoreUnavailableException>(fault, "room made at the store lets the next pass go on, as at a full disk");
+        Assert.Contains(code, fault.Message, StringComparison.Ordinal);
+        Assert.ContainsSingle(_server.Requests.Where(request => request.Method == "PUT"));
+        Assert.IsNull(_server.ObjectIn(Bucket, "root/blobs/data/ab/never"), "a refused put leaves no object, partial or whole");
+    }
+
+    [TestMethod]
+    [DataRow(403, "QuotaExceeded")]
+    [DataRow(400, "XMinioAdminBucketQuotaExceeded")]
+    public async Task Put_OverTheStoresQuota_IsAQuota_AndIsNotRetried(int status, string code)
+    {
+        // A quota is a limit the store's owner set, and it holds until a
+        // person raises it or keeps less there: a decision, not a gap, so it
+        // is told apart from a full store and from a throttle
+        // (FR-QUOTA-001). Each S3-compatible store that has one names it
+        // with its own code and status.
+        var store = Store();
+        _server.FailNext(1, status, code);
+
+        var fault = await Assert.ThrowsExactlyAsync<StoreQuotaExceededException>(async () => await store.PutAsync(
+            Key("blobs/data/ab/never"), Content([1, 2, 3]), PutConditions.IfNotExists, CancellationToken.None));
+
+        Assert.IsNotInstanceOfType<StoreUnavailableException>(fault, "a quota does not lift by itself");
+        Assert.Contains(code, fault.Message, StringComparison.Ordinal);
+        Assert.ContainsSingle(_server.Requests.Where(request => request.Method == "PUT"));
+        Assert.IsNull(_server.ObjectIn(Bucket, "root/blobs/data/ab/never"), "a refused put leaves no object, partial or whole");
     }
 
     [TestMethod]
@@ -171,6 +224,30 @@ public sealed class S3ObjectStoreTests : IAsyncDisposable
 
         SequenceAssert.AreEqual(keys.Order(StringComparer.Ordinal).ToArray(), listed.ToArray());
         Assert.IsGreaterThan(2, _server.Requests.Count(request => request.Method == "GET"), "the listing went past its first page");
+    }
+
+    [TestMethod]
+    public async Task List_ResumedAfterAKey_AsksTheStoreToStartAfterIt()
+    {
+        // Resuming is a parameter of the request, not a walk from the first
+        // page: a caller that resumes a long listing pays for the pages after
+        // its position, never for the ones before it.
+        var store = Store();
+        foreach (var key in new[] { "blobs/data/aa/one", "blobs/data/bb/two", "blobs/data/cc/three" })
+        {
+            await store.PutAsync(Key(key), Content([1]), PutConditions.IfNotExists, CancellationToken.None);
+        }
+
+        List<string> listed = [];
+        await foreach (var entry in store.ListAsync(
+            ObjectPrefix.Parse("blobs/"), new ListOptions { ResumeAfter = "blobs/data/aa/one" }, CancellationToken.None))
+        {
+            listed.Add(entry.Key.Value);
+        }
+
+        SequenceAssert.AreEqual(["blobs/data/bb/two", "blobs/data/cc/three"], listed.ToArray());
+        var asked = Assert.ContainsSingle(_server.Listings);
+        Assert.Contains("start-after=root/blobs/data/aa/one", Uri.UnescapeDataString(asked.Target), StringComparison.Ordinal);
     }
 
     [TestMethod]

@@ -1,6 +1,6 @@
 # ADR-0012 — Storage provider contract
 
-**Status:** Proposed · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
+**Status:** Accepted (amended) · Partly implemented — see [implementation status](../implementation-status.md#by-decision)
 **Date:** 2026-08
 **Requirements:** NFR-PORT-004, NFR-REL-005, NFR-COMP-005, FR-REP-002, FR-QUOTA-001
 **Review finding:** [H7](../review/2026-08-architecture-review.md#h7--the-sample-interfaces-contradict-the-requirements-they-illustrate)
@@ -240,6 +240,109 @@ chunking is the transport's business. Declaring the format's own limit was
 considered and rejected: it would turn another layer's constant into a promise
 this adapter cannot keep updated.
 
+## Amendment 5 (2026-10) — the revisit: three providers, and the faults this record named
+
+This record asked to be revisited once two providers were implemented. There
+are three: the local filesystem, an S3-compatible store
+([ADR-0091](0091-an-s3-compatible-destination.md)) and an Azure Blob
+container ([ADR-0093](0093-an-azure-blob-destination.md)). The question the
+revisit asks is whether the contract held against providers that disagree
+with it. It did. Each network provider bridges its API to the contract
+inside itself: a 409 and a 412 are both read as `AlreadyExists`, a range is
+asked in a header, a listing pages by a marker. Nothing above the contract
+learned which API it was speaking. The decision is accepted.
+
+The revisit changed two things the contract left unsaid, and found one cost
+the code had been paying without anyone seeing it.
+
+**A resume token is its entry's key.** Amendment 1 called the token opaque.
+Every store has always made it the key, and the peer retrieval wire depends
+on that: a page resumes after a key the far side keeps
+([07](../../specifications/peer-protocol/07-retrieval.md)). So the contract
+now says it. `ListOptions.ResumeAfter` takes any key and resumes strictly
+after it in ordinal order, whether or not an object still has the key. A
+provider asks its store to start there rather than reading the pages before
+it: S3's `start-after`, and List Blobs' `startFrom` from version 2023-05-03,
+which includes the key itself and so is asked for one entry more. The shared
+suite holds every provider to it (`Storage.ContractTests/ObjectStoreContractTests`),
+and each network provider's own tests check that the request carries the
+position.
+
+**What that found.** The deep sweep listed every blob for each segment it
+read, and sorted them itself, believing the contract promised no order. The
+contract has promised ordinal order since Amendment 1. The note the sweep
+cited, in the copier, says only that the copier makes no use of the order.
+At a store, where each listing page is a request its owner pays for, a
+circuit over n blobs asked for about n²/4,000 pages: some 2.5 million for an
+archive of 100,000 blobs. A segment now lists from its cursor and stops one
+key past its budget, the key that says whether the circuit goes on. That is
+a page a segment, beside the one that checks the replica is there. Held by
+`Hosts.Tests/ObjectStoreDestinationTests` for both network providers: a
+circuit over ten blobs, a segment each, asked for 60 pages before and is
+bound to two a segment now.
+
+This is not the Phase 3 exit criterion "no object listing required per
+segment", which is about a backup's segments. That one was met by
+construction: a backup never lists a store, and a sync lists each of a
+replica's planes once, however many objects it copies
+(`Replication.Tests/CopierListingCostTests`).
+
+**A refusal is told apart where what a person can do differs** (FR-QUOTA-001).
+Before this, everything a store answered that was not an outage became the
+same fault, recorded failed. That included a throttle that outlasted a
+request's attempts, which told a person to act on something waiting fixes.
+The contract's assembly now has:
+
+| Type | Is | The service records |
+|------|----|---------------------|
+| `Storage.Abstractions/StoreUnavailableException` | the store did not serve, and nothing about the request was wrong | unavailable: a gap that closes itself (FR-DEST-003) |
+| `Storage.Abstractions/StoreUnreachableException` | no connection, no answer, after every attempt | unavailable |
+| `Storage.Abstractions/StoreBusyException` | an answer, on every attempt, that the store was too busy: a 503 SlowDown, SlowDownWrite or ServerBusy, a 500 OperationTimedOut | unavailable |
+| `Storage.Abstractions/StoreFullException` | a 507: no room for the object | unavailable, until room is made |
+| `Storage.Abstractions/StoreQuotaExceededException` | a quota the store's owner set would be crossed | failed, with a notice for the person who can raise it |
+
+The second, third and fourth are kinds of the first. The quota is not: it
+holds until a person changes something. The sync, the sweep, the probe,
+restore and adoption all catch the first where they caught an outage before.
+The quota notice is `quota-exceeded:` and the destination's name, and the
+next sync that lands resolves it. Each kind's message says what a person can
+do.
+
+The codes come from the stores' own sources, not from memory. MinIO's
+`cmd/api-errors.go` answers 507 `XMinioStorageFull`, 400
+`XMinioAdminBucketQuotaExceeded` and 503 `SlowDownWrite`. Ceph RGW's S3
+error table in `rgw_common.cc` answers 507 `InsufficientCapacity`, 403
+`QuotaExceeded` and 503 `SlowDown`. Azure Blob has no answer of its own for
+a container that is full or over a quota, so that provider tells only the
+busy store apart.
+
+**The fault cases this record listed, each answered:**
+
+| Case | Answer |
+|------|--------|
+| Conditional creation | The shared suite, every provider |
+| Range reads | The shared suite |
+| Interrupted upload | A put lands whole or not at all. A sync cut off partway is unavailable, and the next one finishes and proves the replica (`Hosts.Tests/ObjectStoreDestinationTests`) |
+| Listing pagination | Each network provider's own tests |
+| Duplicate writes | The shared suite: `AlreadyExists`, never an overwrite |
+| Stale metadata | Both APIs read their own writes. Nothing holds an object's metadata across a request |
+| Eventual-visibility simulation | Instrumented by `TestSupport/LaggingObjectStore` (Amendment 3) and now through both network providers: a sync under a retention policy, while the store's snapshot listing lags its writes, deletes nothing a kept snapshot needs (`Hosts.Tests/ObjectStoreDestinationTests`). A sync deletes only keys a listing shows and the staging archive's keep-set rejects, so an object a listing hides is offered again, never judged absent |
+| Deletion batching | Not used. Deletions are one request each, and few |
+| Retries and throttling | Each network provider's own tests, and the busy store above |
+| Checksum mismatch | The store checks every put's body: an S3 signature covers its SHA-256, and an Azure put carries its MD5. A read is checked against the digest sealed into the blob, never against the store's |
+| Credential expiry mid-operation | Failed by name, what landed stays, and the next sync finishes (`Hosts.Tests/ObjectStoreDestinationTests`). A shared access signature's own expiry is read and kept to (ADR-0093) |
+| Multipart abandonment and cleanup | Not applicable. Neither provider starts a multipart or block upload: every object is one put, inside the single-put ceiling each declares as its `MaximumObjectSize` |
+| Object-size limits | `MaximumObjectSize`, read by `Repository/StoreAdmission` |
+| Disk-full and quota exhaustion | The table above (`Hosts.Tests/S3DestinationTests`) |
+
+**Two limits, stated.** The direct-ship sink's listing is a union of its
+holders: each holder's keys arrive in order, but they are not merged, so the
+union is not in ordinal order. Nothing resumes a listing of the sink, and
+nothing may until it merges them. And an Azure account with a hierarchical
+namespace sorts `/` before every other character. The one listing the
+product resumes against a store is a sweep's listing of blobs, whose keys
+all have the same shape, so the two orders agree on them.
+
 ## Status history
 
 | Date | Status | Note |
@@ -250,3 +353,4 @@ this adapter cannot keep updated.
 | 2026-09 | Proposed (amended) | Amendment 3: the two unimplemented capability behaviours withdrawn for a named refusal at `Repository/StoreAdmission`, split by whether the caller reads or writes; `ListingConsistency` made load-bearing, vetoing deletion that reasons from absence; the ship sink's forwarded capabilities and an attested completeness witness recorded as owed. Still *Proposed*: there is still one provider |
 | 2026-09 | Proposed (amended) | Amendment 4: `Storage.Abstractions/StoreCapabilities`'s `Intersect` and `Agent/DestinationShipSink` promising the weakest answer its destinations give, Amendment 3's owed item discharged; the archival-tier hazard **or**ed where every other member is **and**ed; `Agent/PeerShipStore` and `Agent/PeerRetrievalObjectStore` found declaring a zero object ceiling by struct default, which nothing read until the sink stopped forwarding. Still *Proposed*: there is still one provider (`Storage.ContractTests/CapabilityIntersectionTests`, `Hosts.Tests/ShipSinkCapabilityTests`) |
 | 2026-10 | Proposed (amended) | Two providers beyond the local one now pass the shared suite: S3-compatible ([ADR-0091](0091-an-s3-compatible-destination.md)) and Azure Blob ([ADR-0093](0093-an-azure-blob-destination.md)), each bridging its API to the contract in the provider while the contract itself stayed unchanged. The contract's assembly gains what the two network providers share, `Storage.Abstractions/IPrefixedObjectStore`, a store under a prefix that names the folders beneath it, and `Storage.Abstractions/StoreUnreachableException`, a store that never answered told apart from one that refused, so the service reads either provider through one seam (`Storage.ContractTests/AzureBlobObjectStoreContractTests`). Still *Proposed*: the revisit this record asked for once two providers existed is due, and is not made here |
+| 2026-10 | Accepted (amended) | Amendment 5: the revisit this record asked for, made against three providers, and the decision accepted. A resume token is its entry's key and `ListOptions.ResumeAfter` takes any key, so a provider starts a resumed listing at the store; the deep sweep, which listed every blob for each segment, lists from its cursor (`Repository/ReplicaSweep`, `Hosts.Tests/ObjectStoreDestinationTests`). A refusal is told apart where a person's action differs: `Storage.Abstractions/StoreUnavailableException` and its kinds, a busy store and a full one, are unavailable, and `Storage.Abstractions/StoreQuotaExceededException` is a failure with a notice (`Hosts.Tests/S3DestinationTests`). Every fault case the contract suite named is answered, by a test or as not applicable |

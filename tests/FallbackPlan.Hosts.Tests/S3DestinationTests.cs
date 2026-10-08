@@ -14,8 +14,10 @@ namespace FallbackPlan.Hosts.Tests;
 /// direct-ship, restore, drill, sweep and repair, and the three ways a store
 /// goes wrong (FR-VER-001, FR-VER-002, FR-VER-004, FR-VER-007, FR-VER-008,
 /// FR-DRL-002, FR-DEST-003) — against a bucket, signed with an access key,
-/// and the two things only a bucket has: a key id the key's envelope is
-/// bound to, and an address the configuration and the provider must agree on.
+/// and what only a bucket has: a key id the key's envelope is bound to, an
+/// address the configuration and the provider must agree on, and a store
+/// that can be full or hold a quota, each told apart from a throttle and
+/// from the other (FR-QUOTA-001, FR-QUOTA-002).
 /// </summary>
 /// <remarks>
 /// The access key reaches the service only as an envelope sealed to its
@@ -36,6 +38,9 @@ public sealed class S3DestinationTests() : ObjectStoreDestinationTests(StartStor
 
     /// <inheritdoc />
     protected override string RefusalCode => "SignatureDoesNotMatch";
+
+    /// <inheritdoc />
+    protected override string BusyCode => "SlowDown";
 
     /// <inheritdoc />
     protected override string MissingCredentialWords => "no access key";
@@ -191,5 +196,72 @@ public sealed class S3DestinationTests() : ObjectStoreDestinationTests(StartStor
         var store = new S3CompatibleTestServer();
         store.CreateBucket(Namespace);
         return store;
+    }
+
+    [TestMethod]
+    public async Task Sync_ToAStoreOutOfRoom_IsUnavailable_SaysSo_AndTheReplicaItHadStillProves()
+    {
+        // A store with no room for the next object (507): the copy stops at
+        // the object it could not place, leaving every one before it whole,
+        // and it is a gap that closes itself once room is made, as a full
+        // disk at a local path is.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        Harness.WriteSourceFile("docs/c.txt", "the object there is no room for");
+        Store.FailFrom(servedFirst: 0, 507, "XMinioStorageFull", method: "PUT");
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        var full = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Unavailable, full.State, full.LastError);
+        Assert.Contains("no room", full.LastError!, StringComparison.Ordinal);
+        Assert.Contains("XMinioStorageFull", full.LastError!, StringComparison.Ordinal);
+
+        Store.Recover();
+        var line = await VerifyAsync(runtime);
+        Assert.Contains("object(s) confirmed", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("damaged", line, StringComparison.Ordinal);
+
+        await SyncAsync(runtime);
+        var synced = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
+    }
+
+    [TestMethod]
+    public async Task Sync_OverTheBucketsQuota_FailsNamingTheQuota_WithANoticeForAPerson()
+    {
+        // A quota is a limit the store's owner set, and it holds until a
+        // person raises it or keeps less there: a failure with a notice, told
+        // apart from a full store and from a throttle; and the replica the
+        // store had is untouched.
+        WriteConfiguration(directShip: false);
+        WriteFiles();
+
+        await using var runtime = await StartAsync();
+        await StoreCredentialAsync(runtime);
+        var now = DateTimeOffset.Now;
+        await BackUpAsync(runtime, now);
+
+        Harness.WriteSourceFile("docs/c.txt", "the object the quota will not take");
+        Store.FailFrom(servedFirst: 0, 403, "QuotaExceeded", method: "PUT");
+        await BackUpAsync(runtime, now.AddHours(1));
+
+        var refused = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.Failed, refused.State, refused.LastError);
+        Assert.Contains("quota", refused.LastError!, StringComparison.Ordinal);
+        Assert.Contains("QuotaExceeded", refused.LastError!, StringComparison.Ordinal);
+        var notice = runtime.Notices.Unacknowledged.Single(notice =>
+            notice.Key.StartsWith("quota-exceeded:", StringComparison.Ordinal)).Message;
+        Assert.Contains("cloud", notice, StringComparison.Ordinal);
+
+        Store.Recover();
+        await SyncAsync(runtime);
+        var synced = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
     }
 }

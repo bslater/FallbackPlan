@@ -232,6 +232,14 @@ internal static class DestinationProbe
                 runtime, set, declared, DestinationSyncState.Unavailable,
                 $"could not reach {StoreComposition.Describe(declared)}: {unreachable.Message}", nowMs);
         }
+        catch (Storage.Abstractions.StoreUnavailableException unavailable)
+        {
+            // Reached, and too busy or too full to serve: a gap that closes
+            // itself as well (FR-DEST-003, FR-QUOTA-001).
+            return Refuse(
+                runtime, set, declared, DestinationSyncState.Unavailable,
+                $"{StoreComposition.Describe(declared)} did not serve the probe: {unavailable.Message}", nowMs);
+        }
         catch (IOException refused)
         {
             return Refuse(

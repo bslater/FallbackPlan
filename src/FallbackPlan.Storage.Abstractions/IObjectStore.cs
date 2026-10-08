@@ -47,8 +47,9 @@ public interface IObjectStore
 
     /// <summary>
     /// Lists objects under a prefix in ordinal key order. Continuation is
-    /// owned by the enumerator; entries carry a resume token for callers that
-    /// must persist a position across process restarts
+    /// owned by the enumerator; entries carry a resume token, their key, for
+    /// callers that must persist a position across process restarts, and a
+    /// listing resumed after a key starts there rather than at the first page
     /// (docs/architecture/05-storage-providers.md §2.3).
     /// </summary>
     IAsyncEnumerable<ObjectEntry> ListAsync(
