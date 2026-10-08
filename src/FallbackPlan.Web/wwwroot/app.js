@@ -3279,6 +3279,13 @@ function serviceSettingsCard() {
     </div>`;
 }
 
+// What each configuration body was last drawn with. A drawing replaces
+// every control in it, and a press begun on a button and released on its
+// replacement fires no click, so a refresh that would draw the same markup
+// draws nothing. Keyed by the element, because opening the view makes a
+// new one, which is always drawn.
+const configBodyMarkup = new WeakMap();
+
 function renderConfigBody() {
   const host = document.getElementById("config-body");
   if (!host) return;
@@ -3360,7 +3367,7 @@ function renderConfigBody() {
       <td>${invite.consumedBy ? "" : `<button type="button" class="btn small" data-action="invite-revoke" data-id="${esc(invite.inviteId)}">Revoke</button>`}</td>
     </tr>`).join("");
 
-  host.innerHTML = `
+  const markup = `
     <div class="cfg-section">
       <div class="cfg-head"><h3>Backup sets</h3>
         <button type="button" class="btn primary small" data-action="cfg-add-set" ${S.destinations.length ? "" : "disabled title='Declare a destination first (FR-DEST-001)'"}>＋ Add backup set</button>
@@ -3409,6 +3416,10 @@ function renderConfigBody() {
         <thead><tr><th>Id</th><th>For</th><th>Role</th><th>State</th><th></th></tr></thead>
         <tbody>${invites}</tbody></table></div></div>
     </div>` : ""}`;
+
+  if (configBodyMarkup.get(host) === markup) return;
+  configBodyMarkup.set(host, markup);
+  host.innerHTML = markup;
 }
 
 /* ----- the set editor ----- */

@@ -1,5 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Application;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -383,8 +384,9 @@ public sealed class AgentHostTests : IDisposable
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
-        var output = new StringWriter();
-        var error = new StringWriter();
+        // Written by the service's threads while this one polls them.
+        using var output = new SharedStringWriter();
+        using var error = new SharedStringWriter();
         var running = AgentHost.RunAsync(
             ["run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory, "--poll-seconds", "1"],
             output, error, stop.Token);
