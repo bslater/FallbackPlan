@@ -1,8 +1,11 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
+using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 
@@ -45,6 +48,8 @@ public sealed class DeletedFileSurveyTests : IDisposable
     private string SourceRoot => Path.Combine(_root, "source");
 
     private string NarrowPath => Path.Combine(_root, "narrow");
+
+    private string SpoolDirectory => Directory.CreateDirectory(Path.Combine(_root, "spool")).FullName;
 
     /// <summary>
     /// The floor and the duration alone: captures dated by the machine's
@@ -189,6 +194,46 @@ public sealed class DeletedFileSurveyTests : IDisposable
     }
 
     [TestMethod]
+    public async Task CompareAsync_AFolderSplitAcrossManifests_IsReadToItsLastPart()
+    {
+        // A folder too wide for one manifest continues in others
+        // (specification 06 §9). A file deleted from its last part is a
+        // deletion like any other, and one added there is not.
+        await BackUpAsync(Day(1));
+        await BackUpAsync(Day(2));
+
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var repository = opened.Repository;
+        var survey = await StagingMark.SurveyAsync(store, repository, CancellationToken.None);
+        var (newer, older) = (survey.Snapshots[0], survey.Snapshots[1]);
+
+        string[] names = [.. Enumerable.Range(0, 40).Select(i => $"file-{i:D3}.txt")];
+        var folders = await WriteFoldersAsync(store, repository, [names, names[..^1], [.. names, "file-040.txt"]]);
+        var (wide, lastGone, oneMore) = (folders[0], folders[1], folders[2]);
+
+        using var reader = new RepositoryReader(repository.RepositoryId, repository.Keys, store);
+        await reader.LoadBlobsAsync(CancellationToken.None);
+        var head = await reader.ReadSegmentAsync(wide, CancellationToken.None);
+        Assert.IsNotNull(
+            TreeManifestCodec.Decode(head.Plaintext!).Continuation, "the folder fits one manifest, so the case below proves nothing");
+
+        var pair = new AdjacentSnapshots(older.Fact, newer.Fact);
+        async Task<bool> LostAsync(ObjectId olderRoot, ObjectId newerRoot) =>
+            (await DeletedFileSurvey.CompareAsync(
+                reader,
+                [
+                    newer with { Manifest = newer.Manifest with { RootTree = newerRoot } },
+                    older with { Manifest = older.Manifest with { RootTree = olderRoot } },
+                ],
+                [pair],
+                CancellationToken.None)).Between(older.Fact, newer.Fact);
+
+        Assert.IsFalse(await LostAsync(wide, oneMore), "a file added to the folder's last part was read as a loss");
+        Assert.IsTrue(await LostAsync(wide, lastGone), "a file deleted from the folder's last part was not found");
+    }
+
+    [TestMethod]
     public async Task RunAsync_ADestinationsOwnDuration_HoldsWhatItKeeps_UntilItHasIt()
     {
         // FR-GC-009 with FR-GC-010: staging lets a snapshot go only once
@@ -306,6 +351,41 @@ public sealed class DeletedFileSurveyTests : IDisposable
         var snapshots = await SnapshotsAsync(new LocalFileSystemObjectStore(RepoPath));
         Assert.HasCount(4, snapshots);
         return (snapshots[3], snapshots[2], snapshots[1], snapshots[0]);
+    }
+
+    /// <summary>
+    /// Appends a root folder of files for each list of names, every one split
+    /// across as many manifests as a small budget makes of it, under a writer
+    /// of its own.
+    /// </summary>
+    /// <returns>Each folder's head manifest, in the order given.</returns>
+    private async Task<IReadOnlyList<ObjectId>> WriteFoldersAsync(
+        IObjectStore store, OpenedRepository repository, IReadOnlyList<IReadOnlyList<string>> folders)
+    {
+        var generation = new KeyGeneration((uint)Math.Max(
+            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value));
+        var builder = new ManifestBuilder(
+            repository.RepositoryId, WriterId.FromBytes(Enumerable.Repeat((byte)0x77, 16).ToArray()), generation,
+            repository.Keys, store, new MonotonicBlobCounterAllocator(1), SpoolDirectory,
+            BlobWriteProfile.LocalDefault, repository.EffectiveFormatVersion);
+
+        var heads = new List<ObjectId>();
+        await using (builder.ConfigureAwait(false))
+        {
+            foreach (var names in folders)
+            {
+                heads.Add(await TreeChainWriter.WriteAsync(
+                    builder,
+                    [.. names.Select(name => new TreeEntry(
+                        System.Text.Encoding.UTF8.GetBytes(name), ObjectId.FromBytes(new byte[32]), EntryKind.File))],
+                    "/"u8.ToArray(), NameNormalisation.Unknown, EntryMetadata.Empty, CancellationToken.None,
+                    shardBudget: 256));
+            }
+
+            await builder.FlushAsync(CancellationToken.None);
+        }
+
+        return heads;
     }
 
     /// <summary>The snapshots a store holds, newest first.</summary>
