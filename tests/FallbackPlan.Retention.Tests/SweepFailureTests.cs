@@ -1,4 +1,6 @@
 using FallbackPlan.Agent;
+using ApiRestoreResult = FallbackPlan.Api.RestoreResult;
+using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository;
@@ -96,8 +98,8 @@ public sealed class SweepFailureTests : IDisposable
     {
         var faulting = await ArmedAtSweepAsync();
 
-        // Every snapshot object refuses; the blobs behind them do not.
-        faulting.Store.ArmThrow(key => key.StartsWith("snapshots/", StringComparison.Ordinal));
+        // The first snapshot object the sweep reaches refuses; nothing else does.
+        faulting.Store.ArmThrow(FirstSnapshotOnly());
 
         var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
 
@@ -107,13 +109,47 @@ public sealed class SweepFailureTests : IDisposable
             report.Swept.Findings,
             "a delete failed and nothing said so");
 
-        // The refused objects are all still there, and the sweep counted none
-        // of them.
-        Assert.HasCount(4, await ListAsync(faulting.Inner, "snapshots/"));
+        // The refused object is still there, and the sweep counted it nowhere.
+        Assert.HasCount(3, await ListAsync(faulting.Inner, "snapshots/"));
 
-        // And the pass got past them: the blobs those expired snapshots held
-        // alone were still condemned and still collected.
+        // And the pass got past it: the other expired snapshot went, with the
+        // blobs it held alone.
         Assert.IsGreaterThan(0, report.Swept.Deleted, "the pass stopped at the first refusal");
+    }
+
+    /// <summary>
+    /// A refused snapshot delete holds back the blobs only that snapshot
+    /// reaches (FR-GC-006). The snapshot is still listed, so it must still
+    /// restore until its own delete succeeds; a blob it needs going first
+    /// leaves a snapshot on the list that nothing can bring back. The backups
+    /// carry a file large enough to have a data blob of its own each day,
+    /// because a walk reads only metadata and would not see that blob go.
+    /// </summary>
+    [TestMethod]
+    public async Task ARefusedSnapshotDelete_HoldsTheBlobsOnlyItReaches_SoItStillRestores()
+    {
+        var faulting = await ArmedAtSweepAsync(bulky: true);
+        var dayOf = await DaysBySnapshotAsync(faulting.Inner);
+        string? refused = null;
+        faulting.Store.ArmThrow(key => key.StartsWith("snapshots/", StringComparison.Ordinal) && (refused ??= key) == key);
+
+        var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
+        Assert.IsNotNull(refused, "the premise: a snapshot delete was refused");
+        Assert.IsGreaterThan(0, report.Swept!.Deleted, "the premise: the other expired snapshot went");
+
+        using var opened = await WriteOnlyInstallation.OpenAsync(faulting.Inner, PassphraseText, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(faulting.Inner, opened.Repository, CancellationToken.None);
+        var standing = Assert.ContainsSingle(
+            survey.Snapshots.Where(snapshot => snapshot.StoreKey.Value == refused),
+            "the refused snapshot is no longer listed");
+
+        var target = Path.Combine(_root, "restored");
+        var restored = await RestoreAsync(standing.Fact.SnapshotId, target);
+        Assert.AreEqual(0, restored.Failed, restored.Outcome);
+
+        var found = Assert.ContainsSingle(Directory.GetFiles(target, "bulk.bin", SearchOption.AllDirectories));
+        CollectionAssert.AreEqual(
+            Bulk(dayOf[standing.Fact.SnapshotId]), File.ReadAllBytes(found), "the refused snapshot restored other bytes");
     }
 
     /// <summary>
@@ -205,7 +241,7 @@ public sealed class SweepFailureTests : IDisposable
         var faulting = await ArmedAtSweepAsync();
         faulting.Store.ArmThrow(
             key => new TimeoutException($"Injected fault: the delete of '{key}' timed out."),
-            key => key.StartsWith("snapshots/", StringComparison.Ordinal));
+            FirstSnapshotOnly());
 
         var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
 
@@ -214,7 +250,7 @@ public sealed class SweepFailureTests : IDisposable
             finding => finding.Contains("could not be deleted", StringComparison.Ordinal),
             report.Swept.Findings,
             "a delete failed and nothing said so");
-        Assert.HasCount(4, await ListAsync(faulting.Inner, "snapshots/"));
+        Assert.HasCount(3, await ListAsync(faulting.Inner, "snapshots/"));
         Assert.IsGreaterThan(0, report.Swept.Deleted, "the pass stopped at the first refusal");
     }
 
@@ -242,20 +278,35 @@ public sealed class SweepFailureTests : IDisposable
 
     private static RetentionConfiguration Policy => new() { KeepDaily = 1, MinGenerations = 1 };
 
+    /// <summary>
+    /// Refuses the first snapshot delete the sweep asks for and no other. With
+    /// every snapshot refused, the blobs each one reaches are held back with
+    /// it and the pass has nothing left to do, which would prove nothing about
+    /// whether it got past a refusal.
+    /// </summary>
+    private static Func<string, bool> FirstSnapshotOnly()
+    {
+        string? refused = null;
+        return key => key.StartsWith("snapshots/", StringComparison.Ordinal) && (refused ??= key) == key;
+    }
+
     private WriterId Writer => WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId);
 
     /// <summary>
     /// Four daily backups, then one apply pass to lay the tombstones and one
     /// publication to run their grace out — so the next pass this test arms
-    /// is a pass whose sweep has real work to refuse.
+    /// is a pass whose sweep has real work to refuse. A bulky fixture also
+    /// writes each day a file of its own content, large enough that the
+    /// day's snapshot alone reaches a data blob.
     /// </summary>
-    private async Task<(DeleteFaultingObjectStore Store, LocalFileSystemObjectStore Inner)> ArmedAtSweepAsync()
+    private async Task<(DeleteFaultingObjectStore Store, LocalFileSystemObjectStore Inner)> ArmedAtSweepAsync(
+        bool bulky = false)
     {
-        await BackUpAsync(Day1);
+        await BackUpAsync(Day1, bulky ? Bulk(0) : null);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
-        await BackUpAsync(Day1.AddDays(1));
+        await BackUpAsync(Day1.AddDays(1), bulky ? Bulk(1) : null);
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
-        await BackUpAsync(Day1.AddDays(2));
+        await BackUpAsync(Day1.AddDays(2), bulky ? Bulk(2) : null);
 
         var inner = new LocalFileSystemObjectStore(RepoPath);
         var tombstoned = await RunAsync(inner, apply: true, now: Day1.AddDays(2).AddHours(1));
@@ -264,13 +315,40 @@ public sealed class SweepFailureTests : IDisposable
 
         // The publication the grace waits for.
         File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day four content");
-        await BackUpAsync(Day1.AddDays(3));
+        await BackUpAsync(Day1.AddDays(3), bulky ? Bulk(3) : null);
 
         return (new DeleteFaultingObjectStore(inner), inner);
     }
 
-    private async Task BackUpAsync(DateTimeOffset now)
+    /// <summary>
+    /// Each snapshot's day in the fixture, in the order its writer published
+    /// them. A capture is stamped by the live clock, not the day a backup was
+    /// told it is, so its capture time cannot say.
+    /// </summary>
+    private static async Task<Dictionary<string, int>> DaysBySnapshotAsync(LocalFileSystemObjectStore store)
     {
+        using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
+        var survey = await StagingMark.SurveyAsync(store, opened.Repository, CancellationToken.None);
+        return survey.Snapshots
+            .OrderBy(snapshot => snapshot.Fact.PublicationSequence)
+            .Select((snapshot, day) => (snapshot.Fact.SnapshotId, day))
+            .ToDictionary(pair => pair.SnapshotId, pair => pair.day, StringComparer.Ordinal);
+    }
+
+    private static byte[] Bulk(int day)
+    {
+        var bytes = new byte[200 * 1024];
+        new Random(day + 1).NextBytes(bytes);
+        return bytes;
+    }
+
+    private async Task BackUpAsync(DateTimeOffset now, byte[]? bulk = null)
+    {
+        if (bulk is not null)
+        {
+            File.WriteAllBytes(Path.Combine(SourceRoot, "bulk.bin"), bulk);
+        }
+
         using var passphrase = Passphrase.Create(PassphraseText);
         var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
@@ -286,6 +364,31 @@ public sealed class SweepFailureTests : IDisposable
             store, repository, Policy, [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None, Writer, apply,
             (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim);
+    }
+
+    private async Task<ApiRestoreResult> RestoreAsync(string snapshotId, string outputDirectory)
+    {
+        using var passphrase = Passphrase.Create(PassphraseText);
+        await using var runtime = await ServiceRuntime.StartAsync(
+            new ServiceOptions { ArchivesRoot = ArchivesRoot, StateDirectory = StateDirectory },
+            CancellationToken.None);
+
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var description = (ServiceDescriptionResult)await handler.ExecuteAsync(
+            new DescribeServiceCommand(), CancellationToken.None);
+        var opened = await handler.ExecuteAsync(
+            new OpenRestoreSourceCommand(
+                "docs",
+                Envelope: WriteOnlyInstallation.RestoreGrant(
+                    StateDirectory, PassphraseText, description.RestoreGrantRecipient!)),
+            CancellationToken.None);
+        var source = opened as RestoreSourceOpenedResult
+            ?? throw new InvalidOperationException($"restore source refused: {(opened as ServiceError)?.Message ?? opened.ToString()}");
+        var result = await handler.ExecuteAsync(
+            new RunRestoreCommand(snapshotId, null, outputDirectory, Source: source.SourceId), CancellationToken.None);
+
+        return result as ApiRestoreResult
+            ?? throw new InvalidOperationException($"restore refused: {result}");
     }
 
     private static async Task<List<string>> ListAsync(LocalFileSystemObjectStore store, string prefix)
