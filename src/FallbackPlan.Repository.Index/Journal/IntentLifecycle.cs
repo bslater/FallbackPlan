@@ -26,10 +26,24 @@ public static class IntentLifecycle
         ulong skewMarginMs)
     {
         var generationPassed = currentGeneration > expiryGeneration;
-        var durationElapsed = nowMs >= issuedAtMs + declaredMaxDurationMs + skewMarginMs;
 
-        return generationPassed && durationElapsed;
+        return generationPassed && HasOutlivedItsDuration(declaredMaxDurationMs, issuedAtMs, nowMs, skewMarginMs);
     }
+
+    /// <summary>
+    /// Whether the declared duration plus the skew margin has elapsed since
+    /// the intent was issued: 08 §7's time condition, alone.
+    /// </summary>
+    /// <remarks>
+    /// Alone it never expires an intent. A collector reads it to tell a
+    /// publication still running from one that died: an intent outlives its
+    /// writer whenever the writer stops without retiring it, and the
+    /// generation condition can take as long as a key rotation to follow
+    /// (ADR-0009 Amendment 8).
+    /// </remarks>
+    public static bool HasOutlivedItsDuration(
+        ulong declaredMaxDurationMs, ulong issuedAtMs, ulong nowMs, ulong skewMarginMs) =>
+        nowMs >= issuedAtMs + declaredMaxDurationMs + skewMarginMs;
 }
 
 /// <summary>One live intent as a collector must see it (specification 08 §8).</summary>
@@ -45,6 +59,16 @@ public sealed record IntentSurvey(
     IReadOnlyList<LiveIntent> LiveIntents,
     bool HasUnparseableIntent)
 {
+    /// <summary>
+    /// The live intents of publications still running: every purpose but
+    /// compaction, inside its declared duration and the skew margin
+    /// (ADR-0009 Amendment 8). Such a publication may have built on a blob
+    /// it does not name, and its snapshot is not yet published for the
+    /// collector to revalidate against, so a collector deletes no blob
+    /// beside one. Compaction builds on nothing it did not copy.
+    /// </summary>
+    public IReadOnlyList<LiveIntent> PublicationsInFlight { get; init; } = [];
+
     /// <summary>
     /// Whether <paramref name="blobId"/> is covered by any live intent —
     /// reachable, no exceptions, no heuristics (08 §8). An unparseable
@@ -91,6 +115,7 @@ public static class IntentSurveyor
         }
 
         var live = new List<LiveIntent>();
+        var inFlight = new List<LiveIntent>();
 
         foreach (var group in records.GroupBy(record => record.WriterId))
         {
@@ -130,10 +155,17 @@ public static class IntentSurveyor
                     .Distinct()
                     .ToList();
 
-                live.Add(new LiveIntent(record.WriterId, record.Sequence, intent, record.IssuedAt, covered));
+                var liveIntent = new LiveIntent(record.WriterId, record.Sequence, intent, record.IssuedAt, covered);
+                live.Add(liveIntent);
+
+                if (intent.Purpose != IntentPurpose.Compaction
+                    && !IntentLifecycle.HasOutlivedItsDuration(duration, record.IssuedAt, nowMs, skewMarginMs))
+                {
+                    inFlight.Add(liveIntent);
+                }
             }
         }
 
-        return new IntentSurvey(live, unparseableCount > 0);
+        return new IntentSurvey(live, unparseableCount > 0) { PublicationsInFlight = inFlight };
     }
 }

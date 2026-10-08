@@ -271,7 +271,7 @@ public static class SnapshotDeletion
         CancellationToken cancellationToken)
     {
         var objectId = snapshot.ManifestObjectId.ToArray();
-        var key = StagingSweep.KeyOf((byte)ObjectType.SnapshotManifest, objectId);
+        var key = TombstoneKeys.For((byte)ObjectType.SnapshotManifest, objectId);
 
         // What stands at the key is an expiry's tombstone, or one that will not
         // verify. Either way the request takes its place: an expiry is a

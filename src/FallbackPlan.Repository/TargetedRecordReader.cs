@@ -73,6 +73,7 @@ internal sealed class TargetedRecordReader(
     private readonly StoreBlobKeyDeriver _storeKeyDeriver = new(keys.KeyIdKey);
     private readonly ConcurrentDictionary<ObjectKey, BlobReader?> _blobs = new();
     private readonly ConcurrentDictionary<BlobId, bool> _blobPresent = new();
+    private readonly ConcurrentDictionary<BlobId, bool> _blobCondemned = new();
     private volatile bool _disposed;
 
     /// <summary>
@@ -118,6 +119,52 @@ internal sealed class TargetedRecordReader(
 
         _blobPresent[location.BlobId] = present;
         return present;
+    }
+
+    /// <summary>
+    /// Whether a collector has tombstoned the blob the catalogue locates for
+    /// <paramref name="objectId"/> (ADR-0009 Amendment 8). A tombstoned blob
+    /// is on its way out: the snapshots that reached it have expired, and the
+    /// collector's revalidation sees only published snapshots, never the one
+    /// this backup is building. One metadata call per distinct blob per
+    /// publication, memoized, beside the presence probe.
+    /// </summary>
+    /// <remarks>
+    /// A store fault reads as tombstoned, for the presence probe's reason:
+    /// refusing a reuse costs a rewrite, and granting the wrong one costs a
+    /// snapshot.
+    /// </remarks>
+    public async ValueTask<bool> IsBlobCondemnedAsync(ObjectId objectId, CancellationToken cancellationToken)
+    {
+        if (_disposed)
+        {
+            return true;
+        }
+
+        if (catalogue.Read(c => c.ResolveLocation(objectId)) is not { } location)
+        {
+            return true;
+        }
+
+        if (_blobCondemned.TryGetValue(location.BlobId, out var known))
+        {
+            return known;
+        }
+
+        bool condemned;
+        try
+        {
+            var metadata = await store.GetMetadataAsync(TombstoneKeys.ForBlob(location.BlobId), cancellationToken)
+                .ConfigureAwait(false);
+            condemned = metadata.Found;
+        }
+        catch (IOException)
+        {
+            condemned = true;
+        }
+
+        _blobCondemned[location.BlobId] = condemned;
+        return condemned;
     }
 
     private async ValueTask<bool> ProbeAsync(ObjectKey storeKey, CancellationToken cancellationToken)

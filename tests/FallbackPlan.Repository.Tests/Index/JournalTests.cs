@@ -13,7 +13,8 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// generations because the record carries none, expiry demands BOTH
 /// conditions, and the collector's survey treats unparseable intents as
 /// live. A bulk snapshot deletion's audit record names the snapshots it
-/// deleted (FR-GC-013).
+/// deleted (FR-GC-013). The survey says which publications are in flight, so
+/// a collector holds blobs beside them (FR-GC-003).
 /// </summary>
 [TestClass]
 public sealed class JournalTests
@@ -196,5 +197,45 @@ public sealed class JournalTests
         var conservative = IntentSurveyor.Survey(records, unparseableCount: 1, 0, 0, 0);
         Assert.IsTrue(conservative.IsCovered(Blob(9)));
         Assert.IsTrue(conservative.IsCovered(Blob(0xEE)));
+    }
+
+    [TestMethod]
+    public void IntentSurvey_PublicationsInFlight_AreLiveIntentsOfEveryPurposeButCompaction_InsideTheirDeclaredDuration()
+    {
+        // A collector holds blobs beside these (FR-GC-003, ADR-0009
+        // Amendment 8). A compaction publishes only what it wrote, so it is
+        // never one; and the declared duration, as an extension revises it,
+        // plus the margin bounds the hold, so an intent its writer left
+        // behind does not stop collection for good.
+        var records = new List<JournalRecord>
+        {
+            new(JournalRecordKind.WriteIntent, Writer, 1, 1_000,
+                new JournalPayload.WriteIntent(BackupSet, [Blob(1)], 60_000, 99, IntentPurpose.Backup)),
+            new(JournalRecordKind.IntentExtension, Writer, 2, 1_000,
+                new JournalPayload.IntentExtension(1, [Blob(2)], 120_000)),
+            new(JournalRecordKind.WriteIntent, Writer, 3, 1_000,
+                new JournalPayload.WriteIntent(BackupSet, [Blob(3)], 60_000, 99, IntentPurpose.Compaction)),
+            new(JournalRecordKind.WriteIntent, Writer, 4, 1_000,
+                new JournalPayload.WriteIntent(BackupSet, [Blob(4)], 60_000, 99, IntentPurpose.Import)),
+        };
+
+        // Inside every declared duration and the margin: everything but the
+        // compaction is in flight, and every intent still covers its blobs.
+        var early = IntentSurveyor.Survey(records, 0, currentGeneration: 0, nowMs: 61_000, skewMarginMs: 10_000);
+        CollectionAssert.AreEquivalent(
+            new ulong[] { 1, 4 }, early.PublicationsInFlight.Select(intent => intent.Sequence).ToArray());
+        Assert.IsTrue(early.IsCovered(Blob(3)));
+
+        // Past the import's hour and margin, short of the backup's revised
+        // two minutes and margin: only the backup is still in flight.
+        var later = IntentSurveyor.Survey(records, 0, currentGeneration: 0, nowMs: 72_000, skewMarginMs: 10_000);
+        Assert.AreEqual(1UL, Assert.ContainsSingle(later.PublicationsInFlight).Sequence);
+
+        // Past both, nothing is in flight, and every intent is still live:
+        // its generation has not passed, so its blobs stay covered.
+        var past = IntentSurveyor.Survey(records, 0, currentGeneration: 0, nowMs: 131_000, skewMarginMs: 10_000);
+        Assert.IsEmpty(past.PublicationsInFlight);
+        Assert.HasCount(3, past.LiveIntents);
+        Assert.IsTrue(past.IsCovered(Blob(1)) && past.IsCovered(Blob(2)) && past.IsCovered(Blob(4)));
     }
 }

@@ -209,8 +209,9 @@ public sealed partial class ServiceCommandHandler(
     /// Runs a pass on the queue's writer lane and waits for it. Retention is
     /// a writer: it tombstones and deletes in the sets' archives, so it queues
     /// with the captures. The lane is a pool (ADR-0047), so a pass can run
-    /// beside a capture of the same set: the write-intent rule keeps the
-    /// capture's blobs from the pass (FR-GC-003), and each uses a catalogue
+    /// beside a capture of the same set: the capture never builds on a blob
+    /// the pass has tombstoned, the pass deletes no blob while the capture is
+    /// live (FR-GC-003, ADR-0009 Amendment 8), and each uses a catalogue
     /// connection of its own (ADR-0010 Amendment 5).
     /// </summary>
     private async ValueTask<ServiceResult> OnWriterLaneAsync(
@@ -393,7 +394,11 @@ public sealed partial class ServiceCommandHandler(
                     // present — and compaction would reclaim nothing, ever
                     // (ADR-0067).
                     objectId => catalogue.ResolveLocation(objectId)?.BlobId,
-                    clockSkewMargin: clockSkewMargin).ConfigureAwait(false);
+                    clockSkewMargin: clockSkewMargin,
+                    // A run of the set's own, queued, running or parked, may
+                    // have built on a blob this pass would condemn, whatever
+                    // its intent still shows (ADR-0009 Amendment 8).
+                    backupInFlight: Scheduler.LiveBackupOf(runtime, set.Id) is not null).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
                 // the scheduled sync holds no authority to delete, so it
