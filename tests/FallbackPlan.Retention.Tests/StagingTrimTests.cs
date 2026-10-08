@@ -117,6 +117,33 @@ public sealed class StagingTrimTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RetentionApply_BesideABackupOfTheSet_TrimsNothing_AndTheNextPassDoes()
+    {
+        // The trim deletes data blobs too. A backup in flight may have built
+        // on a historic one the vault holds, and its snapshot would then
+        // reach a blob staging no longer has: a dedup cache missing what the
+        // newest snapshot needs, and a verify that reports the gap as damage
+        // (FR-GC-003, ADR-0009 Amendment 8).
+        await BackUpThreeDaysAsync();
+        var store = new LocalFileSystemObjectStore(RepoPath);
+
+        var beside = await RunAsync(
+            store, VaultVerification, apply: true, now: Day1.AddDays(2).AddHours(1), backupInFlight: true);
+        Assert.Contains(
+            line => line.StartsWith("held beside a backup:", StringComparison.Ordinal)
+                && line.Contains("2 not trimmed", StringComparison.Ordinal),
+            beside.Lines,
+            string.Join(" | ", beside.Lines));
+        Assert.IsFalse(beside.Lines.Any(line => line.StartsWith("trimmed:", StringComparison.Ordinal)));
+        Assert.HasCount(3, await ListAsync(store, "blobs/data/"));
+
+        var after = await RunAsync(store, VaultVerification, apply: true, now: Day1.AddDays(2).AddHours(2));
+        Assert.Contains(
+            line => line.StartsWith("trimmed: 2 historic data blob(s)", StringComparison.Ordinal), after.Lines);
+        Assert.HasCount(1, await ListAsync(store, "blobs/data/"));
+    }
+
+    [TestMethod]
     public async Task RetentionApply_ADestinationNothingCanVouchFor_HoldsEveryBlobItIsEntitledTo()
     {
         await BackUpThreeDaysAsync();
@@ -541,7 +568,8 @@ public sealed class StagingTrimTests : IDisposable
         Func<string, TrimVerification> verificationFor,
         bool apply,
         DateTimeOffset now,
-        SetDestinationReference? extraDestination = null)
+        SetDestinationReference? extraDestination = null,
+        bool backupInFlight = false)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         var repository = opened.Repository;
@@ -565,7 +593,7 @@ public sealed class StagingTrimTests : IDisposable
             WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             apply,
             (ulong)now.ToUnixTimeMilliseconds(),
-            CancellationToken.None, reclaim: opened.Reclaim);
+            CancellationToken.None, reclaim: opened.Reclaim, backupInFlight: backupInFlight);
     }
 
     private async Task BackUpThreeDaysAsync()

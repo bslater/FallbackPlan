@@ -120,6 +120,26 @@ public sealed class CollectionBesideABackupTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Backup_ThatCannotAskWhetherABlobIsTombstoned_StoresTheBytesAgain()
+    {
+        // A store that will not answer is no answer. Refusing a reuse the
+        // store might have honoured costs a rewrite; granting one it cannot
+        // vouch for may cost a snapshot.
+        await File.WriteAllBytesAsync(ReturningPath, Returning);
+        await BackUpAsync(Day1);
+
+        // Written again, so the capture reads the file rather than carrying
+        // its prior version forward, and offers every segment for reuse.
+        await File.WriteAllBytesAsync(ReturningPath, Returning);
+        var published = await BackUpThroughAsync(Day1.AddDays(1), wrap: inner => new TombstoneProbesFault(inner));
+
+        Assert.IsGreaterThanOrEqualTo(
+            Returning.Length,
+            published.ContentBlobs.Sum(blob => blob.Length),
+            "the backup built on a blob whose tombstone it could not ask about");
+    }
+
+    [TestMethod]
     public async Task RetentionPass_BetweenABackupsUploadsAndItsIndex_DeletesNoBlob_AndTheBackupRestores()
     {
         await TombstoneTheReturningBytesAsync();
@@ -413,6 +433,36 @@ public sealed class CollectionBesideABackupTests : IDisposable
         var bytes = new byte[length];
         new Random(seed).NextBytes(bytes);
         return bytes;
+    }
+
+    /// <summary>A store whose every question about a tombstone fails as an outage would.</summary>
+    private sealed class TombstoneProbesFault(IObjectStore inner) : IObjectStore
+    {
+        public StoreCapabilities Capabilities => inner.Capabilities;
+
+        public ValueTask<GetMetadataResult> GetMetadataAsync(ObjectKey key, CancellationToken cancellationToken) =>
+            key.Value.StartsWith("tombstones/", StringComparison.Ordinal)
+                ? throw new IOException($"Injected fault: the store did not answer for '{key}'.")
+                : inner.GetMetadataAsync(key, cancellationToken);
+
+        public ValueTask<OpenReadResult> OpenReadAsync(
+            ObjectKey key, ObjectRange? range, CancellationToken cancellationToken) =>
+            inner.OpenReadAsync(key, range, cancellationToken);
+
+        public ValueTask<PutResult> PutAsync(
+            ObjectKey key,
+            Func<CancellationToken, ValueTask<Stream>> openContent,
+            PutConditions conditions,
+            CancellationToken cancellationToken) =>
+            inner.PutAsync(key, openContent, conditions, cancellationToken);
+
+        public IAsyncEnumerable<ObjectEntry> ListAsync(
+            ObjectPrefix prefix, ListOptions options, CancellationToken cancellationToken) =>
+            inner.ListAsync(prefix, options, cancellationToken);
+
+        public ValueTask<DeleteResult> DeleteAsync(
+            ObjectKey key, DeleteConditions conditions, CancellationToken cancellationToken) =>
+            inner.DeleteAsync(key, conditions, cancellationToken);
     }
 
     /// <summary>Stops a publication once it completes the named step, as a crash would.</summary>

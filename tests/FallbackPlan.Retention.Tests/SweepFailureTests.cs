@@ -153,6 +153,72 @@ public sealed class SweepFailureTests : IDisposable
     }
 
     /// <summary>
+    /// A refused snapshot whose closure will not walk holds back every blob
+    /// (FR-GC-006). Nothing can say which blobs it reaches, so none may go
+    /// while it is still listed.
+    /// </summary>
+    [TestMethod]
+    public async Task ARefusedSnapshotWhoseTreeWillNotRead_HoldsBackEveryBlob()
+    {
+        var faulting = await ArmedAtSweepAsync(bulky: true);
+        var dayOf = await DaysBySnapshotAsync(faulting.Inner);
+        await CorruptRootTreeAsync(faulting.Inner, dayOf.Single(pair => pair.Value == 0).Key);
+        faulting.Store.ArmThrow(key => key.StartsWith("snapshots/", StringComparison.Ordinal));
+        var blobsBefore = await ListAsync(faulting.Inner, "blobs/");
+
+        var report = await RunAsync(faulting.Store, apply: true, now: Day1.AddDays(3).AddHours(1));
+
+        Assert.AreEqual(0, report.Swept!.Deleted, string.Join(" | ", report.Lines));
+        Assert.IsGreaterThan(0, report.Swept.HeldBlobs, "the premise: a blob's grace had run");
+        CollectionAssert.AreEquivalent(blobsBefore, await ListAsync(faulting.Inner, "blobs/"));
+    }
+
+    /// <summary>
+    /// A tombstoning pass that stops partway leaves no blob's grace ahead of
+    /// the snapshot that reaches it (FR-GC-006). Snapshot tombstones go first,
+    /// so a pass stopped at one has written nothing. Blob tombstones first
+    /// would leave the blobs condemned a publication earlier than their
+    /// snapshot, and the next pass but one would delete them while the
+    /// snapshot was still listed.
+    /// </summary>
+    [TestMethod]
+    public async Task ATombstoningPassCutBetweenItsWrites_LeavesEveryListedSnapshotRestorable()
+    {
+        await BackUpAsync(Day1, Bulk(0));
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day two content");
+        await BackUpAsync(Day1.AddDays(1), Bulk(1));
+
+        var inner = new LocalFileSystemObjectStore(RepoPath);
+        var dayOf = await DaysBySnapshotAsync(inner);
+        var faulting = new PutFaultingObjectStore(inner);
+        faulting.Arm(key => key.StartsWith("tombstones/04/", StringComparison.Ordinal));
+        await Assert.ThrowsExactlyAsync<IOException>(
+            async () => await RunAsync(faulting, apply: true, now: Day1.AddDays(1).AddHours(1)));
+
+        // A publication, then a pass over a healthy store, then another
+        // publication and pass: every tombstone written so far has had its
+        // grace.
+        File.WriteAllText(Path.Combine(SourceRoot, "a.txt"), "day three content");
+        await BackUpAsync(Day1.AddDays(2), Bulk(2));
+        await RunAsync(inner, apply: true, now: Day1.AddDays(2).AddHours(1));
+
+        var oldest = dayOf.Single(pair => pair.Value == 0).Key;
+        using (var opened = await WriteOnlyInstallation.OpenAsync(inner, PassphraseText, CancellationToken.None))
+        {
+            var survey = await StagingMark.SurveyAsync(inner, opened.Repository, CancellationToken.None);
+            Assert.IsTrue(
+                survey.Snapshots.Any(snapshot => snapshot.Fact.SnapshotId == oldest),
+                "the premise: day one's snapshot, condemned a pass late, is still listed");
+        }
+
+        var target = Path.Combine(_root, "restored");
+        var restored = await RestoreAsync(oldest, target);
+        Assert.AreEqual(0, restored.Failed, restored.Outcome);
+        var found = Assert.ContainsSingle(Directory.GetFiles(target, "bulk.bin", SearchOption.AllDirectories));
+        CollectionAssert.AreEqual(Bulk(0), File.ReadAllBytes(found), "the listed snapshot restored other bytes");
+    }
+
+    /// <summary>
     /// A store that reports "not found" for an object it did not remove must
     /// not be counted as a deletion. Today the outcome is discarded and the
     /// counter increments on the call.
@@ -333,6 +399,37 @@ public sealed class SweepFailureTests : IDisposable
             .OrderBy(snapshot => snapshot.Fact.PublicationSequence)
             .Select((snapshot, day) => (snapshot.Fact.SnapshotId, day))
             .ToDictionary(pair => pair.SnapshotId, pair => pair.day, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Flips a byte in the middle of a snapshot's root tree record, so the
+    /// record no longer authenticates while its blob's footer still loads.
+    /// </summary>
+    private async Task CorruptRootTreeAsync(LocalFileSystemObjectStore store, string snapshotId)
+    {
+        string blobKey;
+        long position;
+        using (var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None))
+        {
+            var survey = await StagingMark.SurveyAsync(store, opened.Repository, CancellationToken.None);
+            var rootTree = survey.Snapshots.Single(snapshot => snapshot.Fact.SnapshotId == snapshotId).Manifest.RootTree;
+
+            using var reader = new RepositoryReader(opened.Repository.RepositoryId, opened.Repository.Keys, store);
+            await reader.LoadBlobsAsync(CancellationToken.None);
+            var (blob, record) = reader.Blobs
+                .SelectMany(candidate => candidate.Records.Select(entry => (Blob: candidate, Record: entry)))
+                .Single(pair => pair.Record.ObjectId.Equals(rootTree));
+            blobKey = blob.StoreKey.Value;
+            position = (long)record.PhysicalOffset + (record.StoredLength / 2);
+        }
+
+        // Opened only once nothing else holds the blob, which Windows would
+        // refuse a writer while a reader still had it open.
+        await using var file = new FileStream(Path.Combine(RepoPath, blobKey), FileMode.Open, FileAccess.ReadWrite);
+        file.Position = position;
+        var original = file.ReadByte();
+        file.Position = position;
+        file.WriteByte((byte)(original ^ 0xFF));
     }
 
     private static byte[] Bulk(int day)
