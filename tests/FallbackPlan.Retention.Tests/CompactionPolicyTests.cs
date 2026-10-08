@@ -107,6 +107,31 @@ public sealed class CompactionPolicyTests
     }
 
     /// <summary>
+    /// A metadata blob is left whole because compaction takes data blobs
+    /// only, whatever its fraction and reclaim, so the description says that
+    /// rather than counting it among the blobs below the threshold or past
+    /// the budget (FR-GC-005).
+    /// </summary>
+    [TestMethod]
+    public void TheDescription_SaysAMetadataBlobIsLeftForTheCollector_NotThatItIsBelowTheThreshold()
+    {
+        var metadata = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, "meta");
+        var mostlyLive = Blob(liveBytes: 90L * 1024 * 1024, deadBytes: 10L * 1024 * 1024);
+
+        var lines = Default.Describe([metadata, mostlyLive], Default.SelectCandidates([metadata, mostlyLive]));
+
+        Assert.StartsWith("compaction would rewrite: 0 blob(s)", lines[0], StringComparison.Ordinal);
+        Assert.Contains(
+            "1 blob(s) left whole: below the threshold",
+            Assert.ContainsSingle(lines.Where(line => line.Contains("below the threshold", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "1 metadata blob(s) left whole",
+            Assert.ContainsSingle(lines.Where(line => line.Contains("metadata", StringComparison.Ordinal))),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The format gate, and the whole of what it says: below format 3 a
     /// rewrite means decrypt-and-reseal, which needs a content key this
     /// service does not hold, so nothing is selected and the remedy is
