@@ -16,6 +16,23 @@ namespace FallbackPlan.Agent;
 /// </summary>
 internal static class ReplicationResponder
 {
+    /// <summary>
+    /// Wraps the replica a retention instruction deletes through. A test hook
+    /// scoped to the flow that sets it, as
+    /// <see cref="ReplicaSweepJob.ReplicaDecorator"/> is: no real disk can be
+    /// made to die in front of one delete on demand, and what the replica is
+    /// left holding then is what a test of it needs. The flow is the one that
+    /// started the listener, whose sessions carry it. Null, the production
+    /// value, wraps nothing.
+    /// </summary>
+    internal static Func<IObjectStore, IObjectStore>? RetentionStoreDecorator
+    {
+        get => RetentionStoreDecoratorInFlow.Value;
+        set => RetentionStoreDecoratorInFlow.Value = value;
+    }
+
+    private static readonly AsyncLocal<Func<IObjectStore, IObjectStore>?> RetentionStoreDecoratorInFlow = new();
+
     /// <summary>The result of serving one replication session.</summary>
     /// <param name="RepositoryId">The repository whose objects were received, hex.</param>
     /// <param name="Committed">How many objects were committed.</param>
@@ -644,9 +661,10 @@ internal static class ReplicationResponder
 
         var deleted = new List<string>();
         var notHeld = 0u;
+        var deletes = RetentionStoreDecorator?.Invoke(replica) ?? replica;
         foreach (var key in drops)
         {
-            var outcome = await replica.DeleteAsync(
+            var outcome = await deletes.DeleteAsync(
                 Storage.Abstractions.ObjectKey.Parse(key), DeleteConditions.None, cancellationToken)
                 .ConfigureAwait(false);
             switch (outcome.Outcome)

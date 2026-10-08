@@ -132,6 +132,87 @@ public sealed class DestinationConvergenceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Converge_CutInFrontOfEachWrite_LeavesEverySnapshotTheReplicaListsRestorable_AndTheNextConvergeFinishesIt()
+    {
+        // FR-GC-006 at a destination: the narrow replica's convergence pushes
+        // the day's snapshot and drops the one its policy no longer keeps,
+        // snapshot before blob. Cut in front of each of its writes, the
+        // replica is lagging but valid: every snapshot it lists restores from
+        // it alone, and the next convergence leaves what an uncut one leaves.
+        var days = new Dictionary<string, int>(StringComparer.Ordinal);
+        days[await BackUpDayAsync(0)] = 0;
+        days[await BackUpDayAsync(1)] = 1;
+
+        var replicaPath = Directory.GetDirectories(NarrowPath).Single();
+        var pristine = Path.Combine(_root, "narrow-pristine");
+        CutOracle.CopyDirectory(replicaPath, pristine);
+        days[await BackUpDayAsync(2)] = 2;
+
+        var staging = new LocalFileSystemObjectStore(RepoPath);
+        using var opened = await WriteOnlyInstallation.OpenAsync(staging, PassphraseText, CancellationToken.None);
+        var convergence = await DestinationConvergence.ComputeKeepsAsync(
+            staging, opened.Repository, new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
+            new DateTimeOffset(2026, 8, 3, 11, 0, 0, TimeSpan.Zero), CancellationToken.None);
+        Assert.IsNotNull(convergence.Keeps, convergence.Refusal.ToString());
+
+        CutOracle.ResetTo(pristine, replicaPath);
+        var asked = await ConvergeCutAsync(staging, replicaPath, convergence.Keeps, int.MaxValue);
+        var converged = CutOracle.StoredKeys(replicaPath);
+        Assert.IsTrue(asked.Any(write => write.StartsWith("put snapshots/", StringComparison.Ordinal)), string.Join(" | ", asked));
+        Assert.IsTrue(asked.Any(write => write.StartsWith("delete snapshots/", StringComparison.Ordinal)), string.Join(" | ", asked));
+        Assert.IsTrue(asked.Any(write => write.StartsWith("delete blobs/", StringComparison.Ordinal)), string.Join(" | ", asked));
+
+        for (var cut = 1; cut <= asked.Count; cut++)
+        {
+            var at = $"cut in front of write {cut} of {asked.Count}, {asked[cut - 1]}";
+            CutOracle.ResetTo(pristine, replicaPath);
+
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                async () => await ConvergeCutAsync(staging, replicaPath, convergence.Keeps, cut), at);
+            await CutOracle.AssertEveryListedSnapshotRestoresAsync(
+                replicaPath, StateDirectory, PassphraseText, days, Files, Path.Combine(_root, "restored"), at);
+
+            await ConvergeCutAsync(staging, replicaPath, convergence.Keeps, int.MaxValue);
+            Assert.IsTrue(
+                CutOracle.StoredKeys(replicaPath).SequenceEqual(converged),
+                $"{at}: the next convergence left another replica");
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> ConvergeCutAsync(
+        LocalFileSystemObjectStore staging, string replicaPath, Func<string, bool> keeps, int cut)
+    {
+        using var process = new CancellationTokenSource();
+        var replica = new DiesBeforeWriteStore(new LocalFileSystemObjectStore(replicaPath), cut, process);
+        await StoreToStoreCopier.ConvergeAsync(staging, replica, keeps, process.Token);
+        return replica.Asked;
+    }
+
+    /// <summary>A day's backup, fanned out to both destinations, returning the snapshot it published.</summary>
+    private async Task<string> BackUpDayAsync(int day)
+    {
+        foreach (var (name, bytes) in Files(day))
+        {
+            File.WriteAllBytes(Path.Combine(SourceRoot, name), bytes);
+        }
+
+        var before = Directory.Exists(RepoPath) ? await CutOracle.ListedSnapshotsAsync(RepoPath, PassphraseText) : [];
+        await BackUpAsync(new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.Zero).AddDays(day));
+        return (await CutOracle.ListedSnapshotsAsync(RepoPath, PassphraseText)).Except(before).Single();
+    }
+
+    private static IReadOnlyDictionary<string, byte[]> Files(int day)
+    {
+        var bulk = new byte[200 * 1024];
+        new Random(day + 1).NextBytes(bulk);
+        return new Dictionary<string, byte[]>
+        {
+            ["a.txt"] = System.Text.Encoding.UTF8.GetBytes($"day {day} content"),
+            ["bulk.bin"] = bulk,
+        };
+    }
+
+    [TestMethod]
     public async Task Converge_AKeyOnlyTheDestinationHolds_SurvivesBecauseStagingCannotVouchForIt()
     {
         // After a staging trim the replica holds data blobs staging no longer

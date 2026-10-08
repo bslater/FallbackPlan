@@ -14,7 +14,7 @@ namespace FallbackPlan.Retention;
 /// <summary>What one sweep pass did — and, as loudly, what it refused.</summary>
 /// <param name="Deleted">Objects removed after the full 11 §3.2 gate.</param>
 /// <param name="NotYetEligible">Tombstones whose grace generation has not arrived.</param>
-/// <param name="TombstonesCleared">Tombstones removed one generation after their object went.</param>
+/// <param name="TombstonesCleared">Tombstones removed once their object was gone and the generation past their eligibility.</param>
 /// <param name="Findings">
 /// Security, damage and deferral findings: a signature that failed, a
 /// tombstone for an object revalidation still reaches, a store that would not
@@ -333,9 +333,10 @@ public static class StagingSweep
 
             if (present is null)
             {
-                // The object is gone; the tombstone outlives it one
-                // generation so a reader can tell a completed collection
-                // from a missing object (11 §3.2).
+                // The object is gone. The tombstone stays until the
+                // generation passes its eligibility, counted from there
+                // because nothing records when the delete happened, and is
+                // never cleared by the pass that deleted the object (11 §3.2).
                 if (currentPublicationSequence >= tombstone.Value.EligibleGeneration + 1
                     && await TryDeleteAsync(store, key, $"tombstone {key}", findings, cancellationToken)
                         .ConfigureAwait(false) == Removal.Deleted)

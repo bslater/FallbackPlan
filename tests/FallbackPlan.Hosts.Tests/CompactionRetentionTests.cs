@@ -2,6 +2,8 @@ using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
 using FallbackPlan.Repository.Crypto;
+using CompactionStep = FallbackPlan.Repository.CompactionStep;
+using ICompactionObserver = FallbackPlan.Repository.ICompactionObserver;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -233,6 +235,135 @@ public sealed class CompactionRetentionTests : IDisposable
 
         Assert.IsEmpty(lines.Where(line => line.Contains("compacted:", StringComparison.Ordinal)).ToList());
         Assert.IsEmpty(lines.Where(line => line.Contains("compaction did not run", StringComparison.Ordinal)).ToList());
+    }
+
+    /// <summary>
+    /// FR-GC-006 through the sink: a direct-ship set's compaction, cut after
+    /// each of its steps, leaves the set restoring from its destination, and
+    /// the next pass leaves nothing for compaction to rewrite.
+    /// </summary>
+    /// <remarks>
+    /// The staging archive's cuts are CompactionInterruptionTests'. This is
+    /// the shape where the candidates are read back from a destination and
+    /// the produced blobs, the index deltas and the retirement are all
+    /// written out through the ship sink, so a cut between two steps leaves
+    /// the metadata store and the destination each partly written.
+    /// A pass cut after its upload leaves the blob it produced at the
+    /// destination with no index entry naming it. Its unretired intent
+    /// covers that blob (ADR-0067 §2) until the intent expires, and the
+    /// collector takes it as garbage after that; the next pass compacts again
+    /// into a blob of its own.
+    /// </remarks>
+    [TestMethod]
+    public async Task ADirectShipCompaction_CutAfterEachStep_LeavesTheSetRestorable_AndTheNextPassFinishesIt()
+    {
+        Directory.CreateDirectory(VaultA);
+        WriteConfiguration(directShip: true);
+        WriteIncompressible("docs/steady.bin", seed: 1);
+        WriteIncompressible("docs/churn.bin", seed: 2);
+
+        await using (var runtime = await StartAsync())
+        {
+            await BackUpAsync(runtime);
+            WriteIncompressible("docs/churn.bin", seed: 3);
+            await BackUpAsync(runtime);
+            WriteIncompressible("docs/churn.bin", seed: 4);
+            await BackUpAsync(runtime);
+        }
+
+        var pristine = Path.Combine(_harness.WorkPath, "pristine");
+        CopyDirectory(_harness.StateDirectory, Path.Combine(pristine, "state"));
+        CopyDirectory(VaultA, Path.Combine(pristine, "vault-a"));
+
+        CompactionStep[] cuts =
+        [
+            CompactionStep.PublishIntent,
+            CompactionStep.SealBlobs,
+            CompactionStep.UploadBlobs,
+            CompactionStep.PublishIndex,
+            CompactionStep.RetireIntent,
+        ];
+        foreach (var cut in cuts)
+        {
+            ResetTo(Path.Combine(pristine, "state"), _harness.StateDirectory);
+            ResetTo(Path.Combine(pristine, "vault-a"), VaultA);
+
+            // Set before the runtime starts, so its writer lane carries it.
+            var kill = new KillCompactionAfter(cut);
+            ServiceCommandHandler.CompactionObserver = kill;
+            await using (var runtime = await StartAsync())
+            {
+                var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+                var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+                try
+                {
+                    _ = await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout);
+                }
+                catch (CompactionKilledException)
+                {
+                    // The death this case is about.
+                }
+
+                Assert.IsTrue(kill.Killed, $"cut after {cut}: the pass never compacted");
+            }
+
+            ServiceCommandHandler.CompactionObserver = null;
+            await using (var runtime = await StartAsync())
+            {
+                var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+                var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+                await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+                await AssertRestoresAsync(handler, "churn.bin", seed: 4);
+
+                var next = await RetainAsync(handler, grant);
+                Assert.IsEmpty(
+                    next.Where(line => line.Contains("compaction did not run", StringComparison.Ordinal)).ToList(),
+                    $"cut after {cut}: {string.Join(" | ", next)}");
+
+                Assert.IsInstanceOfType<RetentionResult>(
+                    await handler.ExecuteAsync(new RetentionCommand(Apply: false), Timeout), out var dry);
+                Assert.EndsWith(
+                    "0 blob(s), reclaiming 0 byte(s)",
+                    dry.Lines.Last(line => line.Contains("compaction would rewrite", StringComparison.Ordinal)),
+                    StringComparison.Ordinal,
+                    $"cut after {cut}: the next pass left a backlog: {string.Join(" | ", next)}");
+                await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+            }
+        }
+    }
+
+    private sealed class KillCompactionAfter(CompactionStep step) : ICompactionObserver
+    {
+        public bool Killed { get; private set; }
+
+        public void AfterStep(CompactionStep completedStep)
+        {
+            if (completedStep == step)
+            {
+                Killed = true;
+                throw new CompactionKilledException(step);
+            }
+        }
+    }
+
+    private sealed class CompactionKilledException(CompactionStep step)
+        : Exception($"killed after compaction step {step}");
+
+    private static void CopyDirectory(string from, string to)
+    {
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            var copy = Path.Combine(to, Path.GetRelativePath(from, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+            File.Copy(file, copy);
+        }
+    }
+
+    private static void ResetTo(string pristine, string path)
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(path, recursive: true);
+        CopyDirectory(pristine, path);
     }
 
     private async Task<IReadOnlyList<string>> RetainAsync(ServiceCommandHandler handler, string grant)
