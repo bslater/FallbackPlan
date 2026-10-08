@@ -1,5 +1,6 @@
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Hosts.Tests;
 
@@ -74,8 +75,9 @@ public sealed class AgentDefaultLocationsTests : IDisposable
         PointDefaultsAtTheHarness();
 
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(_timeout.Token);
-        var output = new StringWriter();
-        var error = new StringWriter();
+        // Written by the service's threads while this one polls them.
+        using var output = new SharedStringWriter();
+        using var error = new SharedStringWriter();
 
         var running = AgentHost.RunAsync([], output, error, stop.Token);
 
