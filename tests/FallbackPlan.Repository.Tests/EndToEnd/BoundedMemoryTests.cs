@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using FallbackPlan.Domain;
 using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Domain.Identifiers;
@@ -70,6 +71,30 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         Assert.IsTrue(large <= LiveSetBound, $"The retained set exceeded the NFR-PERF-001 bound. {detail}");
     }
 
+    [TestMethod]
+    public void Baseline_AGraphAwaitingItsFinalizer_IsNotCounted()
+    {
+        // A forced reading collects again only while a collection frees more
+        // than a twentieth of the heap. With nothing else to free, a graph held
+        // by an object whose finalizer has yet to run survives the one
+        // collection it gets, and the next reading frees it. An earlier test's
+        // graph, met that way by a baseline, reads as this pipeline retaining a
+        // negative amount.
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        DropFinalizableGraph(64 * Mebibyte);
+
+        var baseline = SettledLiveSet();
+        var next = GC.GetTotalMemory(forceFullCollection: true);
+
+        Assert.IsTrue(
+            baseline - next < 16 * Mebibyte,
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"The baseline counted {(baseline - next) / (double)Mebibyte:f1} MiB that the next reading freed."));
+    }
+
     private async Task<long> MeasurePeakLiveSetAsync(long inputBytes, ulong firstCounter)
     {
         var policy = CapturePolicy.Default with
@@ -86,7 +111,7 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
             new MonotonicBlobCounterAllocator(firstCounter), SpoolDirectory,
             FormatVersions.SealedDataPlane);
 
-        var baseline = GC.GetTotalMemory(forceFullCollection: true);
+        var baseline = SettledLiveSet();
         var peak = 0L;
         using (var sampler = new Timer(
             _ => peak = Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)), null, 50, 100))
@@ -101,5 +126,17 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         }
 
         return Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)) - baseline;
+    }
+
+    private static long SettledLiveSet() => GC.GetTotalMemory(forceFullCollection: true);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void DropFinalizableGraph(long bytes) => _ = new FinalizableGraph(bytes);
+
+    private sealed class FinalizableGraph(long bytes)
+    {
+        private readonly byte[] _held = new byte[bytes];
+
+        ~FinalizableGraph() => GC.KeepAlive(_held);
     }
 }
