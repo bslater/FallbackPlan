@@ -128,7 +128,18 @@ public sealed class BoundedMemoryTests : ArchiveTestHarness
         return Math.Max(peak, GC.GetTotalMemory(forceFullCollection: true)) - baseline;
     }
 
-    private static long SettledLiveSet() => GC.GetTotalMemory(forceFullCollection: true);
+    /// <summary>
+    /// The live set, read once nothing waits on a finalizer. A forced reading
+    /// alone can count a graph that only a pending finalizer still holds, and
+    /// the next reading frees it: in a baseline, that reads as the pipeline
+    /// giving memory back.
+    /// </summary>
+    private static long SettledLiveSet()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        return GC.GetTotalMemory(forceFullCollection: true);
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void DropFinalizableGraph(long bytes) => _ = new FinalizableGraph(bytes);
