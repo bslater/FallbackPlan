@@ -62,6 +62,8 @@ Because a job's blob set is not known up front, intents are extended incremental
 
 A blob's identifier is the writer's number, so a writer can name blobs it has not made yet. This one names them a batch at a time ([ADR-0092](../adr/0092-a-backup-names-its-blobs-a-batch-at-a-time.md)): it reserves blob counters before it uses them, the write intent names the first eight, and when they run out one extension names the next batch, twice the last up to 64. A blob therefore costs no journal request of its own. The intent's Completed retirement accounts for every reserved number the backup never used, so only a job that dies or is cancelled leaves numbers for the next run to void, and then at most the rest of one batch beyond the blobs it had in flight.
 
+An intent names the blobs a writer creates and not the ones it reuses. A backup builds on both, so two rules cover what the intent does not name: a writer never builds on a blob that carries a tombstone, and a collector collects no blob while a publication of the set is in flight ([`07-retention-and-gc.md` §3.4](07-retention-and-gc.md#34-beside-a-backup-of-the-same-set), [ADR-0009 Amendment 8](../adr/0009-garbage-collection-safety.md#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)).
+
 Naming blobs in advance is only possible because **blob identifiers are writer-allocated rather than content-derived** ([`02-repository-format.md` §5.3](02-repository-format.md#53-spooling-and-sealing), [ADR-0016](../adr/0016-blob-identifier-formation.md)). A content-derived identifier cannot be known before the content exists, and this mechanism would be unimplementable.
 
 ### 4.2.1 Expiry needs two conditions, not one

@@ -115,6 +115,14 @@ Step 3 is not redundant. A tombstone records a decision taken at some earlier mo
 
 A reader that finds a tombstone for an object that is still referenced MUST report a damage finding and MUST NOT delete. That is the signal that a collector's liveness analysis and the object graph disagree, and it is not the reader's to resolve.
 
+Step 3 can save an object only for a snapshot that has already been published. A publication still in flight references objects its write intent does not name: the intent names the blobs the publication creates ([08 §3](08-journal.md#3-write-intent)), not those it builds on. Three rules cover that window.
+
+- **A writer MUST NOT reference an object whose blob carries a tombstone.** It writes the object's bytes again instead.
+- **A collector MUST NOT tombstone or delete a blob while a publication that may reference it is in flight.** A publication is in flight while its intent is unretired and inside its declared duration plus the skew margin, or while the collector otherwise knows it to be running. Snapshot manifests may still be tombstoned and deleted. Compaction is excluded, because what it publishes references only the blobs it wrote, and its intent names those.
+- **A collector MUST NOT delete a blob that is reached by a snapshot still listed after its own delete failed.** Such a snapshot is still listed, so it must still restore. A collector therefore deletes snapshot manifests before the blobs they reach, and writes their tombstones first.
+
+→ [ADR-0009 Amendment 8](../../docs/adr/0009-garbage-collection-safety.md#amendment-8-2026-10--a-backup-builds-on-more-than-its-intent-names)
+
 After a successful delete, the tombstone itself becomes eligible for deletion one generation later. It is retained that long so a concurrent reader that saw the object disappear can tell a completed collection from a missing object.
 
 ### 3.3 A person's request
