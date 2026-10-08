@@ -193,6 +193,13 @@ Three properties of the rotation are load-bearing:
   store contract, so a cursor built on it would advance past keys it never sampled
   — and since the cursor only moves forward, those keys would never be challenged
   again.
+
+  > **Corrected 2026-10 ([ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5).** The contract has
+  > promised ordinal key order since its first implementation, and a resume after
+  > any key. The sort is kept, and costs nothing, but the reason given for it was
+  > wrong. The deep sweep made the same assumption at a price: it listed every blob
+  > for each segment, which over a store is a request per page. It now lists from
+  > its cursor.
 - **It wraps within the same pass.** A rotation that had finished a lap and
   returned nothing would write no verification stamp, and the trim gate would read
   that as an unproven destination and stop reclaiming space.
@@ -592,3 +599,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-09 | Amended | [Amendment 3](#amendment-3-2026-09--a-circuit-is-reported-where-the-status-is): each destination's status row carries its deep sweep — when a circuit last closed, how far the one under way has read, whether it has stopped, and the cadence the scheduler keeps — as contract 1.46's `deep_sweep` (`Api/Results`, `Agent/ServiceCommandHandler`), and the CLI (`Cli/CliApplication`) and the console say it. The cadence rule is stated once for the scheduler and the status (`Agent/ReplicaSweepJob`, `Agent/Scheduler`). Built tests first, with each rule's removal confirmed to turn its tests red: a stall checked after the close, and a reserved kind reported as swept. Held by `Hosts.Tests/DeepSweepTests`, `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/DeepSweepCadenceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/StatusSweepTokenTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Web.Tests/StatusRelayNamesTests` and `Web.Tests/ConsoleDestinationCardTests` |
 | 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an S3-compatible store is swept on Amendment 2's rule, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put, as Amendment 1 repairs a local path's; a store that does not answer is recorded unavailable, and one that refuses is a stall under the back-off. `Agent/ReplicaSweepJob`, `Agent/Scheduler`; `Hosts.Tests/S3DestinationTests`, `Hosts.Tests/DeepSweepCadenceTests` |
 | 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md): an Azure Blob container is swept on the same terms as an S3-compatible store, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put; the notice names whoever holds the account key or a signature for the container as who else could have altered it (`Agent/ReplicaSweepJob`, `Hosts.Tests/AzureBlobDestinationTests`) |
+| 2026-10 | Amended (related) | [ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5: the store contract promises ordinal order and a resume after any key, so the rotation's stated reason for sorting is corrected, and the deep sweep lists from its cursor rather than reading every blob for each segment (`Repository/ReplicaSweep`) |
