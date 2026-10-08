@@ -125,6 +125,8 @@ Step 3 can save an object only for a snapshot that has already been published. A
 
 After a successful delete, the tombstone itself becomes eligible for deletion one generation later. It is retained that long so a concurrent reader that saw the object disappear can tell a completed collection from a missing object.
 
+> **As built (2026-10).** The collector counts that generation from the tombstone's `eligible_generation`, because nothing records when an earlier pass deleted the object. It clears a tombstone whose object is gone once the current generation is past `eligible_generation`, and never in the pass that deleted the object. A pass that deleted late, or one cut after a delete, therefore leaves a tombstone the next pass may clear with no publication between. No reader yet consults a tombstone to explain a missing object, so nothing relies on the longer tail. A reader that comes to MUST NOT rely on it until a collector records when it deleted. Proving the collector cut in front of each of its writes found this (`Retention.Tests/CollectionInterruptionTests`).
+
 ### 3.3 A person's request
 
 A tombstone with reason 5, *requested*, records that a person asked for a snapshot to be deleted ([ADR-0080](../../docs/adr/0080-a-person-deletes-a-snapshot.md)). It is the request itself, not a note about one: it is the only durable record that the snapshot is to go, so a collector reads it on every pass rather than deciding once.
