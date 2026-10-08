@@ -265,6 +265,71 @@ public sealed class ConfigEditingDomTests
         await Expect(page.GetByText("Account key stored for destination 'cloud'.")).ToBeVisibleAsync();
     }
 
+    /// <summary>
+    /// A refresh that changes nothing leaves the view's controls where they
+    /// are. The view is drawn when it opens, again when its lists arrive and
+    /// again when the signed-in role does, and each drawing replaced every
+    /// control in it. A press begun on a button and released on its
+    /// replacement is no click at all, which is how
+    /// <see cref="DestinationEditor_AnAzureBlobContainer_SendsItsAddress_ThenItsAccountKeySealedInTheConsole"/>
+    /// lost its first click, once in a full run.
+    /// </summary>
+    [TestMethod]
+    public async Task ConfigView_ARefreshThatChangesNothing_DoesNotLoseAClickInProgress()
+    {
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetServiceSettingsCommand => new ServiceSettingsResult(null, null, null, EffectiveMaxConcurrentBackups: 2),
+            UpdateServiceSettingsCommand => new ConfigurationChangeResult(["Settings saved."]),
+            ListDestinationsCommand => new DestinationsResult([]),
+            ListBackupSetsCommand => new BackupSetsResult([]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        // Every drawing the view does on opening is done: its lists are in
+        // (the settings card is theirs) and so is the role.
+        await Expect(page.Locator("#svc-window")).ToBeVisibleAsync();
+        await Expect(page.Locator("#signed-in")).ToHaveTextAsync("owner");
+
+        var box = await page.Locator("[data-action=\"dest-add-azure-blob\"]").BoundingBoxAsync();
+        Assert.IsNotNull(box);
+        await page.Mouse.MoveAsync(box.X + (box.Width / 2), box.Y + (box.Height / 2));
+        await page.Mouse.DownAsync();
+
+        // While the button is held, a refresh lands: the settings saved as
+        // they stand make the view read every list it shows again, and the
+        // last of them is the sets.
+        var setsRead = Count<ListBackupSetsCommand>(harness);
+        await page.Locator("[data-action=\"svc-settings-save\"]").DispatchEventAsync("click");
+        await harness.ReceivedAsync<UpdateServiceSettingsCommand>();
+        var deadline = Environment.TickCount64 + 30_000;
+        while (Count<ListBackupSetsCommand>(harness) == setsRead)
+        {
+            Assert.IsLessThan(deadline, Environment.TickCount64, "the refresh never read the sets again");
+            await Task.Delay(25);
+        }
+
+        await page.WaitForTimeoutAsync(500);
+        await page.Mouse.UpAsync();
+
+        await Expect(page.Locator("#dest-account")).ToBeVisibleAsync();
+    }
+
+    private static int Count<TCommand>(DomHarness harness)
+        where TCommand : ServiceCommand
+    {
+        lock (harness.Clients.Client.Received)
+        {
+            return harness.Clients.Client.Received.OfType<TCommand>().Count();
+        }
+    }
+
     [TestMethod]
     public async Task DestinationEditor_EditingAnAzureBlobContainer_SaysWhichCredentialIsHeld_AndTakesASignature()
     {
