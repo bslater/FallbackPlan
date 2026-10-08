@@ -5,7 +5,7 @@
 **Requirements:** FR-GC-011, FR-GC-003, FR-GC-004, FR-GC-005, FR-MAN-015, FR-MAN-019, FR-WOR-003, NFR-SEC-003
 **Related:** [ADR-0025](0025-compaction-reseals-records.md), [ADR-0052](0052-relocatable-records-format-v3.md), [ADR-0066](0066-the-format-upgrade-record.md), [ADR-0009](0009-garbage-collection-safety.md), [ADR-0017](0017-index-entry-supersession.md), [ADR-0007](0007-logical-object-identifiers-in-manifests.md), [ADR-0042](0042-write-only-repositories.md), [ADR-0046](0046-direct-to-destination-publication.md), [repository-format 05 §5](../../specifications/repository-format/05-blob.md), [repository-format 07 §3](../../specifications/repository-format/07-index.md)
 
-**Built:** `Retention/CompactionPolicy` (`CompactableBlob`, the dead-fraction and reclaim floor, the byte budget, and `Select` — one decision the dry run and the act share), `Retention/CollectionPlanner` (the backlog named rather than counted, and the record whose location the index has moved counted dead where its bytes still are), `Retention/RetentionRunner` (the selection on the report, before the apply early return, under the effective-format gate), `Repository.Packing/BlobReader` (`ReadSealedRecordAsync` — the one read with no key path at all, sharing the header/table cross-check), `Repository.Packing/BlobWriter` (`AppendSealedRecordAsync`, which re-frames the header and copies the sealed bytes verbatim), `Repository/BlobCompactor` (the rewrite, holding a structure key per source generation and no content key), `Repository/CompactionPublication` (the supersessions, the covered commitments, and the split that keeps a delta readable), `Repository/CompactionPass` (intent, seal, upload under extensions, publish, retire last), `Repository.Catalogue/Forensic/ForensicRebuilder` (one delta per blob, so a rebuilt index holds every record a blob carries), `Agent/ServiceCommandHandler` (the compaction phase of `retention --apply`, and the catalogue resolver the collector plans with); `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`. The tombstone's reason is derived at condemnation by `Retention/CollectionPlanner` and written by `Retention/StagingSweep` (2026-09 amendment).
+**Built:** `Retention/CompactionPolicy` (`CompactableBlob`, the dead-fraction and reclaim floor, the byte budget, and `Select` — one decision the dry run and the act share), `Retention/CollectionPlanner` (the backlog named rather than counted, and the record whose location the index has moved counted dead where its bytes still are), `Retention/RetentionRunner` (the selection on the report, before the apply early return, under the effective-format gate), `Repository.Packing/BlobReader` (`ReadSealedRecordAsync` — the one read with no key path at all, sharing the header/table cross-check), `Repository.Packing/BlobWriter` (`AppendSealedRecordAsync`, which re-frames the header and copies the sealed bytes verbatim), `Repository/BlobCompactor` (the rewrite, holding a structure key per source generation and no content key), `Repository/CompactionPublication` (the supersessions, the covered commitments, and the split that keeps a delta readable), `Repository/CompactionPass` (intent, seal, upload under extensions, publish, retire last), `Repository.Catalogue/Forensic/ForensicRebuilder` (one delta per blob, so a rebuilt index holds every record a blob carries), `Agent/ServiceCommandHandler` (the compaction phase of `retention --apply`, and the catalogue resolver the collector plans with); `Retention.Tests/CompactionPolicyTests`, `Repository.Tests/Packing/BlobCompactionTests`, `Repository.Tests/Index/CompactionIndexTests`, `Repository.Tests/EndToEnd/CompactedRestoreTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`. The tombstone's reason is derived at condemnation by `Retention/CollectionPlanner` and written by `Retention/StagingSweep` (2026-09 amendment). A metadata blob is never a candidate, and the compactor refuses one by name, by `Repository.Packing/BlobStoreKeys`'s `ClassOf` (2026-10 amendment).
 
 ---
 
@@ -186,6 +186,10 @@ refuses. Rejected, as ADR-0025 Amendment 1 rejected it.
 - It does not choose a candidate by anything but dead bytes: age, access
   pattern and locality play no part. A blob half dead is a candidate whether
   it was written yesterday or last year.
+
+  > **Amended (2026-10).** And by its class: only a data blob is a candidate.
+  > A metadata blob is left whole for the collector
+  > ([amendment](#amendment-2026-10-compaction-takes-data-blobs-only)).
 - It does not reclaim space at a peer, and it does not compact a staging
   archive's blobs on behalf of a destination that holds its own copy.
 - It does not touch a manifest, a tree or a snapshot (FR-GC-004). The only
@@ -228,9 +232,52 @@ a compactor carries the live records and leaves the rest, so whatever it did
 not carry was already unreachable. A blob is drained by the rewrite or it is
 not.
 
+### Amendment (2026-10): compaction takes data blobs only
+
+Proving Phase 4 found the policy choosing metadata blobs. The backlog the
+planner hands over holds every blob kept whole for a live minority, of either
+class, and `Retention/CompactionPolicy` judged each one on its bounds alone.
+The compactor writes data blobs. At format 3 a data record's prefix carries
+its sealed record key beside its nonce, and a metadata record's carries the
+nonce alone, so a metadata record copied into a data blob is framed eighty
+bytes wrong. `Repository.Packing/BlobWriter` caught the mismatch and threw
+an `ArgumentException`, which the service's compaction phase does not catch. The
+retention command ended in that exception and returned no report, and no set
+after it in the run was collected. The next plan chose the same blob, so
+every pass after it did the same. A metadata blob is chosen once its dead
+records pass the same bounds as a data blob's, half the blob and four
+mebibytes. A set whose trees are large enough to leave that much dead history
+in one metadata blob would have met it.
+
+Three changes close it:
+
+1. **The policy takes data blobs only.** `Repository.Packing/BlobStoreKeys`'s
+   `ClassOf` reads the class from the blob's store key, and a metadata blob is
+   never a candidate. A metadata blob kept whole waits for the collector,
+   which condemns it once nothing in it is live, as it condemns any blob.
+2. **The compactor refuses a source that is not a data blob, by name.** It
+   checks every source before it writes anything and throws an
+   `InvalidOperationException`, which the phase reports as "compaction did
+   not run" without failing the command.
+3. **The dry run says why a metadata blob is left whole.** It counts metadata
+   blobs on a line of their own rather than among the blobs below the
+   threshold or past the budget, because neither is the reason (FR-GC-005).
+
+What it costs: a metadata blob's dead bytes come back only when the whole
+blob is dead. The format does not rule out relocating a metadata record.
+Format 3 carries each record's nonce in its own prefix in both classes, so a
+compactor that wrote metadata blobs could copy those records verbatim too.
+Nothing writes one, and this amendment does not build it.
+
+The test that found it is the one FR-GC-004 was owed: compacting every data
+blob in an archive changes no byte of any snapshot or manifest
+(`InterruptionTests/CompactionInterruptionTests`). Its first draft compacted
+every blob, the metadata blob that holds the manifests among them.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
 | 2026-09 | Accepted | The keyless compactor over `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync`, built in five commits; [ADR-0025](0025-compaction-reseals-records.md)'s twelve exit criteria answered one by one, and its *Specified only* row retired |
 | 2026-09 | Amended | The first named follow-up withdrawn rather than deferred: the reason a drained blob is tombstoned with is derived by `Retention/CollectionPlanner` from the distinction it already computes, so the limit rested on a premise its own planner contradicts. Found in passing that the reason field had never carried information at all — both of `Retention/StagingSweep`'s call sites hard-coded *unreferenced* |
+| 2026-10 | Amended | [Amendment](#amendment-2026-10-compaction-takes-data-blobs-only): compaction takes data blobs only. A metadata blob had been selectable, and the writer's framing check failed the retention command on every pass; `Retention/CompactionPolicy` now takes data blobs only, `Repository/BlobCompactor` refuses any other source by name before writing, and the dry run says why a metadata blob is left whole. Found by the first test to compare a compacted archive's manifest bytes |
