@@ -22,9 +22,10 @@ namespace FallbackPlan.Api.Tests;
 /// each snapshot, the wire half of NFR-TIME-002's "queryable per snapshot",
 /// 1.48's implausible capture time on each snapshot, the wire half of
 /// FR-GC-012's "the snapshot list says which are flagged and why",
-/// 1.54's bytes backed up and finishing count on the progress surface, and
+/// 1.54's bytes backed up and finishing count on the progress surface,
 /// 1.59's withheld names on a notice and the look that names them, the wire
-/// half of FR-WOR-007's notices.
+/// half of FR-WOR-007's notices, and 1.62's deleted-file duration on a
+/// retention policy, the wire half of FR-GC-014.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -885,7 +886,7 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
             AdoptedWithRetention(new RetentionPolicyDescriptor(KeepDaily: 7)), FrameCodec.SerializerOptions);
         var old = modern.Replace(
             ",\"retention\":{\"keep_daily\":7,\"keep_weekly\":null,\"keep_monthly\":null,"
-                + "\"min_generations\":null,\"deferral_days\":null}",
+                + "\"min_generations\":null,\"deferral_days\":null,\"keep_deleted_days\":null}",
             "",
             StringComparison.Ordinal);
         Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
@@ -893,6 +894,40 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         var result = JsonSerializer.Deserialize<ServiceResult>(old, FrameCodec.SerializerOptions);
         Assert.IsInstanceOfType<ArchiveAdoptedResult>(result, out var adopted);
         Assert.IsNull(adopted.Retention);
+    }
+
+    [TestMethod]
+    public void TheDeletedFileDuration_WireNameAndPre162Default()
+    {
+        // Contract 1.62 (FR-GC-014): a set's retention, and a destination's
+        // override of it, say how long a file deleted from the sources stays
+        // restorable.
+        var modern = JsonSerializer.Serialize(
+            new RetentionPolicyDescriptor(KeepDaily: 7, KeepDeletedDays: 90), FrameCodec.SerializerOptions);
+        Assert.Contains("\"keep_deleted_days\":90", modern, StringComparison.Ordinal);
+
+        // A pre-1.62 client never mentions it, and the service reads that as
+        // null: keep what stands, because the client could not see the
+        // duration to send it back.
+        var old = modern.Replace(",\"keep_deleted_days\":90", "", StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var read = JsonSerializer.Deserialize<RetentionPolicyDescriptor>(old, FrameCodec.SerializerOptions);
+        Assert.IsNotNull(read);
+        Assert.IsNull(read.KeepDeletedDays);
+        Assert.AreEqual(7, read.KeepDaily);
+    }
+
+    [TestMethod]
+    public void ADeletedFileDurationOfZero_ClearsIt_AndAloneIsTheEmptyPolicy()
+    {
+        // Zero is how a 1.62 client clears the duration, since null already
+        // means "keep what stands". A descriptor holding nothing else is
+        // therefore still the explicit "no policy".
+        Assert.IsTrue(new RetentionPolicyDescriptor(KeepDeletedDays: 0).IsEmpty);
+        Assert.IsTrue(new RetentionPolicyDescriptor().IsEmpty);
+        Assert.IsFalse(new RetentionPolicyDescriptor(KeepDeletedDays: 30).IsEmpty);
+        Assert.IsFalse(new RetentionPolicyDescriptor(KeepDaily: 7, KeepDeletedDays: 0).IsEmpty);
     }
 
     private static ArchiveAdoptedResult AdoptedWithRetention(RetentionPolicyDescriptor retention) =>

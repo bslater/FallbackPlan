@@ -34,11 +34,11 @@ public sealed class ConfigurationContractTests : IDisposable
     }
 
     [TestMethod]
-    public void ContractVersion_AnAzureBlobDestination_IsRecordedAtOneSixtyOne()
+    public void ContractVersion_TheDeletedFileDuration_IsRecordedAtOneSixtyTwo()
     {
         // Deliberately exact: bumping Current without landing here is how a
         // minor stops meaning anything (the convention since 1.2).
-        Assert.AreEqual("1.61", ContractVersion.Current.ToString());
+        Assert.AreEqual("1.62", ContractVersion.Current.ToString());
     }
 
     [TestMethod]

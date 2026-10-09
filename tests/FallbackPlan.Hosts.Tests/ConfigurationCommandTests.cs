@@ -15,7 +15,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// the file left byte-identical, because the page branches on reasons and the
 /// scheduler reads the file.
 /// Establishes FR-DEST-007, FR-DEST-011 and FR-DEST-012 alongside FR-SVC-015,
-/// FR-SVC-020 and a destination's half of FR-SVC-021.
+/// FR-SVC-020, a destination's half of FR-SVC-021, and the service's half of
+/// FR-GC-014: an edit that cannot see the deleted-file duration keeps it.
 /// </summary>
 [TestClass]
 public sealed class ConfigurationCommandTests : IDisposable
@@ -95,6 +96,62 @@ public sealed class ConfigurationCommandTests : IDisposable
                 new RetentionPolicyDescriptor())),
             _timeout.Token));
         Assert.IsNull(ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!.Retention);
+    }
+
+    [TestMethod]
+    public async Task UpsertBackupSet_TheDeletedFileDuration_SurvivesAnOlderClientsEdit_AndZeroClearsIt()
+    {
+        // FR-GC-014, contract 1.62: a client before 1.62 cannot see the
+        // duration, so a policy it sends back has none. That is "keep what
+        // stands", at the set and in a destination's override alike; zero is
+        // how a client that can see it says "none".
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 4h", [], [], ["vault"],
+                new RetentionPolicyDescriptor(KeepDaily: 14, KeepDeletedDays: 90),
+                new Dictionary<string, RetentionPolicyDescriptor> { ["vault"] = new(KeepMonthly: 4, KeepDeletedDays: 30) })),
+            _timeout.Token));
+
+        var seeded = ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!;
+        Assert.AreEqual(90, seeded.Retention?.KeepDeletedDays);
+        Assert.AreEqual(30, seeded.Destinations.Single().Retention?.KeepDeletedDays);
+
+        Assert.IsInstanceOfType<BackupSetsResult>(
+            await handler.ExecuteAsync(new ListBackupSetsCommand(), _timeout.Token), out var listed);
+        var descriptor = Assert.ContainsSingle(listed.Sets);
+        Assert.AreEqual(90, descriptor.Retention?.KeepDeletedDays);
+        Assert.AreEqual(30, descriptor.DestinationRetention?["vault"].KeepDeletedDays);
+
+        // An older client edits both policies' other rules.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 4h", [], [], ["vault"],
+                new RetentionPolicyDescriptor(KeepDaily: 7),
+                new Dictionary<string, RetentionPolicyDescriptor> { ["vault"] = new(KeepMonthly: 6) })),
+            _timeout.Token));
+
+        var edited = ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!;
+        Assert.AreEqual(new RetentionConfiguration { KeepDaily = 7, KeepDeletedDays = 90 }, edited.Retention);
+        Assert.AreEqual(
+            new RetentionConfiguration { KeepMonthly = 6, KeepDeletedDays = 30 }, edited.Destinations.Single().Retention);
+
+        // A 1.62 client clears both, and the other rules stand.
+        Assert.IsInstanceOfType<AcknowledgedResult>(await handler.ExecuteAsync(
+            new UpsertBackupSetCommand(new BackupSetDescriptor(
+                _harness.DocsSetId, "docs", _harness.SourceRoot, "every 4h", [], [], ["vault"],
+                new RetentionPolicyDescriptor(KeepDaily: 7, KeepDeletedDays: 0),
+                new Dictionary<string, RetentionPolicyDescriptor> { ["vault"] = new(KeepMonthly: 6, KeepDeletedDays: 0) })),
+            _timeout.Token));
+
+        var cleared = ClientConfiguration.Load(ConfigurationPath).FindSet("docs")!;
+        Assert.AreEqual(new RetentionConfiguration { KeepDaily = 7 }, cleared.Retention);
+        Assert.AreEqual(new RetentionConfiguration { KeepMonthly = 6 }, cleared.Destinations.Single().Retention);
     }
 
     [TestMethod]

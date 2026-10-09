@@ -95,24 +95,32 @@ public sealed record AcknowledgedResult : ServiceResult;
 /// One retention policy, as the contract carries it (ADR-0037). Every field
 /// optional; a declared value must be positive — zero is refused as a typo,
 /// absent is how "no rule" is said (FR-GC-001's never-destructive default).
+/// The deleted-file duration alone reads zero as "none", since its absence
+/// already means "as it stands".
 /// </summary>
 /// <param name="KeepDaily">Keep one snapshot per calendar day, this many days.</param>
 /// <param name="KeepWeekly">Keep one per ISO week, this many weeks.</param>
 /// <param name="KeepMonthly">Keep one per calendar month, this many months.</param>
 /// <param name="MinGenerations">The floor the other rules cannot override.</param>
 /// <param name="DeferralDays">How long retention may wait on a lagging destination before warning (FR-GC-009).</param>
+/// <param name="KeepDeletedDays">
+/// How many days a file deleted from the sources stays restorable (FR-GC-014,
+/// contract 1.62). On an upsert, null keeps what stands, because a pre-1.62
+/// client cannot see the field to send it back, and zero clears it.
+/// </param>
 public sealed record RetentionPolicyDescriptor(
     int? KeepDaily = null,
     int? KeepWeekly = null,
     int? KeepMonthly = null,
     int? MinGenerations = null,
-    int? DeferralDays = null)
+    int? DeferralDays = null,
+    int? KeepDeletedDays = null)
 {
-    /// <summary>Whether every field is absent — the "no policy" spelling.</summary>
+    /// <summary>Whether every field is absent, the duration's clearing zero aside — the "no policy" spelling.</summary>
     [JsonIgnore]
     public bool IsEmpty =>
         KeepDaily is null && KeepWeekly is null && KeepMonthly is null
-        && MinGenerations is null && DeferralDays is null;
+        && MinGenerations is null && DeferralDays is null && KeepDeletedDays is null or 0;
 }
 
 /// <summary>One capture root of a backup set (ADR-0040).</summary>

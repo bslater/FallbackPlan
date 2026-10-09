@@ -16,7 +16,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// FR-DR-006, FR-DR-009). A fresh installation pointed at an existing
 /// destination lists the archives it holds by descriptor alone and adopts one
 /// under its original repository and set ids with the passphrase, re-declaring
-/// the set from the shape the archive records, its own retention included —
+/// the set from the shape the archive records, its own retention included,
+/// down to how long it keeps a deleted file (FR-GC-014) —
 /// and the next backup is incremental against the replica rather than a
 /// re-seed. Nothing takes effect until that shape has been shown and
 /// confirmed: a preview writes nothing, an adoption without its confirmation
@@ -177,6 +178,34 @@ public sealed class DestinationAdoptionTests : IDisposable
         Assert.IsNull(
             Assert.ContainsSingle(set.Destinations).Retention,
             "a destination's retention override came back from the repository");
+    }
+
+    [TestMethod]
+    public async Task Adopt_AfterTheMachineIsGone_BringsBackHowLongTheSetKeptDeletedFiles_AndSaysSo()
+    {
+        // FR-GC-014 rides FR-DR-006: the deleted-file duration is part of the
+        // set's own policy, recorded with the rest of it, and an adoption
+        // that dropped it would let the next pass expire what a person was
+        // promised for ninety days.
+        _harness.WriteSourceFile("docs/notes.txt", "the first words");
+        await BackUpThenLoseTheMachineAsync(
+            retention: new RetentionConfiguration { KeepDaily = 7, MinGenerations = 3, KeepDeletedDays = 90 });
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var row = await DiscoverSingleAsync(handler);
+
+        Assert.IsInstanceOfType<ArchiveAdoptedResult>(
+            await AdoptConfirmedAsync(
+                handler, new AdoptArchiveCommand(Vault, row.RepositoryId, await EnvelopeForAsync(handler, row, PassphraseText))),
+            out var adopted, "adoption refused");
+
+        Assert.AreEqual(
+            new RetentionPolicyDescriptor(KeepDaily: 7, MinGenerations: 3, KeepDeletedDays: 90), adopted.Retention);
+        Assert.AreEqual(90, Assert.ContainsSingle(runtime.Configuration.BackupSets).Retention!.KeepDeletedDays);
+        Assert.IsTrue(
+            adopted.Lines.Any(line => line.Contains("a deleted file kept for 90 days", StringComparison.Ordinal)),
+            "the duration is not said in words: " + string.Join(" | ", adopted.Lines));
     }
 
     [TestMethod]

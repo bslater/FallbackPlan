@@ -105,6 +105,9 @@ public sealed record RecordedRetention
 
     /// <summary>How many days retention may be deferred before the gap is warned about (inner key 5).</summary>
     public uint? DeferralDays { get; init; }
+
+    /// <summary>How many days a file deleted from the sources stays restorable (inner key 6, FR-GC-014).</summary>
+    public uint? KeepDeletedDays { get; init; }
 }
 
 /// <summary>
@@ -246,7 +249,7 @@ public static class PolicyManifestCodec
         ReadOnlySpan<uint?> rules =
         [
             retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly,
-            retention.MinGenerations, retention.DeferralDays,
+            retention.MinGenerations, retention.DeferralDays, retention.KeepDeletedDays,
         ];
 
         var count = 0;
@@ -432,6 +435,7 @@ public static class PolicyManifestCodec
                 3 => retention with { KeepMonthly = reader.ReadUInt32() },
                 4 => retention with { MinGenerations = reader.ReadUInt32() },
                 5 => retention with { DeferralDays = reader.ReadUInt32() },
+                6 => retention with { KeepDeletedDays = reader.ReadUInt32() },
                 _ => throw new ManifestValidationException(Strings.PolicyManifestCodec_RetentionCarriesUnknownKey),
             };
         }

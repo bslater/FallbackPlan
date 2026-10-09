@@ -1509,7 +1509,7 @@ public sealed partial class ServiceCommandHandler(
             Schedule = command.Set.Schedule,
             IncludeRules = includeRules,
             ExcludeRules = excludeRules,
-            Retention = ToRetention(command.Set.Retention, existing?.Retention),
+            Retention = ToRetention(command.Set.Retention, existing?.Retention, existing?.Retention?.KeepDeletedDays),
             // Null preserves (a pre-1.17 client cannot see the field); zero
             // is the explicit default a 1.17 client may set back.
             Priority = command.Set.Priority ?? existing?.Priority,
@@ -1525,7 +1525,12 @@ public sealed partial class ServiceCommandHandler(
                 Retention = command.Set.DestinationRetention is { } overrides
                     // A carried map is the complete truth: named entries set
                     // (empty clears), unnamed destinations carry no override.
-                    ? ToRetention(overrides.GetValueOrDefault(name), existing: null)
+                    // Only the deleted-file duration, which a pre-1.62 client
+                    // cannot see, stands from the override it replaces.
+                    ? ToRetention(
+                        overrides.GetValueOrDefault(name), existing: null,
+                        existing?.Destinations.FirstOrDefault(reference =>
+                            string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Retention?.KeepDeletedDays)
                     // No map at all preserves whatever the set held, by name.
                     : existing?.Destinations.FirstOrDefault(reference =>
                         string.Equals(reference.Ref, name, StringComparison.Ordinal))?.Retention,

@@ -17,7 +17,8 @@ namespace FallbackPlan.Web.DomTests;
 /// The wizard keeps one size from its first step to its last, every control
 /// in it draws its whole focus ring, and its folder tree shows a folder
 /// nothing in which is captured a shade lighter rather than struck through,
-/// with toggles large enough to hit.
+/// with toggles large enough to hit. Its retention step, and an existing
+/// set's, say how long a deleted file stays restorable (FR-GC-014).
 /// </summary>
 [TestClass]
 [BrowserCondition]
@@ -71,6 +72,7 @@ public sealed class NewSetWizardDomTests
         await Expect(step).ToHaveAttributeAsync("data-section", "retention");
         await page.FillAsync("#ret-daily", "7");
         await page.FillAsync("#ret-min", "3");
+        await page.FillAsync("#ret-deleted", "90");
         await page.ClickAsync("[data-action=\"wiz-next\"]");
 
         // 6. The rest: when it runs, how it ranks, and its storage shape.
@@ -88,7 +90,8 @@ public sealed class NewSetWizardDomTests
         CollectionAssert.AreEqual(new[] { "*.docx" }, upsert.Set.IncludeRules.ToList());
         CollectionAssert.AreEqual(new[] { "*.iso" }, upsert.Set.ExcludeRules.ToList());
         CollectionAssert.AreEqual(new[] { "vault" }, upsert.Set.Destinations.ToList());
-        Assert.AreEqual(new RetentionPolicyDescriptor(KeepDaily: 7, MinGenerations: 3), upsert.Set.Retention);
+        Assert.AreEqual(
+            new RetentionPolicyDescriptor(KeepDaily: 7, MinGenerations: 3, KeepDeletedDays: 90), upsert.Set.Retention);
         Assert.AreEqual("daily at 03:15", upsert.Set.Schedule);
         Assert.AreEqual(5, upsert.Set.Priority);
         Assert.IsFalse(upsert.Set.DirectShip);
@@ -522,6 +525,49 @@ public sealed class NewSetWizardDomTests
         var upsert = await harness.ReceivedAsync<UpsertBackupSetCommand>();
         Assert.AreEqual(Wire.SetId, upsert.Set.Id);
         Assert.AreEqual("documents", upsert.Set.Name);
+    }
+
+    [TestMethod]
+    public async Task AnExistingSet_SaysHowLongItKeepsADeletedFile_AndAnEmptiedFieldSendsTheZeroThatClearsIt()
+    {
+        // FR-GC-014, contract 1.62: an absent duration keeps what stands, so
+        // a field the person emptied has to say zero, at the set and in a
+        // destination's override alike.
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = Service(sets:
+        [
+            Wire.Set() with
+            {
+                Retention = new RetentionPolicyDescriptor(KeepDaily: 7, KeepDeletedDays: 90),
+                DestinationRetention = new Dictionary<string, RetentionPolicyDescriptor>
+                {
+                    ["vault"] = new(KeepMonthly: 4, KeepDeletedDays: 30),
+                },
+            },
+        ]);
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync($"{harness.TokenedUrl}#config");
+
+        await page.ClickAsync("[data-action=\"cfg-edit-set\"][data-name=\"docs\"]");
+        await Expect(page.Locator("#set-summary")).ToContainTextAsync("a deleted file stays restorable for 90 days");
+
+        await page.ClickAsync("[data-action=\"sec-retention\"]");
+        await Expect(page.Locator("#ret-deleted")).ToHaveValueAsync("90");
+        await page.FillAsync("#ret-deleted", "");
+        await page.ClickAsync("[data-action=\"sec-save\"]");
+
+        await page.ClickAsync("[data-action=\"sec-destinations\"]");
+        var overridden = page.Locator("[data-ovr=\"vault:keepDeletedDays\"]");
+        await Expect(overridden).ToHaveValueAsync("30");
+        await overridden.FillAsync("");
+        await page.ClickAsync("[data-action=\"sec-save\"]");
+        await page.ClickAsync("[data-action=\"set-confirm-all\"]");
+
+        var upsert = await harness.ReceivedAsync<UpsertBackupSetCommand>();
+        Assert.AreEqual(new RetentionPolicyDescriptor(KeepDaily: 7, KeepDeletedDays: 0), upsert.Set.Retention);
+        Assert.AreEqual(
+            new RetentionPolicyDescriptor(KeepMonthly: 4, KeepDeletedDays: 0), upsert.Set.DestinationRetention!["vault"]);
     }
 
     private static Func<ServiceCommand, ServiceResult> Service(

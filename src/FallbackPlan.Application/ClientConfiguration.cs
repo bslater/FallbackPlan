@@ -242,7 +242,7 @@ public sealed record LoggingConfiguration
 public sealed record ClientConfiguration
 {
     /// <summary>The current schema version; a mismatch is an error, never a guess.</summary>
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     /// <summary>
     /// The clock skew margin, in hours, a configuration that states none
@@ -468,10 +468,15 @@ public sealed record ClientConfiguration
     /// an <c>endpoint</c>. The kind was reserved until now and carried no
     /// address, so nothing moves.
     /// </para>
+    /// <para>
+    /// <b>10 → 11</b> (ADR-0094): a set's retention, and a destination's
+    /// override of it, gain an optional <c>keep_deleted_days</c>. Nothing
+    /// moves — absent keeps no deleted file longer than the other rules do.
+    /// </para>
     /// </remarks>
     private static ClientConfiguration Migrate(ClientConfiguration configuration, string path)
     {
-        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or CurrentSchemaVersion))
+        if (configuration.SchemaVersion is not (2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10 or CurrentSchemaVersion))
         {
             return configuration; // Validate names the version defect
         }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Bodu;
 using FallbackPlan.Application;
 
@@ -115,6 +116,12 @@ public static class RetentionPlanner
     /// <c>clock_skew_margin_hours</c>, a day when omitted, as a configuration
     /// that states none means.
     /// </param>
+    /// <param name="deletedFiles">
+    /// Which neighbouring snapshots lost a path, for the deleted-file rule
+    /// (FR-GC-014): <see cref="DeletedFileSurvey"/>'s answers over at least
+    /// the pairs <see cref="DeletedFilePairs"/> names. Omitted, every pair
+    /// counts as one that lost a path, which keeps more.
+    /// </param>
     /// <returns>
     /// The selection. With no rule configured, everything is kept — the
     /// default is never the destructive reading. A snapshot whose capture time
@@ -123,30 +130,21 @@ public static class RetentionPlanner
     /// exactly what cannot be relied on. A snapshot a person asked to delete
     /// is expired whatever the rules say, and takes no part in anything that
     /// decides what else is kept, its time included: the others are judged as
-    /// they will be once it has gone.
+    /// they will be once it has gone. Beside a rule that expires anything, a
+    /// deleted-file duration keeps both snapshots either side of a lost path
+    /// until that long after the later one was captured.
     /// </returns>
     public static RetentionSelection Select(
         IReadOnlyList<SnapshotFact> snapshots,
         RetentionConfiguration policy,
         DateTimeOffset now,
-        TimeSpan? clockSkewMargin = null)
+        TimeSpan? clockSkewMargin = null,
+        DeletedFiles? deletedFiles = null)
     {
         ThrowHelper.ThrowIfNull(snapshots);
         ThrowHelper.ThrowIfNull(policy);
 
-        // A person's request outranks every rule, the implausible-time flag
-        // included (ADR-0078's deletion verb), so a requested snapshot is set
-        // aside before anything reads its time.
-        var standing = snapshots.Where(snapshot => snapshot.DeletionRequest is null).ToList();
-        var implausible = FindImplausible(standing, now, clockSkewMargin ?? DefaultMargin);
-        var doubted = implausible.ToDictionary(finding => finding.Snapshot, finding => finding.Direction);
-
-        // Newest first; ties broken by identity so input order never decides
-        // what survives.
-        var everything = snapshots
-            .OrderByDescending(snapshot => snapshot.CapturedAtUnixMilliseconds)
-            .ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal)
-            .ToList();
+        var (everything, doubted, ordered) = RuleOrder(snapshots, now, clockSkewMargin ?? DefaultMargin);
 
         var reasons = everything.ToDictionary(snapshot => snapshot, _ => new List<string>());
         foreach (var (snapshot, direction) in doubted)
@@ -154,15 +152,9 @@ public static class RetentionPlanner
             reasons[snapshot].Add(direction == ImplausibleCaptureTime.Behind ? ImplausibleBehindReason : ImplausibleAheadReason);
         }
 
-        // The rules below read capture times, so they read only the times that
-        // can be relied on. A flagged snapshot is already kept by its flag, and
-        // a requested one is going whatever they say.
-        var ordered = everything
-            .Where(snapshot => !doubted.ContainsKey(snapshot) && snapshot.DeletionRequest is null)
-            .ToList();
-
-        if (policy.KeepDaily is null && policy.KeepWeekly is null
-            && policy.KeepMonthly is null && policy.MinGenerations is null)
+        var noRule = policy.KeepDaily is null && policy.KeepWeekly is null
+            && policy.KeepMonthly is null && policy.MinGenerations is null;
+        if (noRule)
         {
             // An absent policy keeps everything: nothing expires until a
             // human writes a rule that says so.
@@ -219,6 +211,13 @@ public static class RetentionPlanner
             }
         }
 
+        // Deleted-file history (FR-GC-014) only ever keeps more, so a policy
+        // that already keeps everything has nothing for it to add.
+        if (!noRule && policy.KeepDeletedDays is { } deletedDays && deletedDays > 0)
+        {
+            KeepDeletedFileHistory(ordered, reasons, deletedDays, now, deletedFiles ?? DeletedFiles.Unknown);
+        }
+
         var keep = new List<SnapshotKeep>();
         var expire = new List<SnapshotFact>();
         foreach (var snapshot in everything)
@@ -239,6 +238,45 @@ public static class RetentionPlanner
             Requested = [.. expire.Where(snapshot => snapshot.DeletionRequest is not null)],
         };
     }
+
+    /// <summary>
+    /// The neighbouring snapshots the deleted-file rule reads (FR-GC-014,
+    /// ADR-0094), for <see cref="DeletedFileSurvey"/> to compare: adjacent in
+    /// the order the other rules read, newest first, and only those whose
+    /// newer snapshot was captured less than <paramref name="keepDeletedDays"/>
+    /// ago, since a deletion it dates could still keep something.
+    /// </summary>
+    /// <param name="snapshots">Every snapshot of the set, any order.</param>
+    /// <param name="keepDeletedDays">The duration, in days; the longest in force when several policies share the answer.</param>
+    /// <param name="now">The clock, as <see cref="Select"/> is given it.</param>
+    /// <param name="clockSkewMargin">As <see cref="Select"/> is given it; a day when omitted.</param>
+    /// <returns>The pairs, newest first. Each pair's newer snapshot is the next pair's older one.</returns>
+    public static IReadOnlyList<AdjacentSnapshots> DeletedFilePairs(
+        IReadOnlyList<SnapshotFact> snapshots, int keepDeletedDays, DateTimeOffset now, TimeSpan? clockSkewMargin = null)
+    {
+        ThrowHelper.ThrowIfNull(snapshots);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(keepDeletedDays);
+
+        var (_, _, ordered) = RuleOrder(snapshots, now, clockSkewMargin ?? DefaultMargin);
+        return [.. Neighbours(ordered, keepDeletedDays, now).Select(neighbour => neighbour.Pair)];
+    }
+
+    /// <summary>
+    /// Why the newest snapshot holding a deleted file is kept, in the dry-run
+    /// report's words: until the duration since the first snapshot without it
+    /// has run.
+    /// </summary>
+    /// <param name="until">When the duration runs.</param>
+    public static string DeletedFilesReason(DateTimeOffset until) =>
+        string.Create(CultureInfo.InvariantCulture, $"deleted files until {until.UtcDateTime:yyyy-MM-dd}");
+
+    /// <summary>
+    /// Why the first snapshot without a deleted file is kept: it dates the
+    /// deletion, and were it let go a later neighbour would date it instead.
+    /// </summary>
+    /// <param name="until">When the duration runs.</param>
+    public static string FirstWithoutDeletedFilesReason(DateTimeOffset until) =>
+        $"{DeletedFilesReason(until)} (first without them)";
 
     /// <summary>
     /// The snapshots whose capture time does not fit the order their writer
@@ -337,6 +375,95 @@ public static class RetentionPlanner
     }
 
     private static readonly TimeSpan DefaultMargin = TimeSpan.FromHours(ClientConfiguration.DefaultClockSkewMarginHours);
+
+    private const ulong MillisecondsPerDay = 86_400_000;
+
+    /// <summary>
+    /// Every snapshot newest first, the implausible ones with their direction,
+    /// and the order the rules read: the snapshots whose times can be relied
+    /// on and that nobody asked to delete.
+    /// </summary>
+    private static (List<SnapshotFact> Everything, Dictionary<SnapshotFact, ImplausibleCaptureTime> Doubted, List<SnapshotFact> Ordered) RuleOrder(
+        IReadOnlyList<SnapshotFact> snapshots, DateTimeOffset now, TimeSpan clockSkewMargin)
+    {
+        // A person's request outranks every rule, the implausible-time flag
+        // included (ADR-0078's deletion verb), so a requested snapshot is set
+        // aside before anything reads its time.
+        var standing = snapshots.Where(snapshot => snapshot.DeletionRequest is null).ToList();
+        var doubted = FindImplausible(standing, now, clockSkewMargin)
+            .ToDictionary(finding => finding.Snapshot, finding => finding.Direction);
+
+        // Newest first; ties broken by identity so input order never decides
+        // what survives.
+        var everything = snapshots
+            .OrderByDescending(snapshot => snapshot.CapturedAtUnixMilliseconds)
+            .ThenBy(snapshot => snapshot.SnapshotId, StringComparer.Ordinal)
+            .ToList();
+
+        // The rules read capture times, so they read only the times that can
+        // be relied on. A flagged snapshot is already kept by its flag, and a
+        // requested one is going whatever they say.
+        var ordered = everything
+            .Where(snapshot => !doubted.ContainsKey(snapshot) && snapshot.DeletionRequest is null)
+            .ToList();
+
+        return (everything, doubted, ordered);
+    }
+
+    /// <summary>
+    /// Adjacent pairs of <paramref name="newestFirst"/>, newest first, each
+    /// with the instant its newer snapshot's duration runs, while that instant
+    /// is still ahead of <paramref name="now"/>. Times only fall down the
+    /// list, so the first pair past it ends the walk.
+    /// </summary>
+    private static IEnumerable<(AdjacentSnapshots Pair, ulong Until)> Neighbours(
+        List<SnapshotFact> newestFirst, int days, DateTimeOffset now)
+    {
+        var duration = (ulong)days * MillisecondsPerDay;
+        var nowMs = now.ToUnixTimeMilliseconds();
+        for (var index = 0; index + 1 < newestFirst.Count; index++)
+        {
+            var newer = newestFirst[index];
+            var until = SaturatingAdd(newer.CapturedAtUnixMilliseconds, duration);
+            if (nowMs >= 0 && until <= (ulong)nowMs)
+            {
+                yield break;
+            }
+
+            yield return (new AdjacentSnapshots(newestFirst[index + 1], newer), until);
+        }
+    }
+
+    /// <summary>
+    /// Keeps both snapshots of every pair that lost a path while the duration
+    /// since the newer one's capture has not run (FR-GC-014): the older holds
+    /// the last version of what went, and the newer dates its going.
+    /// </summary>
+    /// <remarks>
+    /// The newer is kept for the same span as the older, and the pair is
+    /// released together. Were the newer let go first, the older's next
+    /// neighbour would be a later snapshot, the deletion would read as later
+    /// each time a neighbour expired, and the older would never go.
+    /// </remarks>
+    private static void KeepDeletedFileHistory(
+        List<SnapshotFact> newestFirst,
+        Dictionary<SnapshotFact, List<string>> reasons,
+        int days,
+        DateTimeOffset now,
+        DeletedFiles deletedFiles)
+    {
+        foreach (var (pair, until) in Neighbours(newestFirst, days, now))
+        {
+            if (!deletedFiles.Between(pair.Older, pair.Newer))
+            {
+                continue;
+            }
+
+            var at = CalendarTime(until);
+            reasons[pair.Older].Add(DeletedFilesReason(at));
+            reasons[pair.Newer].Add(FirstWithoutDeletedFilesReason(at));
+        }
+    }
 
     /// <summary>
     /// Which of one writer's snapshots, in publication order, make up the
