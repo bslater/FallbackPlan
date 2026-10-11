@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.62
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.63
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.62 — 65 commands. One line each; parameters, results
+The register as of 1.63 — 65 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -113,7 +113,8 @@ the passphrase), `get_status` (the per-set, per-destination matrix — since 1.2
 with each destination's baseline facts, since 1.24 with each demotion's
 machine cause and the set's `last_completed_at`, since 1.39 with the
 background window's state, since 1.43 with the byte-rate limits background
-work is held to).
+work is held to, since 1.63 with each staging set's sweep of its own
+staging archive).
 
 **Snapshots and restore** — `list_snapshots`, `list_directory`,
 `plan_restore` / `run_restore`, `open_restore_source` /
@@ -241,3 +242,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.60 | An S3-compatible destination ([ADR-0091](../../docs/adr/0091-an-s3-compatible-destination.md), FR-DEST-005). `DestinationDescriptor` gains `bucket`, `region`, `prefix` and `addressing`, its `endpoint` is the store's base URL for an `s3` destination, and `access_key_stored` says whether the service holds that destination's access key. New verb `set_destination_credentials` (destination name, `access_key_id`, `envelope`): the secret crosses only sealed to the service's recipient key, bound to the destination and key id, joining the envelope verbs by decision (NFR-SEC-009); the service holds it in its state directory and never answers it back. Additive: a pre-1.60 client sends none of the fields, and its upsert of another kind is read as before. |
 | 1.61 | An Azure Blob destination ([ADR-0093](../../docs/adr/0093-an-azure-blob-destination.md), FR-DEST-005, FR-REP-002). `DestinationDescriptor` gains `account` and `container`, which address an `azure-blob` destination with the `prefix` and `endpoint` it already had, an absent endpoint being the account's host at the public service; `authorised_by`, which credential the service holds (`access-key`, `shared-key` or `sas`); and `signature_expires`, when a held shared access signature stops being honoured, ISO 8601 in UTC. `access_key_stored` now answers for both object-store kinds. `set_destination_credentials` gains `kind`: `access-key`, which is what a request naming none means, `shared-key` for the account key, or `sas` for a shared access signature, each sealed under a purpose of its own and bound to the destination; `access_key_id` is required for an access key and refused for the other two, and a signature already past its expiry is refused. No member is named for the secret, which keeps the key-material guard as narrow as it was. Additive: a pre-1.61 client sends none of the fields, and its access key is stored as before. |
 | 1.62 | Deleted-file history ([ADR-0094](../../docs/adr/0094-a-deleted-file-stays-restorable.md), FR-GC-014). `RetentionPolicyDescriptor` gains `keep_deleted_days`, on a set's retention and on a destination's override alike: how many days a file deleted from the sources stays restorable. On `upsert_backup_set`, null keeps what stands, because a pre-1.62 client cannot see the field to send it back, and zero clears it; a descriptor holding only a zero is still the empty "no policy". `list_backup_sets`, `archive_adopted` and `adoption_preview` carry it back. Additive: a pre-1.62 client's edits leave the duration as they found it. |
+| 1.63 | The staging archive's own sweep ([ADR-0095](../../docs/adr/0095-the-staging-archive-heals.md), FR-VER-009). `BackupSetStatusDescriptor` gains `staging_sweep`, a `DeepSweepDescriptor` read as a destination row's `deep_sweep` is: when the circuit over the set's staging archive last closed, how far the one under way has read, whether it has stopped, and its cadence. A set with no staging archive reports none. Damage found there that no destination's copy has yet replaced is said in the set's `warnings`, which already crossed. Additive: a pre-1.63 client ignores the field, and a pre-1.63 service's sets read as reporting no staging sweep. |

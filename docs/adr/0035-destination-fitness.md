@@ -156,6 +156,15 @@ stored under another blob's key passes the digest check entirely. The length
 comparison is free from two listings the sweep already has, and is the only thing
 that catches it.
 
+> **Amended 2026-10 ([ADR-0095](0095-the-staging-archive-heals.md)):** the
+> sweep now binds every blob it reads to its key, from the envelope its first
+> read already opens, so a sound blob under another blob's key fails whatever
+> its length. That is what lets the staging archive be swept with no source
+> beside it. A blob that passes both checks is the blob, so a length that
+> differs from the source's is now the source's copy to prove: one that proves
+> unsound is the staging archive's finding, repaired from the destination
+> under the gate the sweep holds, and the destination is not failed for it.
+
 Sweep progress is recorded in its own fields and deliberately **not** written into
 the challenge coverage fields. A forty-of-forty segment written there would print
 100% coverage while the sweep was a thousandth of the way round. Only a
@@ -600,3 +609,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-10 | Amended (related) | [ADR-0091](0091-an-s3-compatible-destination.md) Amendment 1: an S3-compatible store is swept on Amendment 2's rule, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put, as Amendment 1 repairs a local path's; a store that does not answer is recorded unavailable, and one that refuses is a stall under the back-off. `Agent/ReplicaSweepJob`, `Agent/Scheduler`; `Hosts.Tests/S3DestinationTests`, `Hosts.Tests/DeepSweepCadenceTests` |
 | 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md): an Azure Blob container is swept on the same terms as an S3-compatible store, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put; the notice names whoever holds the account key or a signature for the container as who else could have altered it (`Agent/ReplicaSweepJob`, `Hosts.Tests/AzureBlobDestinationTests`) |
 | 2026-10 | Amended (related) | [ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5: the store contract promises ordinal order and a resume after any key, so the rotation's stated reason for sorting is corrected, and the deep sweep lists from its cursor rather than reading every blob for each segment (`Repository/ReplicaSweep`) |
+| 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §4: the sweep binds every blob to its key rather than leaning on the length comparison to catch a blob stored under another's key, and a length that differs is the source's copy to prove, so the staging archive's damage is repaired there and never blamed on the destination (`Repository/ReplicaSweep`, `Repository/VerifyEngine`, `Agent/ReplicaSweepJob`). Held by `Repository.Tests/ReplicaSweepTests` and `Hosts.Tests/StagingSweepTests` |
