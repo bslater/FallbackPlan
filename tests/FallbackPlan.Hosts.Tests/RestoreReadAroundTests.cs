@@ -97,10 +97,44 @@ public sealed class RestoreReadAroundTests : IDisposable
         Assert.Contains("destination 'vault'", line, StringComparison.Ordinal);
         Assert.Contains("the staging archive", line, StringComparison.Ordinal);
 
-        // Nothing repairs a staging archive in place, so a person hears of it.
+        // A person hears of it, and what was found is kept for the staging
+        // sweep to repair (FR-VER-009).
         var notice = Notice(runtime, "staging");
         Assert.Contains("the staging archive", notice.Message, StringComparison.Ordinal);
         Assert.Contains("no longer match what was sealed", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("replaces them from a destination's sound copy", notice.Message, StringComparison.Ordinal);
+        Assert.IsNotEmpty(
+            runtime.StagingSweeps.Find(runtime.Configuration.BackupSets.Single().Id)?.DamagedKeys ?? [],
+            "the keys a restore read around must outlive the restore");
+    }
+
+    [TestMethod]
+    public async Task Restore_StagingDamageItReadAround_IsRepairedByTheNextPass_WithoutASecondNotice()
+    {
+        // The restore found it and said so; the pass after it repairs it at
+        // once, its circuit resting or not, and says nothing the restore did
+        // not already say.
+        await using var runtime = await StartAsync(directShip: false, ("vault", null));
+        await BackUpAsync(runtime);
+        var start = DateTimeOffset.Now;
+        await PassAsync(runtime, start);
+        var tampered = TamperEveryDataBlob(_harness.RepositoryPath);
+        await RestoreAsync(runtime);
+
+        await PassAsync(runtime, start.AddMinutes(1));
+
+        foreach (var key in tampered)
+        {
+            CollectionAssert.AreEqual(
+                await File.ReadAllBytesAsync(PathOf(ReplicaRoot(Vault), key), Timeout),
+                await File.ReadAllBytesAsync(PathOf(_harness.RepositoryPath, key), Timeout),
+                $"'{key}' must be the destination's sound copy again");
+        }
+
+        Assert.IsNull(runtime.StagingSweeps.Find(runtime.Configuration.BackupSets.Single().Id)!.DamagedKeys);
+        Assert.IsFalse(
+            runtime.Notices.Unacknowledged.Any(notice => notice.Key.StartsWith("staging-damaged:", StringComparison.Ordinal)),
+            "the restore already said what it found");
     }
 
     [TestMethod]

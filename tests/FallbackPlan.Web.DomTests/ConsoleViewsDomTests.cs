@@ -66,6 +66,50 @@ public sealed class ConsoleViewsDomTests
     }
 
     [TestMethod]
+    public async Task Overview_AStagingSetsCard_SaysWhenItsStagingArchiveWasLastReadBack_AndADirectShipSetsSaysNothing()
+    {
+        // Contract 1.63 (FR-VER-009): the staging archive is swept as a
+        // destination is, and its set's card says so as a destination's card
+        // does. A set with no staging archive has no line, rather than one
+        // claiming a sweep that does not exist.
+        var now = NowMs;
+        await using var harness = await DomHarness.StartAsync();
+        harness.Clients.Client.Respond = command => command switch
+        {
+            DescribeServiceCommand => Wire.Describe("ready", signedInUser: "owner"),
+            GetStatusCommand => new StatusResult(
+                "vm",
+                [
+                    new BackupSetStatusDescriptor(
+                        "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null,
+                        Destinations: [],
+                        StagingSweep: new DeepSweepDescriptor(IntervalDays: 7, CircuitClosedAt: now - 3_600_000, LastReadAt: now - 3_600_000)),
+                    new BackupSetStatusDescriptor(
+                        "photos", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null,
+                        Destinations: []),
+                ],
+                now,
+                []),
+            ListBackupSetsCommand => new BackupSetsResult([Wire.Set()]),
+            _ => new AcknowledgedResult(),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await page.GotoAsync(harness.TokenedUrl);
+
+        var docs = page.Locator("details.set[data-set=\"docs\"]");
+        await docs.Locator("summary").ClickAsync();
+        await Expect(docs).ToContainTextAsync("Staging archive");
+        await Expect(docs).ToContainTextAsync("every stored object read back");
+        await Expect(docs).ToContainTextAsync("every 7 day(s)");
+
+        var photos = page.Locator("details.set[data-set=\"photos\"]");
+        await photos.Locator("summary").ClickAsync();
+        await Expect(photos).Not.ToContainTextAsync("Staging archive");
+    }
+
+    [TestMethod]
     public async Task Snapshots_SayHowFarTheCapturingClockStoodFromItsPeer()
     {
         // Contract 1.47 (NFR-TIME-002): three hours behind its peer is drawn

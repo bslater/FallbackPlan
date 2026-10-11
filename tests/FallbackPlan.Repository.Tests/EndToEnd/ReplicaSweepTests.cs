@@ -44,6 +44,9 @@ public sealed class ReplicaSweepTests : ArchiveTestHarness
         return (store, replica, keys);
     }
 
+    private static string PathOf(string root, ObjectKey key) =>
+        Path.Combine(root, key.Value.Replace('/', Path.DirectorySeparatorChar));
+
     private static async Task<List<ObjectKey>> BlobKeysAsync(LocalFileSystemObjectStore store)
     {
         var keys = new List<ObjectKey>();
@@ -199,42 +202,120 @@ public sealed class ReplicaSweepTests : ArchiveTestHarness
     }
 
     [TestMethod]
-    public async Task Sweep_AValidBlobStoredUnderAnothersKey_IsCaughtByTheLengthComparison()
+    public async Task Sweep_AValidBlobStoredUnderAnothersKey_IsFoundByItsKey_WithNoSourceToCompare()
     {
         // Why the digest alone is not enough, demonstrated rather than
-        // asserted. A replica holding a perfectly well-formed, correctly
-        // sealed blob under the WRONG key passes FooterAndDigest completely —
-        // the reader authenticates the bytes against their own footer and does
-        // not bind the store key to the envelope's blob id. Nothing internal to
-        // that object is wrong; it is simply not the object we put there.
-        // Comparing lengths against the source is what notices.
-        var (source, replica, keys) = await SeedAsync();
+        // asserted. A store holding a perfectly well-formed, correctly sealed
+        // blob under the WRONG key passes FooterAndDigest completely: the
+        // bytes authenticate against their own footer. Nothing internal to
+        // that object is wrong; it is simply not the object its key names,
+        // and its envelope says so. The staging archive is swept with no
+        // source beside it, so the envelope is the only witness it has.
+        var (_, replica, keys) = await SeedAsync();
         using var held = keys;
 
-        var intact = await ReplicaSweep.RunAsync(
-            Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
-        Assert.IsEmpty(intact.Findings, "the replica must start intact");
-
         var lengths = (await BlobKeysAsync(replica))
-            .Select(key => (Key: key, Length: new FileInfo(
-                Path.Combine(ReplicaRoot, key.Value.Replace('/', Path.DirectorySeparatorChar))).Length))
+            .Select(key => (Key: key, Length: new FileInfo(PathOf(ReplicaRoot, key)).Length))
             .ToList();
         var victim = lengths[0].Key;
-        var other = lengths.OrderByDescending(entry => Math.Abs(entry.Length - lengths[0].Length)).First().Key;
-        var otherPath = Path.Combine(ReplicaRoot, other.Value.Replace('/', Path.DirectorySeparatorChar));
-        var victimPath = Path.Combine(ReplicaRoot, victim.Value.Replace('/', Path.DirectorySeparatorChar));
-        Assert.AreNotEqual(
-            new FileInfo(otherPath).Length, new FileInfo(victimPath).Length,
-            "the two blobs must differ in length for this to reach the length check");
-        await File.WriteAllBytesAsync(victimPath, await File.ReadAllBytesAsync(otherPath));
+        var other = lengths[1].Key;
+        await File.WriteAllBytesAsync(PathOf(ReplicaRoot, victim), await File.ReadAllBytesAsync(PathOf(ReplicaRoot, other)));
+
+        using (var verifier = new VerifyEngine(Repo, keys, replica))
+        {
+            var unbound = await verifier.VerifyBlobAsync(
+                victim, new FileInfo(PathOf(ReplicaRoot, victim)).Length, VerifyLevel.FooterAndDigest,
+                CancellationToken.None);
+            Assert.IsTrue(unbound.Ok, "the digest must pass the swap, or this shows nothing about the key");
+        }
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source: null, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.AreEqual(victim.Value, Assert.ContainsSingle(result.DamagedKeys));
+        Assert.Contains("a different blob", Assert.ContainsSingle(result.Findings), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sweep_ALengthThatDiffersBecauseTheSourcesCopyIsDamaged_IsTheSourcesFinding_NotTheReplicas()
+    {
+        // The replica's blob is the one its key names, unaltered — its key
+        // and its digest say so — so a source holding another length under
+        // that key holds something else. Blaming the replica would repair a
+        // sound object, and leave the damaged one unsaid.
+        var (source, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        var cut = await File.ReadAllBytesAsync(PathOf(StoreRoot, victim));
+        await File.WriteAllBytesAsync(PathOf(StoreRoot, victim), cut[..^100]);
 
         var result = await ReplicaSweep.RunAsync(
             Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
 
-        Assert.IsNotEmpty(result.Findings);
-        Assert.Contains(
-            "where the source holds", string.Join(" ", result.Findings), StringComparison.Ordinal,
-            "the length comparison must be what catches this, not the digest");
+        Assert.IsEmpty(result.Findings, string.Join(" | ", result.Findings));
+        Assert.IsEmpty(result.DamagedKeys);
+        Assert.AreEqual(victim.Value, Assert.ContainsSingle(result.SourceDamagedKeys));
+        Assert.Contains(victim.Value, Assert.ContainsSingle(result.SourceFindings), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Sweep_ALengthThatDiffersWhereTheSourcesCopyWillNotRead_IsNobodysFinding()
+    {
+        // A copy that will not be read has not been shown to be altered, and
+        // the replica's has been shown not to be.
+        var (_, replica, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        var cut = await File.ReadAllBytesAsync(PathOf(StoreRoot, victim));
+        await File.WriteAllBytesAsync(PathOf(StoreRoot, victim), cut[..^100]);
+        var source = new UnreadableObjectStore(CreateStore(), key => key == victim.Value);
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.IsEmpty(result.Findings, string.Join(" | ", result.Findings));
+        Assert.IsEmpty(result.DamagedKeys);
+        Assert.IsEmpty(result.SourceDamagedKeys);
+        Assert.IsNull(result.StalledOn, "the replica's own copy read whole");
+    }
+
+    [TestMethod]
+    public async Task Sweep_ALengthThatDiffersWhereBothCopiesProveSound_IsNobodysFinding()
+    {
+        // Two blobs written under one identity, which only a writer whose
+        // counter went back can produce: each is the blob its key names,
+        // unaltered since it was sealed. Neither is damage, and replacing
+        // either from the other would lose the one replaced, so the sweep
+        // condemns neither.
+        var keys = CreateKeys();
+        using var held = keys;
+        var source = CreateStore();
+        using (var file = new MemoryStream(BuildTestFile()))
+        {
+            await CreateArchiver(source, keys).ArchiveAsync(file, CancellationToken.None);
+        }
+
+        Directory.CreateDirectory(ReplicaRoot);
+        var replica = new LocalFileSystemObjectStore(ReplicaRoot);
+        var noise = new byte[BuildTestFile().Length];
+        new Random(7).NextBytes(noise);
+        using (var file = new MemoryStream(noise))
+        {
+            await CreateArchiver(replica, keys).ArchiveAsync(file, CancellationToken.None);
+        }
+
+        var differing = (await BlobKeysAsync(replica))
+            .Where(key => File.Exists(PathOf(StoreRoot, key))
+                && new FileInfo(PathOf(StoreRoot, key)).Length != new FileInfo(PathOf(ReplicaRoot, key)).Length)
+            .ToList();
+        Assert.IsNotEmpty(differing, "the two archives must share a blob identity at different lengths");
+
+        var result = await ReplicaSweep.RunAsync(
+            Repo, keys, replica, source, cursor: null, budget: 1_000, CancellationToken.None);
+
+        Assert.IsEmpty(result.Findings, string.Join(" | ", result.Findings));
+        Assert.IsEmpty(result.DamagedKeys);
+        Assert.IsEmpty(result.SourceDamagedKeys);
     }
 
     [TestMethod]

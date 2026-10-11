@@ -24,8 +24,9 @@ namespace FallbackPlan.Api.Tests;
 /// FR-GC-012's "the snapshot list says which are flagged and why",
 /// 1.54's bytes backed up and finishing count on the progress surface,
 /// 1.59's withheld names on a notice and the look that names them, the wire
-/// half of FR-WOR-007's notices, and 1.62's deleted-file duration on a
-/// retention policy, the wire half of FR-GC-014.
+/// half of FR-WOR-007's notices, 1.62's deleted-file duration on a
+/// retention policy, the wire half of FR-GC-014, and 1.63's staging sweep on
+/// each set's status, the wire half of FR-VER-009's report of its circuit.
 /// </summary>
 /// <remarks>
 /// The wire names are asserted literally. They are derived from C# property
@@ -1045,6 +1046,32 @@ public sealed class ContractAdditiveFieldsTests : IDisposable
         Assert.AreEqual(0, row.VerifiedDigest);
         Assert.AreEqual(0, row.VerifiedChunk);
         Assert.AreEqual("proven", row.Verification);
+    }
+
+    [TestMethod]
+    public void TheStagingSweep_WireNameAndPre163Default()
+    {
+        // Contract 1.63 (FR-VER-009): a staging set's status carries the
+        // sweep of its own staging archive, in a destination's sweep's words.
+        var modern = JsonSerializer.Serialize(
+            new BackupSetStatusDescriptor(
+                "docs", new BackupSetStatus(ProtectionState.Protected, null, []), NextRun: null, Destinations: [],
+                StagingSweep: new DeepSweepDescriptor(IntervalDays: 7, CircuitClosedAt: 5_000, LastReadAt: 6_000)),
+            FrameCodec.SerializerOptions);
+
+        Assert.Contains("\"staging_sweep\":{\"interval_days\":7,\"circuit_closed_at\":5000", modern, StringComparison.Ordinal);
+
+        // A pre-1.63 frame, or a set with no staging archive, carries none and
+        // reads as none reported, never as a sweep that has not run.
+        var old = modern.Replace(
+            ",\"staging_sweep\":{\"interval_days\":7,\"circuit_closed_at\":5000,\"read_this_circuit\":0,"
+                + "\"last_read_at\":6000,\"stalls\":0,\"stalled_on\":null}",
+            "",
+            StringComparison.Ordinal);
+        Assert.AreNotEqual(modern, old, "the strip must have removed the field, or the old frame proves nothing");
+
+        var read = JsonSerializer.Deserialize<BackupSetStatusDescriptor>(old, FrameCodec.SerializerOptions)!;
+        Assert.IsNull(read.StagingSweep);
     }
 
     [TestMethod]

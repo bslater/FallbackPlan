@@ -66,7 +66,7 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
     [TestMethod]
     public async Task Repair_ASourceHoldingAnotherBlobUnderThisKey_IsNotTrusted()
     {
-        // The case the sweep's length comparison exists for, met here at the
+        // The case the sweep binds each blob to its key for, met here at the
         // other end. A well-formed, correctly sealed blob stored under the
         // wrong key passes every check of its own bytes. Only its envelope
         // says it is some other blob, and copying it over the damaged one

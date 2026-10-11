@@ -108,6 +108,49 @@ public sealed class StatusRelayNamesTests
     }
 
     [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheStagingSweepNamesTheViewReads()
+    {
+        // Contract 1.63 (FR-VER-009). stagingSweepLabel() hands the set's
+        // stagingSweep to sweepLabel(), which reads the same six names off it
+        // as off a destination's, and a set with no staging archive is told
+        // apart by the object being null.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [],
+                    StagingSweep: new DeepSweepDescriptor(
+                        IntervalDays: 7, CircuitClosedAt: 5_000, ReadThisCircuit: 3, LastReadAt: 8_000,
+                        Stalls: 1, StalledOn: "blobs/data/ab/abcdef")),
+                new BackupSetStatusDescriptor(
+                    "photos", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    []),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var sets = body.RootElement.GetProperty("sets");
+
+        var sweep = sets[0].GetProperty("stagingSweep");
+        Assert.AreEqual(7, sweep.GetProperty("intervalDays").GetInt32());
+        Assert.AreEqual(5_000, sweep.GetProperty("circuitClosedAt").GetInt64());
+        Assert.AreEqual(3, sweep.GetProperty("readThisCircuit").GetInt32());
+        Assert.AreEqual(8_000, sweep.GetProperty("lastReadAt").GetInt64());
+        Assert.AreEqual(1, sweep.GetProperty("stalls").GetInt32());
+        Assert.AreEqual("blobs/data/ab/abcdef", sweep.GetProperty("stalledOn").GetString());
+
+        Assert.AreEqual(JsonValueKind.Null, sets[1].GetProperty("stagingSweep").ValueKind);
+    }
+
+    [TestMethod]
     public async Task GetStatus_OverTheRelay_CarriesTheBackgroundWindowNamesTheViewReads()
     {
         // Contract 1.39 (ADR-0069). windowNote() reads three camelCase names
