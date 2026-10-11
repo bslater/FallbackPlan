@@ -1196,12 +1196,19 @@ public sealed record DeepSweepDescriptor(
 /// and from older services.
 /// </param>
 /// <param name="Destinations">The matrix rows, in declaration order.</param>
+/// <param name="StagingSweep">
+/// The sweep of the set's own staging archive, reported as a destination's
+/// deep sweep is (contract 1.63, FR-VER-009): when its circuit last closed,
+/// how far the one under way has read, and whether it has stopped. Null for a
+/// set with no staging archive, and from older services.
+/// </param>
 public sealed record BackupSetStatusDescriptor(
     string SetName,
     BackupSetStatus Status,
     string? NextRun,
     IReadOnlyList<DestinationStatusDescriptor> Destinations,
-    ulong? LastCompletedAt = null);
+    ulong? LastCompletedAt = null,
+    DeepSweepDescriptor? StagingSweep = null);
 
 /// <summary>
 /// The background window's state at the instant the status was observed

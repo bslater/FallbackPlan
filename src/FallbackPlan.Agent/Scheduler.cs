@@ -264,11 +264,11 @@ public static class Scheduler
     /// reaches its destinations promptly; and every pass, so a destination
     /// that was offline catches up under back-off with no operator action
     /// (FR-DEST-003) — the pass is the retry pump, there is no other timer.
-    /// Then phase 3, the deep sweep (FR-VER-002), strictly after the fan-out
-    /// completes: a sweep that read a replica while convergence was putting
-    /// and deleting in it would manufacture failures about damage that never
-    /// existed. Never throws — one faulted destination must never take the
-    /// scheduler loop, or an un-awaiting caller, down.
+    /// Then phase 3, the deep sweeps (FR-VER-002, FR-VER-009), strictly after
+    /// the fan-out completes: a sweep that read a replica while convergence
+    /// was putting and deleting in it would manufacture failures about damage
+    /// that never existed. Never throws — one faulted destination must never
+    /// take the scheduler loop, or an un-awaiting caller, down.
     /// </summary>
     private static async Task RunTransferPhasesAsync(
         ServiceRuntime runtime, DateTimeOffset now, bool userInitiated, CancellationToken cancellationToken)
@@ -318,6 +318,15 @@ public static class Scheduler
             if (!await HoldsSnapshotAsync(runtime, set.Id, cancellationToken).ConfigureAwait(false))
             {
                 continue;
+            }
+
+            // The staging archive ahead of its destinations: their sweeps
+            // compare lengths against it, and one that met its damage there
+            // would have to stop and repair it first (FR-VER-009).
+            if (StagingSweepJob.IsDue(runtime, set, (ulong)now.ToUnixTimeMilliseconds())
+                && StagingSweepJob.Enqueue(runtime, set, now, userInitiated) is { } staging)
+            {
+                sweeps.Add(staging);
             }
 
             foreach (var reference in set.Destinations)
@@ -682,7 +691,7 @@ public static class Scheduler
         && (record.VerifiedAt is not { } verified
             || (ulong)now.ToUnixTimeMilliseconds() >= verified + ChallengeIntervalMs);
 
-    private static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
+    internal static ulong BackoffMs(ServiceRuntime runtime, int consecutiveFailures) =>
         Math.Min((ulong)runtime.Options.PollSeconds * (1UL << Math.Min(consecutiveFailures, 6)), 3_600UL) * 1_000UL;
 
     /// <summary>What a backup's journal row says when it was cancelled before a worker reached it.</summary>

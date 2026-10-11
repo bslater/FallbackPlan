@@ -643,8 +643,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// "no policy". Additive: a pre-1.62 client's edits leave the duration as
     /// they found it.
     /// </para>
+    /// <para>
+    /// 1.63 reports the sweep of a staging set's own staging archive
+    /// (FR-VER-009, ADR-0095). `BackupSetStatusDescriptor` gains
+    /// `staging_sweep`, a `DeepSweepDescriptor` read as a destination row's
+    /// `deep_sweep` is: when its circuit last closed, how far the one under
+    /// way has read, and whether it has stopped. A set with no staging
+    /// archive reports none. Damage found there and not yet replaced is in
+    /// the set's warnings, which already crossed. Additive: a pre-1.63 client
+    /// ignores the field, and a pre-1.63 service's sets read as reporting no
+    /// staging sweep.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 62);
+    public static ContractVersion Current { get; } = new(1, 63);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

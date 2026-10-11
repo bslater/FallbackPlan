@@ -278,6 +278,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>The per-(set, destination) sync ledger (FR-DEST-004).</summary>
     public DestinationSyncStore DestinationSync { get; private set; } = null!;
 
+    /// <summary>Each staging set's sweep of its own staging archive (FR-VER-009).</summary>
+    public StagingSweepStore StagingSweeps { get; private set; } = null!;
+
     /// <summary>The durable notices ledger (architecture 10 §3.1's third channel).</summary>
     public NoticeStore Notices { get; private set; } = null!;
 
@@ -657,6 +660,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 new ServiceRuntime(options, writerRole, state, jobs)
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory, options.DestinationSyncObserver),
+                    StagingSweeps = StagingSweepStore.Open(options.StateDirectory),
                     Notices = notices,
                 });
         }

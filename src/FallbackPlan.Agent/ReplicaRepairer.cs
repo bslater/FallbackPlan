@@ -10,7 +10,8 @@ namespace FallbackPlan.Agent;
 /// set has (FR-VER-007, ADR-0035 Amendment 1): the staging archive, the
 /// set's other local-path destinations, then its paired peers over the
 /// retrieval session — nearest and cheapest first, as <see cref="SetCopies"/>
-/// lists them for a restore too.
+/// lists them for a restore too. In reverse, it repairs the staging archive
+/// itself from the set's destinations (FR-VER-009, ADR-0095).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -36,7 +37,8 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
 {
     private readonly ServiceRuntime _runtime;
     private readonly BackupSetConfiguration _set;
-    private readonly string _damagedDestination;
+    private readonly string? _excluding;
+    private readonly bool _includeStaging;
     private readonly ArchiveHandle _archive;
     private readonly bool _userInitiated;
     private readonly string _scratchRoot;
@@ -52,14 +54,38 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     public ReplicaRepairer(
         ServiceRuntime runtime, BackupSetConfiguration set, string damagedDestination, ArchiveHandle archive,
         bool userInitiated)
+        // A staging set's staging archive is the copy every destination was
+        // filled from. A direct-ship set has none: its store reads blobs back
+        // from the destinations, this one included.
+        : this(runtime, set, archive, damagedDestination, includeStaging: archive.ShipSink is null, userInitiated)
+    {
+    }
+
+    private ReplicaRepairer(
+        ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive, string? excluding,
+        bool includeStaging, bool userInitiated)
     {
         _runtime = runtime;
         _set = set;
-        _damagedDestination = damagedDestination;
+        _excluding = excluding;
+        _includeStaging = includeStaging;
         _archive = archive;
         _userInitiated = userInitiated;
         _scratchRoot = Path.Combine(runtime.Options.StateDirectory, "spool", "repair", Guid.NewGuid().ToString("n"));
     }
+
+    /// <summary>
+    /// A repairer for a staging set's staging archive, whose sources are the
+    /// set's destinations, every one of them: none holds the damage being
+    /// repaired, and each copy is proven before it is used.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose staging archive is damaged.</param>
+    /// <param name="archive">The set's archive, for its keys.</param>
+    /// <param name="userInitiated">Whether a person is waiting; a background repair reads its sources through their limits.</param>
+    public static ReplicaRepairer ForStaging(
+        ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive, bool userInitiated) =>
+        new(runtime, set, archive, excluding: null, includeStaging: false, userInitiated);
 
     /// <summary>Repairs each key at the replica, in order, and says what became of each.</summary>
     /// <param name="replica">The damaged destination's store.</param>
@@ -159,11 +185,5 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
 
     /// <summary>The sources, listed once, each opened at most once.</summary>
     private IReadOnlyList<CopySource> Sources() =>
-        (_copies ??= new SetCopies(
-            _runtime, _set, _archive, excluding: _damagedDestination,
-            // A staging set's staging archive is the copy every destination
-            // was filled from. A direct-ship set has none: its store reads
-            // blobs back from the destinations, this one included.
-            includeStaging: _archive.ShipSink is null,
-            _userInitiated)).Sources;
+        (_copies ??= new SetCopies(_runtime, _set, _archive, _excluding, _includeStaging, _userInitiated)).Sources;
 }

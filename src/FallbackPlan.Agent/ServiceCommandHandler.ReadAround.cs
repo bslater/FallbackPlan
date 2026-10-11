@@ -13,8 +13,8 @@ public sealed partial class ServiceCommandHandler
     /// replaces a local path's from a sound copy (FR-VER-007) and a peer's are
     /// held until its owner removes them (ADR-0035 Amendment 2); either way
     /// the pair is failed (FR-VER-005) and a notice says what was found. The
-    /// staging archive has no ledger row and nothing repairs it in place, so
-    /// its damage is a notice alone.
+    /// staging archive's go on the set's staging sweep record, which the next
+    /// pass repairs from the set's destinations (FR-VER-009).
     /// </summary>
     /// <remarks>
     /// Damage only. A copy that would not read, or did not hold a blob, is
@@ -46,11 +46,15 @@ public sealed partial class ServiceCommandHandler
 
             if (string.Equals(found.Key, SetCopies.StagingName, StringComparison.Ordinal))
             {
+                // On the record before anything is said, as a destination's
+                // go on its ledger row: the next pass tries them at once.
+                runtime.StagingSweeps.RecordDamage(set.Id, keys, resolved: []);
                 runtime.Notices.Raise(
                     $"restore-found-damage:{set.Id}:staging",
-                    $"A restore found the staging archive of set '{set.Name}' holding {what} {after}Nothing here "
-                    + "repairs a staging archive in place, so those objects stay as they are: check the disk that "
-                    + "holds it, and the filesystem, before counting on it.",
+                    $"A restore found the staging archive of set '{set.Name}' holding {what} {after}The service "
+                    + "replaces them from a destination's sound copy and re-verifies them where they land. Its disk "
+                    + "altered a backup once and may again: check the disk that holds it, and the filesystem, before "
+                    + "counting on it.",
                     nowMs,
                     names);
                 continue;

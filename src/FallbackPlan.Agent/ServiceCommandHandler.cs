@@ -3040,6 +3040,9 @@ public sealed partial class ServiceCommandHandler(
                 LatestCaptureStatus = latest?.CaptureStatus,
                 Destinations = inputs,
                 DamageFindings = findings,
+                StagingDamage = set.DirectShip
+                    ? 0
+                    : runtime.StagingSweeps.Find(set.Id)?.DamagedKeys?.Count ?? 0,
                 RequiredObjectsMissing = false,
             });
 
@@ -3052,7 +3055,8 @@ public sealed partial class ServiceCommandHandler(
 
             sets.Add(new BackupSetStatusDescriptor(
                 set.Name, status, nextRun, rows,
-                LastCompletedAt: lastCompleted == 0 ? null : lastCompleted));
+                LastCompletedAt: lastCompleted == 0 ? null : lastCompleted,
+                StagingSweep: set.DirectShip ? null : DescribeStagingSweep(runtime.StagingSweeps.Find(set.Id))));
         }
 
         // From the parsed window, never from the presence of the text: a window
@@ -3203,6 +3207,20 @@ public sealed partial class ServiceCommandHandler(
                 ledger?.SweptAt,
                 ledger?.SweepStalls ?? 0,
                 ledger?.SweepStalledOn);
+
+    /// <summary>
+    /// A staging set's sweep of its own staging archive, as a destination's
+    /// deep sweep is reported (FR-VER-009): one that has not run is a
+    /// descriptor with nothing closed, never a null.
+    /// </summary>
+    internal static DeepSweepDescriptor DescribeStagingSweep(StagingSweepRecord? record) =>
+        new(
+            StagingSweepJob.IntervalDays,
+            record?.SweepCompletedAt,
+            record?.SweptThisCircuit ?? 0,
+            record?.SweptAt,
+            record?.SweepStalls ?? 0,
+            record?.SweepStalledOn);
 
     /// <summary>The documented kebab vocabulary for <see cref="DestinationStatusDescriptor.Reason"/>; null when there is nothing to explain.</summary>
     private static string? ReasonLabel(SyncCause cause) => cause switch

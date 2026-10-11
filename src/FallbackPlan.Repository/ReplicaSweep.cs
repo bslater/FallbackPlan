@@ -27,6 +27,16 @@ public sealed record ReplicaSweepResult(
     public IReadOnlyList<string> DamagedKeys { get; init; } = [];
 
     /// <summary>
+    /// The keys whose copy at the source proved unsound where the replica's
+    /// is the blob its key names: the source's findings, never the
+    /// replica's, for whatever heals the source (ADR-0095).
+    /// </summary>
+    public IReadOnlyList<string> SourceDamagedKeys { get; init; } = [];
+
+    /// <summary>What was wrong with each of <see cref="SourceDamagedKeys"/>, one line each, in the same order.</summary>
+    public IReadOnlyList<string> SourceFindings { get; init; } = [];
+
+    /// <summary>
     /// Every key this segment read, damaged or not — what a caller holding an
     /// earlier finding needs to know which of its keys have now been read
     /// again, and a key the segment did not reach must not be taken for one
@@ -65,18 +75,29 @@ public sealed record ReplicaSweepResult(
 /// eventually, checked against the digest sealed into its own footer.
 /// </para>
 /// <para>
-/// Two checks, because one is demonstrably not enough.
+/// Two checks of each blob, because one is demonstrably not enough.
 /// <see cref="VerifyLevel.FooterAndDigest"/> proves the blob is <b>internally
 /// consistent</b>: its bytes still hash to what its own footer says. That
 /// catches bit-rot, which is the common case. It does <b>not</b> catch a
 /// well-formed, correctly sealed blob stored under a <i>different</i> blob's
-/// key — the reader authenticates bytes against their own footer and does not
-/// bind the store key to the envelope's blob id, so such an object passes
-/// completely. Nothing internal to it is wrong; it is simply not the object we
-/// put there. Comparing each blob's length against the source's is what
-/// notices, and <c>ReplicaSweepTests</c> pins exactly that: the digest check
-/// passes the swap and the length check fails it. A key the source no longer
-/// lists is skipped rather than blamed — that is a trimmed object whose only
+/// key: the bytes authenticate against their own footer, so such an object
+/// passes completely. Nothing internal to it is wrong; it is simply not the
+/// object its key names, and its envelope says so. Each blob is therefore
+/// bound to its key as well, which needs nothing beside the store being read
+/// — the staging archive is swept with no source at all (ADR-0095), and
+/// <c>ReplicaSweepTests</c> pins exactly that: the digest passes the swap and
+/// the key does not.
+/// </para>
+/// <para>
+/// A blob that passes both is the blob its key names, unaltered, so a source
+/// listing another length under that key holds something else. Its copy is
+/// proven where it sits, and one that does not prove sound is the source's
+/// finding, never the replica's: repairing the replica would replace a sound
+/// object and leave the damaged one unsaid. Nothing else about a length is
+/// anyone's finding — a source copy that will not be read has not been shown
+/// to be altered, and one that proves sound is a second blob written under
+/// the same identity, which replacing either would lose. A key the source no
+/// longer lists is skipped too — that is a trimmed object whose only
 /// remaining home may be this replica (ADR-0034 §6).
 /// </para>
 /// <para>
@@ -117,7 +138,7 @@ public static class ReplicaSweep
     /// <param name="repositoryId">The replica's repository identity — the same as the source's.</param>
     /// <param name="keys">The source's key set; a replica is a byte copy, so the same keys open it.</param>
     /// <param name="replica">The destination's store.</param>
-    /// <param name="source">The staging archive's store, for the length comparison; null skips that half.</param>
+    /// <param name="source">The staging archive's store, for the length comparison; null when there is none, or it is the store being swept.</param>
     /// <param name="cursor">Where to resume, or null to start at the beginning.</param>
     /// <param name="budget">The most blobs to examine; must be positive.</param>
     /// <param name="cancellationToken">Cancels the segment; the cursor is not advanced.</param>
@@ -147,7 +168,7 @@ public static class ReplicaSweep
     /// <param name="repositoryId">The replica's repository identity — the same as the source's.</param>
     /// <param name="keys">The source's key set; a replica is a byte copy, so the same keys open it.</param>
     /// <param name="replica">The destination's store.</param>
-    /// <param name="source">The staging archive's store, for the length comparison; null skips that half.</param>
+    /// <param name="source">The staging archive's store, for the length comparison; null when there is none, or it is the store being swept.</param>
     /// <param name="cursor">Where to resume, or null to start at the beginning.</param>
     /// <param name="budget">The most blobs to examine; must be positive.</param>
     /// <param name="byteBudget">The most bytes to read before stopping at a blob boundary; must be positive.</param>
@@ -198,6 +219,8 @@ public static class ReplicaSweep
 
         var findings = new List<string>();
         var damaged = new List<string>();
+        var sourceDamaged = new List<string>();
+        var sourceFindings = new List<string>();
         var read = new List<string>();
         using var verifier = new VerifyEngine(repositoryId, keys, replica);
         string? lastExamined = null;
@@ -220,7 +243,7 @@ public static class ReplicaSweep
             try
             {
                 result = await verifier
-                    .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, cancellationToken)
+                    .VerifyBlobAsync(storeKey, length, VerifyLevel.FooterAndDigest, bindKey: true, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -230,6 +253,8 @@ public static class ReplicaSweep
                 return new ReplicaSweepResult(examined - 1, findings, lastExamined ?? cursor, CompletedCircuit: false)
                 {
                     DamagedKeys = damaged,
+                    SourceDamagedKeys = sourceDamaged,
+                    SourceFindings = sourceFindings,
                     ExaminedKeys = read,
                     StalledOn = key,
                     Stall = exception.Message,
@@ -243,13 +268,12 @@ public static class ReplicaSweep
             }
             else if (source is not null
                 && await LengthAtAsync(source, storeKey, cancellationToken).ConfigureAwait(false) is { } sourceLength
-                && sourceLength != length)
+                && sourceLength != length
+                && await UnsoundAtAsync(repositoryId, keys, source, storeKey, cancellationToken).ConfigureAwait(false)
+                    is { } defect)
             {
-                // Internally consistent and still not what we hold. A key the
-                // source no longer lists is skipped above, not blamed.
-                findings.Add(
-                    $"blob {key}: the replica holds {length} byte(s) where the source holds {sourceLength}");
-                damaged.Add(key);
+                sourceFindings.Add($"blob {key}: {defect}");
+                sourceDamaged.Add(key);
             }
 
             // Only a blob whose read completed is one this segment read.
@@ -265,8 +289,32 @@ public static class ReplicaSweep
         return new ReplicaSweepResult(examined, findings, completed ? null : lastExamined, completed)
         {
             DamagedKeys = damaged,
+            SourceDamagedKeys = sourceDamaged,
+            SourceFindings = sourceFindings,
             ExaminedKeys = read,
         };
+    }
+
+    /// <summary>
+    /// Why what <paramref name="store"/> holds under <paramref name="key"/> is
+    /// not the blob, unaltered; null when it is, when nothing is held there,
+    /// and when it could not be read.
+    /// </summary>
+    private static async ValueTask<string?> UnsoundAtAsync(
+        RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store, ObjectKey key,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var proof = await ReplicaRepair.ProveAsync(repositoryId, keys, store, key, cancellationToken)
+                .ConfigureAwait(false);
+            return proof is { Held: true, Sound: false } ? proof.Detail : null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Not read, so not shown to be altered.
+            return null;
+        }
     }
 
     private static async ValueTask<long?> LengthAtAsync(
