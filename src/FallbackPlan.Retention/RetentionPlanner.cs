@@ -164,25 +164,32 @@ public static class RetentionPlanner
             }
         }
 
+        // A bucket's label is its key, so it is formatted in the invariant
+        // culture: the process culture's calendar need not be the Gregorian
+        // one, and a month named in another calendar groups snapshots by its
+        // months (NFR-PORT-001). The windows need no such care, because
+        // DateTimeOffset's arithmetic is Gregorian in every culture.
         if (policy.KeepDaily is { } days)
         {
             KeepNewestPerBucket(
                 ordered, reasons, now.AddDays(-days),
-                at => $"daily {at:yyyy-MM-dd}");
+                at => string.Create(CultureInfo.InvariantCulture, $"daily {at:yyyy-MM-dd}"));
         }
 
         if (policy.KeepWeekly is { } weeks)
         {
             KeepNewestPerBucket(
                 ordered, reasons, now.AddDays(-7 * weeks),
-                at => $"weekly {System.Globalization.ISOWeek.GetYear(at.UtcDateTime)}-W{System.Globalization.ISOWeek.GetWeekOfYear(at.UtcDateTime):00}");
+                at => string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"weekly {ISOWeek.GetYear(at.UtcDateTime)}-W{ISOWeek.GetWeekOfYear(at.UtcDateTime):00}"));
         }
 
         if (policy.KeepMonthly is { } months)
         {
             KeepNewestPerBucket(
                 ordered, reasons, now.AddMonths(-months),
-                at => $"monthly {at:yyyy-MM}");
+                at => string.Create(CultureInfo.InvariantCulture, $"monthly {at:yyyy-MM}"));
         }
 
         if (policy.MinGenerations is { } floor)
