@@ -103,6 +103,12 @@ Precedence is therefore explicit:
 > The rules stand as written. Only the expectation that rule 2 would seldom
 > decide is withdrawn.
 
+> **Implementation note (2026-10).** This implementation's compactor
+> publishes no supersession that rules 1 and 2 would rank below the entry it
+> relocates. It leaves the blob whole instead
+> ([ADR-0017 Amendment 2](../../docs/adr/0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)).
+> A reader is unaffected.
+
 Two **insertions** for one `object_id` are benign: two writers independently stored the same content in different blobs, and either location serves. A **supersession** is ordered and must be honoured.
 
 Rule 3 depends on the reader knowing which blobs are gone, and **an implementation that supplies no such knowledge does not satisfy rule 3 — it merely never triggers it.** "Known to be deleted" is a positive claim, so a reader that cannot make it MUST assume live: absence from a listing is not deletion on a provider that lists eventually, and discarding a valid location on that evidence turns a stale index into an outage. A reader whose blob inventory is exhaustive — every blob listed and every one openable — MAY treat absence as deletion; one that had to skip a blob MUST NOT, because an inventory with holes cannot distinguish "collected" from "unreadable right now".

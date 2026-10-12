@@ -107,6 +107,12 @@ mandatory dry run (FR-GC-005) and the act cannot disagree about what a pass
 would rewrite. A plan the collector vetoed selects nothing: a pass that
 cannot say what is garbage cannot say what is worth rewriting either.
 
+> **Amended 2026-10 ([ADR-0017 Amendment 2](0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)).**
+> The selection also leaves whole a blob whose relocation would not stand,
+> and the pass asks the same rule again before its intent. The two ask one
+> rule, so they disagree only when the catalogue moved between them, and then
+> the pass declines the blob and writes nothing for it.
+
 ## Consequences
 
 **Positive**
@@ -190,6 +196,11 @@ refuses. Rejected, as ADR-0025 Amendment 1 rejected it.
   > **Amended (2026-10).** And by its class: only a data blob is a candidate.
   > A metadata blob is left whole for the collector
   > ([amendment](#amendment-2026-10-compaction-takes-data-blobs-only)).
+
+  > **Amended (2026-10).** Nor is a blob whose relocation would not stand. A
+  > blob is left whole when another writer's entries hold its live records
+  > under an id that sorts above this writer's
+  > ([ADR-0017 Amendment 2](0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)).
 - It does not reclaim space at a peer, and it does not compact a staging
   archive's blobs on behalf of a destination that holds its own copy.
 - It does not touch a manifest, a tree or a snapshot (FR-GC-004). The only
@@ -282,3 +293,4 @@ every blob, the metadata blob that holds the manifests among them.
 | 2026-09 | Amended | The first named follow-up withdrawn rather than deferred: the reason a drained blob is tombstoned with is derived by `Retention/CollectionPlanner` from the distinction it already computes, so the limit rested on a premise its own planner contradicts. Found in passing that the reason field had never carried information at all — both of `Retention/StagingSweep`'s call sites hard-coded *unreferenced* |
 | 2026-10 | Amended | [Amendment](#amendment-2026-10-compaction-takes-data-blobs-only): compaction takes data blobs only. A metadata blob had been selectable, and the writer's framing check failed the retention command on every pass; `Retention/CompactionPolicy` now takes data blobs only, `Repository/BlobCompactor` refuses any other source by name before writing, and the dry run says why a metadata blob is left whole. Found by the first test to compare a compacted archive's manifest bytes |
 | 2026-10 | Accepted | Decision 2 proved against the service rather than a fixture: a direct-ship set's compaction, cut after each of its five steps, leaves the set restoring from its destination, and the next pass finishes the work (`Hosts.Tests/CompactionRetentionTests`). A cut before the index moves leaves the next pass compacting again into a blob of its own, and the blob the cut pass uploaded is covered by its unretired intent until that intent expires |
+| 2026-10 | Amended | A blob whose relocation would not stand is left whole ([ADR-0017 Amendment 2](0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)). `Retention/CompactionPolicy` leaves it out of the candidates and says why, and `Repository/CompactionPass` declines it before its intent. A pass under the lower of two writer ids no longer compacts records the next plan would move back |

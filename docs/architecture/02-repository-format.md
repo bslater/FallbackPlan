@@ -248,6 +248,11 @@ Precedence is therefore explicit rather than emergent:
 > id is undone by the next retention pass: churn, not loss. No reader orders
 > by the entry type.
 
+> **Amended 2026-10 ([ADR-0017 Amendment 2](../adr/0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)).**
+> The compactor declines a compaction whose supersessions would lose, before
+> it writes anything. A relocation it publishes stands whichever writer
+> published it.
+
 With precedence stated, merging is safe for the reason that actually holds: entries applied in any order converge on the same state, because the winner is a property of the entries themselves rather than of arrival sequence. See [ADR-0017](../adr/0017-index-entry-supersession.md).
 
 Listing remains a useful accelerator for finding a recent checkpoint quickly. It is no longer load-bearing for correctness.
