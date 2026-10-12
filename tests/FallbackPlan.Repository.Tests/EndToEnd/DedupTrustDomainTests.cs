@@ -31,13 +31,15 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// device domain is the default (ADR-0006, amended). What these establish
 /// about it is exactly that refusal.
 ///
-/// The changed-file pair pins what attribution does once both writers hold a
-/// segment. The writer credited is the writer of the location that wins the
-/// index's tie-break, and between two writers that is the one whose id sorts
-/// higher (ADR-0017 Amendment 1). So a second writer under a lower id is never
-/// credited with its own copy, and stores a changed file's unchanged segments
-/// again every time the file changes. Nothing is lost; the cost is storage and
-/// upload, and the pair holds it until the index ranks by more than writer id.
+/// The changed-file tests pin what the device domain counts as a writer's own
+/// copy once both writers hold a segment. It is any live entry the writer
+/// published, not only the one that wins the index's tie-break, which between
+/// two writers is the one whose id sorts higher (ADR-0017 Amendment 1). So a
+/// second writer stores a changed file's unchanged segments once, whichever
+/// way its id sorts, and a copy whose blob is known deleted is no copy (ADR-0006,
+/// amended 2026-10). A reader still resolves a shared segment to the copy that
+/// wins, so the domain decides what a writer references, and not which copy a
+/// restore reads.
 /// </summary>
 [TestClass]
 public sealed class DedupTrustDomainTests : ArchiveTestHarness
@@ -137,17 +139,33 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     }
 
     /// <summary>
-    /// The same writer under an id that sorts below the first's is never
-    /// credited with its own copy, because the first writer's location wins
-    /// every tie-break. Each change to the file stores its unchanged segment
-    /// again.
+    /// The same writer under an id that sorts below the first's. The first
+    /// writer's location wins every tie-break, so this writer's copy of the
+    /// shared segment is never the one a reader resolves to. It is still its
+    /// own copy, which is what the device domain asks for, so each later
+    /// change stores only the segment that changed. Storing the unchanged one
+    /// again would add a third copy that loses the tie-break too.
     /// </summary>
     [TestMethod]
-    public async Task DeviceDomain_ASecondWriterWhoseIdSortsLower_StoresAChangedFilesUnchangedSegmentAgain_EveryTime()
+    public async Task DeviceDomain_ASecondWriterWhoseIdSortsLower_AlsoStoresAChangedFilesUnchangedSegmentOnce()
     {
         Assert.IsLessThan(0, LowerSecondWriter.ToArray().AsSpan().SequenceCompareTo(Writer.ToArray()));
 
         var stored = await SecondWriterChangesASharedFileAsync(LowerSecondWriter);
+
+        SequenceAssert.AreEqual([2, 1, 1], stored);
+    }
+
+    /// <summary>
+    /// A copy counts only while its blob is not known deleted. With each of
+    /// the second writer's blobs recorded deleted after the backup that
+    /// wrote it, the segment the first writer holds is refused every time
+    /// and stored again, as for a writer that never held it.
+    /// </summary>
+    [TestMethod]
+    public async Task DeviceDomain_AWritersCopyInABlobKnownDeleted_IsNotItsOwnCopy()
+    {
+        var stored = await SecondWriterChangesASharedFileAsync(LowerSecondWriter, deleteEachBackupsBlobs: true);
 
         SequenceAssert.AreEqual([2, 2, 2], stored);
     }
@@ -304,10 +322,13 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
     /// The first writer stores a two-segment file. A second writer, with a
     /// catalogue rebuilt from the index alone, then backs it up three times:
     /// as the first stored it, and twice more with its tail changed, so its
-    /// first segment never changes. Returns the data records each of the
-    /// second writer's backups stored.
+    /// first segment never changes. With <paramref name="deleteEachBackupsBlobs"/>
+    /// the second writer's catalogue records each backup's blobs deleted
+    /// after it, as a sweep would. Returns the data records each of the second
+    /// writer's backups stored.
     /// </summary>
-    private async Task<IReadOnlyList<int>> SecondWriterChangesASharedFileAsync(WriterId second)
+    private async Task<IReadOnlyList<int>> SecondWriterChangesASharedFileAsync(
+        WriterId second, bool deleteEachBackupsBlobs = false)
     {
         var store = new CountingObjectStore(CreateStore());
         using var keys = CreateKeys();
@@ -347,6 +368,14 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
 
             stored.Add(published.ContentBlobs.Sum(blob => blob.RecordCount));
             Assert.IsEmpty(catalogue.Findings());
+
+            if (deleteEachBackupsBlobs)
+            {
+                foreach (var blob in published.ContentBlobs)
+                {
+                    catalogue.SetBlobState(blob.BlobId, BlobState.Deleted);
+                }
+            }
         }
 
         return stored;
