@@ -164,4 +164,37 @@ public static class IndexPrecedence
 
         return left.Sequence.CompareTo(right.Sequence);
     }
+
+    /// <summary>
+    /// Whether an entry <paramref name="writer"/> has yet to publish, at
+    /// <paramref name="generation"/>, would outrank an incumbent under
+    /// <see cref="Compare"/>: the question a writer asks before it publishes
+    /// a relocation the next reader would otherwise undo (ADR-0017
+    /// Amendment 2).
+    /// </summary>
+    /// <remarks>
+    /// No sequence is asked for. A writer's next sequence exceeds every one
+    /// it has published, so the sequence decides only against the writer's
+    /// own entries, and there the entry to come wins.
+    /// </remarks>
+    /// <param name="generation">The generation the entry would be published at.</param>
+    /// <param name="writer">The writer that would publish it.</param>
+    /// <param name="incumbentGeneration">The incumbent entry's generation.</param>
+    /// <param name="incumbentWriter">The incumbent entry's writer.</param>
+    /// <returns>True when the entry to come would win.</returns>
+    public static bool WouldOutrank(
+        ulong generation, WriterId writer, ulong incumbentGeneration, WriterId incumbentWriter)
+    {
+        if (generation != incumbentGeneration)
+        {
+            return generation > incumbentGeneration;
+        }
+
+        Span<byte> next = stackalloc byte[16];
+        Span<byte> incumbent = stackalloc byte[16];
+        writer.CopyTo(next);
+        incumbentWriter.CopyTo(incumbent);
+
+        return next.SequenceCompareTo(incumbent) >= 0;
+    }
 }

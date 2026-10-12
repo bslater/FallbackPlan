@@ -64,16 +64,44 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
     /// key this service does not hold (FR-WOR-003), so nothing is selected.
     /// </param>
     /// <param name="backlog">Every blob the collector kept whole for a live minority.</param>
+    /// <param name="relocationStands">
+    /// Whether relocating an object would stand, as the compaction pass
+    /// decides it (ADR-0017 Amendment 2). A blob any of whose live records
+    /// would not stand is left whole and said to be, because the pass would
+    /// decline it. Null offers every blob past the threshold, and leaves the
+    /// pass to decline them.
+    /// </param>
     /// <returns>The candidates and the lines.</returns>
-    public CompactionSelection Select(ushort effectiveFormatVersion, IReadOnlyList<CompactableBlob> backlog)
+    public CompactionSelection Select(
+        ushort effectiveFormatVersion,
+        IReadOnlyList<CompactableBlob> backlog,
+        Func<ObjectId, bool>? relocationStands = null)
     {
         ThrowHelper.ThrowIfNull(backlog);
 
-        var candidates = SelectCandidates(backlog);
+        // Asked only of blobs past the threshold: the question costs a lookup
+        // per live record, and a blob below it is left whole either way.
+        var offered = new List<CompactableBlob>(backlog.Count);
+        var held = 0;
+        foreach (var blob in backlog)
+        {
+            if (relocationStands is not null
+                && Eligible(blob)
+                && !blob.Live.All(record => relocationStands(record.ObjectId)))
+            {
+                held++;
+            }
+            else
+            {
+                offered.Add(blob);
+            }
+        }
+
+        var candidates = SelectCandidates(offered);
 
         if (FormatVersions.HasRelocatableRecords(effectiveFormatVersion))
         {
-            return new CompactionSelection(candidates, Describe(backlog, candidates));
+            return new CompactionSelection(candidates, Describe(backlog, candidates, held));
         }
 
         // Below format 3 the offer is made only when there is something to
@@ -134,7 +162,11 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
     /// <param name="candidates">What <see cref="SelectCandidates"/> chose from it.</param>
     /// <returns>Report lines, empty when there is no backlog at all.</returns>
     public IReadOnlyList<string> Describe(
-        IReadOnlyList<CompactableBlob> backlog, IReadOnlyList<CompactableBlob> candidates)
+        IReadOnlyList<CompactableBlob> backlog, IReadOnlyList<CompactableBlob> candidates) =>
+        Describe(backlog, candidates, held: 0);
+
+    private List<string> Describe(
+        IReadOnlyList<CompactableBlob> backlog, IReadOnlyList<CompactableBlob> candidates, int held)
     {
         ThrowHelper.ThrowIfNull(backlog);
         ThrowHelper.ThrowIfNull(candidates);
@@ -155,7 +187,15 @@ public sealed record CompactionPolicy(double DeadFraction, long MinimumReclaim, 
         // A metadata blob is never a candidate, whatever its bounds say, so
         // counting it under the threshold line would give the wrong reason.
         var metadata = backlog.Count(blob => BlobStoreKeys.ClassOf(blob.StoreKey) == BlobClass.Metadata);
-        var waiting = backlog.Count - candidates.Count - metadata;
+        var waiting = backlog.Count - candidates.Count - metadata - held;
+        if (held > 0)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {held} blob(s) left whole: another writer's entries would outrank the rewrite, and the "
+                + $"next pass would undo it"));
+        }
+
         if (waiting > 0)
         {
             lines.Add(string.Create(

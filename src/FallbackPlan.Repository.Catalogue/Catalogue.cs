@@ -1363,6 +1363,19 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
+    /// The location <see cref="ResolveLocation"/> resolves
+    /// <paramref name="objectId"/> to, without the rule-3 finding it records.
+    /// </summary>
+    /// <remarks>
+    /// For a writer asking whether an entry it has yet to publish would
+    /// outrank the one that holds an object (ADR-0017 Amendment 2). That is
+    /// asked of records whose resolution the same pass has already read
+    /// through <see cref="ResolveLocation"/>, and a second finding for one
+    /// damaged entry would report it twice.
+    /// </remarks>
+    public ResolvedLocation? WinningLocation(ObjectId objectId) => QueryWinner(objectId, excludeDeleted: true);
+
+    /// <summary>
     /// Whether any live index entry locates <paramref name="objectId"/> —
     /// the segment-reuse test (NFR-PERF-010). Keyed by object identifier
     /// rather than content identifier so the answer survives a catalogue

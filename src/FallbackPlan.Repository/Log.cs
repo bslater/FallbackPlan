@@ -62,6 +62,12 @@ internal static partial class Log
     internal static partial void CompactionComplete(ILogger logger, int produced, int drained, long records);
 
     [LoggerMessage(
+        EventId = 2034, Level = LogLevel.Information,
+        Message = "Compaction declined {Declined} blob(s): another writer's entries would outrank the relocation, "
+            + "and the next plan would undo it")]
+    internal static partial void CompactionDeclined(ILogger logger, int declined);
+
+    [LoggerMessage(
         EventId = 2004, Level = LogLevel.Information,
         Message = "Snapshot {SnapshotId} published: {Files} files, {Failures} failed, "
             + "{LogicalBytes} logical bytes")]
