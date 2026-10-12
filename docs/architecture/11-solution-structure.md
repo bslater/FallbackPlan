@@ -18,7 +18,7 @@ FallbackPlan.slnx
 │   ├── FallbackPlan.Repository.Crypto/       ✓ key hierarchy, AEAD, identifiers
 │   ├── FallbackPlan.Repository.Segmentation/ ✓ segmentation profiles
 │   ├── FallbackPlan.Repository.Packing/      ✓ blob spool, seal, read, recovery footer
-│   ├── FallbackPlan.Repository.Index/        ✓ deltas, checkpoints, rebuild
+│   ├── FallbackPlan.Repository.Index/        ✓ deltas, rebuild; a checkpoint codec nothing calls (ADR-0008)
 │   ├── FallbackPlan.Repository.Catalogue/    ✓ disposable local catalogue
 │   ├── FallbackPlan.Filesystem/              ✓ scanner contracts
 │   ├── FallbackPlan.Filesystem.Local/        ✓ local scanner, per-platform interop inside

@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.1–7.5, §7.7–7.9 · **Resolves:** [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on), [H1](../review/2026-08-architecture-review.md#h1--fixed-size-segmentation-is-under-argued-and-its-review-is-scheduled-after-the-point-of-no-return)
 
-**Built:** Yes — implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
+**Built:** Yes, except the checkpoint half of §7. Nothing publishes a checkpoint or retires a delta, so the index is its deltas and a normal rebuild (§8.1) starts from none ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)). Between two writers, the writer id decides a relocation (§7.2, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)). Everything else is implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -206,6 +206,9 @@ The index maps object identifiers to physical locations. It is never a single gr
 
 Read path: catalogue → checkpoint + deltas → blob recovery footer. Fast in the common case, and each fallback is independently sufficient.
 
+> **As built (2026-10).** No checkpoint is published, so the middle step reads
+> the deltas alone, every one of them ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
+
 ### 7.2 Deltas and checkpoints without a global listing
 
 The original design required checkpoint compaction to know the complete set of prior deltas, whose only discovery mechanism was listing — while simultaneously forbidding correctness dependence on listing freshness ([C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)). On an eventually consistent store, a compactor could silently omit a recent delta and every reader trusting the resulting checkpoint would lose the index entries for a set of blobs.
@@ -215,6 +218,13 @@ Five rules close it:
 **1 — Deltas form per-writer chains.** Each delta carries `(writer_id, sequence, predecessor_delta_id)`, with `sequence` strictly increasing per writer and no gaps. A reader holding any delta from a writer can walk backwards, and — critically — can *detect* that it is missing a sequence number rather than silently assuming it has seen everything.
 
 **2 — Gaps are closed explicitly, never by silence.** A writer that skips a sequence — it prepared delta *N*, crashed, and resumed at *N+1* — publishes a signed **void delta** at *N* declaring it intentionally empty. A reader treats a gap as unresolved until either the delta or its void record appears; after a bounded number of generations with neither, it surfaces the gap as a damage finding rather than blocking on it indefinitely. Silence is never read as "empty", so a crashed writer cannot render its own index contributions permanently unusable.
+
+> **As built (2026-10).** Rules 1 and 2 are built. The gap patience is
+> counted in generations, which never advance, so a gap found at rebuild
+> stays unresolved rather than becoming damage. Rules 3 to 5 are specified
+> only: nothing publishes a checkpoint or retires a delta.
+> [ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first) states six constraints a checkpoint must meet
+> before one is published.
 
 **3 — Checkpoints enumerate what they subsume.** A checkpoint lists the exact delta IDs it covers and the per-writer high-water sequence. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not a listing revealed it.
 
@@ -230,6 +240,14 @@ Precedence is therefore explicit rather than emergent:
 - for a given object identifier, the entry with the **highest generation wins**, with a documented deterministic tie-break below that;
 - relocation entries are **typed as supersessions**, so a reader can distinguish "two writers independently recorded the same new object" — genuinely order-independent — from "this object moved", which is not.
 
+> **As built (2026-10, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).** No entry carries a
+> generation. Each ranks at its delta's generation, writer and sequence, and
+> the generation never advances, so the tie-break decides every relocation.
+> With one writer that is publication order, and a compaction stands. Between
+> two writers it is the writer id's bytes, and a compaction under the lower
+> id is undone by the next retention pass: churn, not loss. No reader orders
+> by the entry type.
+
 With precedence stated, merging is safe for the reason that actually holds: entries applied in any order converge on the same state, because the winner is a property of the entries themselves rather than of arrival sequence. See [ADR-0017](../adr/0017-index-entry-supersession.md).
 
 Listing remains a useful accelerator for finding a recent checkpoint quickly. It is no longer load-bearing for correctness.
@@ -237,6 +255,10 @@ Listing remains a useful accelerator for finding a recent checkpoint quickly. It
 ### 7.3 Compaction
 
 Checkpoint compaction is bounded, resumable, and cancellable. Prior checkpoints are retained for a configurable safety window. Compaction never invalidates a prior generation — a reader mid-operation against generation *n* continues to work while *n+1* is published.
+
+> **As built (2026-10).** Checkpoint compaction is not built, and no safety
+> window is configured, because nothing publishes a checkpoint
+> ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 
 **Blob compaction is a different mechanism from the checkpoint compaction above**, and exists in one format only. In format 2 a record's key is its blob's and its nonce is its position, so moving one means opening and re-sealing it ([ADR-0025](../adr/0025-compaction-reseals-records.md)) — which a service cannot do at all, holding the structure key and not the content key, so a format-2 set is refused by name and pointed at the upgrade. In format 3 no key is needed: `Repository.Packing/BlobWriter`'s `AppendSealedRecordAsync` copies a sealed record into another blob verbatim, re-framing only its header, and the record opens there. `Repository/BlobCompactor` is written over that primitive and runs where the structure key and a writer identity are, which is the source service, and never at a destination ([ADR-0067](../adr/0067-the-keyless-compactor.md)).
 
@@ -247,6 +269,10 @@ The catalogue is a cache. Two rebuild paths exist, and both must work.
 ### 8.1 Normal rebuild
 
 Load the latest authenticated checkpoint, apply subsequent deltas per §7.2, validate referenced snapshot and blob objects. This is the fast path.
+
+> **As built (2026-10).** There is no checkpoint to load, so the normal
+> rebuild applies every delta (`Repository.Catalogue/CatalogueRebuilder`,
+> [ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 
 ### 8.2 Forensic rebuild
 

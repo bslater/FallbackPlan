@@ -153,6 +153,13 @@ fallback is slow, not wrong. `ServiceRuntime.AdoptObservedHeadAsync` then
 moves the fresh sequence file past the head the index and journal attest at
 first open, exactly as it already did for a restored state directory.
 
+> **Note (2026-10, [ADR-0017 Amendment 1](0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).**
+> "Once" holds only when this machine's writer id sorts above the archive's
+> writer. Below it, the archive's locations win every tie-break. So a
+> changed file's unchanged segments are sent again every time the file
+> changes, and this machine's compactions of the archive's blobs are undone.
+> Nothing is lost either way; the cost is the repeated work.
+
 ### 5. Contract 1.30, and the envelope fence
 
 Two verbs and two results, additive. The set descriptor also gains the

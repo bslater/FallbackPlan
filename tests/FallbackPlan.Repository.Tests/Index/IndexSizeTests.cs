@@ -39,6 +39,14 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// nobody's problem. The number that would be a problem is the marginal one,
 /// and it is flat.
 /// </para>
+/// <para>
+/// What this measures is a checkpoint's encoding, not a repository's index.
+/// Nothing in the product publishes a checkpoint, so a repository's index is
+/// its deltas (ADR-0008 Amendment 1). And the larger checkpoint here, about
+/// 38 MB, is over the 16 MiB a standalone record may be: it is put, measured
+/// and never read, because no reader would accept it. A checkpoint a reader
+/// accepts holds about 210 000 objects.
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class IndexSizeTests : IDisposable

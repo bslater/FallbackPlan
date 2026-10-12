@@ -94,6 +94,15 @@ Precedence is therefore explicit:
 2. At equal generation, the entry from the higher `(writer_id, sequence)` wins, comparing `writer_id` as unsigned bytes then `sequence` numerically. This tie-break exists so behaviour is defined rather than accidental; it should not arise for a supersession, since compaction is its only producer.
 3. An entry whose `blob_id` names a blob known to be deleted MUST be treated as superseded even if it wins on generation, and reported as a damage finding.
 
+> **Erratum (2026-10).** Rule 2 is reached by every supersession, not rarely.
+> The generation an implementation publishes at is its key generation, and
+> nothing advances it, so every pair of entries for one `object_id` ties on
+> rule 1. Between two writers, `writer_id` decides a relocation, and a
+> compaction published under the lower one loses to the entry it relocates
+> ([ADR-0017 Amendment 1](../../docs/adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).
+> The rules stand as written. Only the expectation that rule 2 would seldom
+> decide is withdrawn.
+
 Two **insertions** for one `object_id` are benign: two writers independently stored the same content in different blobs, and either location serves. A **supersession** is ordered and must be honoured.
 
 Rule 3 depends on the reader knowing which blobs are gone, and **an implementation that supplies no such knowledge does not satisfy rule 3 — it merely never triggers it.** "Known to be deleted" is a positive claim, so a reader that cannot make it MUST assume live: absence from a listing is not deletion on a provider that lists eventually, and discarding a valid location on that evidence turns a stale index into an outage. A reader whose blob inventory is exhaustive — every blob listed and every one openable — MAY treat absence as deletion; one that had to skip a blob MUST NOT, because an inventory with holes cannot distinguish "collected" from "unreadable right now".
