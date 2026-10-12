@@ -826,7 +826,7 @@ function sweepLabel(d) {
     : `every ${fmtCount(s.intervalDays)} day(s)`;
 
   if (s.stalls > 0) {
-    const where = s.stalledOn ? "at a blob that will not read" : "because the replica could not be read";
+    const where = s.stalledOn ? "at a blob that will not read" : "because nothing there could be read";
     const since = s.circuitClosedAt == null ? "" : ` · every stored object last read back ${rel(s.circuitClosedAt)}`;
     return `<b class="warn">stopped</b> <span class="detail">${fmtCount(s.stalls)} time(s) in a row ${esc(where)}${esc(since)}</span>`;
   }
@@ -842,6 +842,15 @@ function sweepLabel(d) {
   }
 
   return `<span class="detail">not read back in full yet · ${esc(cadence)}</span>`;
+}
+
+// A staging set's own staging archive, swept as a destination is (contract
+// 1.63): drawn by the same words, so it can never claim what a destination's
+// sweep would not, and not drawn at all for a set with no staging archive or
+// from a service older than 1.63.
+function stagingSweepLabel(set) {
+  if (set.stagingSweep == null) return null;
+  return sweepLabel({ deepSweep: set.stagingSweep });
 }
 
 // The ring: an SVG arc whose offset is set from script, because the CSP
@@ -886,6 +895,7 @@ function renderSetCard(set) {
             ? `${finishingHtml(lp)} · ${lm.ratio}%`
             : `${fmtCount(lm.handled)} processed · ${fmtCount(lm.stored)} of ${fmtCount(lm.total)} files stored · ${lm.ratio}%${lpTail}`}</span>
     </div>` : "";
+  const staging = stagingSweepLabel(set);
   const verification = set.status.verification
     ? `<span class="chip" title="Verification coverage and age — never a bare tick">
          ${Math.round(set.status.verification.coverage * 100)}% verified ${esc(rel(set.status.verification.verifiedAtUnixMilliseconds))}
@@ -996,6 +1006,7 @@ function renderSetCard(set) {
       <p class="sub">${badge(meta, meta.label)} ${esc(meta.blurb)}</p>
       <p class="sub">${config ? `<span title="${esc(rootsOf(config).join("\n"))}">${esc(rootsSummary(config))}</span> · ` : ""}${set.nextRun ? `next run ${esc(fmtWhen(Date.parse(set.nextRun)))}` : "manual only"}
          ${verification}</p>
+      ${staging ? `<p class="sub"><span class="detail">Staging archive</span> ${staging}</p>` : ""}
       ${destinations}
       ${set.status.warnings?.length ? `<ul class="warnings">${set.status.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${liveRow}

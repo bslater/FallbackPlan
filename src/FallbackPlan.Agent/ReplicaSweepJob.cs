@@ -509,6 +509,20 @@ internal static class ReplicaSweepJob
             runtime.Notices.Resolve($"deep-verify-stalled:{set.Id}:{destinationName}", nowMs);
         }
 
+        // Staging's copy proven unsound where this one is the blob: the
+        // staging archive's finding, never this destination's, repaired here
+        // under the gate this segment holds (FR-VER-009). A direct-ship set's
+        // source is its other destinations, whose own sweeps find their own.
+        if (archive.ShipSink is null && result.SourceDamagedKeys.Count > 0)
+        {
+            await StagingSweepJob.HealFoundAsync(
+                runtime, set, archive,
+                result.SourceDamagedKeys
+                    .Zip(result.SourceFindings)
+                    .ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal),
+                destinationName, nowMs, userInitiated, cancellationToken).ConfigureAwait(false);
+        }
+
         if (result.Findings.Count > 0)
         {
             // FR-VER-005: a verification failure degrades the pair and
@@ -679,7 +693,7 @@ internal static class ReplicaSweepJob
         + "backup once and may again.";
 
     /// <summary>The first three findings, joined as one sentence's list: each is a sentence of its own.</summary>
-    private static string Listed(IReadOnlyList<string> findings) =>
+    internal static string Listed(IEnumerable<string> findings) =>
         string.Join("; ", findings.Take(3).Select(finding => finding.TrimEnd('.')));
 
     /// <summary>Which copies this installation reads without the peer hold the damaged objects sound.</summary>

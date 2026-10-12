@@ -258,6 +258,7 @@ public sealed class ApplicationServiceTests : IDisposable
         LatestCaptureStatus = 1,
         Destinations = [Destination()],
         DamageFindings = 0,
+        StagingDamage = 0,
         RequiredObjectsMissing = false,
     };
 

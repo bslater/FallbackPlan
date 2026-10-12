@@ -5,8 +5,9 @@ namespace FallbackPlan.Web.Tests;
 /// per destination, read from the service's own figures (contract 1.24) and
 /// never re-derived, with the uncounted case drawn as uncounted rather than
 /// as empty; the deep sweep's row (contract 1.46), the console half of
-/// FR-VER-003's report of a circuit; and the drill's row with its drill-now
-/// button (contract 1.58), the console half of FR-DRL-003.
+/// FR-VER-003's report of a circuit, and the staging archive's own sweep on
+/// its set's card (contract 1.63, FR-VER-009); and the drill's row with its
+/// drill-now button (contract 1.58), the console half of FR-DRL-003.
 /// </summary>
 /// <remarks>
 /// Like <see cref="ConsoleProgressScriptTests"/>: no browser, just the
@@ -156,6 +157,29 @@ public sealed class ConsoleDestinationCardTests
         Assert.IsTrue(
             body.IndexOf("stalls > 0", StringComparison.Ordinal) < body.IndexOf("circuitClosedAt != null", StringComparison.Ordinal),
             "the stall is checked before the close, so a stuck circuit is never drawn as settled");
+    }
+
+    [TestMethod]
+    public void Card_TheStagingArchivesSweep_HasALineOfItsOwn_DrawnAsADestinationsIs()
+    {
+        var script = AppJs();
+
+        Assert.Contains("stagingSweepLabel(set)", FunctionBody(script, "renderSetCard"), StringComparison.Ordinal);
+        Assert.Contains("Staging archive", FunctionBody(script, "renderSetCard"), StringComparison.Ordinal);
+
+        // One wording for a circuit wherever it is read, so the staging
+        // archive's can never claim what a destination's would not.
+        Assert.Contains("sweepLabel({ deepSweep: set.stagingSweep })", FunctionBody(script, "stagingSweepLabel"), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void StagingSweepLabel_ASetWithNoStagingArchive_DrawsNoLine()
+    {
+        // A direct-ship set, or a service older than 1.63.
+        var body = FunctionBody(AppJs(), "stagingSweepLabel");
+
+        Assert.Contains("set.stagingSweep == null", body, StringComparison.Ordinal);
+        Assert.Contains("return null", body, StringComparison.Ordinal);
     }
 
     [TestMethod]

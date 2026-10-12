@@ -167,6 +167,11 @@ Damage a restore finds is held where the rest of the service acts on it.
 - **In the staging archive:** a notice alone. The staging archive has no
   ledger row, and nothing repairs it in place.
 
+  > **Amended 2026-10 ([ADR-0095](0095-the-staging-archive-heals.md)):** the
+  > objects go on the set's staging sweep record, and the next pass replaces
+  > them from a destination's copy proven sound, without a second notice. The
+  > restore's notice says so.
+
 A copy that was unreadable, or that did not hold a blob, records nothing.
 
 ### 8. The plan answers for the run it plans
@@ -240,6 +245,9 @@ reason: it would condemn a drive for being unplugged.
 ## What this record does not do
 
 - **Repair the staging archive.** Damage found there is said, and stays.
+
+  > **Amended 2026-10 ([ADR-0095](0095-the-staging-archive-heals.md)):** it
+  > is repaired now, by the staging archive's own sweep.
 - **Name in the plan which copies will serve.** FR-RST-003's "replicas" is
   still only implicit: a plan says nothing is missing, not where each piece will
   come from.
@@ -252,3 +260,4 @@ reason: it would condemn a drive for being unplugged.
 |------|--------|------|
 | 2026-09 | Accepted | Built tests first (the reader, the receipt, the service, the contract, the CLI and the console), with each rule's removal confirmed to turn exactly its tests red: a named source read around, the findings dropped, the plan blind to the copies, and a failed location taken for damage at a copy or at the own store. Amends ADR-0034 §6 |
 | 2026-09 | Accepted (related) | [ADR-0076](0076-damage-is-traced-to-what-needs-it.md): the notice a restore raises for damage it found names the files and snapshots the damage reaches, and the pair it fails is failed for that damage alone. `Agent/ServiceCommandHandler` |
+| 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §7: damage a restore reads around in the staging archive is recorded for the staging archive's sweep, which repairs it from the set's destinations on the next pass. `Agent/ServiceCommandHandler`, `Application/StagingSweepStore`; `Hosts.Tests/RestoreReadAroundTests` |

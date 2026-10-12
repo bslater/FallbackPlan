@@ -1,7 +1,5 @@
 using Bodu;
 using FallbackPlan.Domain.Identifiers;
-using FallbackPlan.Repository.Crypto;
-using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 
 namespace FallbackPlan.Repository;
@@ -31,11 +29,10 @@ public sealed record ReplicaRepairOutcome(string Key, string? RepairedFrom, stri
 /// <para>
 /// A copy is sound when two things hold where it sits: its bytes still hash to
 /// the digest sealed into its own footer, and its envelope names the blob the
-/// key derives from. The first is the sweep's own check. The second is the
-/// one the sweep does not make, and compares lengths against the source
-/// instead: a well-formed, correctly sealed blob stored under another blob's
-/// key passes every check of its own bytes, and copying it over the damaged
-/// one would replace one lost record with a whole wrong object.
+/// key derives from — the two checks the sweep makes of every blob. A
+/// well-formed, correctly sealed blob stored under another blob's key passes
+/// every check of its own bytes, and copying it over the damaged one would
+/// replace one lost record with a whole wrong object.
 /// </para>
 /// <para>
 /// Nothing at the replica is touched until a copy has been proven. A damaged
@@ -82,36 +79,9 @@ public static class ReplicaRepair
         }
 
         var length = found.Length;
-        using (var objectIds = new ObjectIdDeriver(keys.ContentIdKey))
-        {
-            BlobReader reader;
-            try
-            {
-                reader = await BlobReader.OpenAsync(
-                    store, key, length, repositoryId, keys.DeriveClassKey, objectIds, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (BlobFormatException exception)
-            {
-                return new CopyProof(Held: true, Sound: false, length, exception.Message);
-            }
-
-            using (reader)
-            {
-                using var storeKeys = new StoreBlobKeyDeriver(keys.KeyIdKey);
-                var named = BlobStoreKeys.ForBlob(reader.Envelope.BlobClass, storeKeys.Derive(reader.Envelope.BlobId));
-                if (!string.Equals(named.Value, key.Value, StringComparison.Ordinal))
-                {
-                    return new CopyProof(
-                        Held: true, Sound: false, length,
-                        $"it holds a different blob under this key ({named.Value})");
-                }
-            }
-        }
-
         using var verifier = new VerifyEngine(repositoryId, keys, store);
         var verdict = await verifier
-            .VerifyBlobAsync(key, length, VerifyLevel.FooterAndDigest, cancellationToken)
+            .VerifyBlobAsync(key, length, VerifyLevel.FooterAndDigest, bindKey: true, cancellationToken)
             .ConfigureAwait(false);
         return verdict.Ok
             ? new CopyProof(Held: true, Sound: true, length, string.Empty)

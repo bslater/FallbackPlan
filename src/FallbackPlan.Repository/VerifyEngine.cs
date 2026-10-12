@@ -59,6 +59,7 @@ public sealed class VerifyEngine : IDisposable
     private readonly RepositoryKeySet _keys;
     private readonly IObjectStore _store;
     private readonly ObjectIdDeriver _objectIdDeriver;
+    private StoreBlobKeyDeriver? _storeKeys;
 
     /// <summary>Creates an engine.</summary>
     public VerifyEngine(RepositoryId repositoryId, RepositoryKeySet keys, IObjectStore store)
@@ -73,10 +74,36 @@ public sealed class VerifyEngine : IDisposable
     }
 
     /// <summary>Verifies one blob at the requested level.</summary>
+    public ValueTask<BlobVerifyResult> VerifyBlobAsync(
+        ObjectKey storeKey,
+        long blobLength,
+        VerifyLevel level,
+        CancellationToken cancellationToken) =>
+        VerifyBlobAsync(storeKey, blobLength, level, bindKey: false, cancellationToken);
+
+    /// <summary>
+    /// Verifies one blob at the requested level and, when
+    /// <paramref name="bindKey"/> is set, that its envelope names the blob its
+    /// store key derives from.
+    /// </summary>
+    /// <remarks>
+    /// Every level authenticates a blob's bytes against its own footer, and
+    /// none of them asks whether the blob is the one its key was given to. A
+    /// sound blob stored under another blob's key passes them all. Binding the
+    /// key catches it from the envelope the first read opens anyway, with no
+    /// second store to compare lengths against, which is the check a store
+    /// with nothing beside it — the staging archive — has.
+    /// </remarks>
+    /// <param name="storeKey">The blob's store key.</param>
+    /// <param name="blobLength">The blob's length in bytes.</param>
+    /// <param name="level">How much of the blob to verify.</param>
+    /// <param name="bindKey">Whether the envelope must name the blob <paramref name="storeKey"/> derives from.</param>
+    /// <param name="cancellationToken">Cancels the verification.</param>
     public async ValueTask<BlobVerifyResult> VerifyBlobAsync(
         ObjectKey storeKey,
         long blobLength,
         VerifyLevel level,
+        bool bindKey,
         CancellationToken cancellationToken)
     {
         // Level 1 — and the entry point for every level: locator, footer,
@@ -96,6 +123,11 @@ public sealed class VerifyEngine : IDisposable
 
         using (reader)
         {
+            if (bindKey && KeyBindingDefect(reader, storeKey) is { } defect)
+            {
+                return new BlobVerifyResult(false, VerifyLevel.LocatorAndFooter, 0, defect);
+            }
+
             if (level == VerifyLevel.LocatorAndFooter)
             {
                 return new BlobVerifyResult(true, level, 0, null);
@@ -253,6 +285,23 @@ public sealed class VerifyEngine : IDisposable
         return digest;
     }
 
+    /// <summary>
+    /// Why the blob <paramref name="reader"/> opened is not the one
+    /// <paramref name="storeKey"/> names, or null when it is.
+    /// </summary>
+    private string? KeyBindingDefect(BlobReader reader, ObjectKey storeKey)
+    {
+        _storeKeys ??= new StoreBlobKeyDeriver(_keys.KeyIdKey);
+        var named = BlobStoreKeys.ForBlob(reader.Envelope.BlobClass, _storeKeys.Derive(reader.Envelope.BlobId));
+        return string.Equals(named.Value, storeKey.Value, StringComparison.Ordinal)
+            ? null
+            : $"it holds a different blob under this key ({named.Value})";
+    }
+
     /// <inheritdoc />
-    public void Dispose() => _objectIdDeriver.Dispose();
+    public void Dispose()
+    {
+        _objectIdDeriver.Dispose();
+        _storeKeys?.Dispose();
+    }
 }

@@ -3105,7 +3105,7 @@ public static class CliApplication
                     foreach (var set in result.Sets)
                     {
                         output.WriteLine(
-                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}");
+                            $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}");
                         foreach (var row in set.Destinations)
                         {
                             output.WriteLine(
@@ -3143,6 +3143,7 @@ public static class CliApplication
                 var requiredMissing = findings.Any(finding =>
                     finding.Kind is DamageKind.MissingBlob or DamageKind.MissingIndexObject);
                 var ledger = DestinationSyncStore.Open(session.StateDirectory);
+                var stagingSweeps = StagingSweepStore.Open(session.StateDirectory);
                 var snapshots = catalogue.EnumerateSnapshots();
 
                 var sets = configuration.BackupSets.Count > 0
@@ -3183,6 +3184,7 @@ public static class CliApplication
                         LatestCaptureStatus = latest?.CaptureStatus,
                         Destinations = destinations,
                         DamageFindings = findings.Count,
+                        StagingDamage = set.DirectShip ? 0 : stagingSweeps.Find(set.Id)?.DamagedKeys?.Count ?? 0,
                         RequiredObjectsMissing = requiredMissing,
                     });
 
@@ -3350,7 +3352,17 @@ public static class CliApplication
     /// destination only a person's request reads in full, which "never" would
     /// make look overdue.
     /// </remarks>
-    internal static string DescribeSweep(DestinationStatusDescriptor row) => row.DeepSweep switch
+    internal static string DescribeSweep(DestinationStatusDescriptor row) => SweepToken(row.DeepSweep);
+
+    /// <summary>
+    /// A staging set's sweep of its own staging archive (contract 1.63,
+    /// FR-VER-009), worded as a destination's is, or nothing for a set with no
+    /// staging archive and from an older service.
+    /// </summary>
+    internal static string DescribeStagingSweep(BackupSetStatusDescriptor set) =>
+        SweepToken(set.StagingSweep) is { Length: > 0 } token ? "staging-" + token : string.Empty;
+
+    private static string SweepToken(DeepSweepDescriptor? sweep) => sweep switch
     {
         null => string.Empty,
         { Stalls: > 0 } => "sweep:STALLED",

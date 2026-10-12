@@ -451,6 +451,12 @@ public sealed record StatusInputs
     /// <summary>Open damage findings against the set's staging archive.</summary>
     public required int DamageFindings { get; init; }
 
+    /// <summary>
+    /// Objects found damaged in the set's staging archive that no sound copy
+    /// has yet replaced (FR-VER-009); zero for a set with no staging archive.
+    /// </summary>
+    public required int StagingDamage { get; init; }
+
     /// <summary>Whether a damage report names required objects with no readable copy.</summary>
     public required bool RequiredObjectsMissing { get; init; }
 }
@@ -508,9 +514,22 @@ public static class StatusDeriver
             warnings.Add("The latest snapshot is PARTIAL — its error manifest names what was not captured.");
         }
 
+        // Ahead of the matrix: every destination can read in sync while the
+        // copy they were all filled from holds objects nothing could replace.
+        if (inputs.StagingDamage > 0)
+        {
+            warnings.Add(
+                $"{inputs.StagingDamage} object(s) found damaged in the staging archive have had no sound copy put "
+                + "in their place — what needs them cannot be restored from the staging archive until they are replaced.");
+        }
+
         if (inputs.DamageFindings > 0)
         {
             warnings.Add($"{inputs.DamageFindings} damage finding(s) are open — run `check`.");
+        }
+
+        if (inputs.StagingDamage > 0 || inputs.DamageFindings > 0)
+        {
             return new BackupSetStatus(ProtectionState.Degraded, latestClaim, warnings);
         }
 
