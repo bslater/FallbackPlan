@@ -15,10 +15,10 @@ public sealed record RebuildReport(
     IReadOnlyList<DamageFinding> Findings);
 
 /// <summary>
-/// Rebuilds the catalogue from checkpoint plus deltas (E1; FR-MAN-006,
-/// FR-MAN-009): delete the file, load the index plane, re-apply. The
-/// catalogue never holds anything the store cannot regenerate — this type is
-/// the proof.
+/// Rebuilds the catalogue from the index plane (E1; FR-MAN-006, FR-MAN-009):
+/// delete the file, load the index plane, re-apply every checkpoint found and
+/// then every delta, subsumed or not. The catalogue never holds anything the
+/// store cannot regenerate — this type is the proof.
 /// </summary>
 public sealed class CatalogueRebuilder
 {

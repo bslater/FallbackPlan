@@ -20,7 +20,7 @@ Architecture decision records and threat model · versioned configuration schema
 - Every segment and every complete restored file is cryptographically verified.
 - Interrupted blob construction or publication cannot expose an incomplete committed file version.
 - Resume-after-kill produces byte-identical blobs; restart-after-kill produces a different blob salt.
-- The catalogue can be deleted and rebuilt from checkpoint plus deltas.
+- The catalogue can be deleted and rebuilt from checkpoint plus deltas. *(Met from deltas alone: nothing publishes a checkpoint yet — [ADR-0008 Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first).)*
 - Forensic rebuild succeeds from blob recovery footers and manifests after every global index object is removed.
 - Blob compaction relocates records without modifying any manifest, and all references still resolve.
 - Garbage collection concurrent with an in-flight backup deletes none of its intent-covered blobs.

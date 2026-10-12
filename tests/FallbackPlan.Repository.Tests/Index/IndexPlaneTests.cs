@@ -9,11 +9,17 @@ namespace FallbackPlan.Repository.Tests.Index;
 
 /// <summary>
 /// The index plane end to end (specification 07 §2–§8; FR-MAN-008,
-/// FR-MAN-016, FR-MAN-017): codecs round-trip through the two-pass
-/// signature, the publisher seals real objects into a real store, the
-/// loader verifies and applies them, void deltas fill crash-skipped
-/// numbers, and gaps surface as damage only after the bounded patience.
+/// FR-MAN-016): codecs round-trip through the two-pass signature, the
+/// publisher seals real objects into a real store, the loader verifies and
+/// applies them, void deltas fill crash-skipped numbers, and gaps surface as
+/// damage only after the bounded patience.
 /// </summary>
+/// <remarks>
+/// The patience is counted in generations, and the test advances the
+/// generation by hand to exhaust it, which nothing in the product does
+/// (ADR-0008 Amendment 1). The one checkpoint here is published by the test.
+/// Nothing retires a delta, so this class does not establish FR-MAN-017.
+/// </remarks>
 [TestClass]
 public sealed class IndexPlaneTests : IDisposable
 {

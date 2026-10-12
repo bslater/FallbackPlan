@@ -241,7 +241,7 @@ Multiple writers may run backup jobs concurrently with no coordination — this 
 
 Maintenance operations (compaction, garbage collection, healing) take advisory leases to avoid duplicated work, and are individually safe to run concurrently regardless:
 
-- **Checkpoint compaction** — conflicting same-generation checkpoints are merged, not elected ([`02-repository-format.md` §7.2](02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing)).
+- **Checkpoint compaction** — conflicting same-generation checkpoints are merged, not elected ([`02-repository-format.md` §7.2](02-repository-format.md#72-deltas-and-checkpoints-without-a-global-listing)). Specified only: nothing publishes a checkpoint yet ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 - **Blob compaction** — republishes index entries only; manifests are untouched, so two compactors converge ([`02-repository-format.md` §6.2](02-repository-format.md#62-manifests-hold-logical-facts-only)).
 - **Garbage collection** — bounded by generation cut-off, intent coverage, and grace periods, all of which are evaluated independently by each collector ([`07-retention-and-gc.md` §3](07-retention-and-gc.md#3-garbage-collection)).
 

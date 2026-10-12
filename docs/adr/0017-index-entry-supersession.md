@@ -1,6 +1,6 @@
 # ADR-0017 — Index entry supersession and precedence
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)
 **Date:** 2026-08
 **Requirements:** FR-MAN-008, FR-MAN-013, FR-MAN-015, FR-GC-004
 **Pressure-test finding:** [PT-2](../review/2026-08-fix-pressure-test.md#pt-2--c6s-commutativity-claim-is-false-once-c1-is-in-place)
@@ -25,6 +25,14 @@ Every index entry records the generation at which it was published. For a given 
 
 Below that, a documented deterministic tie-break applies — entries at the same generation for the same identifier are ordered by `(writer_id, sequence)`. Ties should not arise for a *relocation*, since compaction is the only producer of relocations and two collectors relocating the same object concurrently is already bounded by advisory leases; the tie-break exists so that behaviour is defined rather than accidental.
 
+> **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).**
+> No entry carries a generation. Each one ranks at the generation, writer and
+> sequence of the delta that published it, and the generation never advances,
+> so every relocation ties and the tie-break decides it. With one writer the
+> sequence decides, and a compaction stands. Between two writers the writer
+> id's bytes decide: a compaction published under the lower id is undone by
+> the next retention pass, which is churn and not loss. A fix is owed.
+
 ### Relocations are typed
 
 An entry declares whether it is an **insertion** (first mapping for this identifier) or a **supersession** (this object moved). The distinction matters because the two have different orderings:
@@ -35,6 +43,12 @@ An entry declares whether it is an **insertion** (first mapping for this identif
 | Supersession | Compaction relocating a record | Ordered — the later publication is correct and the earlier points at a doomed blob |
 
 A reader that encounters two insertions for one identifier may take either; they describe the same bytes in different places, and both are valid until one is superseded. A reader that encounters a supersession must honour generation order.
+
+> **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).**
+> The type is published and stored, and no reader orders by it. Only the
+> generation, writer and sequence of the publishing object decide, so a
+> supersession is honoured only where that triple puts it above what it
+> relocates.
 
 ### Merging is safe for a stated reason
 
@@ -54,6 +68,10 @@ With precedence explicit, "both retained and both applied" is sound: the winner 
 - Catalogue application must compare generations rather than blindly overwriting, and a rebuild that applies deltas out of order must not let an older entry win.
 - Superseded entries cannot be discarded immediately: a reader may still be resolving against the older generation. They are retired with the tombstone-and-grace treatment that applies to the blob they point at.
 
+> **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).**
+> The per-entry generation field was never added; the generation is the
+> delta's. Superseded entries are never retired, because no delta is.
+
 ## Alternatives considered
 
 **Keep commutativity and forbid compaction.** Rejected — compaction is how space is reclaimed after retention expires snapshots, and without it the retention policy is advisory.
@@ -64,8 +82,100 @@ With precedence explicit, "both retained and both applied" is sound: the winner 
 
 **Last-writer-wins by timestamp.** Rejected. Requires a trusted clock, which [ADR-0009](0009-garbage-collection-safety.md) establishes we do not have.
 
+## Amendment 1 (2026-10) — precedence as built, and the writer it favours
+
+Reading the index plane against this record, before designing checkpoints
+([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)),
+found four statements above that describe the design rather than the code.
+The first three decide, between them, who wins a relocation in an archive
+with two writers.
+
+1. **No entry carries a generation.** The entry
+   ([specification 07 §2.1](../../specifications/repository-format/07-index.md#21-index-entry))
+   has six fields, and a generation is not one of them. The generation
+   belongs to the delta, and every entry in a delta ranks at that delta's
+   generation, writer and sequence. The catalogue stores that triple beside
+   each location it records. The cost named under Negative, a generation
+   field on every entry, was never paid.
+2. **The generation never advances.** Every delta is published at the
+   repository's key generation. Only a key rotation would move it, and
+   nothing rotates a key yet
+   ([ADR-0009 Amendment 5](0009-garbage-collection-safety.md#amendment-5-2026-08--the-grace-generation-realised)).
+   So rule 1 of 07 §3 decides nothing in any repository the product writes.
+   Every pair of entries for one object ties on generation, and the
+   tie-break decides all of them. "Ties should not arise for a relocation"
+   is false as built: every relocation ties.
+3. **No reader orders by the entry type.** A compaction publishes
+   supersessions and a capture publishes insertions. Both orderings in the
+   code, `IndexPrecedence` and the catalogue's location query, compare the
+   triple and nothing else. The type records what a compaction meant;
+   precedence is what carries it out, or fails to.
+4. **Superseded entries are never retired.** The last cost under Negative,
+   retiring superseded entries under tombstone and grace, is not built. No
+   delta is retired, so a superseded entry stays in the delta that published
+   it, and precedence picks the winner every time an index is read. Retiring
+   entries is a checkpoint's work, and nothing publishes a checkpoint yet.
+
+What that means:
+
+- **With one writer, a compaction stands.** A compaction's delta comes after
+  the deltas whose entries it relocates, so it carries a higher sequence
+  from the same writer and wins. A staging archive is single-writer by
+  construction ([ADR-0034](0034-hub-and-spoke-destinations.md)), and this is
+  the case the product runs.
+- **With two writers, the writer id decides.** An archive holds two writers
+  when a machine adopts it and keeps its own identity. [ADR-0061](0061-adopt-a-destinations-archives.md)
+  §4 keeps it when the archive already has more than one writer, or when the
+  machine has already published. Suppose one writer compacts records the
+  other inserted, and the compacting writer's id sorts lower. Its
+  supersessions then lose to the insertions they relocate, whatever order
+  the two were published in. The next retention plan resolves the records
+  to the drained blob again and condemns the blob the compaction produced.
+  It leaves the drained blob part-dead, so a later compaction chooses it
+  again.
+
+That is **churn, not loss**. Every reader resolves the same winner, and the
+winner is the blob that still holds the records. `Retention.Tests/CompactionCollectionTests`
+pins both directions:
+- Under the higher id, the compaction stands.
+- Under the lower id, the produced blob is swept and the drained blob is
+  kept. No finding is raised, and every reachable object still reads.
+
+The cost is a compaction that copies records and reclaims nothing, every time
+it chooses that blob, in an adopted archive whose ids fall the wrong way.
+
+**The reuse shortcut follows the same winner.** A writer reuses a segment
+without a read only when the location that wins is its own
+([ADR-0006](0006-object-identifiers-and-dedup-trust-domains.md)). Where both
+writers hold a segment, the higher id's location wins. So under a lower id
+a writer is never credited with its own copy, and under the device domain it
+stores a changed file's unchanged segments again every time the file
+changes. `Repository.Tests/DedupTrustDomainTests` pins both directions:
+- Under the higher id, a file changed twice after its first backup stores
+  only the segment that changed.
+- Under the lower id, it stores its unchanged segment again on each backup.
+
+An unchanged file is not affected, because it reuses its prior version
+without asking the shortcut. Nothing is lost here either. The cost is
+storage and upload.
+
+**A fix is owed, and this amendment does not choose it.** Whatever it is
+must:
+- make a compaction's supersessions outrank every entry they relocate,
+  whichever writer published either;
+- leave two insertions order-independent, as this record decided;
+- account for what advancing a generation sets off, if the fix advances
+  one. The gap patience of [ADR-0008](0008-index-generations-and-checkpoints.md)
+  is counted in generations, and no load the product runs passes sequence
+  accounting. Once generations move, the numbers a writer that has stopped
+  publishing spent on journal records and blobs would read as missing deltas
+  ([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
+
+FR-MAN-015 carries the fix.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended); partly built | [Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours): no entry carries a generation and the generation never advances, so the writer-id tie-break decides every relocation. A compaction under the lower of two writer ids is undone, which is churn and not loss (`Retention.Tests/CompactionCollectionTests`). Superseded entries are never retired. The fix is owed under FR-MAN-015 |
 | 2026-08 | Accepted | Forced into the open by PT-2; ADR-0008's merge rule is unsound without it |

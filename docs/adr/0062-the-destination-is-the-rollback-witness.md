@@ -27,7 +27,12 @@ writer had got — signed checkpoint watermarks, signed delta sequences,
 journal keys — and moves the local sequence past it when local allocation
 state turns out to be behind its own published history
 (`Hosts.Tests/ObservedHeadAdoptionTests`). That closed the case of a lost
-or rolled-back **sequence file**. It could not close the case of a whole
+or rolled-back **sequence file**.
+
+> **Note (2026-10, [ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).**
+> Nothing writes a checkpoint, so the witness read at archive open is the
+> delta sequences and the journal keys. The watermarks are read only if a
+> checkpoint exists, and none does. It could not close the case of a whole
 state directory restored from an older copy, because for a direct-ship set
 ([ADR-0046](0046-direct-to-destination-publication.md)) the archive's
 metadata plane *is* the state directory: the catalogue, the sequence file,

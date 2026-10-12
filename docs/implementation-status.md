@@ -32,7 +32,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0005](adr/0005-aead-suite-and-nonce-construction.md) | AEAD suite and nonce construction | **Built** | `Repository.Crypto/RecordCipher`, `Repository.Crypto/BlobKeyDeriver` · six requirements, all traced |
 | [0006](adr/0006-object-identifiers-and-dedup-trust-domains.md) | Object identifiers and dedup trust domains | **Built** | `Repository/DedupTrustGate` · [notes](#0006--the-integrity-guard-is-built-and-one-thing-is-deliberately-not) |
 | [0007](adr/0007-logical-object-identifiers-in-manifests.md) | Manifests carry logical identifiers only | **Built** | `Repository.Format/Manifests/*`, `Repository.Format/Manifests/SourceIdentityHint`, `Repository/SourceIdentityLookup` · `Repository.Tests/Index/IndexPrecedenceTests`, `Repository.Tests/Format/SourceIdentityHintCodecTests` · [notes](#0007--device-specific-facts-live-outside-the-manifest-and-one-of-the-two-is-built) |
-| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Built** | `Repository.Index/CheckpointCodec`, `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence`, `Repository.Index/ObservedHead` — the watermarks the decision put in checkpoints are now also read back as a rollback witness, so a writer whose allocation state fell behind its own published history adopts the repository's head at archive open (`Hosts.Tests/ObservedHeadAdoptionTests`); and where the whole state directory rolled back, the destination's journal keys are the witness ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md), `Hosts.Tests/DirectoryRollbackTests`) |
+| [0008](adr/0008-index-generations-and-checkpoints.md) | Index generations, deltas, checkpoints | **Partly built** | `Repository.Index/IndexDeltaCodec`, `Repository.Index/WriterSequence`, `Repository.Index/IndexLoader` — the deltas, their chains and void deltas; `Repository.Index/CheckpointCodec` round-trips a checkpoint and nothing in the product publishes one or retires a delta ([Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first), [notes](#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)) · `Repository.Index/ObservedHead` reads the deltas' sequences and the journal keys back as a rollback witness, so a writer whose allocation state fell behind its own published history adopts the repository's head at archive open (`Hosts.Tests/ObservedHeadAdoptionTests`); and where the whole state directory rolled back, the destination's journal keys are the witness ([ADR-0062](adr/0062-the-destination-is-the-rollback-witness.md), `Hosts.Tests/DirectoryRollbackTests`) |
 | [0009](adr/0009-garbage-collection-safety.md) | Garbage collection safety | **Built** | `Repository.Index/Journal/IntentLifecycle`, `Retention/StagingSweep`, `Retention/CollectionPlanner`, `Retention/RetentionRunner`, `Repository/DedupTrustGate`, `Repository/TombstoneKeys` · `Retention.Tests/RetentionCycleTests`, `Retention.Tests/ClockSkewTests`, `Retention.Tests/CollectionBesideABackupTests`, `Retention.Tests/SweepFailureTests`, `Application.Tests/ClockSkewMarginTests`, `Hosts.Tests/ClockSkewMarginServiceTests`, `Hosts.Tests/RetentionBesideABackupTests`, `InterruptionTests/CompactionInterruptionTests`, `Retention.Tests/CollectionInterruptionTests`, `Hosts.Tests/PeerRetentionInterruptionTests` · [notes](#0009--the-collector-is-built-and-now-so-is-compaction) |
 | [0010](adr/0010-local-store-separation.md) | Local store separation | **Built** | `Application/LocalState` · `Repository.Tests/EndToEnd/LocalStateSeparationTests` · `Repository.Tests/Catalogue/CatalogueTests` · `Repository.Tests/Catalogue/CataloguePoolingTests` (catalogue connections are unpooled, [ADR §Amendment 3](adr/0010-local-store-separation.md#amendment-3-2026-09--the-catalogues-connections-are-not-pooled)) · `Agent/ServiceRuntime` · `Agent/CatalogueRebuild` · `Hosts.Tests/CatalogueRebuildAtOpenTests` (a discarded or lost catalogue is rebuilt at open, [ADR §Amendment 4](adr/0010-local-store-separation.md#amendment-4-2026-09--a-catalogue-discarded-is-rebuilt-before-it-is-read)) · `Agent/ArchiveHandle` · `ArchitectureTests/CatalogueConnectionTests` · `Repository.Tests/Catalogue/CatalogueConnectionsTests` (a set's backup has the archive's catalogue connection to itself, and a sync, retention, a deletion and a heal each open their own, [ADR §Amendment 5](adr/0010-local-store-separation.md#amendment-5-2026-10--a-sets-backup-has-the-catalogues-connection-to-itself)) |
 | [0011](adr/0011-commit-versus-replication-semantics.md) | Commit versus replication semantics | **Built** | `Application/DestinationSyncStore` (the per-replica half), `Repository/SnapshotPublication` (the commit half) · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
@@ -41,7 +41,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0014](adr/0014-format-versioning-and-stability.md) | Format versioning and pre-1.0 posture; format 1 withdrawn before freeze (Amendment 1) | **Built** | `Domain/FormatLimits` · `Repository.Format/Descriptor/RepositoryDescriptorCodec` · `Repository/RepositoryLifecycle` · `Repository.Tests/EndToEnd/RepositoryLifecycleTests`, `Repository.Tests/Format/RepositoryDescriptorCodecTests` · [notes](#0014--one-format-and-a-refusal-by-name) |
 | [0015](adr/0015-legacy-importer-isolation.md) | Legacy importer isolation | **Partly built** | `FallbackPlan.Import.Abstractions` · [notes](#0015--the-seam-is-the-decision-and-the-seam-is-built) |
 | [0016](adr/0016-blob-identifier-formation.md) | Blob identifiers are writer-allocated | **Built** | `Domain/Identifiers/BlobId`, `Domain/IBlobCounterAllocator` · `InterruptionTests/SequenceRollbackTests` holds the refusal when an identifier is ever reused |
-| [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence | **Built** | `Repository.Index/IndexEntry`, `Repository.Index/IndexLoader` · `Repository.Tests/Index/IndexPrecedenceTests` |
+| [0017](adr/0017-index-entry-supersession.md) | Index entry supersession and precedence | **Partly built** | `Repository.Index/IndexEntry`, `Repository.Index/IndexLoader` · `Repository.Tests/Index/IndexPrecedenceTests` — the rules as written; no entry carries a generation and the generation never advances, so between two writers the writer id decides a relocation (`Retention.Tests/CompactionCollectionTests`, [Amendment 1](adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours), [notes](#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)) |
 | [0018](adr/0018-replica-failure-domains.md) | Replica failure domains | **Built** | `Application/StatusModel` · `Repository.Tests/EndToEnd/ApplicationServiceTests` · [notes](#0011-0018--commit-is-per-replica-and-there-are-now-many-replicas) |
 | [0019](adr/0019-third-party-dependency-policy.md) | Third-party dependency policy | **Applied** | `ArchitectureTests/DependencyRuleTests` — the policy is a test, not a promise |
 | [0020](adr/0020-ed25519-signing-key-semantics.md) | Ed25519 signing key semantics | **Built** | `Repository.Crypto/RepositorySigner` · `Repository.ConformanceTests/Ed25519ConformanceTests` |
@@ -129,7 +129,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 
 Object identifiers, the keyed derivation behind them, the domain enumeration — and now the guard the enumeration was for.
 
-`DedupTrustGate` decides every reuse, segments and metadata objects alike, and it reads **writer attribution first, domain second**. A segment this writer wrote is reused in every domain with no read at all, which is what makes the default affordable and is the literal text of FR-DED-002's acceptance: a second backup of an unchanged single-writer tree issues **zero** store reads, measured rather than asserted. Another writer's object is refused outright under `device`, referenced unread under `repository-unverified`, and under the default `repository` is fetched, decrypted and confirmed before it is referenced. The confirmation is the record read's own 04 §6 step 7, so there is no second verification path that could disagree with the first.
+`DedupTrustGate` decides every reuse, segments and metadata objects alike, and it reads **writer attribution first, domain second**. A segment this writer wrote is reused in every domain with no read at all — when its own location is the one the index's tie-break picks, which between two writers it is only for the higher id ([0008, 0017](#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)) — which is what makes the default affordable and is the literal text of FR-DED-002's acceptance: a second backup of an unchanged single-writer tree issues **zero** store reads, measured rather than asserted. Another writer's object is refused outright under `device`, referenced unread under `repository-unverified`, and under the default `repository` is fetched, decrypted and confirmed before it is referenced. The confirmation is the record read's own 04 §6 step 7, so there is no second verification path that could disagree with the first.
 
 **This is [C3](review/2026-08-architecture-review.md#c3--cross-device-deduplication-has-no-integrity-guard)'s remedy, present.** A record that reads and does not verify is written again from the bytes this device holds and reported as a damage finding against the object — detection at write time, while the source data is still there. [T-10](threat-model.md) is mitigated under the default and closed under `device`. Six end-to-end tests in `Repository.Tests/DedupTrustDomainTests` hold it, and they are the only suite in the repository with two writers, because with one writer all three domains are indistinguishable by design.
 
@@ -148,6 +148,51 @@ It is keyed by **source key** rather than by snapshot, and the difference is the
 A renamed file no longer pays for its move in reads either. `PriorManifestSource` resolves the prior version's location through the catalogue and opens that one blob through its recovery footer, so the publisher can fetch the prior manifest and rewrite it under the new name instead of re-reading the file — a handful of range reads in place of the whole file. It is best-effort: a manifest that cannot be fetched or decoded sends the file down the ordinary capture path and raises no finding. It also needs the catalogue, so after a rebuild the hints recover the ancestry and the content is read again, because a hint names an object and not its location.
 
 The **placement hint** ([06 §10](../specifications/repository-format/06-manifests.md#10-placement-hint)) is specified and not built. It is a `MAY`, and the thing it accelerates — single-file emergency recovery without an index — has no implementation to accelerate yet; it is worth writing alongside that path rather than before it.
+
+### 0008, 0017 — the deltas are built, the checkpoints are not, and two writers are ranked by id
+
+The index the product writes is deltas and nothing else. Each delta carries
+its writer, sequence and predecessor, a skipped number is closed by a void
+delta, and `IndexLoader` detects a missing number rather than reading silence
+as empty. All of that is built and tested (`Repository.Tests/Index/IndexPlaneTests`).
+
+**The checkpoint half is a codec with no caller.** `CheckpointCodec` and
+`IndexPublisher.PublishCheckpointAsync` round-trip a checkpoint, and the
+loader applies one if it finds it. Only tests publish one, so:
+- every full load reads every delta;
+- a normal rebuild is a rebuild from deltas;
+- nothing retires a delta, at staging or at a destination.
+
+[ADR-0008 Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)
+names six constraints a checkpoint must meet before the product publishes one:
+- how its entries rank;
+- whose writer they credit;
+- what a watermark may stand on;
+- a readable size;
+- the blob digests and roots only deltas carry;
+- a retirement that survives the copies.
+
+**The gap patience never runs out.** It is counted in generations, and the
+generation never advances, so a gap a service rebuild finds stays unresolved
+and is never reported as damage. No load the product runs passes the
+accounting for journal and blob numbers, so those read as gaps as well.
+
+**Precedence is decided by the writer id.** No entry carries a generation.
+Every entry ranks at the generation, writer and sequence of its delta, and
+that generation never moves, so the tie-break decides every relocation.
+- **One writer:** sequence decides, and a compaction stands. A staging
+  archive is single-writer by construction.
+- **Two writers:** the writer id's bytes decide. An archive adopted by a
+  machine that kept its own identity has two. A compaction published under
+  the lower id is undone by the next retention pass. It is churn and not
+  loss, pinned in both directions by `Retention.Tests/CompactionCollectionTests`.
+- **The reuse shortcut follows the winner too.** Under the lower id a writer
+  is never credited with its own copy of a segment both hold. So under the
+  device domain it stores a changed file's unchanged segments again on every
+  backup, pinned by `Repository.Tests/DedupTrustDomainTests`.
+
+[ADR-0017 Amendment 1](adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)
+records it, and the fix is owed under FR-MAN-015.
 
 ### 0009 — the collector is built, and now so is compaction
 
@@ -663,7 +708,7 @@ Three limits worth stating:
 
 | Phase | State |
 |-------|-------|
-| [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — the compaction criterion discharged by the compactor itself since [0067](#0067--the-rewrite-that-holds-no-key), rather than by its preconditions alone |
+| [0 — Archive engine](roadmap.md#phase-0--archive-engine-vertical-slice) | Complete; every exit criterion traced to a named test — the compaction criterion discharged by the compactor itself since [0067](#0067--the-rewrite-that-holds-no-key), rather than by its preconditions alone. One criterion is narrower than it reads: the catalogue is deleted and rebuilt from the deltas, because nothing publishes a checkpoint and the test behind criterion 7 publishes none ([0008, 0017](#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)) |
 | [1 — Snapshot and local repository](roadmap.md#phase-1--snapshot-and-local-repository-mvp) | Complete, both pushes |
 | [2 — Peer-to-peer and the service boundary](roadmap.md#phase-2--peer-to-peer-backup-and-the-service-boundary) | Complete except deferred-not-planned items (LAN discovery, relay, bandwidth schedules, multi-instance console, Q18/Q19): service boundary on both bindings, peer protocol over a real socket, replication with recovery drill, roles/termination/quotas/retention via the hub-and-spoke arc, and destination verification (spec 04) with `verified` earned from read-back and the four-value failure domains (FR-SNP-007). The web UI, deferred at the phase close, has since landed as the local web console ([ADR-0036](adr/0036-local-web-console.md)) |
 | [Hub-and-spoke arc](roadmap.md#the-hub-and-spoke-arc--multi-destination-backup-sets-built) | Built ([ADR-0034](adr/0034-hub-and-spoke-destinations.md)): configuration schema v2, per-set staging archives, local-path and peer fan-out, the status matrix, termination notices, quota enforcement, retention against staging, local-path and peer destinations, the staging trim, and the `sync`/`retention` operator verbs — see [0034](#0034--the-hub-fans-out-ages-and-trims). For a `direct_ship` set the staging half of this arc is replaced by the direct-to-destination row below |

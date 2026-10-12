@@ -42,6 +42,16 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 /// must condemn nothing at all, or the last copy of a record goes on the
 /// strength of a pointer into nothing.
 /// </para>
+/// <para>
+/// The two-writer pair pins what happens when the compaction is published under
+/// a second writer, as in an archive adopted by a machine that kept its own
+/// identity (ADR-0061). Every entry ranks by a generation that never advances,
+/// so between two writers the writer id's bytes decide (ADR-0017 Amendment 1).
+/// Under an id that sorts higher the compaction stands; under one that sorts
+/// lower it is undone by the next plan, and nothing is lost either way. The
+/// second is a shortfall that is owed a fix, so this class does not establish
+/// FR-MAN-015.
+/// </para>
 /// </remarks>
 [TestClass]
 public sealed class CompactionCollectionTests : IDisposable
@@ -279,6 +289,69 @@ public sealed class CompactionCollectionTests : IDisposable
             "a dry run changed the store");
     }
 
+    /// <summary>
+    /// A compaction published under a second writer whose id sorts above the
+    /// first stands, as a single writer's does: its supersessions outrank the
+    /// insertions they relocate, so the drained blob is condemned and the one
+    /// the pass produced is kept.
+    /// </summary>
+    [TestMethod]
+    public async Task TwoWriters_ACompactionUnderAnIdThatSortsHigher_Stands()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store);
+
+        using var catalogue = OpenCatalogue(await RepositoryIdAsync(store), live: true);
+        var (drained, produced) = await CompactAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: true));
+
+        var condemned = (await PlanAsync(store, catalogue)).DeletableBlobs.Select(blob => blob.BlobId).ToList();
+        Assert.Contains(drained, condemned, "the drained blob was not condemned under the higher id");
+        Assert.DoesNotContain(produced, condemned, "the produced blob was condemned under the higher id");
+    }
+
+    /// <summary>
+    /// The same compaction under an id that sorts below the first writer's is
+    /// undone: its supersessions lose to the insertions they relocate, so the
+    /// next plan keeps the drained blob, condemns the one the pass produced,
+    /// and leaves the drained blob part dead for the next compaction to choose
+    /// again. Nothing is lost, because every location the planner and a
+    /// restore resolve is still the blob that holds the records.
+    /// </summary>
+    [TestMethod]
+    public async Task TwoWriters_ACompactionUnderAnIdThatSortsLower_IsUndoneByTheNextPlan_AndLosesNothing()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store);
+        var repositoryId = await RepositoryIdAsync(store);
+
+        BlobId drained, produced;
+        using (var catalogue = OpenCatalogue(repositoryId, live: true))
+        {
+            (drained, produced) = await CompactAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: false));
+
+            var plan = await PlanAsync(store, catalogue);
+            var condemned = plan.DeletableBlobs.Select(blob => blob.BlobId).ToList();
+            Assert.Contains(produced, condemned, "the produced blob's records still resolve into the drained one");
+            Assert.DoesNotContain(drained, condemned, "the drained blob was condemned though its records resolve to it");
+            Assert.Contains(
+                drained, plan.PartlyLiveBlobs.Select(blob => blob.BlobId).ToList(),
+                "the drained blob is still part dead, so the next compaction would choose it again");
+        }
+
+        // Tombstone, publish past the decision so the grace runs, sweep, each
+        // pass resolving through the catalogue that holds both writers' rows.
+        await RetainAsync(store, Day1.AddDays(3).AddHours(1), live: true);
+        File.WriteAllText(Path.Combine(SourceRoot, "churn.txt"), new string('4', 200_000));
+        await BackUpAsync(Day1.AddDays(4));
+        var swept = await RetainAsync(store, Day1.AddDays(4).AddHours(1), live: true);
+
+        Assert.IsEmpty(swept.Swept!.Findings);
+        var stored = await StoredBlobIdsAsync(store);
+        Assert.DoesNotContain(produced, stored, "the blob the compaction produced was not swept");
+        Assert.Contains(drained, stored, "the drained blob was swept though every reader resolves into it");
+        await AssertEveryReachableObjectReadsAsync(store);
+    }
+
     /// <summary>Four backups with churn, so some records in the early blobs die.</summary>
     private async Task ChurnAsync(LocalFileSystemObjectStore store)
     {
@@ -295,25 +368,35 @@ public sealed class CompactionCollectionTests : IDisposable
         await RetainAsync(store, Day1.AddDays(3).AddMinutes(30));
     }
 
-    /// <summary>Compacts the first blob the collector reports as part dead.</summary>
-    private async Task<(BlobId Drained, BlobId Produced)> CompactAsync(LocalFileSystemObjectStore store)
+    /// <summary>
+    /// Compacts the first blob the collector reports as part dead, publishing
+    /// into <paramref name="into"/> (the test's own catalogue when null) under
+    /// <paramref name="writer"/> (the backups' writer when null).
+    /// </summary>
+    private async Task<(BlobId Drained, BlobId Produced)> CompactAsync(
+        LocalFileSystemObjectStore store, CatalogueDb? into = null, WriterId? writer = null)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
-        using var catalogue = OpenCatalogue(opened.Repository.RepositoryId);
+        using var owned = into is null ? OpenCatalogue(opened.Repository.RepositoryId) : null;
+        var catalogue = into ?? owned!;
 
         var backlog = (await PlanAsync(store, catalogue)).PartlyLiveBlobs;
         Assert.IsNotEmpty(backlog, "no blob is part dead, so there is nothing to compact and nothing to prove");
 
+        // A second writer has its own sequence space, outside the state
+        // directory the backups' writer allocates from.
         var candidate = backlog[0];
         var sequence = new WriterSequence(
-            new FileSequenceStateStore(Path.Combine(
-                StateDirectory,
-                $"sequence-{Convert.ToHexStringLower(opened.Repository.RepositoryId.ToArray())}.txt")));
+            new FileSequenceStateStore(writer is null
+                ? Path.Combine(
+                    StateDirectory,
+                    $"sequence-{Convert.ToHexStringLower(opened.Repository.RepositoryId.ToArray())}.txt")
+                : Path.Combine(_root, "second-writer-sequence.txt")));
 
         var outcome = await CompactionPass.RunAsync(
             [new CompactionSource(candidate.StoreKey, candidate.BlobId, candidate.Live)],
             opened.Repository, store, store,
-            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
+            writer ?? WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId),
             CapturePolicy.Default, sequence, catalogue, SpoolDirectory,
             (ulong)Day1.AddDays(3).AddHours(1).ToUnixTimeMilliseconds(),
             declaredMaxDurationMs: 3_600_000, expiryGeneration: 16, CancellationToken.None);
@@ -328,8 +411,42 @@ public sealed class CompactionCollectionTests : IDisposable
     /// rather than the set's, which are different things and only look alike
     /// when a set was provisioned by hand.
     /// </summary>
-    private CatalogueDb OpenCatalogue(RepositoryId repositoryId) =>
-        CatalogueDb.Open(Path.Combine(StateDirectory, "compaction-catalogue.db"), repositoryId);
+    private CatalogueDb OpenCatalogue(RepositoryId repositoryId, bool live = false)
+    {
+        if (!live)
+        {
+            return CatalogueDb.Open(Path.Combine(StateDirectory, "compaction-catalogue.db"), repositoryId);
+        }
+
+        // The service's own catalogue, which every backup applied its delta
+        // to: the one place both writers' rows meet, as they do in service.
+        var path = Path.Combine(StateDirectory, $"catalogue-{repositoryId}.db");
+        Assert.IsTrue(File.Exists(path), $"the backups wrote no catalogue at {path}");
+        return CatalogueDb.Open(path, repositoryId);
+    }
+
+    /// <summary>
+    /// A writer other than the backups', whose id sorts above or below theirs
+    /// in the byte order the catalogue's tie-break compares.
+    /// </summary>
+    private WriterId SecondWriter(bool sortsAboveTheFirst)
+    {
+        var first = LocalState.LoadOrCreate(StateDirectory).WriterId;
+        var second = new byte[first.Length];
+        if (sortsAboveTheFirst)
+        {
+            Array.Fill(second, (byte)0xFF);
+        }
+        else
+        {
+            second[^1] = 0x01;
+        }
+
+        Assert.AreEqual(
+            sortsAboveTheFirst ? -1 : 1, Math.Sign(first.AsSpan().SequenceCompareTo(second)),
+            "the backups' writer id does not sort where this test needs it");
+        return WriterId.FromBytes(second);
+    }
 
     private static async Task<RepositoryId> RepositoryIdAsync(LocalFileSystemObjectStore store) =>
         (await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None)).RepositoryId;
@@ -475,10 +592,10 @@ public sealed class CompactionCollectionTests : IDisposable
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
-    private async Task<RetentionReport> RetainAsync(LocalFileSystemObjectStore store, DateTimeOffset now)
+    private async Task<RetentionReport> RetainAsync(LocalFileSystemObjectStore store, DateTimeOffset now, bool live = false)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
-        using var catalogue = OpenCatalogue(opened.Repository.RepositoryId);
+        using var catalogue = OpenCatalogue(opened.Repository.RepositoryId, live);
 
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(

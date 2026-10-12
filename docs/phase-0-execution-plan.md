@@ -1,6 +1,6 @@
 # Phase 0 — Execution plan
 
-**Status:** implemented — all waves A–F complete; every item below is delivered and its acceptance criterion backed by a named test (benchmarks published at reduced scale, [`phase-0-benchmarks.md`](phase-0-benchmarks.md)) · **Scope:** [Phase 0](roadmap.md#phase-0--archive-engine-vertical-slice) — archive engine vertical slice
+**Status:** implemented — all waves A–F complete; every item below is delivered and its acceptance criterion backed by a named test (benchmarks published at reduced scale, [`phase-0-benchmarks.md`](phase-0-benchmarks.md)), except the checkpoint half of D4 and E1 — see the notes under Waves D and E · **Scope:** [Phase 0](roadmap.md#phase-0--archive-engine-vertical-slice) — archive engine vertical slice
 
 ---
 
@@ -82,6 +82,16 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 | D5 | Write-intent journal records | [08](../specifications/repository-format/08-journal.md) | FR-SNP-004, FR-SNP-005 | No blob uploaded without covering intent; expiry requires **both** generation and duration |
 | D6 | Publication ordering | [08 §10](../specifications/repository-format/08-journal.md#10-publication-order) | FR-SNP-001 | Every object a published object references is already durable |
 
+> **Corrected 2026-10 ([ADR-0008 Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).** D4 delivered the
+> checkpoint's codec, the precedence rules and the supersession type. It did
+> not deliver a checkpoint the product publishes, or a retirement: nothing
+> publishes the one, and nothing performs the other. Its acceptance still
+> holds, with two writers too: entries converge in any order, and no reader
+> resolves into a tombstoned blob. What a second writer changes is which
+> location wins. Under the lower writer id, a compaction is undone rather
+> than honoured
+> ([ADR-0017 Amendment 1](adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).
+
 > **D5 before C-wave upload code goes live.** If the blob writer ships without intents and they arrive later, the interruption harness passes for the wrong reason — nothing was concurrently collecting, so nothing was at risk ([PT-3](review/2026-08-fix-pressure-test.md#pt-3--compaction-output-blobs-are-unprotected-between-creation-and-index-publication)).
 
 ### Wave E — Recovery
@@ -92,6 +102,11 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 | E2 | Forensic rebuild from blob footers, **targetable** | [07 §10](../specifications/repository-format/07-index.md#10-rebuilding-without-the-index) | FR-MAN-009, NFR-PERF-015 | Succeeds with every index object deleted; a single named file recovers without a whole-repository scan |
 | E3 | Rebuild verification and damage reporting | [`02-repository-format.md` §8.3](architecture/02-repository-format.md#83-rebuild-never-repairs) | FR-MAN-011, FR-MAN-012, FR-MAN-014 | Each fault class distinctly named; **rebuild leaves every object byte-identical** |
 | E4 | File restore with per-segment and whole-file verification | [04 §6](../specifications/repository-format/04-record.md#6-reading-a-record), [06 §4.2](../specifications/repository-format/06-manifests.md#42-the-whole-file-hash) | FR-RST-002, FR-RST-005 | Verifies the plaintext hash after decryption, not merely the AEAD tag; never reports partial success |
+
+> **Corrected 2026-10 ([ADR-0008 Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).** E1's rebuild applies
+> any checkpoint it finds and then every delta. No checkpoint exists to find,
+> so the rebuild delivered, and the one `CatalogueRebuildTests` proves, is a
+> rebuild from deltas.
 
 ### Wave F — Proof
 
@@ -119,7 +134,7 @@ Every one of the 11 criteria in [Phase 0](roadmap.md#phase-0--archive-engine-ver
 | 4 | Every segment and restored file cryptographically verified | B5, E4 | `VerifyEngine`/`RestoreEngine` paths in `ForensicRebuildTests` — incl. the swapped-segment forgery only the whole-file hash catches |
 | 5 | Interruption cannot expose an incomplete committed file version | C1, D6, F1 | `PublicationInterruptionTests` — every 04 §5.1 row, committed snapshots stay restorable |
 | 6 | Resume byte-identical; restart draws a different salt | C1, F1 | `SpoolCheckpointTests` |
-| 7 | Catalogue deletable and rebuildable from checkpoint plus deltas | D2, E1 | `CatalogueRebuildTests` |
+| 7 | Catalogue deletable and rebuildable from checkpoint plus deltas | D2, E1 | `CatalogueRebuildTests` — from deltas: nothing publishes a checkpoint, so the checkpoint half of the criterion has nothing to rebuild from ([ADR-0008 Amendment 1](adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)) |
 | 8 | Forensic rebuild succeeds with all index objects removed | C2, E2 | `ForensicRebuildTests` |
 | 9 | Compaction relocates records without modifying any manifest | D1, D4 | `ManifestCodecTests` (nothing physical decodes), `IndexPrecedenceTests` (supersession converges); since [ADR-0067](adr/0067-the-keyless-compactor.md), `CompactionIndexTests` and `CompactedRestoreTests` discharge it directly — a restore reads its file through the manifest the capture wrote after half its segments have moved and the blob they came from has been deleted |
 | 10 | GC concurrent with a backup deletes no intent-covered blob | D5, F1 | `ConcurrentCollectionTests` |
