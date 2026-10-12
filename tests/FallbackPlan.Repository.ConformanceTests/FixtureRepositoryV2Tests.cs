@@ -168,6 +168,7 @@ public sealed class FixtureRepositoryV2Tests : IDisposable
         Assert.IsEmpty(state.Findings);
 
         var delta = Assert.ContainsSingle(state.Deltas).Delta;
+        Assert.IsNull(delta.IndexGeneration, "a format-2 delta carries no key 12");
         Assert.IsNotEmpty(delta.CoveredBlobIds);
         Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);
         Assert.IsEmpty(delta.CoveredBlobMerkleRoots);

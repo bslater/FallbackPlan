@@ -8,6 +8,7 @@ using FallbackPlan.Recovery;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Format.Lifecycle;
+using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
@@ -248,6 +249,46 @@ public sealed class FormatUpgradeTests : IDisposable
             "the next backup still sealed the older format, so the upgrade reached nothing");
     }
 
+    /// <summary>
+    /// A format-3 set upgraded to format 4 (ADR-0096) stamps its next delta
+    /// with an index generation, and its older deltas keep none: they are
+    /// history, which a format-4 reader ranks at zero.
+    /// </summary>
+    [TestMethod]
+    public async Task AFormatThreeSet_UpgradedToFour_StampsItsNextDeltaWithAnIndexGeneration()
+    {
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.RelocatableRecords;
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/before.txt", "written while this set was at format 3");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+
+        await RunOnAsync(runtime, set);
+        var before = await DeltasAsync();
+        Assert.IsNotEmpty(before);
+        Assert.IsTrue(before.All(delta => delta.IndexGeneration is null), "a format-3 set published key 12");
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout), out _);
+        Assert.IsTrue(
+            File.Exists(Path.Combine(
+                MetadataRoot,
+                FormatUpgradeRecordCodec.KeyFor(FormatVersions.IndexGenerations).Replace('/', Path.DirectorySeparatorChar))),
+            "the upgrade wrote no record for format 4");
+
+        _harness.WriteSourceFile("docs/after.txt", "written after the upgrade");
+        await RunOnAsync(runtime, set);
+
+        var after = await DeltasAsync();
+        var stamped = after.Where(delta => delta.IndexGeneration is not null).ToList();
+        Assert.IsNotEmpty(stamped, "the next backup published no index generation, so the upgrade reached nothing");
+        Assert.IsTrue(stamped.All(delta => delta.Sequence > before.Max(old => old.Sequence)));
+        Assert.HasCount(before.Count, after.Where(delta => delta.IndexGeneration is null).ToList());
+    }
+
     [TestMethod]
     public async Task AnUpgrade_WithADestinationThatRefusesTheWrite_IsStillRecordedLocally()
     {
@@ -377,6 +418,24 @@ public sealed class FormatUpgradeTests : IDisposable
         }
 
         return versions;
+    }
+
+    /// <summary>Every delta in the set's metadata plane, decoded and verified.</summary>
+    private async Task<List<IndexDelta>> DeltasAsync()
+    {
+        var store = new LocalFileSystemObjectStore(MetadataRoot);
+        using var passphrase = Passphrase.Create(Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!);
+        var (repository, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, Timeout);
+        using (repository)
+        using (authority)
+        using (var loader = new IndexLoader(store, repository.RepositoryId, repository.Credential))
+        {
+            var state = await loader.LoadAsync(
+                currentGeneration: 0, IndexLoader.GapPatienceGenerations, isSequenceAccountedAsync: null,
+                blobState: null, Timeout);
+            Assert.IsEmpty(state.Findings, string.Join(" | ", state.Findings.Select(finding => finding.Detail)));
+            return [.. state.Deltas.Select(decoded => decoded.Delta).OrderBy(delta => delta.Sequence)];
+        }
     }
 
     private static async Task<(int ExitCode, string Output, string Error)> RunRecoveryAsync(params string[] args)

@@ -41,13 +41,13 @@ public sealed class RepositoryLifecycleTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat3AndDeclaresRelocatableRecords()
+    public async Task Repository_CreatedWithTheDefaultSettings_IsFormat4AndDeclaresBothFeatures()
     {
-        // The creation default moved to format 3. It stayed at 2 while the
-        // format was new and untried, which was right then and meant that
-        // nothing a person installed ever wrote a relocatable record or a
-        // Merkle commitment — a format reachable only from a test is a
-        // format that reaches nobody.
+        // The creation default moved to format 3, and then to 4 (ADR-0096).
+        // It stayed at 2 while format 3 was new and untried, which was right
+        // then and meant that nothing a person installed ever wrote a
+        // relocatable record or a Merkle commitment — a format reachable
+        // only from a test is a format that reaches nobody.
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
         _ = await CreateAsync(store, passphrase);
@@ -56,10 +56,13 @@ public sealed class RepositoryLifecycleTests : IDisposable
         using (reopened)
         using (authority)
         {
-            Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
+            Assert.AreEqual(FormatVersions.IndexGenerations, reopened.Descriptor.FormatVersion);
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords),
-                "a format-3 descriptor must list relocatable-records (01 §3.2)");
+                "a format-4 descriptor must list relocatable-records (01 §3.2)");
+            Assert.IsTrue(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureIndexGenerations),
+                "a format-4 descriptor must list index-generations (01 §3.2)");
         }
     }
 
@@ -110,6 +113,9 @@ public sealed class RepositoryLifecycleTests : IDisposable
             Assert.AreEqual(FormatVersions.RelocatableRecords, reopened.Descriptor.FormatVersion);
             Assert.IsTrue(
                 reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureRelocatableRecords));
+            Assert.IsFalse(
+                reopened.Descriptor.RequiredFeatures.Contains(RepositoryDescriptorCodec.FeatureIndexGenerations),
+                "a format-3 descriptor must not list index-generations (01 §3.2)");
         }
     }
 
@@ -119,7 +125,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var store = CreateStore();
         using var passphrase = Passphrase.Create("correct horse battery staple");
 
-        var settings = Settings with { FormatVersion = 4 };
+        var settings = Settings with { FormatVersion = 5 };
         Assert.IsFalse(settings.Validate().IsValid);
         await Assert.ThrowsExactlyAsync<ArgumentException>(async () =>
             await RepositoryLifecycle.CreateFromPassphraseAsync(
@@ -252,7 +258,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         var descriptorPath = Path.Combine(_root, "store", "repository-format");
         var bytes = await File.ReadAllBytesAsync(descriptorPath);
         Assert.AreEqual(
-            FormatVersions.RelocatableRecords, bytes[9],
+            FormatVersions.IndexGenerations, bytes[9],
             "the framing carries the created version as u16 at offset 8");
         bytes[9] = 1;
         // The body repeats the version under CBOR key 2: after the 16-byte
@@ -261,7 +267,7 @@ public sealed class RepositoryLifecycleTests : IDisposable
         const int bodyVersion = RepositoryDescriptorCodec.HeaderLength + 1 + 1 + 1 + 16 + 1;
         Assert.AreEqual(0x02, bytes[bodyVersion - 1], "key 2");
         Assert.AreEqual(
-            FormatVersions.RelocatableRecords, bytes[bodyVersion], "the body repeats the created format_version");
+            FormatVersions.IndexGenerations, bytes[bodyVersion], "the body repeats the created format_version");
         bytes[bodyVersion] = 0x01;
         // Re-stamp the trailing digest so the refusal is the version's, not the digest's.
         System.Security.Cryptography.SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32), bytes.AsSpan(bytes.Length - 32));
