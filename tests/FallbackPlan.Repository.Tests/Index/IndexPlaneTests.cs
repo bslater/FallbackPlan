@@ -198,7 +198,7 @@ public sealed class IndexPlaneTests : IDisposable
     {
         // The compatibility pin. A delta carrying no roots must encode
         // exactly as it did before key 11 existed, because an older reader
-        // refuses an unknown key outright (07 §2.4) and every format-2
+        // refuses an unknown key outright (07 §2.5) and every format-2
         // repository still on disk depends on that byte for byte.
         using var credential = TestAuthority.Shared.Credential.Clone();
         using var signer = RepositorySigner.Create(credential, KeyGeneration.Zero);

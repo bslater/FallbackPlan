@@ -37,6 +37,13 @@ Below that, a documented deterministic tie-break applies — entries at the same
 > The compactor no longer publishes a relocation that would lose. It declines
 > the blob before it writes anything and leaves it whole.
 
+> **Amended 2026-10 ([Amendment 3](#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation)).**
+> From format 4 the generation advances: each delta carries an index
+> generation, one above the highest its writer had seen, and an entry ranks
+> by it. A relocation outranks what it relocates whichever writer published
+> either, and the tie-break decides only between entries published without
+> either writer seeing the other.
+
 ### Relocations are typed
 
 An entry declares whether it is an **insertion** (first mapping for this identifier) or a **supersession** (this object moved). The distinction matters because the two have different orderings:
@@ -192,6 +199,11 @@ FR-MAN-015 carries the fix.
 > **Amendment 2** stops the wasted compaction without the fix: a writer
 > declines a relocation that would not stand. The fix is still owed.
 
+> **Amendment 3** is the fix, at format 4: every delta carries an index
+> generation, and an entry ranks by it
+> ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)). All three
+> conditions hold.
+
 ## Amendment 2 (2026-10) — the compactor declines a relocation that would not stand
 
 The fix Amendment 1 owes changes the rank rule, and the rank rule is a format
@@ -262,10 +274,51 @@ make a compaction's supersessions outrank every entry they relocate,
 whichever writer published either, so the writer whose id sorts lower can
 compact too.
 
+> **Amended 2026-10 (Amendment 3).** Built at format 4. Below it, this
+> amendment's rule declines exactly what it did.
+
+## Amendment 3 (2026-10) — format 4 ranks an entry by its index generation
+
+The fix Amendment 1 owes is built, as format 4
+([ADR-0096](0096-format-4-an-index-generation-per-delta.md)). Every delta a
+format-4 writer publishes carries an index generation, key 12 of
+[specification 07 §2.4](../../specifications/repository-format/07-index.md#24-index-generation):
+one more than the highest the writer had seen, from its catalogue or its
+own last delta. An entry ranks by its delta's index generation first.
+
+- **The generation this record ranks by is the index generation.** The
+  "generation" of the Decision above and of 07 §3's rule 1 is, from format 4,
+  the delta's index generation, and 0 for a delta without one. The key
+  generation names the key a delta is signed under and ranks nothing.
+- **Condition 1 holds.** A pass plans from a catalogue holding every entry
+  it relocates, and publishes one above the highest that catalogue holds. So
+  its supersessions outrank what they relocate, whichever writer published
+  either (`Retention.Tests/CompactionCollectionTests`,
+  `Hosts.Tests/CompactionRetentionTests`).
+- **Condition 2 holds.** Two insertions published without either writer
+  seeing the other may carry one index generation, and the writer id decides
+  between them, as before. Either location serves.
+- **Condition 3 holds**, as Amendment 1's note records, and the patience now
+  runs out: a gap ages per gap in index generations, and a production reader
+  judges it at 8 ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)
+  §4).
+- **Amendment 2's rule stays, and declines nothing at format 4.** The pass
+  asks whether a relocation would stand at the index generation it will
+  publish at. At format 4 every relocation does. Below it the pass publishes
+  none, asks at 0, and declines what it declined.
+- **Format-3 history ranks as it did.** Its entries rank at 0, so between
+  two writers the writer id decides them, and anything a format-4 writer
+  publishes outranks them.
+- **A checkpoint's entries are not yet ranked this way.** They rank at the
+  checkpoint's generation, and nothing publishes a checkpoint
+  ([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first),
+  constraint 1).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended); partly built | [Amendment 3](#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation): the fix, as format 4. An entry ranks by its delta's index generation (`Repository.Index/IndexLoader`, `Repository.Catalogue/Catalogue`), so a compaction under the lower of two writer ids stands and is not declined (`Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`, [ADR-0096](0096-format-4-an-index-generation-per-delta.md)). Partly built still: a checkpoint's entries are not ranked this way, and superseded entries are never retired |
 | 2026-10 | Accepted (amended); partly built | Of the three conditions Amendment 1 sets for the fix, the third is met ahead of it: the product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so moving generations will not read a stopped writer's journal records and blobs as missing deltas (`ArchitectureTests/IndexLoadAccountingTests`) |
 | 2026-10 | Accepted (amended); partly built | [Amendment 2](#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand): the compactor declines a relocation that would not stand. `IndexPrecedence.WouldOutrank`, asked by `CompactionPass` of the entry that holds each live record, declines a candidate before its intent, and `CompactionPolicy` leaves the blob whole and says why. A published compaction now stands whichever writer published it (FR-MAN-015, `Retention.Tests/CompactionCollectionTests`). The rank rule and the reuse shortcut are unchanged, and the fix Amendment 1 owes is format 4's |
 | 2026-10 | Accepted (amended); partly built | [Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours): no entry carries a generation and the generation never advances, so the writer-id tie-break decides every relocation. A compaction under the lower of two writer ids is undone, which is churn and not loss (`Retention.Tests/CompactionCollectionTests`). Superseded entries are never retired. The fix is owed under FR-MAN-015 |

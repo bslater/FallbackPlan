@@ -180,6 +180,15 @@ asked for one leaf and its authentication path
 ([ADR-0065](0065-merkle-commitment-and-chunk-possession.md)). Both are real
 proofs; one is much cheaper.
 
+> **Amended 2026-10 ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)).**
+> The same record moves a set to format 4, which changes the index delta
+> rather than the container. The upgraded set's next delta carries an index
+> generation, and nothing already published changes. A build older than
+> format 4 opens such a repository, because its descriptor names what it was
+> created at, and reports each newer delta as an index object it cannot read
+> — this record's price, carried from blobs to deltas. A repository created
+> at 4 lists `index-generations`, and an older build refuses it by name.
+
 ## Consequences
 
 **The stated price: an older build misdiagnoses.** A build predating format 3
@@ -255,4 +264,5 @@ both.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended) | The upgrade verb targets format 4 ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): an upgraded set stamps its next delta with an index generation, and its older deltas keep none (`Hosts.Tests/FormatUpgradeTests`). The service's notice and the verb's lines say the newer format begins with what the set writes next, rather than at its next blob |
 | 2026-09 | Accepted | Built over five commits: the creation default moved to the latest format the product writes; the record, its codec and the never-deletable refusal; the writer reading the effective version, with the recovery tool sharing the one decision; the verb, the agent verb and the console control at contract 1.36; and this record. The owner's installation stays format 2 by choice — both formats are supported and nothing pushes |
