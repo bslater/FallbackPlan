@@ -1400,6 +1400,34 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
+    /// Whether a live index entry that <paramref name="writerId"/> published
+    /// locates <paramref name="objectId"/>: the writer's own copy, whether or
+    /// not it is the one the 07 §3 order picks.
+    /// </summary>
+    /// <remarks>
+    /// Live as <see cref="HasLocation"/> counts it, so a copy whose blob is
+    /// known deleted is no copy. Keyed by the entry's <c>writer_id</c>, which a
+    /// rebuild recovers, so the answer survives losing the catalogue.
+    /// </remarks>
+    public bool HasLocationBy(ObjectId objectId, WriterId writerId)
+    {
+        var started = Stopwatch.GetTimestamp();
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM object_locations l
+                LEFT JOIN blobs b ON b.blob_id = l.blob_id
+                WHERE l.object_id = $object AND l.writer_id = $writer AND COALESCE(b.state, 1) <> 3
+            );
+            """;
+        command.Parameters.AddWithValue("$object", objectId.ToArray());
+        command.Parameters.AddWithValue("$writer", writerId.ToArray());
+        var exists = (long)command.ExecuteScalar()! > 0;
+        EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        return exists;
+    }
+
+    /// <summary>
     /// The reuse candidate for <paramref name="objectId"/>, or
     /// <see langword="null"/> when no live index entry locates it — the
     /// trust-domain-aware form of <see cref="HasLocation"/> (ADR-0006;

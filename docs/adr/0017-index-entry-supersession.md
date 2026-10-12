@@ -163,6 +163,11 @@ An unchanged file is not affected, because it reuses its prior version
 without asking the shortcut. Nothing is lost here either. The cost is
 storage and upload.
 
+> **Amended 2026-10 ([ADR-0006](0006-object-identifiers-and-dedup-trust-domains.md#amendment-2026-10--a-devices-own-copy-is-one-it-holds-not-only-one-that-wins)).**
+> No longer under `device`. A writer's own copy is any live entry it
+> published, so under the lower id it stores a changed file's unchanged
+> segments once. A restore still reads the winning copy.
+
 **A fix is owed, and this amendment does not choose it.** Whatever it is
 must:
 - make a compaction's supersessions outrank every entry they relocate,
@@ -238,6 +243,10 @@ What it does not change:
 - **The reuse shortcut.** Under the device domain, the writer whose id sorts
   lower still stores a changed file's unchanged segments again
   (`Repository.Tests/DedupTrustDomainTests`).
+
+  > **Amended 2026-10.** Since fixed in format 3: under `device` a writer's
+  > own copy is any live entry it published
+  > ([ADR-0006](0006-object-identifiers-and-dedup-trust-domains.md#amendment-2026-10--a-devices-own-copy-is-one-it-holds-not-only-one-that-wins)).
 - **The format and the wire.** Nothing new is written, and nothing a reader
   reads changes.
 

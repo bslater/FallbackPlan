@@ -164,6 +164,14 @@ Restore-time verification (FR-RST-002) catches this at the moment the user needs
 | `repository` | Reuse any member's segments, after **verify-on-reuse**: fetch, decrypt, confirm the content identifier before referencing. | One read per first reuse; still avoids re-upload and re-storage | ✅ |
 | `repository-unverified` | Reuse without verification. | None | Opt-in, requires explicit acknowledgement |
 
+> **Amended (2026-10).** The default is `device`, and `repository` is
+> refused by name, because no writer holds the content key verify-on-reuse
+> needs ([ADR-0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md#trust-domains--new),
+> amended 2026-09). Under `device` a writer reuses an object it holds a live
+> copy of, whichever writer's entry a reader resolves the object to
+> ([ADR-0006](../adr/0006-object-identifiers-and-dedup-trust-domains.md#amendment-2026-10--a-devices-own-copy-is-one-it-holds-not-only-one-that-wins)). The domain decides what a writer
+> references, and not which copy a restore reads.
+
 `repository` is the default. In a single-writer repository it **degenerates exactly to `device` behaviour at zero cost**, because there are no other writers' segments to verify — it is free precisely where `device` is free. Where the two differ is the multi-device household backing up four laptops that share an operating system and a music library, and there `device` stores four copies of everything they have in common. That is the classic consumer use case and this project's stated reason for existing, so the default should serve it.
 
 An earlier draft made `device` the default on the grounds that it "costs nothing in the single-device case". True — and it does not distinguish the two options, because `repository` costs nothing there either. The argument selected between them on a criterion where they are identical ([PT-11](../review/2026-08-fix-pressure-test.md#pt-11--the-stated-rationale-for-the-device-dedup-default-does-not-distinguish-it-from-repository)).

@@ -99,9 +99,12 @@ internal sealed class DedupTrustGate(
         {
             // Another writer's segment is not reused at all. The cost is
             // duplicate storage across a user's devices, which is the trade
-            // this domain exists to offer.
+            // this domain exists to offer. A copy of this device's own counts
+            // even where another writer's entry is the one a reader resolves
+            // to: the domain decides what this device references, and those
+            // bytes are its own (ADR-0006, amended 2026-10).
             case DedupTrustDomain.Device:
-                return false;
+                return catalogue.Read(c => c.HasLocationBy(objectId, writerId));
 
             // A uniformly trusted fleet, opting out of the read.
             case DedupTrustDomain.RepositoryUnverified:

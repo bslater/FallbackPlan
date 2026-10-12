@@ -138,6 +138,10 @@ identifier (02 §4.3) and the class follows from the object type, because the
 device that needs to verify is exactly the device whose catalogue was rebuilt
 from index deltas and has no blob rows at all.
 
+> **Amended (2026-10).** Under `device`, from any live entry this device
+> published, not only the winning one
+> ([amendment](#amendment-2026-10--a-devices-own-copy-is-one-it-holds-not-only-one-that-wins)).
+
 **A confirmation that fails is a finding, and the backup still succeeds.** A
 record that reads and does not verify is recorded as `CorruptRecord` against
 the object and written again from the bytes this device has in hand — which is
@@ -177,6 +181,44 @@ yet. Losing the catalogue therefore re-imposes verification once, and the
 schema's own comment says so where an implementer will read it. Adding the
 durable object later is a minor-version change, so nothing is foreclosed.
 
+### Amendment (2026-10) — a device's own copy is one it holds, not only one that wins
+
+Between two writers the writer id decides every tie in the index's order, so
+the entry that wins for a segment both hold is the one published under the
+higher id ([ADR-0017 Amendment 1](0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)).
+The gate asked whether the winning entry was this writer's. Under `device`,
+the default since the 2026-09 amendment, the writer whose id sorts lower was
+therefore never credited with its own copy. It stored a changed file's
+unchanged segments again on every backup: two records a backup, where the
+higher id stored one (`Repository.Tests/DedupTrustDomainTests`). The copy it
+stored again lost the tie too, so the cost bought nothing.
+
+The device rule now asks what the domain is about: **does a live entry this
+writer published locate the object?** `Catalogue.HasLocationBy` answers it by
+the entry's `writer_id`, which a rebuild recovers, and counts an entry only
+while its blob is not known deleted. The gate asks it only where the winning
+entry is another writer's. A winning entry of the writer's own is reused, in
+every domain, as before.
+
+What this means:
+
+- **The domain decides what a writer references, not which copy a restore
+  reads.** A restore resolves an object to the copy that wins the index's
+  order, whatever the domain. Between two writers that is the higher id's
+  copy, and it was before this amendment as well: the copy the lower id
+  stored again never won. So `device` keeps a writer from referencing an
+  object it never wrote. It does not keep that writer's restores off another
+  writer's copy of an object both hold.
+- **A mismatched record that wins fails the read rather than restoring.** The
+  record read confirms the content identifier its plaintext implies (04 §6
+  step 7), so a record whose plaintext does not match is reported, not
+  restored. A restore reads around a record by fetching the same blob from
+  another copy of the set ([ADR-0075](0075-a-restore-reads-around-damage.md)),
+  not by trying another entry for the object. That residual belongs to the
+  format-4 rank design, which is also where the newest copy starts to win.
+- **Nothing changes in the format or on the wire.** A writer's own entries
+  were already in every catalogue, rebuilt or not.
+
 ## Status history
 
 | Date | Status | Note |
@@ -185,3 +227,4 @@ durable object later is a minor-version change, so nothing is foreclosed.
 | 2026-08 | Accepted (amended) | Default changed from `device` to `repository` — the original rationale did not distinguish the two (PT-11). Writer-attribution and verification-state recovery specified (PT-12). Three-domain model itself unchanged. |
 | 2026-09 | Amended | Default `device`; `repository` refused by name for every writer, none of which holds a content key ([ADR-0042 §7](0042-write-only-repositories.md)). Format 1 withdrawn ([ADR-0014 Amendment 1](0014-format-versioning-and-stability.md#amendment-1-2026-09--format-1-withdrawn-before-freeze)) |
 | 2026-08 | Accepted (amended) | Built. PT-12's open half resolved the second way: verification outcomes are catalogue state and a rebuild re-imposes the read, rather than a durable repository object designed before anything consumes it. |
+| 2026-10 | Amended | [Amendment](#amendment-2026-10--a-devices-own-copy-is-one-it-holds-not-only-one-that-wins): under `device` a writer's own copy is any live entry it published, not only the winning one, so a writer whose id sorts lower no longer stores a shared file's unchanged segments again on every backup (`Repository.Tests/DedupTrustDomainTests`). The domain decides what a writer references, and a restore reads the winning copy |
