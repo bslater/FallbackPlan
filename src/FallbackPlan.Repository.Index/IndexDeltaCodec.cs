@@ -9,8 +9,9 @@ namespace FallbackPlan.Repository.Index;
 
 /// <summary>
 /// An index delta (specification 07 §2): one writer's incremental additions
-/// to the index, gapless per writer, signed keys 1–8. A void delta
-/// (<c>is_void</c>) fills a skipped sequence with nothing (07 §4).
+/// to the index, gapless per writer, signed over every key but the
+/// signature. A void delta (<c>is_void</c>) fills a skipped sequence with
+/// nothing (07 §4).
 /// </summary>
 public sealed record IndexDelta
 {
@@ -23,7 +24,11 @@ public sealed record IndexDelta
     /// <summary>The writer's previous delta (key 3); null for its first.</summary>
     public DeltaId? PredecessorDeltaId { get; init; }
 
-    /// <summary>The publication generation (key 4).</summary>
+    /// <summary>
+    /// The key generation the delta is signed under (key 4). It names the
+    /// signing key and nothing more: at format 4 an entry ranks by
+    /// <see cref="IndexGeneration"/> instead (07 §3).
+    /// </summary>
     public required ulong Generation { get; init; }
 
     /// <summary>
@@ -71,6 +76,26 @@ public sealed record IndexDelta
     /// afford a tree still has the cheaper commitment.
     /// </remarks>
     public IReadOnlyList<ReadOnlyMemory<byte>> CoveredBlobMerkleRoots { get; init; } = [];
+
+    /// <summary>
+    /// One more than the highest index generation the writer had seen when it
+    /// published (key 12; 07 §2.4;
+    /// [ADR-0096](../../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).
+    /// Present on every delta a writer publishes at repository format 4 or
+    /// later, void deltas included, and on none below. Null reads as zero.
+    /// </summary>
+    /// <remarks>
+    /// The first field of an entry's rank (07 §3). Never zero when present:
+    /// zero is what absence means, and a canonical form has one encoding of
+    /// each fact.
+    /// </remarks>
+    public ulong? IndexGeneration { get; init; }
+
+    /// <summary>
+    /// The generation an entry of this delta ranks at (07 §3): its index
+    /// generation, or zero for a delta that predates format 4.
+    /// </summary>
+    public ulong RankGeneration => IndexGeneration ?? 0;
 }
 
 /// <summary>A decoded delta: the value, the exact signed bytes, and the signature to verify against the derived signing key for <see cref="IndexDelta.Generation"/>.</summary>
@@ -78,11 +103,12 @@ public sealed record DecodedDelta(IndexDelta Delta, ReadOnlyMemory<byte> SignedB
 
 /// <summary>
 /// Encodes and decodes index deltas with the 06 §6.1 two-pass signature
-/// construction over keys 1–8; the stored form re-encodes with key 9 added.
+/// construction over every key but 9; the stored form re-encodes with the
+/// signature at key 9 added.
 /// </summary>
 public static class IndexDeltaCodec
 {
-    /// <summary>Encodes keys 1–8 — the exact bytes the signature covers.</summary>
+    /// <summary>Encodes every key but 9 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(IndexDelta delta)
     {
         ThrowHelper.ThrowIfNull(delta);
@@ -93,7 +119,7 @@ public static class IndexDeltaCodec
         return writer.Encode();
     }
 
-    /// <summary>Encodes the stored form: keys 1–8 plus the signature at key 9.</summary>
+    /// <summary>Encodes the stored form: the signed keys plus the signature at key 9.</summary>
     public static byte[] Encode(IndexDelta delta, ReadOnlySpan<byte> signature)
     {
         ThrowHelper.ThrowIfNull(delta);
@@ -129,7 +155,7 @@ public static class IndexDeltaCodec
         var count = reader.ReadStartMap();
 
         WriterId? writerId = null;
-        ulong? sequence = null, generation = null;
+        ulong? sequence = null, generation = null, indexGeneration = null;
         DeltaId? predecessor = null;
         ushort? shard = null;
         List<BlobId> covered = [];
@@ -196,6 +222,9 @@ public static class IndexDeltaCodec
 
                     reader.ReadEndArray();
                     break;
+                case 12:
+                    indexGeneration = reader.ReadUnsignedInteger();
+                    break;
                 default:
                     throw new IndexFormatException(Strings.IndexDeltaCodec_DeltaCarriesUnknownKeySpecification);
             }
@@ -226,6 +255,7 @@ public static class IndexDeltaCodec
             IsVoid = isVoid == true,
             CoveredBlobDigests = digests,
             CoveredBlobMerkleRoots = merkleRoots,
+            IndexGeneration = indexGeneration,
         };
 
         Validate(delta);
@@ -238,6 +268,11 @@ public static class IndexDeltaCodec
         if (delta.IsVoid && (delta.Entries.Count > 0 || delta.CoveredBlobIds.Count > 0))
         {
             throw new IndexFormatException(Strings.IndexDeltaCodec_VoidDeltaWellFormedSigned);
+        }
+
+        if (delta.IndexGeneration == 0)
+        {
+            throw new IndexFormatException(Strings.IndexDeltaCodec_IndexGenerationZero);
         }
 
         // Parallel arrays or no array at all. Pairing what can be paired
@@ -359,7 +394,8 @@ public static class IndexDeltaCodec
             + (delta.IsVoid ? 1 : 0)
             + (signature is not null ? 1 : 0)
             + (delta.CoveredBlobDigests.Count > 0 ? 1 : 0)
-            + (delta.CoveredBlobMerkleRoots.Count > 0 ? 1 : 0);
+            + (delta.CoveredBlobMerkleRoots.Count > 0 ? 1 : 0)
+            + (delta.IndexGeneration is not null ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -405,7 +441,7 @@ public static class IndexDeltaCodec
             writer.WriteByteString(signature);
         }
 
-        // Keys 10 and 11 sort after the signature and are nonetheless
+        // Keys 10 to 12 sort after the signature and are nonetheless
         // signed: the signature covers every key except itself (07 §2),
         // which is what lets a later key be signed without renumbering an
         // established one.
@@ -431,6 +467,12 @@ public static class IndexDeltaCodec
             }
 
             writer.WriteEndArray();
+        }
+
+        if (delta.IndexGeneration is { } indexGeneration)
+        {
+            writer.WriteKey(12);
+            writer.WriteUnsignedInteger(indexGeneration);
         }
 
         writer.WriteEndMap();

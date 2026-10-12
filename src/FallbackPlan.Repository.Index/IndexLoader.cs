@@ -129,6 +129,21 @@ public sealed class IndexState
 /// </summary>
 public sealed class IndexLoader : IDisposable
 {
+    /// <summary>
+    /// How many generations a production reader lets a gap stay unresolved
+    /// before it reports it as damage (07 §4;
+    /// [ADR-0096](../../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).
+    /// </summary>
+    /// <remarks>
+    /// Counted per gap, in index generations, from the first later delta of
+    /// the gap's writer. A number its writer left pending is discharged by
+    /// that writer's next publication (07 §4), so eight is room for the
+    /// writer to miss several runs while the repository's other writers
+    /// publish, after which the gap is reported as the damage it then most
+    /// likely is.
+    /// </remarks>
+    public const int GapPatienceGenerations = 8;
+
     private readonly IObjectStore _store;
     private readonly RepositoryId _repositoryId;
     private readonly RepositoryWriteCredential _credential;
@@ -157,7 +172,12 @@ public sealed class IndexLoader : IDisposable
     /// Loads and applies the whole index plane.
     /// </summary>
     /// <param name="currentGeneration">The repository's current generation (ADR-0022 §Decision 5).</param>
-    /// <param name="gapPatienceGenerations">How many generations a gap may stay unresolved before it is damage (07 §4).</param>
+    /// <param name="gapPatienceGenerations">
+    /// How many generations a gap may stay unresolved before it is damage
+    /// (07 §4): key generations past its writer's newest, or index
+    /// generations past the first later delta of its writer, whichever is
+    /// more. A production reader passes <see cref="GapPatienceGenerations"/>.
+    /// </param>
     /// <param name="isSequenceAccountedAsync">Accounts sequences the index cannot see — journal records and intent-covered blobs; null means none.</param>
     /// <param name="blobState">The reader's blob-lifecycle knowledge for precedence rule 3.</param>
     /// <param name="cancellationToken">Cancels the loads.</param>
@@ -278,18 +298,28 @@ public sealed class IndexLoader : IDisposable
 
             foreach (var entry in delta.Delta.Entries)
             {
-                allEntries.Add(new ProvenancedEntry(entry, delta.Delta.Generation, writer, delta.Delta.Sequence));
+                allEntries.Add(new ProvenancedEntry(entry, delta.Delta.RankGeneration, writer, delta.Delta.Sequence));
             }
         }
 
         // Gap accounting (07 §4; ADR-0022 §Decision 7): every number from the
         // watermark to the writer's highest seen must be accounted for.
         var unresolved = new List<(WriterId, ulong)>();
+        var currentIndexGeneration = deltas.Count == 0 ? 0 : deltas.Max(delta => delta.Delta.RankGeneration);
+        var indexGenerationsBySequence = deltas
+            .GroupBy(delta => delta.Delta.WriterId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderBy(delta => delta.Delta.Sequence)
+                    .Select(delta => (delta.Delta.Sequence, delta.Delta.IndexGeneration))
+                    .ToArray());
 
         foreach (var (writer, sequences) in appliedSequences)
         {
             var floor = watermarks.GetValueOrDefault(writer);
             var ceiling = sequences.Max();
+            var published = indexGenerationsBySequence[writer];
+            var above = 0;
 
             for (var sequence = floor + 1; sequence <= ceiling; sequence++)
             {
@@ -304,7 +334,21 @@ public sealed class IndexLoader : IDisposable
                     continue;
                 }
 
-                var age = currentGeneration - Math.Min(currentGeneration, newestGenerationPerWriter.GetValueOrDefault(writer));
+                // The first delta of this writer above the gap was published
+                // after the number was allocated, so the gap is at least as
+                // old as it. One that predates format 4 carries no index
+                // generation to count from, and the gap is aged as before.
+                while (published[above].Sequence < sequence)
+                {
+                    above++;
+                }
+
+                var keyGenerationAge =
+                    currentGeneration - Math.Min(currentGeneration, newestGenerationPerWriter.GetValueOrDefault(writer));
+                var indexGenerationAge = published[above].IndexGeneration is { } after
+                    ? currentIndexGeneration - after
+                    : 0;
+                var age = Math.Max(keyGenerationAge, indexGenerationAge);
                 if (age >= (ulong)gapPatienceGenerations)
                 {
                     findings.Add(new DamageFinding(

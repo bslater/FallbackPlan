@@ -1079,7 +1079,8 @@ public sealed class ServiceRuntime : IAsyncDisposable
                     $"Set '{setId}' writes repository format {repository.EffectiveFormatVersion}; this build "
                     + $"writes {FormatLimits.FormatVersion}. Upgrading appends a signed record and takes effect "
                     + "at the set's next backup: blobs already sealed are left exactly as they are, and nothing "
-                    + "undoes it — a build older than this one would read the newer blobs as damage (ADR-0066).",
+                    + "undoes it — a build older than this one would read what the set writes next as damage "
+                    + "(ADR-0066).",
                     (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             }
 

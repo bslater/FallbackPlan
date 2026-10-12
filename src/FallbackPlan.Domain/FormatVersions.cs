@@ -28,6 +28,13 @@ public static class FormatVersions
     /// </summary>
     public const ushort RelocatableRecords = 3;
 
+    /// <summary>
+    /// Format 4: every delta carries an index generation, one more than the
+    /// highest its writer had seen, and entries rank by it (07 §2 key 12,
+    /// §3). Records and blobs are format 3's (ADR-0096).
+    /// </summary>
+    public const ushort IndexGenerations = 4;
+
     /// <summary>Whether a descriptor's version is one this implementation reads.</summary>
     public static bool IsReadable(ushort formatVersion) =>
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
@@ -58,6 +65,13 @@ public static class FormatVersions
     public static bool HasRelocatableRecords(ushort formatVersion) => formatVersion >= RelocatableRecords;
 
     /// <summary>
+    /// Whether a writer at this version stamps each delta with an index
+    /// generation (07 §2 key 12). Below format 4 it must not: a reader that
+    /// predates the key refuses a delta carrying it.
+    /// </summary>
+    public static bool HasIndexGenerations(ushort formatVersion) => formatVersion >= IndexGenerations;
+
+    /// <summary>
     /// The version a blob of this class is stamped with inside a repository
     /// of <paramref name="repositoryFormatVersion"/> — which is not the same
     /// number, and the one place that says so.
@@ -67,7 +81,8 @@ public static class FormatVersions
     /// and <see cref="SealedDataPlane"/> data blobs, because the symmetric
     /// construction is the one format 1 defined and format 2 kept byte for
     /// byte (ADR-0014 Amendment 1); a format-3 repository writes
-    /// <see cref="RelocatableRecords"/> for both. The stamp is AAD input, so
+    /// <see cref="RelocatableRecords"/> for both, and so does a format-4 one,
+    /// whose change is to the index alone. The stamp is AAD input, so
     /// answering this wrongly does not produce a warning — it produces a blob
     /// whose own repository cannot open it.
     /// </remarks>

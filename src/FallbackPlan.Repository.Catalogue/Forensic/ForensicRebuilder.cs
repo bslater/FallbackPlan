@@ -186,10 +186,10 @@ public sealed class ForensicRebuilder : IDisposable
                 entry.Length,
                 digest: default);
 
-            // Forensic provenance: the envelope's generation, writer and
-            // counter — deterministic, footer-derived, and below any real
-            // published entry at a later generation (07 §10 reports;
-            // precedence still decides).
+            // Forensic provenance: the envelope's writer and counter, and no
+            // index generation — deterministic, footer-derived, and below any
+            // entry a format-4 writer published (07 §10 reports; precedence
+            // still decides).
             //
             // One delta for the whole blob, not one per record. The
             // catalogue's delta ledger is UNIQUE (writer_id, sequence) and

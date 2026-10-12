@@ -1018,8 +1018,8 @@ public sealed record RetireStagingCommand(string SetName) : ServiceCommand;
 /// <summary>
 /// Upgrades one set's repository to the latest format this build writes
 /// (ADR-0066, contract 1.36): appends a signed format-upgrade record, so
-/// the set seals the newer format from its next blob while everything
-/// already sealed stays readable exactly as it is. There is no version
+/// the set writes the newer format from its next blob or index delta while
+/// everything already sealed stays readable exactly as it is. There is no version
 /// parameter — the service upgrades to the one version it can write, so a
 /// client cannot ask for a format this build would not understand. The act
 /// cannot be undone: nothing removes the record and nothing rewrites a

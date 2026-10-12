@@ -128,7 +128,7 @@ internal static class CatalogueRebuild
             new IndexLoader(store, repository.RepositoryId, repository.Credential, runtime.LoggerFor<IndexLoader>()),
             runtime.LoggerFor<CatalogueRebuilder>())
             .RebuildAsync(
-                catalogue, generation, gapPatienceGenerations: 2,
+                catalogue, generation, IndexLoader.GapPatienceGenerations,
                 isSequenceAccountedAsync: accounting.IsAccountedAsync, cancellationToken)
             .ConfigureAwait(false);
 

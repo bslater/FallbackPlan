@@ -91,8 +91,11 @@
   <data name="IndexDeltaCodec_MerkleRootsWithoutDigests" xml:space="preserve">
     <value>A delta carrying covered_blob_merkle_roots carries covered_blob_digests too; the Merkle root is the stronger commitment and never the only one (specification 07 §2.3).</value>
   </data>
+  <data name="IndexDeltaCodec_IndexGenerationZero" xml:space="preserve">
+    <value>index_generation is at least 1 when present; an absent key means 0, and a canonical form has one encoding of it (specification 07 §2.4).</value>
+  </data>
   <data name="IndexDeltaCodec_DeltaCarriesUnknownKeySpecification" xml:space="preserve">
-    <value>The delta carries an unknown key; specification 07 §2 assigns keys 1-11 only.</value>
+    <value>The delta carries an unknown key; specification 07 §2 assigns keys 1-12 only.</value>
   </data>
   <data name="IndexDeltaCodec_DeltaDeclaresShardButCarries" xml:space="preserve">
     <value>The delta declares shard {0} but carries an entry in shard {1} (ADR-0022 §Decision 4).</value>

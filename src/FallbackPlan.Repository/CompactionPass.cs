@@ -165,7 +165,7 @@ public static class CompactionPass
 
         // Decided before the intent, so a pass that declines every candidate
         // writes nothing at all.
-        var stands = RelocationStandsAt(generation, writerId, catalogue);
+        var stands = RelocationStandsAt(PublicationRankGeneration(repository, catalogue), writerId, catalogue);
         var taken = new List<CompactionSource>(candidates.Count);
         var declined = new List<BlobId>();
         foreach (var candidate in candidates)
@@ -226,7 +226,8 @@ public static class CompactionPass
         {
             using var keyDeriver = new StoreBlobKeyDeriver(repository.Keys.KeyIdKey);
             using var publisher = new IndexPublisher(
-                destination, repository.RepositoryId, writerId, repository.Credential, sequence, logger);
+                destination, repository.RepositoryId, writerId, repository.Credential, sequence, logger,
+                HighestIndexGenerationSeen(repository, catalogue));
 
             // Every blob is sealed before any is put, so one extension can
             // name them all and be durable before the first upload
@@ -287,14 +288,21 @@ public static class CompactionPass
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Every entry ranks at its delta's generation, writer and sequence, and
-    /// the generation never advances, so between two writers the writer id's
-    /// bytes decide. A supersession published under the lower of two ids
-    /// loses to the insertion it relocates. The drained blob stays live, the
-    /// produced one is garbage, and the next pass chooses the drained blob
-    /// again: nothing is lost and nothing is reclaimed. Declining the blob
-    /// leaves its dead bytes where they are until its live records die or a
-    /// writer whose relocation would stand rewrites it.
+    /// Every entry ranks at its generation, writer and sequence (07 §3). At
+    /// format 4 the generation is its delta's index generation, and a pass
+    /// publishes one above the highest its catalogue holds
+    /// ([ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)),
+    /// so its relocation outranks every entry it relocates and always stands.
+    /// </para>
+    /// <para>
+    /// Below format 4 no delta carries one, every entry ranks at zero, and
+    /// between two writers the writer id's bytes decide. A supersession
+    /// published under the lower of two ids loses to the insertion it
+    /// relocates. The drained blob stays live, the produced one is garbage,
+    /// and the next pass chooses the drained blob again: nothing is lost and
+    /// nothing is reclaimed. Declining the blob leaves its dead bytes where
+    /// they are until its live records die or a writer whose relocation
+    /// would stand rewrites it.
     /// </para>
     /// <para>
     /// An object the catalogue does not locate stands, because the
@@ -303,7 +311,7 @@ public static class CompactionPass
     /// deltas.
     /// </para>
     /// </remarks>
-    /// <param name="repository">The opened archive, whose generations set the one the pass publishes at.</param>
+    /// <param name="repository">The opened archive, whose effective format decides what the pass ranks at.</param>
     /// <param name="writerId">The writer that would publish the relocation.</param>
     /// <param name="catalogue">The catalogue the pass's plan resolved through.</param>
     /// <returns>A predicate over the objects a pass would relocate.</returns>
@@ -313,13 +321,29 @@ public static class CompactionPass
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(catalogue);
 
-        return RelocationStandsAt(PublicationGeneration(repository), writerId, catalogue);
+        return RelocationStandsAt(PublicationRankGeneration(repository, catalogue), writerId, catalogue);
     }
 
     private static Func<ObjectId, bool> RelocationStandsAt(
-        uint generation, WriterId writerId, Catalogue.Catalogue catalogue) =>
+        ulong rankGeneration, WriterId writerId, Catalogue.Catalogue catalogue) =>
         objectId => catalogue.WinningLocation(objectId) is not { } incumbent
-            || IndexPrecedence.WouldOutrank(generation, writerId, incumbent.Generation, incumbent.WriterId);
+            || IndexPrecedence.WouldOutrank(rankGeneration, writerId, incumbent.Generation, incumbent.WriterId);
+
+    /// <summary>
+    /// The highest index generation the pass has seen, which its deltas
+    /// publish above, or null below format 4, where they carry none (07 §2.4).
+    /// </summary>
+    private static ulong? HighestIndexGenerationSeen(OpenedRepository repository, Catalogue.Catalogue catalogue) =>
+        FormatVersions.HasIndexGenerations(repository.EffectiveFormatVersion) ? catalogue.MaxIndexGeneration() : null;
+
+    /// <summary>
+    /// The least generation a pass's supersessions rank at (07 §3): one above
+    /// the highest index generation its catalogue holds, or zero below
+    /// format 4. Its deltas may rank higher still, when the writer's own last
+    /// index generation is above the catalogue's highest; never lower.
+    /// </summary>
+    private static ulong PublicationRankGeneration(OpenedRepository repository, Catalogue.Catalogue catalogue) =>
+        HighestIndexGenerationSeen(repository, catalogue) is { } highest ? checked(highest + 1) : 0;
 
     /// <summary>The generation a pass publishes its intent and its supersessions at.</summary>
     private static uint PublicationGeneration(OpenedRepository repository) =>

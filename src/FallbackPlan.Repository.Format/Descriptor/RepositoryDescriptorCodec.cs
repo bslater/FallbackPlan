@@ -59,7 +59,7 @@ public static class RepositoryDescriptorCodec
     /// <summary>
     /// The relocatable-records feature
     /// ([ADR-0052](../../../docs/adr/0052-relocatable-records-format-v3.md)
-    /// Amendment 1): a format-3 repository names it in
+    /// Amendment 1): a repository at format 3 or later names it in
     /// <c>required_features</c> — and a format-2 repository never does — so a
     /// reader that predates format 3 refuses through the 01 §3.2 path with
     /// the identifier named, rather than half-reading records whose nonces
@@ -67,9 +67,20 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureRelocatableRecords = 0x0003;
 
+    /// <summary>
+    /// The index-generations feature
+    /// ([ADR-0096](../../../docs/adr/0096-format-4-an-index-generation-per-delta.md)):
+    /// a format-4 repository names it in <c>required_features</c>, beside
+    /// <see cref="FeatureRelocatableRecords"/>, and a format-2 or format-3
+    /// one never does. A reader that predates format 4 refuses the
+    /// repository by that name at open, rather than refusing each delta's
+    /// unknown key 12 and reporting the index damaged.
+    /// </summary>
+    public const ushort FeatureIndexGenerations = 0x0004;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
     private static readonly HashSet<ushort> Implemented =
-        [FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords];
+        [FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
@@ -81,8 +92,8 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only formats 2 and 3 are written (ADR-0042 §1, ADR-0052; format 1
-        // withdrawn before freeze), and a descriptor of either is nothing
+        // Only formats 2 to 4 are written (ADR-0042 §1, ADR-0052, ADR-0096;
+        // format 1 withdrawn before freeze), and a descriptor of any is nothing
         // without its sealing public key — the verifier every open compares
         // against. A caller handing over anything else is a bug refused here
         // rather than a stored contradiction.
@@ -97,7 +108,7 @@ public static class RepositoryDescriptorCodec
         if (descriptor.SealingPublicKey.Length != 32)
         {
             throw new ArgumentException(
-                "A format-2 or format-3 descriptor carries exactly a 32-byte sealing public key (ADR-0042).",
+                $"A format-{descriptor.FormatVersion} descriptor carries exactly a 32-byte sealing public key (ADR-0042).",
                 nameof(descriptor));
         }
 
@@ -326,7 +337,7 @@ public static class RepositoryDescriptorCodec
         if (sealingPublicKey is null)
         {
             return new DescriptorParseResult.FormatViolation(
-                "The sealing public key (key 9) is mandatory for a format-2 or format-3 descriptor (ADR-0042).");
+                $"The sealing public key (key 9) is mandatory for a format-{formatVersion} descriptor (ADR-0042).");
         }
 
         var unsupported = required.Where(feature => !Implemented.Contains(feature)).ToArray();
@@ -335,9 +346,9 @@ public static class RepositoryDescriptorCodec
             return new DescriptorParseResult.UnsupportedRequiredFeatures(unsupported);
         }
 
-        // The version and the relocatable-records feature name one fact
-        // (01 §3.2): a descriptor in which they disagree was not written by
-        // a conforming writer, and reading it either way would be a guess.
+        // The version and its features name one fact (01 §3.2): a descriptor
+        // in which they disagree was not written by a conforming writer, and
+        // reading it either way would be a guess.
         if (FeatureVersionDisagreement(formatVersion, required) is { } disagreement)
         {
             return new DescriptorParseResult.FormatViolation(disagreement);
@@ -357,24 +368,32 @@ public static class RepositoryDescriptorCodec
     }
 
     /// <summary>
-    /// Why the version and the relocatable-records feature disagree, or null
-    /// when they agree: a format-3 descriptor lists the feature and a
-    /// format-2 one does not (01 §3.2).
+    /// Why the version and the features it implies disagree, or null when
+    /// they agree (01 §3.2): format 3 and later list relocatable-records,
+    /// format 4 and later list index-generations, and an earlier format lists
+    /// neither.
     /// </summary>
-    private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required)
+    private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required) =>
+        FeatureDisagreement(
+            formatVersion, required, FeatureRelocatableRecords, "relocatable-records",
+            FormatVersions.HasRelocatableRecords(formatVersion))
+        ?? FeatureDisagreement(
+            formatVersion, required, FeatureIndexGenerations, "index-generations",
+            FormatVersions.HasIndexGenerations(formatVersion));
+
+    private static string? FeatureDisagreement(
+        ushort formatVersion, IReadOnlyList<ushort> required, ushort feature, string name, bool implied)
     {
-        var listed = required.Contains(FeatureRelocatableRecords);
-        var relocatable = FormatVersions.HasRelocatableRecords(formatVersion);
-        if (listed == relocatable)
+        if (required.Contains(feature) == implied)
         {
             return null;
         }
 
-        return relocatable
-            ? $"A format-{formatVersion} descriptor must list feature 0x{FeatureRelocatableRecords:x4} "
-              + "(relocatable-records) and this one does not (specification 01 §3.2)."
-            : $"A format-{formatVersion} descriptor must not list feature 0x{FeatureRelocatableRecords:x4} "
-              + "(relocatable-records) and this one does (specification 01 §3.2).";
+        return implied
+            ? $"A format-{formatVersion} descriptor must list feature 0x{feature:x4} "
+              + $"({name}) and this one does not (specification 01 §3.2)."
+            : $"A format-{formatVersion} descriptor must not list feature 0x{feature:x4} "
+              + $"({name}) and this one does (specification 01 §3.2).";
     }
 
     private static List<ushort> ReadFeatureArray(CanonicalCborReader reader)

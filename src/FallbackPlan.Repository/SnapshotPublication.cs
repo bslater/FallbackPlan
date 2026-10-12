@@ -304,7 +304,15 @@ public sealed partial class PublicationOrchestrator
         BlobWriter.SweepUnresumable(_spoolDirectory, _logger);
 
         using var journal = new JournalPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
-        using var indexPublisher = new IndexPublisher(_store, _repositoryId, _writerId, _credential, _sequence, _logger);
+        // At format 4 every delta this publication writes, its voids too,
+        // carries an index generation above the highest its catalogue holds
+        // (07 §2.4); one with no catalogue publishes above its writer's own
+        // last. Read once, before anything runs concurrently with it.
+        ulong? highestIndexGenerationSeen = FormatVersions.HasIndexGenerations(_repositoryFormatVersion)
+            ? _catalogue?.MaxIndexGeneration() ?? 0
+            : null;
+        using var indexPublisher = new IndexPublisher(
+            _store, _repositoryId, _writerId, _credential, _sequence, _logger, highestIndexGenerationSeen);
 
         // A previous run's leftovers — crash or cancellation alike — get
         // their void deltas on this publication, not on a restart

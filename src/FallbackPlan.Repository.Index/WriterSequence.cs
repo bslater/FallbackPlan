@@ -6,7 +6,12 @@ using FallbackPlan.Domain.Identifiers;
 namespace FallbackPlan.Repository.Index;
 
 /// <summary>The persisted state of a writer's sequence space.</summary>
-public sealed record SequenceState(ulong NextSequence, IReadOnlyList<ulong> PendingSequences, DeltaId? LastDeltaId)
+/// <param name="NextSequence">The number the writer hands out next.</param>
+/// <param name="PendingSequences">The numbers allocated and not yet accounted for.</param>
+/// <param name="LastDeltaId">The writer's most recently published delta.</param>
+/// <param name="LastIndexGeneration">The highest index generation the writer has stamped on a delta; zero before its first (07 §2.4).</param>
+public sealed record SequenceState(
+    ulong NextSequence, IReadOnlyList<ulong> PendingSequences, DeltaId? LastDeltaId, ulong LastIndexGeneration = 0)
 {
     /// <summary>A fresh writer: the first allocation returns 1.</summary>
     public static readonly SequenceState Initial = new(1, [], null);
@@ -45,6 +50,7 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
         var next = SequenceState.Initial.NextSequence;
         var pending = new List<ulong>();
         DeltaId? lastDelta = null;
+        ulong lastIndexGeneration = 0;
 
         foreach (var line in File.ReadAllLines(_path))
         {
@@ -68,12 +74,15 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
                 case "last-delta" when value.Length > 0:
                     lastDelta = DeltaId.FromBytes(Convert.FromHexString(value));
                     break;
+                case "last-index-generation":
+                    lastIndexGeneration = ulong.Parse(value, CultureInfo.InvariantCulture);
+                    break;
                 default:
                     break;
             }
         }
 
-        return new SequenceState(next, pending, lastDelta);
+        return new SequenceState(next, pending, lastDelta, lastIndexGeneration);
     }
 
     /// <inheritdoc />
@@ -86,7 +95,8 @@ public sealed class FileSequenceStateStore : ISequenceStateStore
         var content =
             $"next={state.NextSequence.ToString(CultureInfo.InvariantCulture)}\n" +
             $"pending={string.Join(',', state.PendingSequences.Select(sequence => sequence.ToString(CultureInfo.InvariantCulture)))}\n" +
-            $"last-delta={(state.LastDeltaId is { } delta ? Convert.ToHexStringLower(delta.ToArray()) : string.Empty)}\n";
+            $"last-delta={(state.LastDeltaId is { } delta ? Convert.ToHexStringLower(delta.ToArray()) : string.Empty)}\n" +
+            $"last-index-generation={state.LastIndexGeneration.ToString(CultureInfo.InvariantCulture)}\n";
 
         // The rename alone leaves the new bytes in the page cache; a power
         // loss then regresses the sequence space, and every number the lost
@@ -137,6 +147,7 @@ public sealed class WriterSequence : IBlobCounterAllocator
     private ulong _next;
     private readonly List<ulong> _pending;
     private DeltaId? _lastDeltaId;
+    private ulong _lastIndexGeneration;
 
     /// <summary>Loads the writer's state; anything pending at load is a crash leftover.</summary>
     public WriterSequence(ISequenceStateStore store)
@@ -148,6 +159,7 @@ public sealed class WriterSequence : IBlobCounterAllocator
         _next = state.NextSequence;
         _pending = [.. state.PendingSequences];
         _lastDeltaId = state.LastDeltaId;
+        _lastIndexGeneration = state.LastIndexGeneration;
     }
 
     /// <summary>
@@ -186,6 +198,45 @@ public sealed class WriterSequence : IBlobCounterAllocator
             {
                 return _lastDeltaId;
             }
+        }
+    }
+
+    /// <summary>
+    /// The highest index generation this writer has stamped on a delta, or
+    /// zero before its first (07 §2.4).
+    /// </summary>
+    public ulong LastIndexGeneration
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastIndexGeneration;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The index generation for this writer's next delta: one more than the
+    /// higher of <paramref name="highestSeen"/> and the writer's own last,
+    /// durable before it is returned (07 §2.4; ADR-0096).
+    /// </summary>
+    /// <remarks>
+    /// The writer's own last is the half that needs no catalogue. A
+    /// publication whose catalogue is absent or awaiting a rebuild still
+    /// publishes above every delta this writer published before, so its own
+    /// entries rank in the order it published them, across a restart as much
+    /// as within one run.
+    /// </remarks>
+    /// <param name="highestSeen">The highest index generation the publication has seen in the repository; zero for none.</param>
+    /// <returns>The index generation to stamp.</returns>
+    public ulong AllocateIndexGeneration(ulong highestSeen)
+    {
+        lock (_gate)
+        {
+            _lastIndexGeneration = checked(Math.Max(highestSeen, _lastIndexGeneration) + 1);
+            Persist();
+            return _lastIndexGeneration;
         }
     }
 
@@ -337,7 +388,7 @@ public sealed class WriterSequence : IBlobCounterAllocator
     /// </remarks>
     void IBlobCounterAllocator.MarkAccounted(ulong blobCounter) => MarkAccounted(blobCounter);
 
-    private void Persist() => _store.Save(new SequenceState(_next, [.. _pending], _lastDeltaId));
+    private void Persist() => _store.Save(new SequenceState(_next, [.. _pending], _lastDeltaId, _lastIndexGeneration));
 }
 
 /// <summary>
