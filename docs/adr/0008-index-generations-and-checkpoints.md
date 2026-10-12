@@ -44,6 +44,11 @@ A writer that discovers it has skipped a sequence publishes a signed **void delt
 > reported as damage. No load the product runs accounts for the journal and
 > blob numbers in the same sequence space, so those count as gaps too.
 
+> **Amended 2026-10 ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended).**
+> The product's two rebuilds now pass that accounting, so a number spent on
+> a journal record, or on a blob an intent named, is not a gap. The patience
+> still never runs out.
+
 ### Checkpoints enumerate what they subsume
 
 ```text
@@ -152,6 +157,13 @@ built; that design comes next, under this record.
   ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md)
   §Decision 7). No load the product runs passes the accounting that would
   tell them apart, so those numbers count as gaps too.
+
+  > **Amended 2026-10 ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended).**
+  > The service's catalogue rebuild and the CLI's `rebuild-index` now pass
+  > it (`Repository.Index/SequenceAccounting`), so only a number nothing
+  > accounts for is a gap. `ArchitectureTests/IndexLoadAccountingTests` holds
+  > that in the compiled code, because no rebuild's output can show it while
+  > the patience never runs out.
 - **The checkpoint codec and publisher.** `Repository.Index/CheckpointCodec`
   and `IndexPublisher.PublishCheckpointAsync` round-trip a checkpoint, and
   the loader applies any checkpoint it finds. Only tests publish one.
@@ -296,6 +308,7 @@ and compaction passes.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Partly built (amended) | The product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so a journal record or a named blob is not a gap (`Repository.Index/SequenceAccounting`, `ArchitectureTests/IndexLoadAccountingTests`). The patience still never runs out |
 | 2026-10 | Partly built (amended) | [Amendment 1](#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first): the deltas, their chains, void deltas and the loader are built. Nothing publishes a checkpoint, nothing retires a delta, and the gap patience never runs out because the generation never advances. The 2026-09 row's "Built" read the codec as the decision. The amendment states six constraints a checkpoint must meet before one is published: rank, writer attribution, watermark accounting, a readable size, digests and roots, and retirement across copies |
 | 2026-09 | Built (witness extended) | The rollback witness read at archive open reaches only the plane the writer publishes into, and for a direct-ship set that plane is the state directory itself; [ADR-0062](0062-the-destination-is-the-rollback-witness.md) reads the same journal keys at the destination on every fan-out pass (`Repository.Index/ObservedHead`'s `JournalHeadAsync`), which is the one copy a state directory rolled back whole does not take with it |
 | 2026-08 | Proposed | |

@@ -221,8 +221,12 @@ Five rules close it:
 
 > **As built (2026-10).** Rules 1 and 2 are built. The gap patience is
 > counted in generations, which never advance, so a gap found at rebuild
-> stays unresolved rather than becoming damage. Rules 3 to 5 are specified
-> only: nothing publishes a checkpoint or retires a delta.
+> stays unresolved rather than becoming damage. A number spent on a journal
+> record, or on a blob an intent named, is not a gap at all: the product's
+> rebuilds pass the journal's accounting
+> ([ADR-0022](../adr/0022-standalone-metadata-records-and-index-identifiers.md)
+> §Decision 7, amended). Rules 3 to 5 are specified only: nothing publishes
+> a checkpoint or retires a delta.
 > [ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first) states six constraints a checkpoint must meet
 > before one is published.
 
