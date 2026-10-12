@@ -16,8 +16,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// Establishes FR-SVC-008, the CLI half of FR-SVC-021, the CLI half of
 /// FR-VER-003's report of a circuit, the CLI half of FR-GC-008's granted
 /// collection run, the CLI half of FR-GC-013's snapshot deletion, the
-/// CLI half of FR-DRL-003's drill on request, and the CLI half of
-/// FR-DEST-005's access key for an S3-compatible destination.
+/// CLI half of FR-DRL-003's drill on request, the CLI half of
+/// FR-DEST-005's access key for an S3-compatible destination, and the CLI
+/// half of NFR-OPS-002's warnings beside a set's state.
 /// </summary>
 [TestClass]
 public sealed class ClientModeTests : IDisposable
@@ -232,6 +233,39 @@ public sealed class ClientModeTests : IDisposable
 
         Assert.AreEqual(0, result.ExitCode, result.All);
         Assert.DoesNotContain("limited to", result.All, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task Status_PrintsEachOfASetsWarnings_UnderItsLine_AsOfflineStatusDoes()
+    {
+        // A set's state says it is not protected; its warnings say why and
+        // what to do about it. The service's answer carries them, the console
+        // shows them and offline status always printed them, so the line a
+        // service answers must not drop them.
+        await _harness.CreateRepositoryAsync();
+        _harness.WriteSourceFile("notes.txt", "hello");
+        await _harness.BackUpAsync();
+        _harness.WriteConfiguration("every 1h");
+
+        await using var runtime = await StartServiceAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        await using var listener = LocalServiceListener.Start(handler, _harness.StateDirectory);
+        Assert.IsInstanceOfType<StatusResult>(await handler.ExecuteAsync(new GetStatusCommand(), _timeout.Token), out var answered);
+        var warnings = Assert.ContainsSingle(answered.Sets).Status.Warnings;
+        Assert.IsNotEmpty(warnings, "the control: the set's state comes with a warning to print");
+
+        var result = await ServiceCliAsync("status", "--state", _harness.StateDirectory);
+
+        Assert.AreEqual(0, result.ExitCode, result.All);
+        var lines = result.Output.ReplaceLineEndings("\n").Split('\n');
+        var setLine = Array.FindIndex(lines, line => line.StartsWith("docs ", StringComparison.Ordinal));
+        Assert.IsGreaterThanOrEqualTo(0, setLine, result.Output);
+        for (var index = 0; index < warnings.Count; index++)
+        {
+            Assert.AreEqual(
+                $"{string.Empty,-20} warning: {warnings[index]}", lines[setLine + 1 + index],
+                "each warning sits under the set's line, ahead of its destinations");
+        }
     }
 
     [TestMethod]
