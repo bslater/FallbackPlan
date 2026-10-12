@@ -23,6 +23,8 @@ The user-facing view answers the six questions in [`00-overview.md` §2](00-over
 | Last verified restore point | Verification coverage ([`09-replication-and-peers.md` §5](09-replication-and-peers.md#5-destination-verification)) |
 | Warnings requiring action | Damage reports, quota exhaustion, unusual deletion rates |
 
+A set's warnings travel with its state. Every surface that shows the state shows the warnings beside it: the console's expanded card, and the CLI's `status`, whether it read the state itself or a service answered it (NFR-OPS-002). The state says what is wrong; only the warnings say why and what to do.
+
 ### 1.1 States must be distinguishable
 
 The status vocabulary is normative, because collapsing any two of these is how a user comes to believe they are protected when they are not. It has two layers: the **derived states** the service computes and every surface carries, and the console's **glance words** — a five-word grouping for the collapsed overview row, with the derived state one expand away.
