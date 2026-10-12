@@ -60,8 +60,8 @@ public sealed class IndexState
     /// The writer's own <c>sequence</c> file is allocation state: it says what
     /// this machine has handed out, and it is exactly as durable as the state
     /// directory holding it. This is the other half, and it is the half that
-    /// travels: every checkpoint carries a signed per-writer watermark and
-    /// every applied delta carries its signed sequence (07 §§5–6), so any
+    /// travels: every applied delta carries its signed sequence, and a
+    /// checkpoint would carry a signed per-writer watermark (07 §§5–6), so any
     /// replica of the repository can say how far its writers had got. A
     /// machine whose local state was lost or rolled back can therefore learn
     /// the truth from the repository rather than from a collision partway
@@ -114,8 +114,12 @@ public sealed class IndexState
 
 /// <summary>
 /// Loads the index (specification 07 §5–§8): every checkpoint at every
-/// generation is applied (07 §6), then every delta whose sequence exceeds
-/// its writer's watermark — whether or not a listing revealed it in time.
+/// generation is applied (07 §6), then every listed delta whose sequence
+/// exceeds its writer's highest watermark. A delta's key carries a random
+/// identifier, so one the listing omits is never fetched; it is seen only as
+/// a gap once a later number of its writer is. The watermark alone decides
+/// what a checkpoint covers: <c>subsumed_delta_ids</c> and <c>shard_set</c>
+/// are not read (ADR-0008 Amendment 1).
 /// Signatures verify against the derived signing key per generation; a
 /// failure is a <b>security finding</b> and the object is excluded. Sequence
 /// gaps follow ADR-0022 §Decision 7: a number is accounted for by a delta, a

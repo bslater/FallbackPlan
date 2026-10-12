@@ -305,10 +305,11 @@ public sealed class BlobCompactor : IDisposable
     {
         var sealedBlob = await writer.SealAsync(cancellationToken).ConfigureAwait(false);
 
-        // Supersessions, not insertions: these locations must be honoured in
-        // order against the ones the source blobs still carry, and an
-        // insertion would leave the winner to a tie-break rather than to the
-        // decision this pass just made (07 §3, FR-MAN-015).
+        // Supersessions, not insertions: the type says these locations replace
+        // the ones the source blobs still carry (07 §2.1, FR-MAN-015). No
+        // reader orders by it. What moves a reader is precedence, and between
+        // two writers at one generation that is the writer id, which can undo
+        // this pass (ADR-0017 Amendment 1).
         var entries = sealedBlob.RecordTable
             .Select(record => new IndexEntry(
                 record.ObjectId,

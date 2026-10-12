@@ -45,8 +45,11 @@ public sealed record PublishedCompaction(
 /// both capture paths construct insertions. What actually moves a reader
 /// off the drained blob is 07 §3's precedence, which is generation then
 /// <c>(writer_id, sequence)</c> and does not read the entry type; the type
-/// states the intent that ordering carries out, and a compaction entry
-/// always carries the higher sequence.
+/// states the intent that ordering carries out. At one generation it carries
+/// it out only where the writer that inserted a relocated record is the one
+/// compacting it, whose sequence has moved on. Between two writers the writer
+/// id decides, and a compaction under the lower one is undone by the next
+/// retention pass (ADR-0017 Amendment 1).
 /// </para>
 /// <para>
 /// A pass's entries are split across deltas so that no delta exceeds
