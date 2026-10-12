@@ -398,7 +398,12 @@ public sealed partial class ServiceCommandHandler(
                     // A run of the set's own, queued, running or parked, may
                     // have built on a blob this pass would condemn, whatever
                     // its intent still shows (ADR-0009 Amendment 8).
-                    backupInFlight: Scheduler.LiveBackupOf(runtime, set.Id) is not null).ConfigureAwait(false);
+                    backupInFlight: Scheduler.LiveBackupOf(runtime, set.Id) is not null,
+                    // The rule the compaction phase declines a blob by, so the
+                    // dry run offers only what the apply would rewrite
+                    // (ADR-0017 Amendment 2).
+                    relocationStands: Repository.CompactionPass.RelocationStands(
+                        archive.Repository, runtime.Writer, catalogue)).ConfigureAwait(false);
 
                 // A set's peers converge here and nowhere else (ADR-0055 §6):
                 // the scheduled sync holds no authority to delete, so it
@@ -552,14 +557,27 @@ public sealed partial class ServiceCommandHandler(
                 .Where(blob => outcome.Drained.Contains(blob.BlobId))
                 .Sum(blob => blob.DeadBytes);
 
-            return
-            [
-                $"compacted: {outcome.RecordsMoved.ToString(CultureInfo.InvariantCulture)} record(s) out of "
-                + $"{outcome.Drained.Count.ToString(CultureInfo.InvariantCulture)} blob(s) into "
-                + $"{outcome.Published.Count.ToString(CultureInfo.InvariantCulture)}; "
-                + $"{reclaimable.ToString("N0", CultureInfo.InvariantCulture)} byte(s) come back once the next "
-                + "pass condemns them and their grace runs",
-            ];
+            var lines = new List<string>();
+            if (outcome.Declined.Count < report.CompactionCandidates.Count)
+            {
+                lines.Add(
+                    $"compacted: {outcome.RecordsMoved.ToString(CultureInfo.InvariantCulture)} record(s) out of "
+                    + $"{outcome.Drained.Count.ToString(CultureInfo.InvariantCulture)} blob(s) into "
+                    + $"{outcome.Published.Count.ToString(CultureInfo.InvariantCulture)}; "
+                    + $"{reclaimable.ToString("N0", CultureInfo.InvariantCulture)} byte(s) come back once the next "
+                    + "pass condemns them and their grace runs");
+            }
+
+            // The plan already leaves out what the pass would decline, so
+            // this is the catalogue having moved between the two.
+            if (outcome.Declined.Count > 0)
+            {
+                lines.Add(
+                    $"compaction declined {outcome.Declined.Count.ToString(CultureInfo.InvariantCulture)} blob(s): "
+                    + "another writer's entries would outrank the rewrite, and the next pass would undo it");
+            }
+
+            return lines;
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException
             or Repository.Packing.BlobFormatException)

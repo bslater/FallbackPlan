@@ -43,14 +43,15 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 /// strength of a pointer into nothing.
 /// </para>
 /// <para>
-/// The two-writer pair pins what happens when the compaction is published under
+/// The two-writer tests pin what happens when the compaction is published under
 /// a second writer, as in an archive adopted by a machine that kept its own
 /// identity (ADR-0061). Every entry ranks by a generation that never advances,
 /// so between two writers the writer id's bytes decide (ADR-0017 Amendment 1).
-/// Under an id that sorts higher the compaction stands; under one that sorts
-/// lower it is undone by the next plan, and nothing is lost either way. The
-/// second is a shortfall that is owed a fix, so this class does not establish
-/// FR-MAN-015.
+/// Under an id that sorts higher the compaction stands. Under one that sorts
+/// lower its supersessions would lose to the insertions they relocate, so the
+/// pass declines the blob and writes nothing, and the dry run says why
+/// (ADR-0017 Amendment 2). Every compaction that is published therefore
+/// stands whichever writer published it, which is FR-MAN-015's acceptance.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -311,45 +312,60 @@ public sealed class CompactionCollectionTests : IDisposable
 
     /// <summary>
     /// The same compaction under an id that sorts below the first writer's is
-    /// undone: its supersessions lose to the insertions they relocate, so the
-    /// next plan keeps the drained blob, condemns the one the pass produced,
-    /// and leaves the drained blob part dead for the next compaction to choose
-    /// again. Nothing is lost, because every location the planner and a
-    /// restore resolve is still the blob that holds the records.
+    /// not started. Its supersessions would lose to the insertions they
+    /// relocate, so the pass declines the blob and writes nothing at all, not
+    /// even its intent, and the next plan still has the blob part dead, for the
+    /// collector to take once its records die.
     /// </summary>
     [TestMethod]
-    public async Task TwoWriters_ACompactionUnderAnIdThatSortsLower_IsUndoneByTheNextPlan_AndLosesNothing()
+    public async Task TwoWriters_ACompactionUnderAnIdThatSortsLower_IsDeclined_AndWritesNothing()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
         await ChurnAsync(store);
         var repositoryId = await RepositoryIdAsync(store);
+        var keysBefore = await StoredKeysAsync(store);
 
-        BlobId drained, produced;
-        using (var catalogue = OpenCatalogue(repositoryId, live: true))
-        {
-            (drained, produced) = await CompactAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: false));
+        using var catalogue = OpenCatalogue(repositoryId, live: true);
+        var (candidate, outcome) = await RunCompactionAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: false));
 
-            var plan = await PlanAsync(store, catalogue);
-            var condemned = plan.DeletableBlobs.Select(blob => blob.BlobId).ToList();
-            Assert.Contains(produced, condemned, "the produced blob's records still resolve into the drained one");
-            Assert.DoesNotContain(drained, condemned, "the drained blob was condemned though its records resolve to it");
-            Assert.Contains(
-                drained, plan.PartlyLiveBlobs.Select(blob => blob.BlobId).ToList(),
-                "the drained blob is still part dead, so the next compaction would choose it again");
-        }
+        Assert.AreEqual(candidate.BlobId, Assert.ContainsSingle(outcome.Declined));
+        Assert.IsEmpty(outcome.Published);
+        Assert.IsEmpty(outcome.Drained);
+        Assert.AreEqual(0, outcome.RecordsMoved);
+        CollectionAssert.AreEqual(keysBefore, await StoredKeysAsync(store), "a declined pass wrote to the store");
 
-        // Tombstone, publish past the decision so the grace runs, sweep, each
-        // pass resolving through the catalogue that holds both writers' rows.
-        await RetainAsync(store, Day1.AddDays(3).AddHours(1), live: true);
-        File.WriteAllText(Path.Combine(SourceRoot, "churn.txt"), new string('4', 200_000));
-        await BackUpAsync(Day1.AddDays(4));
-        var swept = await RetainAsync(store, Day1.AddDays(4).AddHours(1), live: true);
-
-        Assert.IsEmpty(swept.Swept!.Findings);
-        var stored = await StoredBlobIdsAsync(store);
-        Assert.DoesNotContain(produced, stored, "the blob the compaction produced was not swept");
-        Assert.Contains(drained, stored, "the drained blob was swept though every reader resolves into it");
+        var plan = await PlanAsync(store, catalogue);
+        Assert.DoesNotContain(candidate.BlobId, plan.DeletableBlobs.Select(blob => blob.BlobId).ToList());
+        Assert.Contains(candidate.BlobId, plan.PartlyLiveBlobs.Select(blob => blob.BlobId).ToList());
         await AssertEveryReachableObjectReadsAsync(store);
+    }
+
+    /// <summary>
+    /// The dry run reads the same rule the pass does, so under the lower id it
+    /// offers the blob to no pass and says why, rather than promising a
+    /// compaction the pass would decline (FR-GC-005).
+    /// </summary>
+    [TestMethod]
+    public async Task TwoWriters_UnderAnIdThatSortsLower_TheDryRunLeavesTheBlobWhole_AndSaysWhy()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store);
+
+        var lower = SecondWriter(sortsAboveTheFirst: false);
+        var report = await RetainAsync(
+            store, Day1.AddDays(3).AddHours(1), live: true, apply: false, writer: lower,
+            compaction: new CompactionPolicy(0.0, 0, long.MaxValue));
+
+        Assert.IsEmpty(report.CompactionCandidates);
+        Assert.Contains(
+            line => line.Contains("another writer's entries would outrank the rewrite", StringComparison.Ordinal),
+            report.Lines);
+
+        // The control: under the backups' own writer the same blob is offered.
+        var own = await RetainAsync(
+            store, Day1.AddDays(3).AddHours(1), live: true, apply: false,
+            compaction: new CompactionPolicy(0.0, 0, long.MaxValue));
+        Assert.IsNotEmpty(own.CompactionCandidates);
     }
 
     /// <summary>Four backups with churn, so some records in the early blobs die.</summary>
@@ -369,12 +385,26 @@ public sealed class CompactionCollectionTests : IDisposable
     }
 
     /// <summary>
-    /// Compacts the first blob the collector reports as part dead, publishing
-    /// into <paramref name="into"/> (the test's own catalogue when null) under
-    /// <paramref name="writer"/> (the backups' writer when null).
+    /// Compacts the first blob the collector reports as part dead, and
+    /// requires that the pass drained it into one new blob.
     /// </summary>
     private async Task<(BlobId Drained, BlobId Produced)> CompactAsync(
         LocalFileSystemObjectStore store, CatalogueDb? into = null, WriterId? writer = null)
+    {
+        var (candidate, outcome) = await RunCompactionAsync(store, into, writer);
+
+        Assert.AreEqual(candidate.BlobId, Assert.ContainsSingle(outcome.Drained));
+        return (candidate.BlobId, Assert.ContainsSingle(outcome.Published));
+    }
+
+    /// <summary>
+    /// Runs one compaction pass over the first blob the collector reports as
+    /// part dead, publishing into <paramref name="into"/> (the test's own
+    /// catalogue when null) under <paramref name="writer"/> (the backups'
+    /// writer when null), and returns what the pass said it did.
+    /// </summary>
+    private async Task<(CompactableBlob Candidate, CompactionOutcome Outcome)> RunCompactionAsync(
+        LocalFileSystemObjectStore store, CatalogueDb? into, WriterId? writer)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         using var owned = into is null ? OpenCatalogue(opened.Repository.RepositoryId) : null;
@@ -401,8 +431,7 @@ public sealed class CompactionCollectionTests : IDisposable
             (ulong)Day1.AddDays(3).AddHours(1).ToUnixTimeMilliseconds(),
             declaredMaxDurationMs: 3_600_000, expiryGeneration: 16, CancellationToken.None);
 
-        Assert.AreEqual(candidate.BlobId, Assert.ContainsSingle(outcome.Drained));
-        return (candidate.BlobId, Assert.ContainsSingle(outcome.Published));
+        return (candidate, outcome);
     }
 
     /// <summary>
@@ -592,19 +621,42 @@ public sealed class CompactionCollectionTests : IDisposable
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }
 
-    private async Task<RetentionReport> RetainAsync(LocalFileSystemObjectStore store, DateTimeOffset now, bool live = false)
+    private async Task<RetentionReport> RetainAsync(
+        LocalFileSystemObjectStore store,
+        DateTimeOffset now,
+        bool live = false,
+        bool apply = true,
+        WriterId? writer = null,
+        CompactionPolicy? compaction = null)
     {
         using var opened = await WriteOnlyInstallation.OpenAsync(store, PassphraseText, CancellationToken.None);
         using var catalogue = OpenCatalogue(opened.Repository.RepositoryId, live);
 
+        // The pass is run by the writer that would compact, as the service's
+        // is, and judges each candidate by the rule the compaction pass uses.
+        var running = writer ?? WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId);
         var sync = DestinationSyncStore.Open(StateDirectory);
         return await RetentionRunner.RunAsync(
             store, opened.Repository, new RetentionConfiguration { KeepDaily = 1, MinGenerations = 1 },
             [new SetDestinationReference { Ref = "vault" }],
             name => sync.Find(SetId, name), _ => TrimVerification.None,
-            WriterId.FromBytes(LocalState.LoadOrCreate(StateDirectory).WriterId), apply: true,
+            running, apply,
             (ulong)now.ToUnixTimeMilliseconds(), CancellationToken.None, reclaim: opened.Reclaim,
-            resolveLocation: objectId => catalogue.ResolveLocation(objectId)?.BlobId);
+            resolveLocation: objectId => catalogue.ResolveLocation(objectId)?.BlobId,
+            compactionPolicy: compaction,
+            relocationStands: CompactionPass.RelocationStands(opened.Repository, running, catalogue));
+    }
+
+    private static async Task<List<string>> StoredKeysAsync(LocalFileSystemObjectStore store)
+    {
+        var keys = new List<string>();
+        await foreach (var entry in store.ListAsync(ObjectPrefix.All, ListOptions.Default, CancellationToken.None))
+        {
+            keys.Add(entry.Key.Value);
+        }
+
+        keys.Sort(StringComparer.Ordinal);
+        return keys;
     }
 
     private async Task<RetentionReport> PlanOnlyAsync(

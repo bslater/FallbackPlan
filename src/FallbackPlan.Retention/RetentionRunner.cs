@@ -90,6 +90,12 @@ public static class RetentionRunner
     /// outside its window can outlive that; the service that holds the run
     /// knows it is there whatever its intent shows.
     /// </param>
+    /// <param name="relocationStands">
+    /// Whether relocating an object would stand, which the compaction pass
+    /// decides before it starts (ADR-0017 Amendment 2). The plan leaves a blob
+    /// the pass would decline out of the candidates and says why. Null offers
+    /// every blob past the threshold.
+    /// </param>
     /// <returns>The report.</returns>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
@@ -109,7 +115,8 @@ public static class RetentionRunner
         CompactionPolicy? compactionPolicy = null,
         TimeSpan? clockSkewMargin = null,
         bool requestsOnly = false,
-        bool backupInFlight = false)
+        bool backupInFlight = false,
+        Func<ObjectId, bool>? relocationStands = null)
     {
         var log = logger ?? NullLogger.Instance;
         var set = setName ?? "the set";
@@ -220,7 +227,7 @@ public static class RetentionRunner
         // garbage cannot say what is worth rewriting either.
         var compaction = plan.Deletable && !requestsOnly
             ? (compactionPolicy ?? CompactionPolicy.Default).Select(
-                repository.EffectiveFormatVersion, plan.PartlyLiveBlobs)
+                repository.EffectiveFormatVersion, plan.PartlyLiveBlobs, relocationStands)
             : new CompactionSelection([], []);
         lines.AddRange(compaction.Lines);
 

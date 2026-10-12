@@ -184,9 +184,31 @@ public sealed class CompactionPolicyTests
             StringComparison.Ordinal);
     }
 
+    [TestMethod]
+    public void ABlobWhoseLiveRecordsAnotherWritersEntriesHold_IsLeftWhole_AndSaid()
+    {
+        // ADR-0017 Amendment 2: a rewrite whose supersessions would lose to
+        // the entries its records resolve through is undone by the next plan.
+        // So it is not offered, and the dry run gives that reason rather than
+        // counting the blob under the threshold it cleared.
+        var held = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, liveObject: 0x21);
+        var free = Blob(liveBytes: 8L * 1024 * 1024, deadBytes: 8L * 1024 * 1024, liveObject: 0x22);
+        var heldObject = held.Live[0].ObjectId;
+
+        var selection = Default.Select(
+            FormatVersions.RelocatableRecords, [held, free],
+            relocationStands: objectId => !objectId.Equals(heldObject));
+
+        Assert.AreEqual(free.BlobId, Assert.ContainsSingle(selection.Candidates).BlobId);
+        var lines = string.Join("\n", selection.Lines);
+        Assert.Contains(
+            "1 blob(s) left whole: another writer's entries would outrank the rewrite", lines, StringComparison.Ordinal);
+        Assert.DoesNotContain("below the threshold", lines, StringComparison.Ordinal);
+    }
+
     private static int _next;
 
-    private static CompactableBlob Blob(long liveBytes, long deadBytes, string blobClass = "data")
+    private static CompactableBlob Blob(long liveBytes, long deadBytes, string blobClass = "data", byte liveObject = 7)
     {
         var n = Interlocked.Increment(ref _next);
         var bytes = new byte[BlobId.Size];
@@ -196,7 +218,7 @@ public sealed class CompactionPolicyTests
             ObjectKey.Parse($"blobs/{blobClass}/abcd/blob{n}"),
             id,
             [new RecordTableEntry(
-                ObjectId.FromBytes([.. Enumerable.Repeat((byte)7, 32)]),
+                ObjectId.FromBytes([.. Enumerable.Repeat(liveObject, 32)]),
                 Ordinal: 0,
                 PhysicalOffset: 0,
                 StoredLength: (uint)liveBytes,

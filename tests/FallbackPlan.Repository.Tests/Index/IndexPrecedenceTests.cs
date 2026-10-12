@@ -142,6 +142,52 @@ public sealed class IndexPrecedenceTests
     }
 
     [TestMethod]
+    public void IndexPrecedence_WhatAWriterPublishesNext_OutranksItsOwnAndALowerWritersAtOneGeneration()
+    {
+        // The writer's next sequence exceeds every one it has published, so
+        // against its own entry only the generation could stop it.
+        Assert.IsTrue(IndexPrecedence.WouldOutrank(0, Writer(5), incumbentGeneration: 0, Writer(5)));
+        Assert.IsTrue(IndexPrecedence.WouldOutrank(0, Writer(5), incumbentGeneration: 0, Writer(4)));
+    }
+
+    [TestMethod]
+    public void IndexPrecedence_WhatAWriterPublishesNext_LosesToAHigherWritersAtOneGeneration()
+    {
+        // The two-writer case ADR-0017 Amendment 1 found: at one generation
+        // the writer id's bytes decide, whatever was published first.
+        Assert.IsFalse(IndexPrecedence.WouldOutrank(0, Writer(4), incumbentGeneration: 0, Writer(5)));
+    }
+
+    [TestMethod]
+    public void IndexPrecedence_WhatAWriterPublishesNext_IsDecidedByGenerationFirst()
+    {
+        Assert.IsTrue(IndexPrecedence.WouldOutrank(1, Writer(4), incumbentGeneration: 0, Writer(5)));
+        Assert.IsFalse(IndexPrecedence.WouldOutrank(0, Writer(5), incumbentGeneration: 1, Writer(4)));
+    }
+
+    [TestMethod]
+    public void IndexPrecedence_WouldOutrank_AgreesWithTheOrderEveryReaderResolvesBy()
+    {
+        // The compactor's foresight and the readers' order must be one rule:
+        // a pass that judged by a different one would start compactions
+        // the next plan undoes, or decline ones that would stand.
+        var random = new Random(20261012);
+        for (var trial = 0; trial < 200; trial++)
+        {
+            var incumbent = Entry(
+                blobSeed: 1, generation: (ulong)random.Next(0, 3), writerSeed: (byte)random.Next(1, 4),
+                sequence: (ulong)random.Next(1, 1_000));
+            var generation = (ulong)random.Next(0, 3);
+            var writer = Writer((byte)random.Next(1, 4));
+
+            var next = new ProvenancedEntry(incumbent.Entry, generation, writer, ulong.MaxValue);
+            Assert.AreEqual(
+                IndexPrecedence.Compare(next, incumbent) > 0,
+                IndexPrecedence.WouldOutrank(generation, writer, incumbent.Generation, incumbent.WriterId));
+        }
+    }
+
+    [TestMethod]
     public void IndexPrecedence_TwoLocationsForOneObject_AreBenignAndEitherServes()
     {
         // 07 §3: two writers independently stored the same content in

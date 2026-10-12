@@ -1,7 +1,10 @@
+using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
+using FallbackPlan.Repository.Index;
 using CompactionStep = FallbackPlan.Repository.CompactionStep;
 using ICompactionObserver = FallbackPlan.Repository.ICompactionObserver;
 
@@ -14,7 +17,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// rewrites what the collector's plan chose, the space comes back once the
 /// next pass condemns the drained blobs and their grace runs, and the set is
 /// a whole restorable repository throughout. Establishes FR-GC-011 and
-/// FR-MAN-019.
+/// FR-MAN-019, and the service's half of FR-MAN-015: a blob whose relocation
+/// would not stand is left whole.
 /// </summary>
 /// <remarks>
 /// The direct-ship case is the one worth having. Its candidates are read
@@ -212,6 +216,66 @@ public sealed class CompactionRetentionTests : IDisposable
     }
 
     /// <summary>
+    /// The service judges a candidate by the rule its compaction pass uses
+    /// (ADR-0017 Amendment 2; FR-MAN-015). Its catalogue is given a second
+    /// writer's entries for every object, at the locations its own entries
+    /// name and under an id that sorts above any it could hold: the standing
+    /// an adopted archive's other writer has, without a second machine. The
+    /// blob the dry run offered is then left whole and said to be, and the
+    /// pass that applies rewrites nothing.
+    /// </summary>
+    [TestMethod]
+    public async Task UnderAHigherWritersEntries_TheServiceLeavesTheBlobWhole_SaysWhy_AndRewritesNothing()
+    {
+        Directory.CreateDirectory(VaultA);
+        WriteConfiguration(directShip: true);
+        WriteIncompressible("docs/steady.bin", seed: 1);
+        WriteIncompressible("docs/churn.bin", seed: 2);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 3);
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 4);
+        await BackUpAsync(runtime);
+
+        // The control: under its own entries alone the blob is offered.
+        Assert.Contains(
+            line => line.Contains("compaction would rewrite: 1 blob(s)", StringComparison.Ordinal),
+            await DryRunAsync(handler));
+
+        await GiveEveryObjectToAHigherWriterAsync(runtime);
+
+        var dry = await DryRunAsync(handler);
+        var said = string.Join(Environment.NewLine, dry);
+        Assert.Contains(
+            line => line.Contains("compaction would rewrite: 0 blob(s)", StringComparison.Ordinal), dry, said);
+        Assert.Contains(
+            line => line.Contains(
+                "1 blob(s) left whole: another writer's entries would outrank the rewrite", StringComparison.Ordinal),
+            dry,
+            said);
+
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(VaultA));
+        var before = BlobObjects(replica);
+        var applied = await RetainAsync(handler, grant);
+
+        // Neither started nor declined: the plan offered the pass nothing.
+        Assert.IsEmpty(
+            applied.Where(line => line.Contains("compacted:", StringComparison.Ordinal)
+                || line.Contains("compaction declined", StringComparison.Ordinal)
+                || line.Contains("compaction did not run", StringComparison.Ordinal)).ToList(),
+            string.Join(Environment.NewLine, applied));
+        Assert.IsEmpty(
+            BlobObjects(replica).Except(before, StringComparer.Ordinal).ToList(),
+            "the pass wrote a blob it should have declined to produce");
+        await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+    }
+
+    /// <summary>
     /// A direct-ship set whose destination is away compacts nothing and says
     /// nothing — the sink lists no blobs, so the plan has no backlog. It must
     /// not be an error: retention runs on a schedule and an unplugged drive
@@ -372,6 +436,43 @@ public sealed class CompactionRetentionTests : IDisposable
             await handler.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout),
             out var result);
         return result.Lines;
+    }
+
+    private async Task<IReadOnlyList<string>> DryRunAsync(ServiceCommandHandler handler)
+    {
+        Assert.IsInstanceOfType<RetentionResult>(
+            await handler.ExecuteAsync(new RetentionCommand(Apply: false), Timeout), out var result);
+        return result.Lines;
+    }
+
+    /// <summary>
+    /// Applies to the set's catalogue one delta from a writer whose id sorts
+    /// above every other, re-inserting each object at the location the index
+    /// resolves it to, at the same generation.
+    /// </summary>
+    private async Task GiveEveryObjectToAHigherWriterAsync(ServiceRuntime runtime)
+    {
+        var archive = await runtime.ArchiveForAsync(runtime.Configuration.BackupSets.Single(), Timeout);
+        var index = await new IndexLoader(
+            archive.Store, archive.Repository.RepositoryId, archive.Repository.Credential)
+            .LoadAsync(
+                currentGeneration: 0, gapPatienceGenerations: 0, isSequenceAccountedAsync: null, blobState: null,
+                Timeout);
+        Assert.IsNotEmpty(index.Resolved);
+
+        using var catalogue = archive.OpenWritableCatalogue();
+        catalogue.ApplyDelta(
+            DeltaId.FromBytes(RandomNumberGenerator.GetBytes(DeltaId.Size)),
+            new IndexDelta
+            {
+                WriterId = WriterId.FromBytes([.. Enumerable.Repeat((byte)0xFF, 16)]),
+                Sequence = 1,
+                Generation = index.Resolved.Values.Max(entry => entry.Generation),
+                Entries = [.. index.Resolved.Values.Select(entry => entry.Entry with
+                {
+                    EntryType = IndexEntryType.Insertion,
+                })],
+            });
     }
 
     private async Task AssertRestoresAsync(ServiceCommandHandler handler, string file, int seed)

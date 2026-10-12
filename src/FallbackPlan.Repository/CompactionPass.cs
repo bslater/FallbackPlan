@@ -60,6 +60,13 @@ public sealed record CompactionOutcome(
 {
     /// <summary>A pass that had nothing to do.</summary>
     public static CompactionOutcome Nothing { get; } = new([], [], [], 0, 0);
+
+    /// <summary>
+    /// The candidates left whole because their relocation would not stand
+    /// (<see cref="CompactionPass.RelocationStands"/>): neither read nor
+    /// drained, and named by no intent.
+    /// </summary>
+    public IReadOnlyList<BlobId> Declined { get; init; } = [];
 }
 
 /// <summary>
@@ -154,8 +161,35 @@ public static class CompactionPass
             return CompactionOutcome.Nothing;
         }
 
-        var generation = Math.Max(
-            repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
+        var generation = PublicationGeneration(repository);
+
+        // Decided before the intent, so a pass that declines every candidate
+        // writes nothing at all.
+        var stands = RelocationStandsAt(generation, writerId, catalogue);
+        var taken = new List<CompactionSource>(candidates.Count);
+        var declined = new List<BlobId>();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Live.All(record => stands(record.ObjectId)))
+            {
+                taken.Add(candidate);
+            }
+            else
+            {
+                declined.Add(candidate.BlobId);
+            }
+        }
+
+        if (declined.Count > 0)
+        {
+            Log.CompactionDeclined(
+                logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, declined.Count);
+        }
+
+        if (taken.Count == 0)
+        {
+            return CompactionOutcome.Nothing with { Declined = declined };
+        }
 
         using var journal = new JournalPublisher(
             destination, repository.RepositoryId, writerId, repository.Credential, sequence, logger);
@@ -183,7 +217,7 @@ public static class CompactionPass
             repository.RepositoryId, writerId, new KeyGeneration(generation), repository.Keys, policy,
             source, sequence, spoolDirectory, repository.EffectiveFormatVersion, logger))
         {
-            produced = await compactor.CompactAsync(candidates, cancellationToken).ConfigureAwait(false);
+            produced = await compactor.CompactAsync(taken, cancellationToken).ConfigureAwait(false);
         }
 
         observer?.AfterStep(CompactionStep.SealBlobs);
@@ -231,7 +265,10 @@ public static class CompactionPass
 
             observer?.AfterStep(CompactionStep.Complete);
             return new CompactionOutcome(
-                published.Published, published.Drained, published.DeltaIds, intentSequence, moved);
+                published.Published, published.Drained, published.DeltaIds, intentSequence, moved)
+            {
+                Declined = declined,
+            };
         }
         finally
         {
@@ -241,6 +278,52 @@ public static class CompactionPass
             }
         }
     }
+
+    /// <summary>
+    /// Whether a relocation <paramref name="writerId"/> published now would
+    /// stand: whether its supersession would outrank the entry that holds
+    /// each object, so the next plan reads the object where the pass put it
+    /// (ADR-0017 Amendment 2).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every entry ranks at its delta's generation, writer and sequence, and
+    /// the generation never advances, so between two writers the writer id's
+    /// bytes decide. A supersession published under the lower of two ids
+    /// loses to the insertion it relocates. The drained blob stays live, the
+    /// produced one is garbage, and the next pass chooses the drained blob
+    /// again: nothing is lost and nothing is reclaimed. Declining the blob
+    /// leaves its dead bytes where they are until its live records die or a
+    /// writer whose relocation would stand rewrites it.
+    /// </para>
+    /// <para>
+    /// An object the catalogue does not locate stands, because the
+    /// supersession would be its only entry. The catalogue must therefore be
+    /// the one the pass's plan resolved through, holding every writer's
+    /// deltas.
+    /// </para>
+    /// </remarks>
+    /// <param name="repository">The opened archive, whose generations set the one the pass publishes at.</param>
+    /// <param name="writerId">The writer that would publish the relocation.</param>
+    /// <param name="catalogue">The catalogue the pass's plan resolved through.</param>
+    /// <returns>A predicate over the objects a pass would relocate.</returns>
+    public static Func<ObjectId, bool> RelocationStands(
+        OpenedRepository repository, WriterId writerId, Catalogue.Catalogue catalogue)
+    {
+        ThrowHelper.ThrowIfNull(repository);
+        ThrowHelper.ThrowIfNull(catalogue);
+
+        return RelocationStandsAt(PublicationGeneration(repository), writerId, catalogue);
+    }
+
+    private static Func<ObjectId, bool> RelocationStandsAt(
+        uint generation, WriterId writerId, Catalogue.Catalogue catalogue) =>
+        objectId => catalogue.WinningLocation(objectId) is not { } incumbent
+            || IndexPrecedence.WouldOutrank(generation, writerId, incumbent.Generation, incumbent.WriterId);
+
+    /// <summary>The generation a pass publishes its intent and its supersessions at.</summary>
+    private static uint PublicationGeneration(OpenedRepository repository) =>
+        Math.Max(repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
     /// <summary>
     /// Covers blobs by intent-extension (08 §4): the extension naming a blob
