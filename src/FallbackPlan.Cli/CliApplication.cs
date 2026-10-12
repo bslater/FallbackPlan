@@ -3106,6 +3106,15 @@ public static class CliApplication
                     {
                         output.WriteLine(
                             $"{set.SetName,-20} {set.Status.State,-14} next: {set.NextRun ?? "manual"}{DescribeVerification(set.Status.Verification)}{(DescribeStagingSweep(set) is { Length: > 0 } staging ? $"  {staging}" : string.Empty)}");
+
+                        // Under the set's own line, as offline status prints
+                        // them: the state says what, the warnings say why
+                        // and what to do (10 §1, NFR-OPS-002).
+                        foreach (var warning in set.Status.Warnings)
+                        {
+                            output.WriteLine($"{string.Empty,-20} warning: {warning}");
+                        }
+
                         foreach (var row in set.Destinations)
                         {
                             output.WriteLine(
