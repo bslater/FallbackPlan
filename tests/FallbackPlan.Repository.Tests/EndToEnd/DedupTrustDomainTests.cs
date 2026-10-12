@@ -10,6 +10,7 @@ using FallbackPlan.Storage.Local;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 using FallbackPlan.Filesystem;
+using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.EndToEnd;
 
@@ -29,12 +30,24 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// no content key (ADR-0042 §7), so the read it needs cannot happen, and the
 /// device domain is the default (ADR-0006, amended). What these establish
 /// about it is exactly that refusal.
+///
+/// The changed-file pair pins what attribution does once both writers hold a
+/// segment. The writer credited is the writer of the location that wins the
+/// index's tie-break, and between two writers that is the one whose id sorts
+/// higher (ADR-0017 Amendment 1). So a second writer under a lower id is never
+/// credited with its own copy, and stores a changed file's unchanged segments
+/// again every time the file changes. Nothing is lost; the cost is storage and
+/// upload, and the pair holds it until the index ranks by more than writer id.
 /// </summary>
 [TestClass]
 public sealed class DedupTrustDomainTests : ArchiveTestHarness
 {
     private static readonly WriterId SecondWriter =
         WriterId.FromBytes(Convert.FromHexString("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"));
+
+    /// <summary>A second writer whose id sorts below <see cref="ArchiveTestHarness.Writer"/>'s.</summary>
+    private static readonly WriterId LowerSecondWriter =
+        WriterId.FromBytes(Convert.FromHexString("10111213141516171819101112131415"));
 
     [TestMethod]
     public async Task DedupReuse_ASingleWritersOwnSegments_AreReusedWithNoVerificationRead()
@@ -106,6 +119,37 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
         // record being honest.
         Assert.IsTrue(second.Published.ContentBlobs.Sum(blob => blob.RecordCount) > 0);
         Assert.IsEmpty(second.Catalogue.Findings());
+    }
+
+    /// <summary>
+    /// A second writer whose id sorts above the first's is credited with its own
+    /// copy of a segment both hold: once it has stored the file, each later
+    /// change stores only the segment that changed.
+    /// </summary>
+    [TestMethod]
+    public async Task DeviceDomain_ASecondWriterWhoseIdSortsHigher_StoresAChangedFilesUnchangedSegmentOnce()
+    {
+        Assert.IsGreaterThan(0, SecondWriter.ToArray().AsSpan().SequenceCompareTo(Writer.ToArray()));
+
+        var stored = await SecondWriterChangesASharedFileAsync(SecondWriter);
+
+        SequenceAssert.AreEqual([2, 1, 1], stored);
+    }
+
+    /// <summary>
+    /// The same writer under an id that sorts below the first's is never
+    /// credited with its own copy, because the first writer's location wins
+    /// every tie-break. Each change to the file stores its unchanged segment
+    /// again.
+    /// </summary>
+    [TestMethod]
+    public async Task DeviceDomain_ASecondWriterWhoseIdSortsLower_StoresAChangedFilesUnchangedSegmentAgain_EveryTime()
+    {
+        Assert.IsLessThan(0, LowerSecondWriter.ToArray().AsSpan().SequenceCompareTo(Writer.ToArray()));
+
+        var stored = await SecondWriterChangesASharedFileAsync(LowerSecondWriter);
+
+        SequenceAssert.AreEqual([2, 2, 2], stored);
     }
 
     [TestMethod]
@@ -254,6 +298,58 @@ public sealed class DedupTrustDomainTests : ArchiveTestHarness
             keys.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// The first writer stores a two-segment file. A second writer, with a
+    /// catalogue rebuilt from the index alone, then backs it up three times:
+    /// as the first stored it, and twice more with its tail changed, so its
+    /// first segment never changes. Returns the data records each of the
+    /// second writer's backups stored.
+    /// </summary>
+    private async Task<IReadOnlyList<int>> SecondWriterChangesASharedFileAsync(WriterId second)
+    {
+        var store = new CountingObjectStore(CreateStore());
+        using var keys = CreateKeys();
+        using var credential = CreateCredential();
+        var original = Deterministic(120_000, 17);
+
+        var source = new FakeFileSystemSource();
+        source.AddFile("shared/payload.bin", original, fileId: 9_001);
+        using (var first = OpenCatalogue("first"))
+        {
+            await Publish(store, keys, credential, first, Writer, "first", DedupTrustDomain.Device)
+                .PublishAsync(Job(source, 0xD1), CancellationToken.None);
+        }
+
+        using var catalogue = OpenCatalogue("second");
+        using (var loader = new IndexLoader(store, Repo, credential))
+        {
+            await new CatalogueRebuilder(loader).RebuildAsync(
+                catalogue, currentGeneration: 0, gapPatienceGenerations: 2,
+                isSequenceAccountedAsync: null, CancellationToken.None);
+        }
+
+        var stored = new List<int>();
+        for (var change = 0; change < 3; change++)
+        {
+            var version = new FakeFileSystemSource();
+            version.AddFile(
+                "shared/payload.bin", [.. original, .. Enumerable.Repeat((byte)0x5C, change * 10)], fileId: 9_001);
+
+            var published = await Publish(store, keys, credential, catalogue, second, "second", DedupTrustDomain.Device)
+                .PublishAsync(
+                    Job(version, (byte)(0xD2 + change), now: (ulong)(1_722_600_000_010 + change)) with
+                    {
+                        DeviceId = Enumerable.Repeat((byte)0x44, 16).ToArray(),
+                    },
+                    CancellationToken.None);
+
+            stored.Add(published.ContentBlobs.Sum(blob => blob.RecordCount));
+            Assert.IsEmpty(catalogue.Findings());
+        }
+
+        return stored;
     }
 
     /// <summary>One two-writer fixture and what the second writer published.</summary>
