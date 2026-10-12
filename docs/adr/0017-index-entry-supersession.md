@@ -180,6 +180,13 @@ must:
   publishing spent on journal records and blobs would read as missing deltas
   ([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 
+> **Amended 2026-10 ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended).**
+> The third condition is met ahead of the fix. The product's index loads
+> pass sequence accounting, so once generations move, a stopped writer's
+> journal records and named blobs are accounted for rather than read as
+> missing deltas. That includes blobs a collector has since removed. The
+> patience is still counted in generations.
+
 FR-MAN-015 carries the fix.
 
 > **Amendment 2** stops the wasted compaction without the fix: a writer
@@ -259,6 +266,7 @@ compact too.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended); partly built | Of the three conditions Amendment 1 sets for the fix, the third is met ahead of it: the product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so moving generations will not read a stopped writer's journal records and blobs as missing deltas (`ArchitectureTests/IndexLoadAccountingTests`) |
 | 2026-10 | Accepted (amended); partly built | [Amendment 2](#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand): the compactor declines a relocation that would not stand. `IndexPrecedence.WouldOutrank`, asked by `CompactionPass` of the entry that holds each live record, declines a candidate before its intent, and `CompactionPolicy` leaves the blob whole and says why. A published compaction now stands whichever writer published it (FR-MAN-015, `Retention.Tests/CompactionCollectionTests`). The rank rule and the reuse shortcut are unchanged, and the fix Amendment 1 owes is format 4's |
 | 2026-10 | Accepted (amended); partly built | [Amendment 1](#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours): no entry carries a generation and the generation never advances, so the writer-id tie-break decides every relocation. A compaction under the lower of two writer ids is undone, which is churn and not loss (`Retention.Tests/CompactionCollectionTests`). Superseded entries are never retired. The fix is owed under FR-MAN-015 |
 | 2026-08 | Accepted | Forced into the open by PT-2; ADR-0008's merge rule is unsound without it |

@@ -1,6 +1,7 @@
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Catalogue;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Storage.Abstractions;
 using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 
@@ -115,6 +116,10 @@ internal static class CatalogueRebuild
         var generation = Math.Max(
             repository.CurrentDataGeneration.Value, repository.CurrentMetadataGeneration.Value);
 
+        var accounting = await SequenceAccounting.LoadAsync(
+            store, repository.RepositoryId, repository.Credential, generation, cancellationToken)
+            .ConfigureAwait(false);
+
         // The index plane rebuilds the locations; no blob inventory is
         // taken, because an entry naming a trimmed blob is re-answered
         // honestly by the plan probe, which asks the store per blob
@@ -124,7 +129,7 @@ internal static class CatalogueRebuild
             runtime.LoggerFor<CatalogueRebuilder>())
             .RebuildAsync(
                 catalogue, generation, gapPatienceGenerations: 2,
-                isSequenceAccountedAsync: null, cancellationToken)
+                isSequenceAccountedAsync: accounting.IsAccountedAsync, cancellationToken)
             .ConfigureAwait(false);
 
         var projected = await CatalogueProjector.ProjectAsync(

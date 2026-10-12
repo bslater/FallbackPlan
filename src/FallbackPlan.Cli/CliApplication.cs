@@ -17,6 +17,7 @@ using FallbackPlan.Repository.Catalogue.Forensic;
 using FallbackPlan.Repository.Format.Manifests;
 using FallbackPlan.Repository.Format.Records;
 using FallbackPlan.Repository.Index;
+using FallbackPlan.Repository.Index.Journal;
 using FallbackPlan.Repository.Packing;
 using FallbackPlan.Protocol;
 using FallbackPlan.Storage.Abstractions;
@@ -814,12 +815,16 @@ public static class CliApplication
                         session.Repository.RepositoryId, session.Repository.Keys, session.Store, session.ReadAuthority);
                     await inventory.LoadBlobsAsync(cancellationToken).ConfigureAwait(false);
 
+                    var accounting = await SequenceAccounting.LoadAsync(
+                        session.Store, session.Repository.RepositoryId, session.Repository.Credential,
+                        session.CurrentGeneration.Value, cancellationToken).ConfigureAwait(false);
+
                     var report = await new CatalogueRebuilder(
                         loader, logging.Factory.CreateLogger<CatalogueRebuilder>()).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
                         gapPatienceGenerations: 2,
-                        isSequenceAccountedAsync: null,
+                        isSequenceAccountedAsync: accounting.IsAccountedAsync,
                         cancellationToken,
                         CatalogueRebuilder.KnownBlobs(
                             inventory.Blobs.Select(blob => blob.BlobId),
