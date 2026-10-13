@@ -484,8 +484,9 @@ public static class CliApplication
             var formatVersionOption = new Option<int>("--format-version")
             {
                 Description = "The on-disk format to create, fixed for the repository's life. "
-                    + $"{FormatLimits.FormatVersion} is the default; {FormatVersions.RelocatableRecords} writes "
-                    + "relocatable records (ADR-0052).",
+                    + $"{FormatLimits.FormatVersion} is the default and stamps each index delta with an index "
+                    + $"generation (ADR-0096); {FormatVersions.RelocatableRecords} writes relocatable records "
+                    + "without one (ADR-0052).",
                 DefaultValueFactory = _ => FormatLimits.FormatVersion,
             };
             var acknowledgeLossOption = new Option<bool>("--acknowledge-loss")
@@ -823,7 +824,7 @@ public static class CliApplication
                         loader, logging.Factory.CreateLogger<CatalogueRebuilder>()).RebuildAsync(
                         catalogue,
                         session.CurrentGeneration.Value,
-                        gapPatienceGenerations: 2,
+                        IndexLoader.GapPatienceGenerations,
                         isSequenceAccountedAsync: accounting.IsAccountedAsync,
                         cancellationToken,
                         CatalogueRebuilder.KnownBlobs(

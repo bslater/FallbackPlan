@@ -107,7 +107,12 @@ internal static class Strings
     internal static string IndexDeltaCodec_MerkleRootsWithoutDigests => Get(nameof(IndexDeltaCodec_MerkleRootsWithoutDigests));
 
     /// <summary>
-    /// The delta carries an unknown key; specification 07 §2 assigns keys 1-11 only.
+    /// index_generation is at least 1 when present; an absent key means 0, and a canonical form has one encoding of it (specification 07 §2.4).
+    /// </summary>
+    internal static string IndexDeltaCodec_IndexGenerationZero => Get(nameof(IndexDeltaCodec_IndexGenerationZero));
+
+    /// <summary>
+    /// The delta carries an unknown key; specification 07 §2 assigns keys 1-12 only.
     /// </summary>
     internal static string IndexDeltaCodec_DeltaCarriesUnknownKeySpecification => Get(nameof(IndexDeltaCodec_DeltaCarriesUnknownKeySpecification));
 

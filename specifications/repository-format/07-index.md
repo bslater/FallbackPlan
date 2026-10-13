@@ -32,8 +32,11 @@ Stored at `/index/delta/<generation>/<delta-id>`, encrypted as a metadata record
 | 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of **every other key present**; semantics as [06 §6.1](06-manifests.md#61-signature): repository-scoped, verified against the derived signing key for `generation` |
 | 10 | array | `covered_blob_digests` — array of bytes[32], parallel to `covered_blob_ids` (§2.2) |
 | 11 | array | `covered_blob_merkle_roots` — array of bytes[32], parallel to `covered_blob_ids` (§2.3) |
+| 12 | u64 | `index_generation` — at least 1; what the delta's entries rank by (§2.4, §3) |
 
-The signature covers every key except itself, stated that way rather than as a numeric range so that a key added later is signed by construction. Key 10 was the first such key and key 11 the second; nothing sorts a signed key after the signature by accident.
+The signature covers every key except itself, stated that way rather than as a numeric range so that a key added later is signed by construction. Key 10 was the first such key, key 11 the second and key 12 the third; nothing sorts a signed key after the signature by accident.
+
+Key 4 names the key generation the delta is signed and sealed under, and from format 4 it names nothing else: an entry ranks by key 12 (§3).
 
 > **Erratum (phase 0).** Three resolutions pending normative edits, all per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) "encrypted as a metadata record" is under-specified for an object outside a blob — the `FBPKSREC` standalone framing (Decision 1) supplies the encryption context, with object type `0x08`; (2) `<delta-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); (3) key 5 `shard` is **optional** — present only when every entry falls in that one shard, absent otherwise (Decision 4), since §8 permits multi-shard deltas that a scalar cannot describe.
 
@@ -70,13 +73,25 @@ A length mismatch between the two arrays is a malformed object, and a reader MUS
 
 `covered_blob_merkle_roots` is OPTIONAL, and it is **not** an alternative to §2.2 — a delta may carry both, and a writer that carries this one MUST also carry that one. When present it MUST have exactly the length of `covered_blob_ids`, and element *i* MUST be the Merkle commitment of the blob named by `covered_blob_ids[i]`, computed as [05 §5.2](05-blob.md#52-the-merkle-commitment) defines it: an RFC 6962 tree over one-mebibyte leaves of the same preimage the flat digest names, with the preimage's length bound into the published root.
 
-**A writer at repository format 3 or above MUST publish it for every blob a delta covers. A writer below format 3 MUST NOT publish it.** The reason is compatibility and it is worth stating plainly: unlike a map key inside a message on the peer wire, an unknown key in this object is refused rather than skipped (§2.4), so a delta carrying key 11 is unreadable to a build that predates it. Tying publication to the repository's declared format version means a repository an older reader is entitled to read never contains one, and [ADR-0014](../../docs/adr/0014-format-versioning-and-stability.md)'s rule — refuse by name, never misread — holds without anything having to be refused.
+**A writer at repository format 3 or above MUST publish it for every blob a delta covers. A writer below format 3 MUST NOT publish it.** The reason is compatibility and it is worth stating plainly: unlike a map key inside a message on the peer wire, an unknown key in this object is refused rather than skipped (§2.5), so a delta carrying key 11 is unreadable to a build that predates it. Tying publication to the repository's declared format version means a repository an older reader is entitled to read never contains one, and [ADR-0014](../../docs/adr/0014-format-versioning-and-stability.md)'s rule — refuse by name, never misread — holds without anything having to be refused.
 
 A length mismatch with `covered_blob_ids`, or an element that is not 32 bytes, is a malformed object, and a reader MUST refuse the delta rather than pair the elements it can. A reader MUST NOT treat absence as damage, and MUST treat a **present** root that does not admit a leaf it checked as a damage finding.
 
 What the root buys that the digest does not is a check by a party that holds *neither the blob nor any key*: the flat digest can only be compared by someone who has all the bytes, whereas the root can be checked against one leaf and its authentication path. That is what makes a possession challenge against a replica a proof rather than a restatement of what the examined party once computed ([peer-protocol 04 §5.1](../peer-protocol/04-verification.md)).
 
-### 2.4 Unknown keys
+### 2.4 Index generation
+
+`index_generation` is one more than the highest index generation the writer had seen when it published the delta: the highest any delta it had read carries, or the highest it had itself published, whichever is higher ([ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)). It is the first thing an entry ranks by (§3).
+
+**A writer at repository format 4 or above MUST publish it on every delta, void deltas included. A writer below format 4 MUST NOT publish it.** The reason is §2.3's: a reader that predates the key refuses a delta carrying it (§2.5), so a repository such a reader is entitled to read never holds one. A reader MUST read the key on any delta that carries it, whatever format the repository's descriptor or upgrade records name, because a copy can hold a delta before the record that explains it ([11 §5.1](11-lifecycle-objects.md#51-the-effective-format-version)).
+
+When present it MUST be at least 1, and a reader MUST refuse a delta carrying 0 as malformed. Zero is what absence means — a delta without the key ranks at index generation 0, as every delta written below format 4 does — and a canonical form has one encoding of each fact.
+
+A writer's index generations MUST strictly increase across the deltas it publishes, whether or not it can read the rest of the index when it publishes, so that its own entries rank in the order it published them. A writer that keeps its last one beside its sequence state meets this across restarts as well as within one run.
+
+What it buys is that a relocation outranks what it relocates. A writer reads the entry it relocates before it publishes the supersession, so the supersession's index generation is higher, whichever writer published either. Two insertions published without either writer having seen the other may carry one index generation, and §3's tie-break decides between them as it always did; either location serves.
+
+### 2.5 Unknown keys
 
 A reader MUST refuse a delta carrying a key this section does not assign, as a malformed object. The asymmetry with the peer protocol — where an unknown map key inside a known message is skipped — is deliberate: a delta is a signed statement about what exists and where, so a key a reader cannot interpret may be changing the meaning of the keys it can.
 
@@ -90,7 +105,7 @@ An earlier draft of the design justified merging concurrent checkpoints on the g
 
 Precedence is therefore explicit:
 
-1. For a given `object_id`, the entry published at the **highest generation** wins.
+1. For a given `object_id`, the entry published at the **highest generation** wins. An entry's generation is its delta's `index_generation` (§2.4), or 0 for a delta that carries none.
 2. At equal generation, the entry from the higher `(writer_id, sequence)` wins, comparing `writer_id` as unsigned bytes then `sequence` numerically. This tie-break exists so behaviour is defined rather than accidental; it should not arise for a supersession, since compaction is its only producer.
 3. An entry whose `blob_id` names a blob known to be deleted MUST be treated as superseded even if it wins on generation, and reported as a damage finding.
 
@@ -103,11 +118,20 @@ Precedence is therefore explicit:
 > The rules stand as written. Only the expectation that rule 2 would seldom
 > decide is withdrawn.
 
+> **Amended (format 4, [ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).**
+> Rule 1 compares index generations, which advance with every delta, so it
+> decides a relocation, and rule 2 decides only between entries published
+> without either writer having seen the other. The erratum above still
+> describes format-3 history: every such entry ranks at 0, and between two
+> writers `writer_id` decides it.
+
 > **Implementation note (2026-10).** This implementation's compactor
 > publishes no supersession that rules 1 and 2 would rank below the entry it
 > relocates. It leaves the blob whole instead
 > ([ADR-0017 Amendment 2](../../docs/adr/0017-index-entry-supersession.md#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand)).
-> A reader is unaffected.
+> A reader is unaffected. At format 4 it declines none: it publishes one
+> index generation above the highest its catalogue holds, above every entry
+> it relocates.
 
 Two **insertions** for one `object_id` are benign: two writers independently stored the same content in different blobs, and either location serves. A **supersession** is ordered and must be honoured.
 
@@ -128,6 +152,8 @@ A reader:
 - MUST treat a gap as unresolved until either the delta or its void record appears;
 - MUST NOT interpret silence as an empty delta;
 - MUST, after a bounded number of generations with neither, surface the gap as a damage finding rather than blocking indefinitely.
+
+The generations are counted per gap. From format 4 they are index generations: the highest any loaded delta carries, less that of the gap's writer's first delta above the gap, which was published after the missing number was allocated. A gap whose next delta carries no index generation, as one in format-3 history does, is not aged by them. This implementation's bound is 8 ([ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).
 
 → [PT-6](../../docs/review/2026-08-fix-pressure-test.md#pt-6--a-crashed-writer-can-permanently-block-readers-through-a-sequence-gap)
 

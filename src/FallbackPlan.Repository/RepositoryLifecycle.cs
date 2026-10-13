@@ -262,21 +262,27 @@ public static class RepositoryLifecycle
     /// <summary>
     /// What a new descriptor of this version must declare (01 §3.2): the
     /// sealed data plane and the reclaim authority always; relocatable
-    /// records exactly when the format is 3.
+    /// records from format 3; index generations from format 4.
     /// </summary>
-    private static ushort[] RequiredFeaturesFor(ushort formatVersion) =>
-        FormatVersions.HasRelocatableRecords(formatVersion)
-            ?
-            [
-                RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                RepositoryDescriptorCodec.FeatureReclaimAuthority,
-                RepositoryDescriptorCodec.FeatureRelocatableRecords,
-            ]
-            :
-            [
-                RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                RepositoryDescriptorCodec.FeatureReclaimAuthority,
-            ];
+    private static ushort[] RequiredFeaturesFor(ushort formatVersion)
+    {
+        List<ushort> features =
+        [
+            RepositoryDescriptorCodec.FeatureSealedDataPlane,
+            RepositoryDescriptorCodec.FeatureReclaimAuthority,
+        ];
+        if (FormatVersions.HasRelocatableRecords(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureRelocatableRecords);
+        }
+
+        if (FormatVersions.HasIndexGenerations(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureIndexGenerations);
+        }
+
+        return [.. features];
+    }
 
     private static async ValueTask<OpenedRepository> CreateCoreAsync(
         IObjectStore store,

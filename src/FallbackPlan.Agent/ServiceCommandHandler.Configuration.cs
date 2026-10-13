@@ -578,12 +578,12 @@ public sealed partial class ServiceCommandHandler
             $"Backup set '{set.Name}': repository format {from} → {FormatLimits.FormatVersion}. The record is "
             + "signed under the repository's signing key and appended; the descriptor is unchanged.",
             "Everything already sealed stays exactly as it is and reads as it always did; the newer format "
-            + "begins at the set's next blob.",
+            + "begins with what the set writes next.",
             "The record reaches each destination on the next reconciling pass — until it arrives, a copy holds "
-            + "newer blobs than the record it has, which costs nothing because every blob declares its own "
-            + "container.",
-            "This cannot be undone, and a build older than this one would read the newer blobs as damage "
-            + "rather than as a format it does not know (ADR-0066).",
+            + "newer objects than the record it has, which costs nothing because every blob declares its own "
+            + "container and every index delta carries its own keys.",
+            "This cannot be undone, and a build older than this one would read what the set writes next as "
+            + "damage rather than as a format it does not know (ADR-0066).",
         ]);
     }
 

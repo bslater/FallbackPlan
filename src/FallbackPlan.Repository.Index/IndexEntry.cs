@@ -58,6 +58,14 @@ public sealed record IndexEntry(
 /// in-memory entry must carry its provenance or precedence cannot be
 /// decided.
 /// </summary>
+/// <param name="Entry">The entry.</param>
+/// <param name="Generation">
+/// The generation it ranks at (07 §3): its delta's index generation, zero
+/// for a delta that predates format 4, or the enclosing checkpoint's
+/// generation.
+/// </param>
+/// <param name="WriterId">The writer that published it.</param>
+/// <param name="Sequence">Its delta's sequence, or the checkpoint's watermark for its writer.</param>
 public sealed record ProvenancedEntry(
     IndexEntry Entry,
     ulong Generation,

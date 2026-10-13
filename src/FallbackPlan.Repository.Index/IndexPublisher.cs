@@ -13,11 +13,12 @@ namespace FallbackPlan.Repository.Index;
 
 /// <summary>
 /// Publishes index deltas, void deltas, and checkpoints (specification
-/// 07 §2, §4, §5; FR-MAN-008): each object is signed over its 1–8 prefix,
-/// sealed under the FBPKSREC framing with its sequence number as the record
-/// counter, and put at its <c>/index/…</c> key with a freshly allocated
-/// random identifier (ADR-0022 §Decision 2). Retry re-puts the identical
-/// sealed buffer — the identifier and bytes are held until acknowledged.
+/// 07 §2, §4, §5; FR-MAN-008): each object is signed over every key but its
+/// signature, sealed under the FBPKSREC framing with its sequence number as
+/// the record counter, and put at its <c>/index/…</c> key with a freshly
+/// allocated random identifier (ADR-0022 §Decision 2). Retry re-puts the
+/// identical sealed buffer — the identifier and bytes are held until
+/// acknowledged.
 /// </summary>
 public sealed class IndexPublisher : IDisposable
 {
@@ -28,15 +29,30 @@ public sealed class IndexPublisher : IDisposable
     private readonly WriterSequence _sequence;
     private readonly ObjectIdDeriver _objectIdDeriver;
     private readonly ILogger _log;
+    private readonly ulong? _highestIndexGenerationSeen;
 
     /// <summary>Creates a publisher for one writer.</summary>
+    /// <param name="store">Where the index objects go.</param>
+    /// <param name="repositoryId">The repository.</param>
+    /// <param name="writerId">The writer.</param>
+    /// <param name="credential">What signs and seals.</param>
+    /// <param name="sequence">The writer's sequence space.</param>
+    /// <param name="logger">Where publication is logged.</param>
+    /// <param name="highestIndexGenerationSeen">
+    /// The highest index generation the publication has seen in the
+    /// repository, zero for none, which makes every delta this publisher
+    /// writes carry one (07 §2.4; ADR-0096). Null for a writer below
+    /// repository format 4, whose deltas carry none: an older reader is
+    /// entitled to read them and would refuse key 12 outright.
+    /// </param>
     public IndexPublisher(
         IObjectStore store,
         RepositoryId repositoryId,
         WriterId writerId,
         RepositoryWriteCredential credential,
         WriterSequence sequence,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ulong? highestIndexGenerationSeen = null)
     {
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(credential);
@@ -48,12 +64,13 @@ public sealed class IndexPublisher : IDisposable
         _writerId = writerId;
         _credential = credential;
         _sequence = sequence;
+        _highestIndexGenerationSeen = highestIndexGenerationSeen;
         _objectIdDeriver = new ObjectIdDeriver(credential.ContentIdKey.ToArray());
     }
 
     /// <summary>
-    /// Publishes a delta: allocates the next sequence, signs keys 1–8, seals,
-    /// puts, and only then marks the sequence accounted.
+    /// Publishes a delta: allocates the next sequence, signs, seals, puts, and
+    /// only then marks the sequence accounted.
     /// </summary>
     public async ValueTask<DeltaId> PublishDeltaAsync(
         ulong generation,
@@ -109,6 +126,7 @@ public sealed class IndexPublisher : IDisposable
             CoveredBlobDigests = coveredBlobDigests,
             CoveredBlobMerkleRoots = coveredBlobMerkleRoots,
             Entries = entries,
+            IndexGeneration = NextIndexGeneration(),
         };
 
         var deltaId = await PublishDeltaObjectAsync(delta, cancellationToken).ConfigureAwait(false);
@@ -133,6 +151,7 @@ public sealed class IndexPublisher : IDisposable
             PredecessorDeltaId = _sequence.LastDeltaId,
             Generation = generation,
             IsVoid = true,
+            IndexGeneration = NextIndexGeneration(),
         };
 
         var deltaId = await PublishDeltaObjectAsync(delta, cancellationToken).ConfigureAwait(false);
@@ -188,6 +207,12 @@ public sealed class IndexPublisher : IDisposable
         _sequence.MarkAccounted(sequence);
         return checkpointId;
     }
+
+    // A void delta draws one too: every delta a format-4 writer publishes
+    // carries key 12 (07 §2.4), so a reader can age a gap from whichever
+    // delta follows it.
+    private ulong? NextIndexGeneration() =>
+        _highestIndexGenerationSeen is { } highestSeen ? _sequence.AllocateIndexGeneration(highestSeen) : null;
 
     private async ValueTask<DeltaId> PublishDeltaObjectAsync(IndexDelta delta, CancellationToken cancellationToken)
     {

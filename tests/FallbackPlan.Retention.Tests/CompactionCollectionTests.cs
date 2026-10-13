@@ -45,13 +45,15 @@ using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
 /// <para>
 /// The two-writer tests pin what happens when the compaction is published under
 /// a second writer, as in an archive adopted by a machine that kept its own
-/// identity (ADR-0061). Every entry ranks by a generation that never advances,
-/// so between two writers the writer id's bytes decide (ADR-0017 Amendment 1).
+/// identity (ADR-0061). At format 3 every entry ranks at one generation, so
+/// between two writers the writer id's bytes decide (ADR-0017 Amendment 1).
 /// Under an id that sorts higher the compaction stands. Under one that sorts
 /// lower its supersessions would lose to the insertions they relocate, so the
 /// pass declines the blob and writes nothing, and the dry run says why
-/// (ADR-0017 Amendment 2). Every compaction that is published therefore
-/// stands whichever writer published it, which is FR-MAN-015's acceptance.
+/// (ADR-0017 Amendment 2). At format 4 the pass publishes at a higher index
+/// generation than any entry it relocates, so it stands under either id
+/// (ADR-0096). Every compaction that is published therefore stands whichever
+/// writer published it, which is FR-MAN-015's acceptance.
 /// </para>
 /// </remarks>
 [TestClass]
@@ -297,10 +299,10 @@ public sealed class CompactionCollectionTests : IDisposable
     /// the pass produced is kept.
     /// </summary>
     [TestMethod]
-    public async Task TwoWriters_ACompactionUnderAnIdThatSortsHigher_Stands()
+    public async Task AtFormatThree_TwoWriters_ACompactionUnderAnIdThatSortsHigher_Stands()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        await ChurnAsync(store);
+        await ChurnAsync(store, FormatVersions.RelocatableRecords);
 
         using var catalogue = OpenCatalogue(await RepositoryIdAsync(store), live: true);
         var (drained, produced) = await CompactAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: true));
@@ -318,10 +320,10 @@ public sealed class CompactionCollectionTests : IDisposable
     /// collector to take once its records die.
     /// </summary>
     [TestMethod]
-    public async Task TwoWriters_ACompactionUnderAnIdThatSortsLower_IsDeclined_AndWritesNothing()
+    public async Task AtFormatThree_TwoWriters_ACompactionUnderAnIdThatSortsLower_IsDeclined_AndWritesNothing()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        await ChurnAsync(store);
+        await ChurnAsync(store, FormatVersions.RelocatableRecords);
         var repositoryId = await RepositoryIdAsync(store);
         var keysBefore = await StoredKeysAsync(store);
 
@@ -346,10 +348,10 @@ public sealed class CompactionCollectionTests : IDisposable
     /// compaction the pass would decline (FR-GC-005).
     /// </summary>
     [TestMethod]
-    public async Task TwoWriters_UnderAnIdThatSortsLower_TheDryRunLeavesTheBlobWhole_AndSaysWhy()
+    public async Task AtFormatThree_TwoWriters_UnderAnIdThatSortsLower_TheDryRunLeavesTheBlobWhole_AndSaysWhy()
     {
         var store = new LocalFileSystemObjectStore(RepoPath);
-        await ChurnAsync(store);
+        await ChurnAsync(store, FormatVersions.RelocatableRecords);
 
         var lower = SecondWriter(sortsAboveTheFirst: false);
         var report = await RetainAsync(
@@ -368,9 +370,60 @@ public sealed class CompactionCollectionTests : IDisposable
         Assert.IsNotEmpty(own.CompactionCandidates);
     }
 
-    /// <summary>Four backups with churn, so some records in the early blobs die.</summary>
-    private async Task ChurnAsync(LocalFileSystemObjectStore store)
+    /// <summary>
+    /// At format 4 the same compaction under the lower id stands (ADR-0096).
+    /// The pass publishes at one more than the highest index generation its
+    /// catalogue holds, so its supersessions outrank the insertions they
+    /// relocate whichever writer published either. The drained blob is
+    /// condemned, the produced one is not, and every reachable object reads.
+    /// </summary>
+    [TestMethod]
+    public async Task AtFormatFour_TwoWriters_ACompactionUnderAnIdThatSortsLower_Stands()
     {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store, FormatVersions.IndexGenerations);
+
+        using var catalogue = OpenCatalogue(await RepositoryIdAsync(store), live: true);
+        var (drained, produced) = await CompactAsync(store, catalogue, SecondWriter(sortsAboveTheFirst: false));
+
+        var condemned = (await PlanAsync(store, catalogue)).DeletableBlobs.Select(blob => blob.BlobId).ToList();
+        Assert.Contains(drained, condemned, "the drained blob was not condemned under the lower id");
+        Assert.DoesNotContain(produced, condemned, "the produced blob was condemned under the lower id");
+        await AssertEveryReachableObjectReadsAsync(store);
+    }
+
+    /// <summary>
+    /// And the dry run under the lower id offers the blob at format 4, with
+    /// no line saying another writer's entries would outrank it.
+    /// </summary>
+    [TestMethod]
+    public async Task AtFormatFour_TwoWriters_UnderAnIdThatSortsLower_TheDryRunOffersTheBlob()
+    {
+        var store = new LocalFileSystemObjectStore(RepoPath);
+        await ChurnAsync(store, FormatVersions.IndexGenerations);
+
+        var report = await RetainAsync(
+            store, Day1.AddDays(3).AddHours(1), live: true, apply: false, writer: SecondWriter(sortsAboveTheFirst: false),
+            compaction: new CompactionPolicy(0.0, 0, long.MaxValue));
+
+        Assert.IsNotEmpty(report.CompactionCandidates);
+        Assert.DoesNotContain(
+            line => line.Contains("another writer's entries would outrank the rewrite", StringComparison.Ordinal),
+            report.Lines);
+    }
+
+    /// <summary>
+    /// Four backups with churn, so some records in the early blobs die, into
+    /// an archive created at <paramref name="formatVersion"/> when one is
+    /// named and at the format new sets are born at when not.
+    /// </summary>
+    private async Task ChurnAsync(LocalFileSystemObjectStore store, ushort? formatVersion = null)
+    {
+        if (formatVersion is { } version)
+        {
+            await WriteOnlyInstallation.CreateArchiveAsync(StateDirectory, RepoPath, version);
+        }
+
         await BackUpAsync(Day1);
         File.WriteAllText(Path.Combine(SourceRoot, "churn.txt"), new string('2', 200_000));
         await BackUpAsync(Day1.AddDays(1));

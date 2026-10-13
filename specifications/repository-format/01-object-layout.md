@@ -89,9 +89,10 @@ The feature identifiers this specification defines:
 |---|---|---|---|
 | `0x0001` | `sealed-data-plane` | every descriptor | Data-blob content is sealed to the sealing public key ([03 §9](03-keys.md#9-write-only-repositories-format-v2)) |
 | `0x0002` | `reclaim-authority` | every descriptor | Tombstones and retention instructions are signed under the reclaim key ([11 §3](11-lifecycle-objects.md); [ADR-0055](../../docs/adr/0055-reclaim-authority.md)) |
-| `0x0003` | `relocatable-records` | a format-3 descriptor, and never a format-2 one | Records are keyed to the object, carry their nonce and omit the ordinal from their associated data ([04 §3–§4](04-record.md#3-nonce)); a reader that does not implement format 3 refuses by this name ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) |
+| `0x0003` | `relocatable-records` | a format-3 or format-4 descriptor, and never a format-2 one | Records are keyed to the object, carry their nonce and omit the ordinal from their associated data ([04 §3–§4](04-record.md#3-nonce)); a reader that does not implement format 3 refuses by this name ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)) |
+| `0x0004` | `index-generations` | a format-4 descriptor, and never a format-2 or format-3 one | Every index delta carries an index generation and entries rank by it ([07 §2.4](07-index.md#24-index-generation), [07 §3](07-index.md#3-precedence)); a reader that does not implement format 4 refuses by this name rather than at each delta's unknown key ([ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)) |
 
-A format-3 descriptor MUST list `0x0003` and a format-2 descriptor MUST NOT; a reader MUST treat either mismatch as a format violation, because the version and the feature name one fact and a descriptor in which they disagree was not written by a conforming writer.
+A format-3 or format-4 descriptor MUST list `0x0003` and a format-2 descriptor MUST NOT. A format-4 descriptor MUST list `0x0004` and a format-2 or format-3 descriptor MUST NOT. A reader MUST treat any mismatch as a format violation, because the version and its features name one fact and a descriptor in which they disagree was not written by a conforming writer.
 
 A reader MUST refuse the repository if `required_features` contains any identifier it does not implement, naming the unimplemented identifier. It MUST NOT proceed on the assumption that an unknown feature is unimportant.
 

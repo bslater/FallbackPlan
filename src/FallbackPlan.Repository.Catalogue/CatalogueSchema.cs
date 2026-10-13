@@ -65,8 +65,16 @@ public static class CatalogueSchema
     /// (NFR-TIME-002). Nullable, because a capture with no reading records
     /// none, and a row that read it as 0 would claim a clock in step.
     /// </para>
+    /// <para>
+    /// v10 over v9: <c>index_deltas.index_generation</c>, a delta's key 12
+    /// (specification 07 §2.4), which a format-4 writer publishes one above
+    /// the highest of. <c>object_locations.generation</c> keeps its name and
+    /// now holds what an entry ranks by (07 §3): its delta's index
+    /// generation, zero for a delta without one. A catalogue at v9 ranked by
+    /// key generation, so it is rebuilt rather than read under the new rule.
+    /// </para>
     /// </remarks>
-    public const int Version = 9;
+    public const int Version = 10;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -110,6 +118,7 @@ public static class CatalogueSchema
             generation           INTEGER NOT NULL,
             predecessor_delta_id BLOB,
             is_void              INTEGER NOT NULL DEFAULT 0,
+            index_generation     INTEGER,
             UNIQUE (writer_id, sequence)
         ) WITHOUT ROWID;
 

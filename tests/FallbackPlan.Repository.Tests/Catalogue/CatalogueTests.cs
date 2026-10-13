@@ -81,6 +81,48 @@ public sealed class CatalogueTests : IDisposable
     }
 
     [TestMethod]
+    public void ResolveLocation_TheLaterIndexGeneration_Wins_WhicheverWriterPublishedIt()
+    {
+        using var catalogue = Open();
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta
+        {
+            WriterId = Writer(9),
+            Sequence = 1,
+            Generation = 0,
+            IndexGeneration = 1,
+            Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
+        });
+        catalogue.ApplyDelta(Delta(2), new IndexDelta
+        {
+            WriterId = Writer(2),
+            Sequence = 1,
+            Generation = 0,
+            IndexGeneration = 2,
+            Entries = [new IndexEntry(Object(1), Blob(2), 88, 100, 1, 1, IndexEntryType.Supersession)],
+        });
+
+        var winner = catalogue.ResolveLocation(Object(1))!;
+        Assert.AreEqual(Blob(2), winner.BlobId);
+        Assert.AreEqual(2UL, winner.Generation);
+        Assert.AreEqual(Blob(2), catalogue.WinningLocation(Object(1))!.BlobId);
+    }
+
+    [TestMethod]
+    public void MaxIndexGeneration_IsTheHighestAnyAppliedDeltaCarries()
+    {
+        // What a format-4 writer publishes one above (07 §2, key 12).
+        using var catalogue = Open();
+        Assert.AreEqual(0UL, catalogue.MaxIndexGeneration());
+
+        catalogue.ApplyDelta(Delta(1), new IndexDelta { WriterId = Writer(1), Sequence = 1, Generation = 0, IndexGeneration = 5 });
+        catalogue.ApplyDelta(Delta(2), new IndexDelta { WriterId = Writer(2), Sequence = 1, Generation = 0, IndexGeneration = 3 });
+        catalogue.ApplyDelta(Delta(3), new IndexDelta { WriterId = Writer(3), Sequence = 1, Generation = 0 });
+
+        Assert.AreEqual(5UL, catalogue.MaxIndexGeneration());
+    }
+
+    [TestMethod]
     public void ResolveLocation_AnyRandomisedEntrySet_AgreesWithIndexPrecedence()
     {
         // Two implementations of 07 §3 — the in-memory resolver and the SQL
@@ -103,13 +145,24 @@ public sealed class CatalogueTests : IDisposable
                 0x0001,
                 random.Next(2) == 0 ? IndexEntryType.Insertion : IndexEntryType.Supersession);
 
+            // The rank generation is the delta's index generation (07 §3,
+            // format 4); a delta without one, as every format-3 delta is,
+            // ranks at zero. The key generation names a signing key and no
+            // longer ranks anything.
             var generation = (ulong)random.Next(0, 4);
             var writer = Writer((byte)random.Next(1, 5));
             sequence++;
 
             catalogue.ApplyDelta(
                 DeltaId.FromBytes(System.Security.Cryptography.SHA256.HashData(BitConverter.GetBytes(sequence)).AsSpan(0, 16)),
-                new IndexDelta { WriterId = writer, Sequence = sequence, Generation = generation, Entries = [entry] });
+                new IndexDelta
+                {
+                    WriterId = writer,
+                    Sequence = sequence,
+                    Generation = 0,
+                    IndexGeneration = generation == 0 ? null : generation,
+                    Entries = [entry],
+                });
 
             byObject.TryAdd(objectId, []);
             byObject[objectId].Add(new ProvenancedEntry(entry, generation, writer, sequence));
@@ -137,14 +190,16 @@ public sealed class CatalogueTests : IDisposable
         {
             WriterId = Writer(1),
             Sequence = 1,
-            Generation = 1,
+            Generation = 0,
+            IndexGeneration = 1,
             Entries = [new IndexEntry(Object(1), Blob(1), 88, 100, 1, 1, IndexEntryType.Insertion)],
         });
         catalogue.ApplyDelta(Delta(2), new IndexDelta
         {
             WriterId = Writer(1),
             Sequence = 2,
-            Generation = 2,
+            Generation = 0,
+            IndexGeneration = 2,
             Entries = [new IndexEntry(Object(1), Blob(2), 999, 100, 1, 1, IndexEntryType.Supersession)],
         });
 

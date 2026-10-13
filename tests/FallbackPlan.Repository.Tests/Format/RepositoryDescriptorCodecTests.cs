@@ -258,17 +258,73 @@ public sealed class RepositoryDescriptorCodecTests
         Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
     }
 
+    private static RepositoryDescriptor SampleV4() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatVersions.IndexGenerations,
+        RequiredFeatures =
+        [
+            RepositoryDescriptorCodec.FeatureSealedDataPlane,
+            RepositoryDescriptorCodec.FeatureRelocatableRecords,
+            RepositoryDescriptorCodec.FeatureIndexGenerations,
+        ],
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV4_EncodedAndDecoded_RoundTrips()
+    {
+        // A format-4 descriptor (ADR-0096): format 4 keeps format 3's records
+        // and adds the index generation, so it lists both features.
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV4());
+
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.IndexGenerations, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual<ushort>(
+            [
+                RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                RepositoryDescriptorCodec.FeatureRelocatableRecords,
+                RepositoryDescriptorCodec.FeatureIndexGenerations,
+            ],
+            ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV4_WithoutTheIndexGenerationsFeature_IsAFormatViolation()
+    {
+        // 01 §3.2: a format-4 descriptor MUST list 0x0004, so a reader that
+        // predates format 4 refuses the repository by that name rather than
+        // at its first delta.
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV4() with { RequiredFeatures = SampleV3().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV3(), version: 4);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0004", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must list", violation.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV3_NamingTheIndexGenerationsFeature_IsAFormatViolation()
+    {
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV3() with { RequiredFeatures = SampleV4().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV4(), version: 3);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0004", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_AFormatNewerThanThisBuildReads_IsRefusedNamingTheRange()
     {
         // A version above the newest this build reads is the earlier fact
         // and is named first — before any feature it might also list — with
         // the remedy: update, not re-seed, because nothing is withdrawn.
-        var bytes = Restamped(SampleV3(), version: 4);
+        var bytes = Restamped(SampleV4(), version: 5);
 
         Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
-        Assert.Contains("format 4", violation.Message, StringComparison.Ordinal);
-        Assert.Contains("2 to 3", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("format 5", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("2 to 4", violation.Message, StringComparison.Ordinal);
         Assert.Contains("Update", violation.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("withdrawn", violation.Message, StringComparison.Ordinal);
     }

@@ -57,6 +57,10 @@ public sealed record ReuseCandidate(WriterId WriterId, bool Verified);
 /// whether or not this catalogue has seen the blob that holds them, which is
 /// the ordinary state of a rebuilt catalogue. A reader that needs to address
 /// the blob derives its store key from <see cref="BlobId"/> instead.
+/// <see cref="Generation"/>, <see cref="WriterId"/> and <see cref="Sequence"/>
+/// are the winning entry's rank (07 §3): its generation is its delta's index
+/// generation, zero for a delta that predates format 4, or its checkpoint's
+/// generation.
 /// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
@@ -283,8 +287,9 @@ public sealed class Catalogue : IDisposable
         {
             ledger.Transaction = transaction;
             ledger.CommandText = """
-                INSERT OR IGNORE INTO index_deltas (delta_id, writer_id, sequence, generation, predecessor_delta_id, is_void)
-                VALUES ($id, $writer, $sequence, $generation, $predecessor, $void);
+                INSERT OR IGNORE INTO index_deltas
+                    (delta_id, writer_id, sequence, generation, predecessor_delta_id, is_void, index_generation)
+                VALUES ($id, $writer, $sequence, $generation, $predecessor, $void, $indexGeneration);
                 """;
             ledger.Parameters.AddWithValue("$id", deltaId.ToArray());
             ledger.Parameters.AddWithValue("$writer", delta.WriterId.ToArray());
@@ -292,6 +297,8 @@ public sealed class Catalogue : IDisposable
             ledger.Parameters.AddWithValue("$generation", (long)delta.Generation);
             ledger.Parameters.AddWithValue("$predecessor", delta.PredecessorDeltaId is { } p ? p.ToArray() : DBNull.Value);
             ledger.Parameters.AddWithValue("$void", delta.IsVoid ? 1 : 0);
+            ledger.Parameters.AddWithValue(
+                "$indexGeneration", delta.IndexGeneration is { } indexGeneration ? (long)indexGeneration : DBNull.Value);
 
             if (ledger.ExecuteNonQuery() == 0)
             {
@@ -302,7 +309,7 @@ public sealed class Catalogue : IDisposable
 
         foreach (var entry in delta.Entries)
         {
-            InsertLocation(transaction, entry, delta.Generation, delta.WriterId, delta.Sequence);
+            InsertLocation(transaction, entry, delta.RankGeneration, delta.WriterId, delta.Sequence);
         }
 
         // The signed blob digests ride the delta (07 §2.2) so that a catalogue
@@ -1499,6 +1506,18 @@ public sealed class Catalogue : IDisposable
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM index_deltas;";
         return (long)command.ExecuteScalar()!;
+    }
+
+    /// <summary>
+    /// The highest index generation any applied delta carries, or zero when
+    /// none carries one (07 §2.4): what a format-4 writer publishes one
+    /// above.
+    /// </summary>
+    public ulong MaxIndexGeneration()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(index_generation), 0) FROM index_deltas;";
+        return (ulong)(long)command.ExecuteScalar()!;
     }
 
     private ResolvedLocation? QueryWinner(ObjectId objectId, bool excludeDeleted)

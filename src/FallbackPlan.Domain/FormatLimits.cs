@@ -10,10 +10,11 @@ public static class FormatLimits
 {
     /// <summary>
     /// The repository format version a new repository is created with unless
-    /// told otherwise: format 3, whose records carry their own nonce and
-    /// sealed key and can therefore be relocated between blobs without being
-    /// opened ([ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md)).
-    /// The descriptor carries it, and so does every blob.
+    /// told otherwise: format 4, whose records are format 3's and whose
+    /// deltas carry an index generation, so an entry published after another
+    /// outranks it whichever writer published either
+    /// ([ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).
+    /// The descriptor carries it.
     /// </summary>
     /// <remarks>
     /// It equals <see cref="LatestFormatVersion"/>, and that is the rule
@@ -25,10 +26,10 @@ public static class FormatLimits
     /// migrated by this: its version is fixed at creation and moves only
     /// under a signed upgrade record.
     /// </remarks>
-    public const ushort FormatVersion = FormatVersions.RelocatableRecords;
+    public const ushort FormatVersion = FormatVersions.IndexGenerations;
 
     /// <summary>
-    /// The newest repository format this implementation reads: format 3.
+    /// The newest repository format this implementation reads: format 4.
     /// Readers accept every version from <see cref="FormatVersions.SealedDataPlane"/>
     /// to this one (<see cref="FormatVersions.IsReadable"/>), so a format-2
     /// repository written before the default moved is read in place and never
@@ -36,7 +37,7 @@ public static class FormatLimits
     /// not renumbered, because they are bound into every descriptor and every
     /// sealed blob's AAD already on disk.
     /// </summary>
-    public const ushort LatestFormatVersion = FormatVersions.RelocatableRecords;
+    public const ushort LatestFormatVersion = FormatVersions.IndexGenerations;
 
     /// <summary>
     /// The version stamped on a <b>symmetric</b> container — a metadata blob

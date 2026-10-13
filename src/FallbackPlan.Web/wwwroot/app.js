@@ -3143,9 +3143,9 @@ const actions = {
   },
 
   // The format-upgradable notice's act (ADR-0066, contract 1.36): append a
-  // signed record so the set seals the latest format from its next blob. The
-  // typed confirmation is about intent — nothing removes the record and
-  // nothing rewrites a blob that is already sealed.
+  // signed record so the set writes the latest format from its next blob or
+  // index delta. The typed confirmation is about intent — nothing removes the
+  // record and nothing rewrites a blob that is already sealed.
   async "upgrade-format"(el) {
     const setId = (el.dataset.key ?? "").split(":")[1] ?? "";
     if (!S.sets.length) await refreshSets();

@@ -254,6 +254,7 @@ public sealed class FixtureRepositoryV3Tests : IDisposable
         Assert.IsEmpty(state.Findings);
 
         var delta = Assert.ContainsSingle(state.Deltas).Delta;
+        Assert.IsNull(delta.IndexGeneration, "a format-3 delta carries no key 12, which every format-3 reader refuses");
         Assert.IsNotEmpty(delta.CoveredBlobIds);
         Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobMerkleRoots);
         Assert.HasCount(delta.CoveredBlobIds.Count, delta.CoveredBlobDigests);

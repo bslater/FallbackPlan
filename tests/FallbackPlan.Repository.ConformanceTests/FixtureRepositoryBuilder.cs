@@ -91,14 +91,22 @@ internal static class FixtureRepositoryBuilder
 
     /// <summary>The required features a descriptor of this version declares.</summary>
     private static ushort[] RequiredFeaturesFor(ushort formatVersion) =>
-        FormatVersions.HasRelocatableRecords(formatVersion)
+        FormatVersions.HasIndexGenerations(formatVersion)
             ?
             [
                 RepositoryDescriptorCodec.FeatureSealedDataPlane,
                 RepositoryDescriptorCodec.FeatureReclaimAuthority,
                 RepositoryDescriptorCodec.FeatureRelocatableRecords,
+                RepositoryDescriptorCodec.FeatureIndexGenerations,
             ]
-            : [RepositoryDescriptorCodec.FeatureSealedDataPlane];
+            : FormatVersions.HasRelocatableRecords(formatVersion)
+                ?
+                [
+                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
+                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
+                    RepositoryDescriptorCodec.FeatureRelocatableRecords,
+                ]
+                : [RepositoryDescriptorCodec.FeatureSealedDataPlane];
 
     /// <summary>Generates the complete fixture store under <paramref name="rootDirectory"/>.</summary>
     internal static async Task GenerateAsync(Identity identity, string rootDirectory, CancellationToken cancellationToken)
@@ -268,6 +276,10 @@ internal static class FixtureRepositoryBuilder
                 // such a reader is entitled to read the format-2 fixture.
                 CoveredBlobMerkleRoots =
                     FormatVersions.HasRelocatableRecords(identity.FormatVersion) ? blobMerkleRoots : [],
+
+                // Key 12 rides only at format 4 (07 §2, ADR-0096), on the same
+                // terms: the repository's first delta is at index generation 1.
+                IndexGeneration = FormatVersions.HasIndexGenerations(identity.FormatVersion) ? 1 : null,
                 Entries = entries,
             };
             byte[] storedDelta;

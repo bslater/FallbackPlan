@@ -4,6 +4,7 @@ using FallbackPlan.Domain.Configuration;
 using FallbackPlan.Repository;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Storage.Abstractions;
+using FallbackPlan.Storage.Local;
 
 namespace FallbackPlan.Retention.Tests;
 
@@ -66,6 +67,24 @@ internal static class WriteOnlyInstallation
             passphrase, provisioning.KdfParameters, provisioning.KdfSalt, KdfValidationMode.OpenRepository);
         return Convert.ToHexStringLower(
             WriteOnlyProvisioning.SealReclaimGrant(Convert.FromHexString(recipientHex), authority.ReclaimKeySeed));
+    }
+
+    /// <summary>
+    /// Creates a set's archive at <paramref name="formatVersion"/> before its
+    /// first backup, from the installation credential the service would
+    /// create it from. The pass that follows then opens this archive rather
+    /// than creating one at the format new sets are born at.
+    /// </summary>
+    public static async Task CreateArchiveAsync(string stateDirectory, string archivePath, ushort formatVersion)
+    {
+        using var provisioning = new InstallationCredentialStore(stateDirectory).TryLoad()
+            ?? throw new InvalidOperationException("the state directory is not set up");
+        using var created = await RepositoryLifecycle.CreateAsync(
+            new LocalFileSystemObjectStore(archivePath), provisioning.Credential, provisioning.KdfSalt.ToArray(),
+            provisioning.KdfParameters, createdBy: "retention-tests",
+            (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), CancellationToken.None,
+            logger: null, formatVersion);
+        Assert.AreEqual(formatVersion, created.EffectiveFormatVersion);
     }
 
     /// <summary>Opens the write-only archive at <paramref name="store"/> with the passphrase, authority and all.</summary>

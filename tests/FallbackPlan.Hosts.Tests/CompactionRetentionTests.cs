@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using FallbackPlan.Agent;
 using FallbackPlan.Api;
 using FallbackPlan.Application;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
@@ -220,13 +221,15 @@ public sealed class CompactionRetentionTests : IDisposable
     /// (ADR-0017 Amendment 2; FR-MAN-015). Its catalogue is given a second
     /// writer's entries for every object, at the locations its own entries
     /// name and under an id that sorts above any it could hold: the standing
-    /// an adopted archive's other writer has, without a second machine. The
-    /// blob the dry run offered is then left whole and said to be, and the
-    /// pass that applies rewrites nothing.
+    /// an adopted archive's other writer has, without a second machine. At
+    /// format 3, where every entry ranks at one generation, the blob the dry
+    /// run offered is then left whole and said to be, and the pass that
+    /// applies rewrites nothing.
     /// </summary>
     [TestMethod]
-    public async Task UnderAHigherWritersEntries_TheServiceLeavesTheBlobWhole_SaysWhy_AndRewritesNothing()
+    public async Task AtFormatThree_UnderAHigherWritersEntries_TheServiceLeavesTheBlobWhole_SaysWhy_AndRewritesNothing()
     {
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.RelocatableRecords;
         Directory.CreateDirectory(VaultA);
         WriteConfiguration(directShip: true);
         WriteIncompressible("docs/steady.bin", seed: 1);
@@ -272,6 +275,57 @@ public sealed class CompactionRetentionTests : IDisposable
         Assert.IsEmpty(
             BlobObjects(replica).Except(before, StringComparer.Ordinal).ToList(),
             "the pass wrote a blob it should have declined to produce");
+        await AssertRestoresAsync(handler, "steady.bin", seed: 1);
+    }
+
+    /// <summary>
+    /// The same second writer at format 4 (ADR-0096). The compactor publishes
+    /// at one more than the highest index generation its catalogue holds, so
+    /// its relocations outrank every entry they relocate, whichever writer
+    /// published either. The blob is compacted once, and the next pass finds
+    /// nothing to undo.
+    /// </summary>
+    [TestMethod]
+    public async Task AtFormatFour_UnderAHigherWritersEntries_TheServiceCompacts_AndTheNextPassDoesNotUndoIt()
+    {
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.IndexGenerations;
+        Directory.CreateDirectory(VaultA);
+        WriteConfiguration(directShip: true);
+        WriteIncompressible("docs/steady.bin", seed: 1);
+        WriteIncompressible("docs/churn.bin", seed: 2);
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var grant = await _harness.ReclaimGrantAsync(handler, Timeout);
+
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 3);
+        await BackUpAsync(runtime);
+        WriteIncompressible("docs/churn.bin", seed: 4);
+        await BackUpAsync(runtime);
+
+        await GiveEveryObjectToAHigherWriterAsync(runtime);
+
+        var dry = await DryRunAsync(handler);
+        var said = string.Join(Environment.NewLine, dry);
+        Assert.Contains(
+            line => line.Contains("compaction would rewrite: 1 blob(s)", StringComparison.Ordinal), dry, said);
+        Assert.DoesNotContain(
+            line => line.Contains("another writer's entries would outrank the rewrite", StringComparison.Ordinal),
+            dry,
+            said);
+
+        var lines = new List<string>();
+        for (var pass = 0; pass < 3; pass++)
+        {
+            lines.AddRange(await RetainAsync(handler, grant));
+        }
+
+        Assert.HasCount(
+            1,
+            lines.Where(line => line.Contains("compacted:", StringComparison.Ordinal)).ToList(),
+            $"the relocation was undone and the blob rewritten again:{Environment.NewLine}"
+            + string.Join(Environment.NewLine, lines));
         await AssertRestoresAsync(handler, "steady.bin", seed: 1);
     }
 
@@ -448,7 +502,8 @@ public sealed class CompactionRetentionTests : IDisposable
     /// <summary>
     /// Applies to the set's catalogue one delta from a writer whose id sorts
     /// above every other, re-inserting each object at the location the index
-    /// resolves it to, at the same generation.
+    /// resolves it to, at the highest index generation the index holds: a tie
+    /// on generation, which the writer id then decides in its favour.
     /// </summary>
     private async Task GiveEveryObjectToAHigherWriterAsync(ServiceRuntime runtime)
     {
@@ -460,6 +515,7 @@ public sealed class CompactionRetentionTests : IDisposable
                 Timeout);
         Assert.IsNotEmpty(index.Resolved);
 
+        var highest = index.Resolved.Values.Max(entry => entry.Generation);
         using var catalogue = archive.OpenWritableCatalogue();
         catalogue.ApplyDelta(
             DeltaId.FromBytes(RandomNumberGenerator.GetBytes(DeltaId.Size)),
@@ -467,7 +523,8 @@ public sealed class CompactionRetentionTests : IDisposable
             {
                 WriterId = WriterId.FromBytes([.. Enumerable.Repeat((byte)0xFF, 16)]),
                 Sequence = 1,
-                Generation = index.Resolved.Values.Max(entry => entry.Generation),
+                Generation = 0,
+                IndexGeneration = highest == 0 ? null : highest,
                 Entries = [.. index.Resolved.Values.Select(entry => entry.Entry with
                 {
                     EntryType = IndexEntryType.Insertion,

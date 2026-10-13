@@ -96,6 +96,11 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 > The compactor now declines that compaction before it writes anything, so
 > no relocation it publishes is undone.
 
+> **Amended 2026-10 ([ADR-0017 Amendment 3](adr/0017-index-entry-supersession.md#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation)).**
+> From format 4 every delta carries an index generation an entry ranks by, so
+> the compaction under the lower writer id outranks what it relocates and is
+> honoured rather than declined.
+
 > **D5 before C-wave upload code goes live.** If the blob writer ships without intents and they arrive later, the interruption harness passes for the wrong reason — nothing was concurrently collecting, so nothing was at risk ([PT-3](review/2026-08-fix-pressure-test.md#pt-3--compaction-output-blobs-are-unprotected-between-creation-and-index-publication)).
 
 ### Wave E — Recovery

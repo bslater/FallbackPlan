@@ -230,6 +230,11 @@ Five rules close it:
 > [ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first) states six constraints a checkpoint must meet
 > before one is published.
 
+> **Amended 2026-10 ([ADR-0096](../adr/0096-format-4-an-index-generation-per-delta.md)).**
+> From format 4 the patience runs out. Every delta carries an index
+> generation, and a gap ages from the first later delta of its writer until
+> a rebuild judges it at eight. A gap in format-3 history is not aged by them.
+
 **3 — Checkpoints enumerate what they subsume.** A checkpoint lists the exact delta IDs it covers and the per-writer high-water sequence. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not a listing revealed it.
 
 **4 — Retirement requires uncontested coverage.** A delta may be retired only when it is named by a checkpoint that no live checkpoint at or above its generation contradicts — in practice, when every retained checkpoint at that generation names it, or a later checkpoint supersedes them all. Retirement is a deletion and takes the same tombstone-and-grace treatment as any other. Retiring a delta on one checkpoint's authority while another live checkpoint omits it would strand its entries for any reader holding only the second.
@@ -256,6 +261,12 @@ Precedence is therefore explicit rather than emergent:
 > The compactor declines a compaction whose supersessions would lose, before
 > it writes anything. A relocation it publishes stands whichever writer
 > published it.
+
+> **Amended 2026-10 ([ADR-0017 Amendment 3](../adr/0017-index-entry-supersession.md#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation), [ADR-0096](../adr/0096-format-4-an-index-generation-per-delta.md)).**
+> From format 4 every delta carries an index generation, one above the
+> highest its writer had seen, and an entry ranks by it. A compaction is
+> published above every entry it relocates, so it stands under either writer
+> id and is not declined. Format-3 history ranks at 0, as above.
 
 With precedence stated, merging is safe for the reason that actually holds: entries applied in any order converge on the same state, because the winner is a property of the entries themselves rather than of arrival sequence. See [ADR-0017](../adr/0017-index-entry-supersession.md).
 

@@ -66,6 +66,25 @@ one more that only frozen bytes can establish: a data record lifted verbatim
 out of this blob, and appended into a blob written later by a different
 writer under a different salt at a different ordinal, still opens.
 
+## fixture-repository-v4
+
+The same six objects and the same deterministic `fixture.bin`, written at
+**format 4** ([ADR-0096](../../../../docs/adr/0096-format-4-an-index-generation-per-delta.md))
+under the passphrase `fallbackplan-fixture-v4-passphrase`. Format 4 changes
+the index delta and nothing else, so everything sealed here is format 3's and
+stamped 3. What differs on disk is the descriptor, which declares format 4
+and lists `index-generations` beside `relocatable-records` as **required**
+features, so a reader that does not rank by index generation refuses the
+repository by name; and the one delta, which carries key 12,
+`index_generation`, at 1, the first any repository holds.
+
+`FixtureRepositoryV4Tests` holds the read contract on these bytes: the
+descriptor names format 4 and both features, every blob is stamped 3, the
+index loads with no finding and every entry ranks at index generation 1, a
+catalogue rebuilt from it holds that as its highest, and the passphrase
+restores `fixture.bin` byte for byte. Regeneration is no more byte-identical
+than format 3's.
+
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while
 format v1 did. Both were withdrawn with the format, before any freeze; the
