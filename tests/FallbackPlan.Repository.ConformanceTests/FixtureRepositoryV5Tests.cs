@@ -54,9 +54,10 @@ public sealed class FixtureRepositoryV5Tests : IDisposable
         return directory?.FullName;
     }
 
-    private static async Task<string> CommittedFixtureAsync()
+    private static async Task<string> CommittedFixtureAsync(bool bootstrap)
     {
         var committed = CommittedFixturePath();
+        Assert.IsTrue(bootstrap || Directory.Exists(committed), $"The committed v5 fixture is absent at {committed}.");
         if (!Directory.Exists(committed))
         {
             // Bootstrap: materialise the fixture so it can be committed, and
@@ -94,7 +95,7 @@ public sealed class FixtureRepositoryV5Tests : IDisposable
     [TestMethod]
     public async Task FixtureRepositoryV5_TheCommittedBytes_DeclareFormatFive_CarryTheirDeltaInACheckpoint_AndRestore()
     {
-        var committed = await CommittedFixtureAsync();
+        var committed = await CommittedFixtureAsync(bootstrap: true);
         var store = new LocalFileSystemObjectStore(committed);
 
         var descriptor = await RepositoryLifecycle.ReadDescriptorAsync(store, CancellationToken.None);
@@ -173,8 +174,9 @@ public sealed class FixtureRepositoryV5Tests : IDisposable
     {
         // The copy inside the checkpoint is the delta (07 §5): a store that
         // lost the object at the delta's key, or a listing that omits it,
-        // loses nothing a reader needs.
-        var committed = await CommittedFixtureAsync();
+        // loses nothing a reader needs. Only the test above bootstraps the
+        // fixture, so the two never generate it at once.
+        var committed = await CommittedFixtureAsync(bootstrap: false);
         var copy = Path.Combine(_scratch, "fixture");
         CopyDirectory(committed, copy);
         var whole = await LoadAsync(new LocalFileSystemObjectStore(committed));

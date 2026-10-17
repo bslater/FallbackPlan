@@ -60,6 +60,12 @@ public sealed class ArchiveHandle : IDisposable
     /// <summary>The archive's sequence allocator — one per writer role, held here and nowhere else.</summary>
     public required WriterSequence Sequence { get; init; }
 
+    /// <summary>
+    /// What this archive's backups have learned of its index checkpoints, so
+    /// each reads only those published since the last (ADR-0097).
+    /// </summary>
+    public CheckpointCoverage CheckpointCoverage { get; } = new();
+
     /// <summary>Where this archive's blobs spool before upload.</summary>
     public required string SpoolDirectory { get; init; }
 

@@ -267,6 +267,10 @@ public static class BackupRunner
             runtime.SetSettings.Captured(
                 set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
 
+            // Inside the run, so a direct-ship set's checkpoint reaches its
+            // destinations through the same fan-out its deltas did.
+            await CheckpointIndexAsync(runtime, set, archive, generation, cancellationToken).ConfigureAwait(false);
+
             return new BackupOutcome(set.Name, "ran", summary);
         }
         catch (OperationCanceledException)
@@ -314,6 +318,52 @@ public static class BackupRunner
             {
                 await sink.CompleteRunAsync(nowMs, runCommitted).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Carries a format-5 archive's uncovered index deltas into checkpoints
+    /// once enough have gathered (07 §5, ADR-0097), so a load reads one object
+    /// where it read many.
+    /// </summary>
+    /// <remarks>
+    /// Best effort, after the snapshot committed: a checkpoint changes how
+    /// many objects a load reads and nothing it reaches, so one that fails is
+    /// logged and the run still ran. The number it drew stays outstanding and
+    /// the next publication voids it, as any failed publication's is. Below
+    /// format 5 nothing is published, because a reader that predates key 10
+    /// would report the checkpoint as damage.
+    /// </remarks>
+    private static async ValueTask CheckpointIndexAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        ArchiveHandle archive,
+        Domain.KeyGeneration generation,
+        CancellationToken cancellationToken)
+    {
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(archive.Repository.EffectiveFormatVersion))
+        {
+            return;
+        }
+
+        var log = runtime.LoggerFor<Repository.Index.IndexCheckpointer>();
+        try
+        {
+            using var checkpointer = new Repository.Index.IndexCheckpointer(
+                archive.Store, archive.Repository.RepositoryId, runtime.Writer, archive.Repository.Credential,
+                archive.Sequence, log)
+            {
+                Coverage = archive.CheckpointCoverage,
+            };
+            await checkpointer.CheckpointAsync(
+                generation.Value,
+                runtime.Options.CheckpointThresholdOverride ?? Repository.Index.IndexCheckpointer.DefaultThreshold,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or Repository.Index.IndexFormatException or OperationCanceledException)
+        {
+            Log.CheckpointDeferred(log, new Domain.Diagnostics.LogLabel(set.Name), exception);
         }
     }
 

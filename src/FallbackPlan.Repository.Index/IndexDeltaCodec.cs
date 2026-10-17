@@ -99,7 +99,15 @@ public sealed record IndexDelta
 }
 
 /// <summary>A decoded delta: the value, the exact signed bytes, and the signature to verify against the derived signing key for <see cref="IndexDelta.Generation"/>.</summary>
-public sealed record DecodedDelta(IndexDelta Delta, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature);
+public sealed record DecodedDelta(IndexDelta Delta, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature)
+{
+    /// <summary>
+    /// The delta's identifier, which no key of the delta carries: a load
+    /// takes it from the delta's store key, or from key 2 of the checkpoint
+    /// carrying it (07 §2, §5). Default for a delta decoded outside a load.
+    /// </summary>
+    public DeltaId DeltaId { get; init; }
+}
 
 /// <summary>
 /// Encodes and decodes index deltas with the 06 §6.1 two-pass signature

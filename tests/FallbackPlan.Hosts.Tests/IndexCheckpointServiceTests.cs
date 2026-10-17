@@ -36,6 +36,9 @@ public sealed class IndexCheckpointServiceTests : IDisposable
 
     private string MetadataRoot => Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
 
+    // A local destination holds each repository it receives under its own directory.
+    private string Replica => Assert.ContainsSingle(Directory.GetDirectories(Vault));
+
     public void Dispose()
     {
         _timeout.Dispose();
@@ -57,7 +60,7 @@ public sealed class IndexCheckpointServiceTests : IDisposable
             await RunOnAsync(runtime, set);
         }
 
-        foreach (var plane in new[] { MetadataRoot, Vault })
+        foreach (var plane in new[] { MetadataRoot, Replica })
         {
             var (state, deltaReads) = await LoadAsync(plane);
             Assert.IsNotEmpty(state.Checkpoints, $"No checkpoint reached {plane}.");
@@ -84,7 +87,7 @@ public sealed class IndexCheckpointServiceTests : IDisposable
             await RunOnAsync(runtime, set);
         }
 
-        foreach (var plane in new[] { MetadataRoot, Vault })
+        foreach (var plane in new[] { MetadataRoot, Replica })
         {
             var (state, _) = await LoadAsync(plane);
             Assert.IsEmpty(state.Checkpoints, $"A format-4 set published a checkpoint at {plane}.");

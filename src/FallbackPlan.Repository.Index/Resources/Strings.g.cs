@@ -23,6 +23,27 @@ internal static class Strings
         Manager.GetString(name, CultureInfo.CurrentUICulture) ?? name;
 
     /// <summary>
+    /// A checkpoint that carries deltas carries no entries, shards or watermarks of its own (specification 07 §5).
+    /// </summary>
+    internal static string CheckpointCodec_CarriedDeltasBesideOwnEntries => Get(nameof(CheckpointCodec_CarriedDeltasBesideOwnEntries));
+
+    /// <summary>
+    /// The checkpoint carries key 10 with no delta in it; a checkpoint that carries none omits the key (specification 07 §5).
+    /// </summary>
+    internal static string CheckpointCodec_CarriedDeltasEmpty => Get(nameof(CheckpointCodec_CarriedDeltasEmpty));
+
+    /// <summary>
+    /// The checkpoint carries {0} delta(s) for {1} identifier(s); key 10 is parallel to key 2 (specification 07 §5).
+    /// </summary>
+    private static string CheckpointCodec_CarriedDeltasParallelToIdentifiers => Get(nameof(CheckpointCodec_CarriedDeltasParallelToIdentifiers));
+
+    /// <summary>
+    /// The checkpoint carries {0} delta(s) for {1} identifier(s); key 10 is parallel to key 2 (specification 07 §5).
+    /// </summary>
+    internal static string FormatCheckpointCodec_CarriedDeltasParallelToIdentifiers(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, CheckpointCodec_CarriedDeltasParallelToIdentifiers, arg0, arg1);
+
+    /// <summary>
     /// The checkpoint carries an entry in shard {0} but does not enumerate it in shard_set (specification 07 §8).
     /// </summary>
     private static string CheckpointCodec_CheckpointCarriesEntryShardBut => Get(nameof(CheckpointCodec_CheckpointCarriesEntryShardBut));
@@ -34,7 +55,7 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CheckpointCodec_CheckpointCarriesEntryShardBut, arg0);
 
     /// <summary>
-    /// The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-9 only.
+    /// The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-10 only.
     /// </summary>
     internal static string CheckpointCodec_CheckpointCarriesUnknownKeySpecification => Get(nameof(CheckpointCodec_CheckpointCarriesUnknownKeySpecification));
 

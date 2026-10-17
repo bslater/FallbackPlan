@@ -35,6 +35,14 @@ public static class FormatVersions
     /// </summary>
     public const ushort IndexGenerations = 4;
 
+    /// <summary>
+    /// Format 5: a checkpoint carries the deltas it subsumes as their stored
+    /// objects (07 §5 key 10), and a loader reads a carried delta from the
+    /// checkpoint rather than from its key. Deltas are format 4's, records
+    /// and blobs format 3's (ADR-0097).
+    /// </summary>
+    public const ushort DeltaCheckpoints = 5;
+
     /// <summary>Whether a descriptor's version is one this implementation reads.</summary>
     public static bool IsReadable(ushort formatVersion) =>
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
@@ -72,6 +80,13 @@ public static class FormatVersions
     public static bool HasIndexGenerations(ushort formatVersion) => formatVersion >= IndexGenerations;
 
     /// <summary>
+    /// Whether a writer at this version may publish a checkpoint carrying
+    /// deltas (07 §5 key 10). Below format 5 it must not: a reader that
+    /// predates the key refuses the checkpoint and reports it as damage.
+    /// </summary>
+    public static bool HasDeltaCheckpoints(ushort formatVersion) => formatVersion >= DeltaCheckpoints;
+
+    /// <summary>
     /// The version a blob of this class is stamped with inside a repository
     /// of <paramref name="repositoryFormatVersion"/> — which is not the same
     /// number, and the one place that says so.
@@ -81,8 +96,8 @@ public static class FormatVersions
     /// and <see cref="SealedDataPlane"/> data blobs, because the symmetric
     /// construction is the one format 1 defined and format 2 kept byte for
     /// byte (ADR-0014 Amendment 1); a format-3 repository writes
-    /// <see cref="RelocatableRecords"/> for both, and so does a format-4 one,
-    /// whose change is to the index alone. The stamp is AAD input, so
+    /// <see cref="RelocatableRecords"/> for both, and so do format-4 and
+    /// format-5 ones, whose changes are to the index alone. The stamp is AAD input, so
     /// answering this wrongly does not produce a warning — it produces a blob
     /// whose own repository cannot open it.
     /// </remarks>

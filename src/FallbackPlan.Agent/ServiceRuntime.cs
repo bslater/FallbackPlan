@@ -89,6 +89,14 @@ public sealed record ServiceOptions
     internal bool? SameDrivePlacementOverride { get; init; }
 
     /// <summary>
+    /// How many uncovered index deltas make a checkpoint due after a format-5
+    /// set's backup (ADR-0097). A test harness's knob, so a suite reaches a
+    /// checkpoint in a few backups; null, the production value, is
+    /// <see cref="Repository.Index.IndexCheckpointer.DefaultThreshold"/>.
+    /// </summary>
+    internal int? CheckpointThresholdOverride { get; init; }
+
+    /// <summary>
     /// A test harness's view of the destination-sync ledger: each row as it
     /// is written, so every state a reader could have read — which polling
     /// can only hope to catch. Null, the production value, observes nothing.

@@ -6,6 +6,8 @@ using FallbackPlan.Repository.Packing;
 using FallbackPlan.Storage.Abstractions;
 using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
+using CatalogueDb = FallbackPlan.Repository.Catalogue.Catalogue;
+using CatalogueRebuilder = FallbackPlan.Repository.Catalogue.CatalogueRebuilder;
 
 namespace FallbackPlan.Repository.Tests.Index;
 
@@ -64,7 +66,7 @@ public sealed class CheckpointBundleTests : IDisposable
 
     private static byte[] Digest(byte seed) => Enumerable.Repeat(seed, 32).ToArray();
 
-    private static async Task<byte[]> StoredAsync(IObjectStore store, DeltaId deltaId, ulong generation = 0)
+    private static async Task<byte[]> StoredAsync(LocalFileSystemObjectStore store, DeltaId deltaId, ulong generation = 0)
     {
         using var read = await store.OpenReadAsync(
             MetadataStoreKeys.IndexDelta(generation, deltaId), range: null, CancellationToken.None);
@@ -413,8 +415,8 @@ public sealed class CheckpointBundleTests : IDisposable
 
         var counting = new CountingObjectStore(store);
         using var loader = new IndexLoader(counting, Repo, TestCredential);
-        using var catalogue = Catalogue.Catalogue.Open(Path.Combine(_root, "catalogue.db"), Repo);
-        var report = await new Catalogue.CatalogueRebuilder(loader).RebuildAsync(
+        using var catalogue = CatalogueDb.Open(Path.Combine(_root, "catalogue.db"), Repo);
+        var report = await new CatalogueRebuilder(loader).RebuildAsync(
             catalogue, currentGeneration: 0, IndexLoader.GapPatienceGenerations, isSequenceAccountedAsync: null,
             CancellationToken.None);
 

@@ -53,7 +53,7 @@ public sealed class IndexCheckpointerTests : IDisposable
             IndexEntryType.Insertion);
     }
 
-    private async Task<List<DeltaId>> PublishDeltasAsync(IObjectStore store, WriterSequence sequence, int count, int first = 0, int entriesEach = 1)
+    private static async Task<List<DeltaId>> PublishDeltasAsync(IObjectStore store, WriterSequence sequence, int count, int first = 0, int entriesEach = 1)
     {
         var published = new List<DeltaId>();
         using var publisher = new IndexPublisher(store, Repo, Writer, TestAuthority.Shared.Credential, sequence, highestIndexGenerationSeen: 0);

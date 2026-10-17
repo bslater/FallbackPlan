@@ -110,6 +110,32 @@ public static class MetadataStoreKeys
     public static ObjectKey IndexDelta(ulong generation, DeltaId deltaId) =>
         ObjectKey.Parse($"index/delta/{Decimal16(generation)}/{deltaId.ToBase32()}");
 
+    /// <summary>
+    /// The delta identifier an index delta's key names, or false for a key
+    /// that is not exactly <see cref="IndexDelta"/>'s rendering of one.
+    /// </summary>
+    /// <param name="key">A key listed under <c>index/delta/</c>.</param>
+    /// <param name="deltaId">The identifier, when the key renders one.</param>
+    public static bool TryParseIndexDelta(ObjectKey key, out DeltaId deltaId)
+    {
+        deltaId = default;
+        var components = key.Components;
+        if (components.Count != 4 || components[0] != "index" || components[1] != "delta"
+            || components[2].Length != Decimal16Length || !components[2].All(char.IsAsciiDigit))
+        {
+            return false;
+        }
+
+        Span<byte> bytes = stackalloc byte[16];
+        if (!Base32.TryDecode(components[3], bytes, out var written) || written != bytes.Length)
+        {
+            return false;
+        }
+
+        deltaId = DeltaId.FromBytes(bytes);
+        return true;
+    }
+
     /// <summary>An index checkpoint's key: <c>index/checkpoint/&lt;generation&gt;/&lt;checkpoint-id&gt;</c> (specification 07 §5).</summary>
     public static ObjectKey IndexCheckpoint(ulong generation, CheckpointId checkpointId) =>
         ObjectKey.Parse($"index/checkpoint/{Decimal16(generation)}/{checkpointId.ToBase32()}");

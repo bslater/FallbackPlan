@@ -78,9 +78,23 @@ public static class RepositoryDescriptorCodec
     /// </summary>
     public const ushort FeatureIndexGenerations = 0x0004;
 
+    /// <summary>
+    /// The delta-checkpoints feature
+    /// ([ADR-0097](../../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)):
+    /// a format-5 repository names it in <c>required_features</c>, beside
+    /// <see cref="FeatureIndexGenerations"/>, and an earlier one never does.
+    /// A reader that predates format 5 refuses the repository by that name
+    /// at open, rather than refusing each checkpoint's unknown key 10 and
+    /// reporting the index damaged.
+    /// </summary>
+    public const ushort FeatureDeltaCheckpoints = 0x0005;
+
     /// <summary>The feature identifiers this implementation understands.</summary>
     private static readonly HashSet<ushort> Implemented =
-        [FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations];
+    [
+        FeatureSealedDataPlane, FeatureReclaimAuthority, FeatureRelocatableRecords, FeatureIndexGenerations,
+        FeatureDeltaCheckpoints,
+    ];
 
     /// <summary>Serialises a descriptor to its store bytes.</summary>
     public static byte[] Serialize(RepositoryDescriptor descriptor)
@@ -92,11 +106,11 @@ public static class RepositoryDescriptorCodec
             throw new ArgumentException(Strings.RepositoryDescriptorCodec_KDFSaltExactlyBytes, nameof(descriptor));
         }
 
-        // Only formats 2 to 4 are written (ADR-0042 §1, ADR-0052, ADR-0096;
-        // format 1 withdrawn before freeze), and a descriptor of any is nothing
-        // without its sealing public key — the verifier every open compares
-        // against. A caller handing over anything else is a bug refused here
-        // rather than a stored contradiction.
+        // Only formats 2 to 5 are written (ADR-0042 §1, ADR-0052, ADR-0096,
+        // ADR-0097; format 1 withdrawn before freeze), and a descriptor of
+        // any is nothing without its sealing public key — the verifier every
+        // open compares against. A caller handing over anything else is a bug
+        // refused here rather than a stored contradiction.
         if (!FormatVersions.IsReadable(descriptor.FormatVersion))
         {
             throw new ArgumentException(
@@ -370,8 +384,8 @@ public static class RepositoryDescriptorCodec
     /// <summary>
     /// Why the version and the features it implies disagree, or null when
     /// they agree (01 §3.2): format 3 and later list relocatable-records,
-    /// format 4 and later list index-generations, and an earlier format lists
-    /// neither.
+    /// format 4 and later list index-generations, format 5 and later list
+    /// delta-checkpoints, and an earlier format lists none of the three.
     /// </summary>
     private static string? FeatureVersionDisagreement(ushort formatVersion, IReadOnlyList<ushort> required) =>
         FeatureDisagreement(
@@ -379,7 +393,10 @@ public static class RepositoryDescriptorCodec
             FormatVersions.HasRelocatableRecords(formatVersion))
         ?? FeatureDisagreement(
             formatVersion, required, FeatureIndexGenerations, "index-generations",
-            FormatVersions.HasIndexGenerations(formatVersion));
+            FormatVersions.HasIndexGenerations(formatVersion))
+        ?? FeatureDisagreement(
+            formatVersion, required, FeatureDeltaCheckpoints, "delta-checkpoints",
+            FormatVersions.HasDeltaCheckpoints(formatVersion));
 
     private static string? FeatureDisagreement(
         ushort formatVersion, IReadOnlyList<ushort> required, ushort feature, string name, bool implied)

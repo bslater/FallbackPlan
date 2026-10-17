@@ -55,11 +55,20 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a2c561934e089</value>
   </resheader>
+  <data name="CheckpointCodec_CarriedDeltasBesideOwnEntries" xml:space="preserve">
+    <value>A checkpoint that carries deltas carries no entries, shards or watermarks of its own (specification 07 §5).</value>
+  </data>
+  <data name="CheckpointCodec_CarriedDeltasEmpty" xml:space="preserve">
+    <value>The checkpoint carries key 10 with no delta in it; a checkpoint that carries none omits the key (specification 07 §5).</value>
+  </data>
+  <data name="CheckpointCodec_CarriedDeltasParallelToIdentifiers" xml:space="preserve">
+    <value>The checkpoint carries {0} delta(s) for {1} identifier(s); key 10 is parallel to key 2 (specification 07 §5).</value>
+  </data>
   <data name="CheckpointCodec_CheckpointCarriesEntryShardBut" xml:space="preserve">
     <value>The checkpoint carries an entry in shard {0} but does not enumerate it in shard_set (specification 07 §8).</value>
   </data>
   <data name="CheckpointCodec_CheckpointCarriesUnknownKeySpecification" xml:space="preserve">
-    <value>The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-9 only.</value>
+    <value>The checkpoint carries an unknown key; specification 07 §5 assigns keys 1-10 only.</value>
   </data>
   <data name="CheckpointCodec_CheckpointNotCanonicalCBOR" xml:space="preserve">
     <value>The checkpoint is not canonical CBOR: {0}</value>
