@@ -89,10 +89,12 @@ public sealed class IndexCheckpointerTests : IDisposable
         var sequence = Sequence();
         _ = await PublishDeltasAsync(store, sequence, count: 3);
 
-        using var checkpointer = Checkpointer(store, sequence);
+        var counting = new CountingObjectStore(store);
+        using var checkpointer = Checkpointer(counting, sequence);
         var published = await checkpointer.CheckpointAsync(0, threshold: 4, CancellationToken.None);
 
         Assert.IsEmpty(published);
+        Assert.AreEqual(0, DeltaReads(counting), "Below the threshold the listing decides, and no delta is read.");
         Assert.IsEmpty((await LoadAsync(store)).Checkpoints);
     }
 
@@ -218,11 +220,13 @@ public sealed class IndexCheckpointerTests : IDisposable
         _ = await PublishDeltasAsync(store, sequence, count: 1, entriesEach: 200);
         _ = await PublishDeltasAsync(store, sequence, count: 3, first: 1000);
 
-        using var checkpointer = Checkpointer(store, sequence, byteBudget: 4 * 1024);
+        var counting = new CountingObjectStore(store);
+        using var checkpointer = Checkpointer(counting, sequence, byteBudget: 4 * 1024);
 
         Assert.IsEmpty(
             await checkpointer.CheckpointAsync(0, threshold: 4, CancellationToken.None),
             "Three deltas fit a checkpoint and the fourth never will, so four are not due.");
+        Assert.AreEqual(0, DeltaReads(counting), "The listing's lengths say so without reading any delta.");
     }
 
     [TestMethod]

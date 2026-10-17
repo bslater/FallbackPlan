@@ -200,15 +200,17 @@ public sealed class IndexLoader : IDisposable
 
             // A carried copy is opened exactly as the object at the delta's
             // key would be (07 §5). One that does not open is reported and
-            // left out, and the delta is read from its key instead.
+            // left out, and the delta is read from its key instead. Every
+            // copy is opened, even of a delta another checkpoint already
+            // carries soundly, so whether damage is reported does not depend
+            // on the order a listing returns checkpoints in.
             var checkpoint = opened.Checkpoint.Checkpoint;
             for (var index = 0; index < checkpoint.SubsumedDeltas.Count; index++)
             {
                 var deltaId = checkpoint.SubsumedDeltaIds[index];
-                if (!carried.ContainsKey(deltaId) &&
-                    OpenDelta($"{entry.Key}, delta {deltaId}", checkpoint.SubsumedDeltas[index].ToArray(), findings) is { } delta)
+                if (OpenDelta($"{entry.Key}, delta {deltaId}", checkpoint.SubsumedDeltas[index].ToArray(), findings) is { } delta)
                 {
-                    carried[deltaId] = delta with { DeltaId = deltaId };
+                    carried.TryAdd(deltaId, delta with { DeltaId = deltaId });
                 }
             }
         }

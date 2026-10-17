@@ -339,6 +339,61 @@ public sealed class CheckpointBundleTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ADamagedCopy_IsReported_EvenWhenAnotherCheckpointCarriesASoundOne()
+    {
+        // Whichever checkpoint a listing returns first, a damaged copy is
+        // damage, and the sound copy still serves the delta. The listing is
+        // ordered here so the sound copy comes first, where a loader that
+        // stopped at the first copy it could open would never look at the
+        // second.
+        var store = CreateStore();
+        var deltas = await PublishHistoryAsync(store);
+        var deltasOnly = await LoadAsync(store);
+
+        var sound = await StoredAsync(store, deltas[0]);
+        var damaged = sound.ToArray();
+        damaged[^1] ^= 0xFF;
+
+        using (var publisher = new IndexPublisher(store, Repo, Lower, TestCredential, Sequence("checkpoint")))
+        {
+            var first = await publisher.PublishBundledCheckpointAsync(
+                0, [new BundledDelta(deltas[0], sound)], predecessor: null, CancellationToken.None);
+            // 0xFF renders as base32 '7…', which sorts ahead of the 'a…' of zeroes.
+            await MoveCheckpointAsync(store, first, CheckpointId.FromBytes(Enumerable.Repeat((byte)0xFF, 16).ToArray()));
+
+            var second = await publisher.PublishBundledCheckpointAsync(
+                0, [new BundledDelta(deltas[0], damaged)], predecessor: null, CancellationToken.None);
+            await MoveCheckpointAsync(store, second, CheckpointId.FromBytes(new byte[16]));
+        }
+
+        var state = await LoadAsync(store);
+
+        Assert.ContainsSingle(state.Findings.Where(finding => finding.Kind == DamageKind.CorruptRecord));
+        Assert.HasCount(2, state.Checkpoints);
+        AssertSameIndex(deltasOnly, state);
+    }
+
+    /// <summary>Re-puts a checkpoint under another identifier, so a listing returns it where the test needs.</summary>
+    private static async Task MoveCheckpointAsync(LocalFileSystemObjectStore store, CheckpointId from, CheckpointId to)
+    {
+        var fromKey = MetadataStoreKeys.IndexCheckpoint(0, from);
+        byte[] bytes;
+        using (var read = await store.OpenReadAsync(fromKey, range: null, CancellationToken.None))
+        using (var memory = new MemoryStream())
+        {
+            await read.Content!.CopyToAsync(memory);
+            bytes = memory.ToArray();
+        }
+
+        await store.PutAsync(
+            MetadataStoreKeys.IndexCheckpoint(0, to),
+            _ => ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false)),
+            PutConditions.IfNotExists,
+            CancellationToken.None);
+        await store.DeleteAsync(fromKey, DeleteConditions.None, CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task AWatermark_HidesNoDelta()
     {
         // The earlier form dropped every delta at or below a watermark

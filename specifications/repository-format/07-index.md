@@ -211,7 +211,7 @@ What carrying buys is that a checkpoint restates nothing. A carried delta is the
 
 ### 5.2 Reading a checkpoint
 
-A reader opens each carried delta **exactly as it would open the object at the delta's key**: framing, object type, authentication, identifier, decoding and signature. A copy that opens is that delta, applied as §3 applies any delta. A copy that does not open is the damage finding the object at the key would be, and the reader reads the delta from its key instead.
+A reader opens each carried delta **exactly as it would open the object at the delta's key**: framing, object type, authentication, identifier, decoding and signature. A copy that opens is that delta, applied as §3 applies any delta. A copy that does not open is the damage finding the object at the key would be, and the reader reads the delta from its key instead. A reader opens every copy, including one of a delta another checkpoint carries soundly, so the findings do not depend on the order checkpoints are listed in.
 
 A reader need not fetch a listed delta that a copy it has opened carries. It applies a carried delta whether or not a listing returns it, and applies each delta once, however many checkpoints carry it.
 
