@@ -198,7 +198,7 @@ The encoding is deterministic, canonical, versioned, and independently implement
 
 The index maps object identifiers to physical locations. It is never a single growing object:
 
-- **Deltas** are immutable and writer-authored, published only after the blobs they cover are durable.
+- **Deltas** are immutable and writer-authored, published only after the blobs they cover are durable. Each is a metadata object within 00 §8's bound, so a publication with more entries than one delta holds publishes several, each covering whole blobs.
 - **Sharding** is by keyed object-ID prefix and object class.
 - **Checkpoints** are periodic authenticated generations that subsume prior deltas.
 - **Filters** (Bloom or XOR) are optional lookup accelerators and are *never* authoritative evidence of absence.
