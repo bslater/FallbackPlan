@@ -164,7 +164,7 @@ public sealed record PublishedTreeSnapshot(
     ObjectId RootTreeObjectId,
     ObjectId PolicyObjectId,
     ObjectId? ErrorManifestObjectId,
-    DeltaId DeltaId,
+    IReadOnlyList<DeltaId> DeltaIds,
     ulong IntentSequence,
     IReadOnlyList<PublishedFileVersion> Files,
     IReadOnlyList<CaptureFailure> Failures,
@@ -509,49 +509,13 @@ public sealed partial class PublicationOrchestrator
             _observer?.AfterStep(PublicationStep.VerifyAcknowledgements);
             RecordStep(PublicationStep.VerifyAcknowledgements, snapshotForLog);
 
-            // Step 6: index deltas referencing the now-durable blobs.
-            var entries = new List<IndexEntry>();
-            var covered = new List<BlobId>();
-
-            // The blob digest's durable home (07 §2.2). It is published
-            // beside the blob it names, inside the signature, so a
-            // participant receiving that blob can check the bytes against
-            // something the writer signed rather than against a record kept
-            // on the writer's own machine.
-            var digests = new List<ReadOnlyMemory<byte>>();
-
-            // And, at format 3 and above, the Merkle commitment over the
-            // same bytes (07 §2.3) — the one a peer can be challenged under
-            // without the blob crossing the wire. Withheld below format 3
-            // because a reader that predates key 11 refuses a delta carrying
-            // it, and such a reader is entitled to read a format-2
-            // repository.
-            var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
-            var merkleRoots = new List<ReadOnlyMemory<byte>>();
-            foreach (var blob in session.Blobs.Concat(builder.Blobs))
-            {
-                covered.Add(blob.BlobId);
-                digests.Add(blob.Digest.ToArray());
-                if (publishRoots)
-                {
-                    merkleRoots.Add(blob.MerkleRoot.ToArray());
-                }
-
-                foreach (var record in blob.RecordTable)
-                {
-                    entries.Add(new IndexEntry(
-                        record.ObjectId,
-                        blob.BlobId,
-                        record.PhysicalOffset,
-                        record.StoredLength,
-                        record.CompressionProfileValue,
-                        record.EncryptionProfileValue,
-                        IndexEntryType.Insertion));
-                }
-            }
-
-            var (deltaId, delta) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, digests, merkleRoots, cancellationToken).ConfigureAwait(false);
+            // Step 6: index deltas referencing the now-durable blobs. The
+            // blob digest's durable home (07 §2.2) is published beside the
+            // blob it names, inside the signature, so a participant receiving
+            // that blob can check the bytes against something the writer
+            // signed rather than against a record kept on its machine.
+            var deltas = await PublishIndexDeltasAsync(
+                indexPublisher, session.Blobs.Concat(builder.Blobs), cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
@@ -593,8 +557,7 @@ public sealed partial class PublicationOrchestrator
             if (_catalogue is not null)
             {
                 ProjectIntoCatalogue(
-                    job, snapshot, walker, session, builder, snapshotObjectId, rootTreeId, policyId, deltaId, delta,
-                    errorId);
+                    job, snapshot, walker, session, builder, snapshotObjectId, rootTreeId, policyId, deltas, errorId);
             }
 
             EngineDiagnostics.PublicationDuration.Record(
@@ -621,7 +584,7 @@ public sealed partial class PublicationOrchestrator
                 rootTreeId,
                 policyId,
                 errorId,
-                deltaId,
+                [.. deltas.Select(published => published.DeltaId)],
                 intentSequence,
                 walker.Files,
                 walker.Failures,
@@ -632,7 +595,7 @@ public sealed partial class PublicationOrchestrator
 
     /// <summary>
     /// Projects one completed publication into the live catalogue: blobs,
-    /// the applied delta, the snapshot row with its capture time, every
+    /// the applied deltas, the snapshot row with its capture time, every
     /// tree path, and each new file version with the identity and time the
     /// next incremental compares (NFR-PERF-003). Reused versions get a
     /// tree-entry row only — their file-version rows already exist. What each
@@ -648,8 +611,7 @@ public sealed partial class PublicationOrchestrator
         ObjectId snapshotObjectId,
         ObjectId rootTreeId,
         ObjectId policyId,
-        DeltaId deltaId,
-        IndexDelta delta,
+        IReadOnlyList<(DeltaId DeltaId, IndexDelta Delta)> deltas,
         ObjectId? errorId)
     {
         foreach (var blob in session.Blobs)
@@ -666,13 +628,16 @@ public sealed partial class PublicationOrchestrator
                 blob.RecordCount, blob.Length, [.. blob.Digest]);
         }
 
-        _catalogue!.ApplyDelta(deltaId, delta);
+        foreach (var (deltaId, delta) in deltas)
+        {
+            _catalogue!.ApplyDelta(deltaId, delta);
+        }
 
         // Signature state 1: this writer signed it in this process. The
         // capture time and the observed skew are the manifest's, as a rebuild
         // reads them — a row that said something else here would change when
         // the catalogue was next rebuilt.
-        _catalogue.RecordSnapshot(
+        _catalogue!.RecordSnapshot(
             job.SnapshotId.Span, job.DeviceId.Span, job.BackupSetId.Span,
             snapshotObjectId, rootTreeId, _generation.Value,
             (byte)(errorId is null ? 1 : 2), signatureState: 1, capturedAt: manifest.CaptureCompletedAt,

@@ -127,6 +127,9 @@
   <data name="IndexPublisher_StoreRefusedIndexObjectWith" xml:space="preserve">
     <value>The store refused index object '{0}' with a failed precondition.</value>
   </data>
+  <data name="IndexPublisher_IndexObjectOverMetadataLimit" xml:space="preserve">
+    <value>Index object '{0}' would be {1} bytes, over the 16 MiB a metadata object may be (specification 00 §8). Every reader refuses such an object before reading it, so it is not written.</value>
+  </data>
   <data name="JournalPublisher_StoreRefusedJournalRecordWith" xml:space="preserve">
     <value>The store refused journal record {0} with a failed precondition.</value>
   </data>

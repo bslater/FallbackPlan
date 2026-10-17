@@ -53,14 +53,10 @@ public sealed record PublishedCompaction(
 /// </para>
 /// <para>
 /// A pass's entries are split across deltas so that no delta exceeds
-/// <see cref="FormatLimits.MaxMetadataObjectSize"/>. That bound is real and
-/// nothing else enforces it for a delta: manifests, tree manifests and blob
-/// footers all check it, <c>IndexDeltaCodec</c> does not, and a delta written
-/// over it is refused at <b>read</b> by the standalone-record framing — so an
-/// unsplit pass would write an object that nothing rejects until the day it
-/// is needed. The split lives here rather than in the publisher because an
-/// ordinary publication's delta is bounded by what one capture wrote, while a
-/// compaction pass hands over a whole byte budget's worth of blobs at once.
+/// <see cref="FormatLimits.MaxMetadataObjectSize"/>, which the framing
+/// enforces at read. The cut is <see cref="IndexDeltaBudget"/>'s, the same
+/// one a capture's publication makes: a capture is no more bounded by the
+/// limit than a pass is.
 /// </para>
 /// <para>
 /// It does not tombstone the drained blobs and does not decide the order its
@@ -71,29 +67,15 @@ public sealed record PublishedCompaction(
 public static class CompactionPublication
 {
     /// <summary>Headroom left for the delta's own header, signature and framing.</summary>
-    public const int DeltaHeaderMargin = 64 * 1024;
-
-    /// <summary>A conservative per-entry cost: identifiers, location, profiles and CBOR framing.</summary>
-    private const int EntryEstimate = 96;
-
-    /// <summary>A conservative per-covered-blob cost: identifier, digest, Merkle root and framing.</summary>
-    private const int CoveredEstimate = 128;
+    public const int DeltaHeaderMargin = IndexDeltaBudget.HeaderMargin;
 
     /// <summary>The default budget for one delta's encoded bytes.</summary>
-    public static int DefaultDeltaByteBudget => FormatLimits.MaxMetadataObjectSize - DeltaHeaderMargin;
+    public static int DefaultDeltaByteBudget => IndexDeltaBudget.Default;
 
     /// <summary>
     /// Groups the produced blobs into deltas, each within
-    /// <paramref name="byteBudget"/>.
+    /// <paramref name="byteBudget"/>, by <see cref="IndexDeltaBudget.Split"/>.
     /// </summary>
-    /// <remarks>
-    /// The split is at blob boundaries, so a blob is covered by exactly one
-    /// delta and no covered list ever names it twice. A single blob cannot
-    /// overflow a delta on its own — at most
-    /// <see cref="FormatLimits.MaxRecordsPerBlob"/> entries, which is far
-    /// inside the bound — and a blob that somehow did is refused by name
-    /// rather than published into an object nothing can read.
-    /// </remarks>
     /// <param name="produced">What the compactor sealed.</param>
     /// <param name="byteBudget">The most one delta's encoded form may occupy.</param>
     /// <returns>The deltas to publish, in order.</returns>
@@ -102,48 +84,15 @@ public static class CompactionPublication
         IReadOnlyList<CompactedBlob> produced, int byteBudget)
     {
         ThrowHelper.ThrowIfNull(produced);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteBudget);
 
-        var deltas = new List<CompactionDelta>();
-        var ids = new List<BlobId>();
-        var digests = new List<ReadOnlyMemory<byte>>();
-        var roots = new List<ReadOnlyMemory<byte>>();
-        var entries = new List<IndexEntry>();
-        var cost = 0;
+        var covered = produced
+            .Select(blob => new CoveredBlob(
+                blob.Sealed.BlobId, blob.Sealed.Digest.ToArray(), blob.Sealed.MerkleRoot.ToArray(), blob.Superseding))
+            .ToList();
 
-        foreach (var blob in produced)
-        {
-            var blobCost = CoveredEstimate + (blob.Superseding.Count * EntryEstimate);
-            if (blobCost > byteBudget)
-            {
-                throw new InvalidOperationException(
-                    Strings.FormatCompactionPublication_BlobExceedsDeltaBudget(
-                        blob.Sealed.BlobId, blob.Superseding.Count, byteBudget));
-            }
-
-            if (entries.Count > 0 && cost + blobCost > byteBudget)
-            {
-                deltas.Add(new CompactionDelta([.. ids], [.. digests], [.. roots], [.. entries]));
-                ids.Clear();
-                digests.Clear();
-                roots.Clear();
-                entries.Clear();
-                cost = 0;
-            }
-
-            ids.Add(blob.Sealed.BlobId);
-            digests.Add(blob.Sealed.Digest.ToArray());
-            roots.Add(blob.Sealed.MerkleRoot.ToArray());
-            entries.AddRange(blob.Superseding);
-            cost += blobCost;
-        }
-
-        if (entries.Count > 0)
-        {
-            deltas.Add(new CompactionDelta([.. ids], [.. digests], [.. roots], [.. entries]));
-        }
-
-        return deltas;
+        return [.. IndexDeltaBudget.Split(covered, byteBudget)
+            .Select(part => new CompactionDelta(
+                part.CoveredBlobIds, part.CoveredBlobDigests, part.CoveredBlobMerkleRoots, part.Entries))];
     }
 
     /// <summary>
