@@ -314,17 +314,68 @@ public sealed class RepositoryDescriptorCodecTests
         Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
     }
 
+    private static RepositoryDescriptor SampleV5() => Sample() with
+    {
+        FormatVersion = FallbackPlan.Domain.FormatVersions.DeltaCheckpoints,
+        RequiredFeatures =
+        [
+            RepositoryDescriptorCodec.FeatureSealedDataPlane,
+            RepositoryDescriptorCodec.FeatureRelocatableRecords,
+            RepositoryDescriptorCodec.FeatureIndexGenerations,
+            RepositoryDescriptorCodec.FeatureDeltaCheckpoints,
+        ],
+    };
+
+    [TestMethod]
+    public void RepositoryDescriptorV5_EncodedAndDecoded_RoundTrips()
+    {
+        // A format-5 descriptor (ADR-0097): format 5 keeps format 4's deltas
+        // and adds checkpoints that carry them, so it lists all three.
+        var bytes = RepositoryDescriptorCodec.Serialize(SampleV5());
+
+        Assert.IsInstanceOfType<DescriptorParseResult.Ok>(RepositoryDescriptorCodec.Parse(bytes), out var ok);
+        Assert.AreEqual(FallbackPlan.Domain.FormatVersions.DeltaCheckpoints, ok.Descriptor.FormatVersion);
+        SequenceAssert.AreEqual(SampleV5().RequiredFeatures, ok.Descriptor.RequiredFeatures);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV5_WithoutTheDeltaCheckpointsFeature_IsAFormatViolation()
+    {
+        // 01 §3.2: a format-5 descriptor MUST list 0x0005, so a reader that
+        // predates format 5 refuses the repository by that name rather than
+        // reporting its first checkpoint as damage.
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV5() with { RequiredFeatures = SampleV4().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV4(), version: 5);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0005", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must list", violation.Message, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void RepositoryDescriptorV4_NamingTheDeltaCheckpointsFeature_IsAFormatViolation()
+    {
+        Assert.ThrowsExactly<ArgumentException>(
+            () => RepositoryDescriptorCodec.Serialize(SampleV4() with { RequiredFeatures = SampleV5().RequiredFeatures }));
+
+        var bytes = Restamped(SampleV5(), version: 4);
+        Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
+        Assert.Contains("0x0005", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("must not list", violation.Message, StringComparison.Ordinal);
+    }
+
     [TestMethod]
     public void RepositoryDescriptor_AFormatNewerThanThisBuildReads_IsRefusedNamingTheRange()
     {
         // A version above the newest this build reads is the earlier fact
         // and is named first — before any feature it might also list — with
         // the remedy: update, not re-seed, because nothing is withdrawn.
-        var bytes = Restamped(SampleV4(), version: 5);
+        var bytes = Restamped(SampleV5(), version: 6);
 
         Assert.IsInstanceOfType<DescriptorParseResult.FormatViolation>(RepositoryDescriptorCodec.Parse(bytes), out var violation);
-        Assert.Contains("format 5", violation.Message, StringComparison.Ordinal);
-        Assert.Contains("2 to 4", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("format 6", violation.Message, StringComparison.Ordinal);
+        Assert.Contains("2 to 5", violation.Message, StringComparison.Ordinal);
         Assert.Contains("Update", violation.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("withdrawn", violation.Message, StringComparison.Ordinal);
     }
