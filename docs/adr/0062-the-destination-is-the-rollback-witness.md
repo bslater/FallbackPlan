@@ -32,7 +32,12 @@ or rolled-back **sequence file**.
 > **Note (2026-10, [ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).**
 > Nothing writes a checkpoint, so the witness read at archive open is the
 > delta sequences and the journal keys. The watermarks are read only if a
-> checkpoint exists, and none does. It could not close the case of a whole
+> checkpoint exists, and none does.
+
+> **Note (2026-10, [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> No watermark is read now: a format-5 checkpoint carries deltas rather
+> than watermarks, and the witness reads the sequence of every delta a load
+> applies, carried or not, beside the journal keys. It could not close the case of a whole
 state directory restored from an older copy, because for a direct-ship set
 ([ADR-0046](0046-direct-to-destination-publication.md)) the archive's
 metadata plane *is* the state directory: the catalogue, the sequence file,
@@ -124,6 +129,10 @@ idempotent and each safe to repeat after a failure:
 3. **The writer is moved past whatever the healed archive now attests**,
    through the same adoption archive open performs, so the index plane's
    watermarks count as well as the journal's.
+
+   > **Note (2026-10, [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+   > The index plane's delta sequences, carried in a checkpoint or not;
+   > no checkpoint watermark is read.
 
 **What triggers the heal is the metadata plane, not the allocator.** The
 pass heals whenever the destination's journal head for this writer exceeds

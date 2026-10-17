@@ -189,6 +189,15 @@ proofs; one is much cheaper.
 > — this record's price, carried from blobs to deltas. A repository created
 > at 4 lists `index-generations`, and an older build refuses it by name.
 
+> **Amended 2026-10 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> The same record moves a set to format 5, the latest, which changes the
+> checkpoint. The upgraded set checkpoints from its next backup, and nothing
+> already published changes. A build older than format 5 opens such a
+> repository and reports each checkpoint as an index object it cannot read,
+> while still reading every delta at its key; it loses the speed and nothing
+> else. A repository created at 5 lists `delta-checkpoints`, and an older
+> build refuses it by name.
+
 ## Consequences
 
 **The stated price: an older build misdiagnoses.** A build predating format 3
@@ -264,5 +273,6 @@ both.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended) | The upgrade verb targets the latest format, 5 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)): an upgraded set checkpoints its deltas from its next backup, and an older build reads its checkpoints as damage and its deltas as before (`Hosts.Tests/FormatUpgradeTests`) |
 | 2026-10 | Accepted (amended) | The upgrade verb targets format 4 ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): an upgraded set stamps its next delta with an index generation, and its older deltas keep none (`Hosts.Tests/FormatUpgradeTests`). The service's notice and the verb's lines say the newer format begins with what the set writes next, rather than at its next blob |
 | 2026-09 | Accepted | Built over five commits: the creation default moved to the latest format the product writes; the record, its codec and the never-deletable refusal; the writer reading the effective version, with the recovery tool sharing the one decision; the verb, the agent verb and the console control at contract 1.36; and this record. The owner's installation stays format 2 by choice — both formats are supported and nothing pushes |

@@ -21,8 +21,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// </summary>
 /// <remarks>
 /// The threshold is set low through the service's options; the default is
-/// sixty-four deltas. Nothing here deletes a delta, so this class does not
-/// establish FR-MAN-017. Does not establish FR-DRL-001.
+/// sixty-four deltas. Nothing here deletes a delta.
+/// This class does not establish FR-MAN-017.
 /// </remarks>
 [TestClass]
 public sealed class IndexCheckpointServiceTests : IDisposable

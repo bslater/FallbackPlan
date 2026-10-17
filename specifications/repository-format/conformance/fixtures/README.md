@@ -33,7 +33,7 @@ its footer — the structure plane — opens under the metadata class key.
 
 **Provenance and the read contract.** The generator is
 `tests/FallbackPlan.Repository.ConformanceTests/FixtureRepositoryBuilder.cs`,
-which both fixtures drive with their own identity. There is **no
+which every fixture drives with its own identity. There is **no
 byte-identical regeneration**: sealing takes a fresh random content key and a
 fresh ephemeral X25519 share per blob, by design, so no two generations share
 bytes. What this committed copy freezes is the **read contract**, enforced by
@@ -84,6 +84,26 @@ index loads with no finding and every entry ranks at index generation 1, a
 catalogue rebuilt from it holds that as its highest, and the passphrase
 restores `fixture.bin` byte for byte. Regeneration is no more byte-identical
 than format 3's.
+
+## fixture-repository-v5
+
+The same six objects and the same deterministic `fixture.bin`, written at
+**format 5** ([ADR-0097](../../../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md))
+under the passphrase `fallbackplan-fixture-v5-passphrase`, plus a seventh: a
+checkpoint at sequence 7 (`index/checkpoint/…`) carrying the one delta's
+stored bytes at key 10, beside its identifier. Format 5 changes the
+checkpoint and nothing else, so the delta is format 4's, carrying index
+generation 1, and everything sealed is format 3's and stamped 3. The
+descriptor declares format 5 and lists `delta-checkpoints` beside
+`index-generations` and `relocatable-records` as **required** features.
+
+`FixtureRepositoryV5Tests` holds the read contract on these bytes: the
+descriptor names format 5 and its three features, every blob is stamped 3,
+the index loads with no finding from the checkpoint without fetching the
+delta at its key, the checkpoint carries nothing of its own, the same index
+loads from a copy with the delta gone from its key, and the passphrase
+restores `fixture.bin` byte for byte. Regeneration is no more
+byte-identical than format 3's.
 
 A format-1 fixture (`fixture-repository-v1`, with a key object and a
 byte-identical regeneration) and its committed recovery kit lived here while

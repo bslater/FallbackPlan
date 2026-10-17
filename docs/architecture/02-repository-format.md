@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.1–7.5, §7.7–7.9 · **Resolves:** [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on), [H1](../review/2026-08-architecture-review.md#h1--fixed-size-segmentation-is-under-argued-and-its-review-is-scheduled-after-the-point-of-no-return)
 
-**Built:** Yes, except the checkpoint half of §7. Nothing publishes a checkpoint or retires a delta, so the index is its deltas and a normal rebuild (§8.1) starts from none ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)). Between two writers, the writer id decides a relocation (§7.2, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)). Everything else is implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
+**Built:** Yes, except delta retirement and checkpoint compaction in §7. From format 5 a checkpoint carries the deltas it subsumes and a normal rebuild (§8.1) reads them from it; below format 5 none is published, and nothing retires a delta at any format ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0008 Amendment 2](../adr/0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six)). Between two writers, the writer id decides a relocation (§7.2, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)). Everything else is implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -209,6 +209,10 @@ Read path: catalogue → checkpoint + deltas → blob recovery footer. Fast in t
 > **As built (2026-10).** No checkpoint is published, so the middle step reads
 > the deltas alone, every one of them ([ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
 
+> **Amended 2026-10 ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).** A format-5 set's middle step reads
+> its checkpoints, each carrying deltas verbatim, and the deltas none carries.
+> A set below format 5 still reads every delta.
+
 ### 7.2 Deltas and checkpoints without a global listing
 
 The original design required checkpoint compaction to know the complete set of prior deltas, whose only discovery mechanism was listing — while simultaneously forbidding correctness dependence on listing freshness ([C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)). On an eventually consistent store, a compactor could silently omit a recent delta and every reader trusting the resulting checkpoint would lose the index entries for a set of blobs.
@@ -236,6 +240,14 @@ Five rules close it:
 > a rebuild judges it at eight. A gap in format-3 history is not aged by them.
 
 **3 — Checkpoints enumerate what they subsume.** A checkpoint lists the exact delta IDs it covers and the per-writer high-water sequence. A reader keeps applying any delta whose sequence exceeds the checkpoint's watermark for that writer, whether or not a listing revealed it.
+
+> **Amended 2026-10 ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0008 Amendment 2](../adr/0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six)).**
+> From format 5 a checkpoint lists the delta IDs it covers and carries each
+> delta's stored object beside its ID, and nothing else. A reader reads a
+> carried delta from the checkpoint, exactly as from its key, and applies a
+> delta no checkpoint carries whenever a listing returns it. No watermark is
+> acted on, so a delta a builder's listing missed cannot be hidden; the
+> enumeration is what the reader skips by.
 
 **4 — Retirement requires uncontested coverage.** A delta may be retired only when it is named by a checkpoint that no live checkpoint at or above its generation contradicts — in practice, when every retained checkpoint at that generation names it, or a later checkpoint supersedes them all. Retirement is a deletion and takes the same tombstone-and-grace treatment as any other. Retiring a delta on one checkpoint's authority while another live checkpoint omits it would strand its entries for any reader holding only the second.
 
@@ -268,6 +280,10 @@ Precedence is therefore explicit rather than emergent:
 > published above every entry it relocates, so it stands under either writer
 > id and is not declined. Format-3 history ranks at 0, as above.
 
+> **Amended 2026-10 ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).** A format-5 checkpoint has no
+> entries of its own to rank: every entry it carries is inside a delta and
+> ranks as that delta's. Two checkpoints carrying one delta apply it once.
+
 With precedence stated, merging is safe for the reason that actually holds: entries applied in any order converge on the same state, because the winner is a property of the entries themselves rather than of arrival sequence. See [ADR-0017](../adr/0017-index-entry-supersession.md).
 
 Listing remains a useful accelerator for finding a recent checkpoint quickly. It is no longer load-bearing for correctness.
@@ -293,6 +309,11 @@ Load the latest authenticated checkpoint, apply subsequent deltas per §7.2, val
 > **As built (2026-10).** There is no checkpoint to load, so the normal
 > rebuild applies every delta (`Repository.Catalogue/CatalogueRebuilder`,
 > [ADR-0008 Amendment 1](../adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).
+
+> **Amended 2026-10 ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).** For a format-5 set it loads every
+> checkpoint, applies the deltas they carry, and fetches only the deltas
+> none carries. The catalogue it builds is the one a rebuild from the deltas
+> alone builds. Below format 5 it still applies every delta.
 
 ### 8.2 Forensic rebuild
 

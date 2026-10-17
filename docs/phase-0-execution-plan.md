@@ -117,6 +117,11 @@ A · Foundations ──▶ B · Record path ──▶ C · Container ──▶ D
 > so the rebuild delivered, and the one `CatalogueRebuildTests` proves, is a
 > rebuild from deltas.
 
+> **Amended 2026-10 ([ADR-0097](adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> From format 5 a checkpoint exists to find: it carries the deltas it
+> subsumes, and a rebuild reads them from it. `CheckpointBundleTests` proves a
+> catalogue rebuilt through one locates what a rebuild from the deltas does.
+
 ### Wave F — Proof
 
 | # | Item | Requirements | Acceptance |
