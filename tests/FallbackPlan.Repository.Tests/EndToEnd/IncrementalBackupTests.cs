@@ -732,7 +732,7 @@ public sealed class IncrementalBackupTests : ArchiveTestHarness
         // in-process value: what a replicating participant checks is the
         // published object, and only the published object.
         var deltaBytes = await ReadObjectAsync(
-            store, MetadataStoreKeys.IndexDelta(0, published.DeltaId));
+            store, MetadataStoreKeys.IndexDelta(0, Assert.ContainsSingle(published.DeltaIds)));
 
         var record = StandaloneRecordFraming.Parse(deltaBytes);
         var metadataKey = keys.DeriveClassKey(BlobClass.Metadata, record.KeyGeneration);

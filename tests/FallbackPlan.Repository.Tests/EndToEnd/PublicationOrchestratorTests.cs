@@ -115,7 +115,7 @@ public sealed class PublicationOrchestratorTests : ArchiveTestHarness
         // Step 8: retirement is the LAST journal put, after the snapshot.
         Assert.IsTrue(FirstIndex("snapshots/") < LastIndex("journal/"), "retirement follows the snapshot");
 
-        Assert.AreNotEqual(default, published.DeltaId);
+        Assert.IsNotEmpty(published.DeltaIds);
     }
 
     [TestMethod]
