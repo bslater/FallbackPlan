@@ -152,6 +152,10 @@ that prompted this record regresses.
 > is at 1.1.0 on that rule, and the other five stay at 1.0.0. The verification
 > below is unchanged, and it gated that move too.
 
+> **Amended 2026-10 by [Amendment 4](#amendment-4-2026-10--the-six-rejoin-the-wave-at-130).**
+> All six are at 1.3.0, upstream's next lock-step release, and the
+> verification below gated that move as well.
+
 **The upgrade, and why the verification is the whole of it.** All six move
 together at one version, as they always have: upstream versions them in
 lock-step and a mixed set pairs assemblies never built or tested against each
@@ -186,6 +190,11 @@ dialect is **specified** ([ADR-0024](0024-include-exclude-rule-dialect.md),
 never the library.
 
 ## Amendment 3 (2026-09) — A package released alone is taken alone
+
+> **Amended 2026-10 by [Amendment 4](#amendment-4-2026-10--the-six-rejoin-the-wave-at-130).**
+> The six are at one version again, 1.3.0, so the exception below covers no
+> package today. The rule stands, and it is why `Bodu.Security.Cryptography`
+> 1.2.0 waited for that wave rather than being taken alone.
 
 Amendment 2's upgrade rule reads:
 
@@ -272,6 +281,71 @@ What it bought is measured in
   CPU;
 - the seven suites that derive keys finish in 40 % less time.
 
+## Amendment 4 (2026-10) — The six rejoin the wave at 1.3.0
+
+Upstream's next lock-step release is **1.3.0**, and all six packages this
+repository takes move to it. They are pinned at one version again.
+
+**What the wave folds in.** All six 1.3.0 packages come from one upstream
+commit, `613759c`, and each declares its Bodu dependencies at 1.3.0. The
+wave includes two releases made alone after Amendment 3:
+- `Bodu.Core` 1.0.1, a fix to `DaysInYear` and `DaysInMonth`, which nothing
+  here calls;
+- `Bodu.Security.Cryptography` 1.2.0, a speed release whose outputs are
+  unchanged.
+
+Neither was taken alone, and Amendment 3's rule is the reason. 1.2.0
+declares `Bodu.Core` 1.0.1, newer than the 1.0.0 then pinned here, so it
+waited for the wave. With all six at one version, the exception covers no
+package. The rule stands for the next package released alone.
+
+**What changed that this repository could meet.**
+- **One breaking change.** `WeekPattern` became `DayOfWeekSet`. Nothing here
+  names either, so the move needs no source change. The build passes with
+  warnings as errors.
+- **Cron accepts Quartz's day tokens** (`L`, `W`, `#` and `?`), which it
+  refused before. `Application/Schedule` builds its own five-field
+  expression from `daily at HH:mm` and never parses a person's text as cron.
+  So the schedules a person can write are unchanged.
+- **Argon2 divides a derivation among threads from 768 KiB per lane**, down
+  from 1 MiB. A repository's derivation is 64 MiB over four lanes, 16 MiB
+  each, so it was divided already and still is.
+- **1.2.0's speed work** brought three changes:
+  - a new ARM64 Argon2 kernel;
+  - X25519 and Ed25519 over a base-point table a fifth the size, with Ed25519
+    verifying over non-adjacent forms;
+  - portable BLAKE2 and scrypt kernels on ARM64.
+
+  Upstream holds each to byte-identical output. Here, each one this
+  repository uses sits beneath a committed vector file: `argon2id.json`,
+  `write-only.json` and `ed25519.json`.
+
+**The verification is Amendment 2's, and it passed unchanged.**
+- The conformance suite holds the vectors, the cross-verification against
+  Konscious, and the three frozen fixtures (v2, v3 and v4). It passed with
+  each Argon2 kernel an x64 machine can select:
+  - AVX2;
+  - the 128-bit kernel, under `DOTNET_EnableAVX2=0`;
+  - the scalar one, under `DOTNET_EnableHWIntrinsic=0`.
+- The full suite was green in the default culture and under tr-TR, with the
+  same counts as before the move.
+- `eng/recovery-drill.sh` recovered eleven files byte-identical from the
+  passphrase alone on the Release binaries. The rebuilt machine then resumed
+  both sets incrementally.
+
+The machine that ran these is x64, so none of them reached the new ARM64
+Argon2 kernel. CI's macOS job runs the same conformance suite on GitHub's
+`macos-latest` image, which is Apple silicon.
+
+One derivation at the repository's parameters costs what it did under
+1.1.0. It was measured with
+[the requirements document's harness](../bodu-argon2-requirements.md#appendix-how-the-numbers-were-measured),
+three rounds in alternating order on one machine:
+- 1.1.0 took 59 to 64 ms and 157 to 166 ms of CPU;
+- 1.3.0 took 61 to 65 ms and 154 to 170 ms of CPU.
+
+Both produced the same tag. 1.2.0's x64 speed work is outside Argon2.
+
 ## Status history
 
 | Date | Status | Note |
@@ -280,3 +354,4 @@ What it bought is measured in
 | 2026-08 | Accepted (amended) | Amendment 1: `Bodu.Core` becomes the solution-wide guard-clause vocabulary; its containment canary is replaced by a rule on the recovery tool's closure |
 | 2026-09 | Accepted (amended) | Amendment 2: upstream published to nuget.org, so the committed feed is deleted and all six packages come from nuget.org at 0.7.0 — the migration this record's own last alternative forecast as "a source-mapping change". The `Bodu.*` source mapping survives, pointing at nuget.org |
 | 2026-09 | Accepted (amended) | Amendment 3: upstream released `Bodu.Security.Cryptography` 1.1.0 alone, and it is taken alone because its one declared dependency, `Bodu.Core` 1.0.0, is the version pinned here. The other five stay at 1.0.0. Amendment 2's verification gated the move and passed unchanged |
+| 2026-10 | Accepted (amended) | Amendment 4: all six packages move to upstream's lock-step 1.3.0, which folds in `Bodu.Core` 1.0.1 and `Bodu.Security.Cryptography` 1.2.0. 1.2.0 had waited for this wave under Amendment 3's rule, because it declares `Bodu.Core` 1.0.1. No source change was needed, and Amendment 2's verification passed unchanged |

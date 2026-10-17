@@ -169,8 +169,8 @@
       "fallbackplan.domain": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
-          "Bodu.Text.Encoding": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
+          "Bodu.Text.Encoding": "[1.3.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )"
         }
       },
@@ -185,7 +185,7 @@
       "fallbackplan.filesystem.local": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Filesystem": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )"
         }
@@ -193,7 +193,7 @@
       "fallbackplan.repository.catalogue": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Index": "[1.0.0, )",
           "FallbackPlan.Storage.Abstractions": "[1.0.0, )",
@@ -204,8 +204,8 @@
       "fallbackplan.repository.crypto": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
-          "Bodu.Security.Cryptography": "[1.1.0, )",
+          "Bodu.Core": "[1.3.0, )",
+          "Bodu.Security.Cryptography": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )"
         }
@@ -213,7 +213,7 @@
       "fallbackplan.repository.format": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )",
           "System.Formats.Cbor": "[10.0.10, )",
@@ -223,7 +223,7 @@
       "fallbackplan.repository.index": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -235,7 +235,7 @@
       "fallbackplan.repository.packing": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "FallbackPlan.Repository.Crypto": "[1.0.0, )",
           "FallbackPlan.Repository.Format": "[1.0.0, )",
@@ -246,7 +246,7 @@
       "fallbackplan.storage.abstractions": {
         "type": "Project",
         "dependencies": {
-          "Bodu.Core": "[1.0.0, )",
+          "Bodu.Core": "[1.3.0, )",
           "FallbackPlan.Domain": "[1.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.12, )"
         }
@@ -265,26 +265,26 @@
       },
       "Bodu.Core": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0, )",
-        "resolved": "1.0.0",
-        "contentHash": "3O189QLbaDEiA5UN0ATfKugtalS3g8CTbjEjsPdPNv9AHz1VSX28WEippwqSLd2k14ELfHSSJTu/zIurB42WlQ=="
+        "requested": "[1.3.0, )",
+        "resolved": "1.3.0",
+        "contentHash": "3ZaV/v/E9L3WFTG0U8ZjT+1vN5624rPI/jQTu4eRDJ2FsEkA2HK3nQ+vKKVfQB0zZW69twWP29jk0IYLgjNYNw=="
       },
       "Bodu.Security.Cryptography": {
         "type": "CentralTransitive",
-        "requested": "[1.1.0, )",
-        "resolved": "1.1.0",
-        "contentHash": "qiCCdHN9sU+MlYG1Av0LvYcM3CIjBXw+eM3LFBLTbkoQCGCqrXxXu1okEYgbTl8AtgvjgLYh889zdgWlJ/QlwQ==",
+        "requested": "[1.3.0, )",
+        "resolved": "1.3.0",
+        "contentHash": "/OzfDt5kXGKQel3mA+p2bU167WCNZw6Sl0tdt47CgnREUUkkrs9IRNQnboh8k0CtfpeueGeBaugk8AHl99xJkw==",
         "dependencies": {
-          "Bodu.Core": "1.0.0"
+          "Bodu.Core": "1.3.0"
         }
       },
       "Bodu.Text.Encoding": {
         "type": "CentralTransitive",
-        "requested": "[1.0.0, )",
-        "resolved": "1.0.0",
-        "contentHash": "428j1DCm/iFZDtkA4FZv+VO+IxYIxCn4NolmFQUms4CqOtuIDT0YS7wM0DTTxfa/oNyBLhr9AcaF2QCC54CyJQ==",
+        "requested": "[1.3.0, )",
+        "resolved": "1.3.0",
+        "contentHash": "JMHtor0/7m/EjxGh+GN9duxk7mCbGU/dWYhQZ5F8hM68IpPB4i3casbiCZ6CYwiUBoRtLCK2hCIy2+wu6vsrWw==",
         "dependencies": {
-          "Bodu.Core": "1.0.0"
+          "Bodu.Core": "1.3.0"
         }
       },
       "Microsoft.Data.Sqlite": {
