@@ -480,6 +480,27 @@ the derivations, takes 48 % less, and Cli.Tests takes less than a third of
 its time. The suites whose time is mostly not Argon2id gain least:
 Repository.Tests takes 8 to 10 % less.
 
+### 1.3.0, the next wave
+
+All six packages moved to the lock-step 1.3.0 on 2026-10-17
+([ADR-0021 Amendment 4](adr/0021-consume-bodu-via-committed-package-feed.md#amendment-4-2026-10--the-six-rejoin-the-wave-at-130)).
+It folds in 1.2.0, which brought two changes to Argon2:
+- **A new ARM64 kernel.** On an Apple M1, upstream measured it at 1.3 to 1.6
+  times the speed of the AdvSimd kernel it replaces. No machine here is
+  ARM64, so ARG-N-008 for it rests on CI's macOS job, which runs the
+  committed vectors on Apple silicon.
+- **Threads from 768 KiB per lane**, down from 1 MiB. FallbackPlan's
+  derivations are 16 MiB per lane, so they were divided among threads
+  before and still are.
+
+On x64, one derivation costs what it did under 1.1.0. The appendix's
+harness ran three rounds in alternating order, on the same kind of machine
+as the 1.1.0 section (a 4-vCPU Xeon at 2.8 GHz with AVX-512), on .NET 10.0.13:
+- 1.1.0 took 59 to 64 ms and 157 to 166 ms of CPU;
+- 1.3.0 took 61 to 65 ms and 154 to 170 ms of CPU.
+
+Both produced the same tag.
+
 ## Appendix: how the numbers were measured
 
 A console application on .NET 10.0.12 referencing the published

@@ -15,16 +15,16 @@
          against each other. The one exception is a package upstream
          releases alone. It is taken alone when every dependency its package
          declares is at the version pinned here, so no assembly meets a
-         version it was not built against (Amendment 3).
-         Bodu.Security.Cryptography 1.1.0 is that case: its one dependency
-         is Bodu.Core 1.0.0, and no other Bodu package here depends on it.
+         version it was not built against (Amendment 3). One that declares
+         a newer Bodu dependency waits for the next wave, as
+         Bodu.Security.Cryptography 1.2.0 waited for 1.3.0 (Amendment 4).
          Argon2id and base32 sit beneath the committed conformance fixtures,
          so an upgrade that changes either surfaces as a fixture diff rather
          than as a test that merely still compiles (NFR-COMP-004). -->
-    <PackageVersion Include="Bodu.Core" Version="1.0.0" />
-    <PackageVersion Include="Bodu.Security.Cryptography" Version="1.1.0" />
-    <PackageVersion Include="Bodu.Text.Encoding" Version="1.0.0" />
-    <PackageVersion Include="Bodu.Globalization.Recurrence" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Core" Version="1.3.0" />
+    <PackageVersion Include="Bodu.Security.Cryptography" Version="1.3.0" />
+    <PackageVersion Include="Bodu.Text.Encoding" Version="1.3.0" />
+    <PackageVersion Include="Bodu.Globalization.Recurrence" Version="1.3.0" />
     <!-- The diagnostics ring buffer (ADR-0043 §6): a lock-free Vyukov MPMC
          ConcurrentCircularBuffer<T> with drop-oldest eviction, which is the
          data structure the client log feed needs and one this repository has
@@ -32,8 +32,8 @@
          only by FallbackPlan.Diagnostics, which the Agent and CLI reference —
          never Repository.Format, so never the recovery tool's closure. MIT.
          Bodu.Collections is its declared dependency, not a direct use. -->
-    <PackageVersion Include="Bodu.Collections.Concurrent" Version="1.0.0" />
-    <PackageVersion Include="Bodu.Collections" Version="1.0.0" />
+    <PackageVersion Include="Bodu.Collections.Concurrent" Version="1.3.0" />
+    <PackageVersion Include="Bodu.Collections" Version="1.3.0" />
   </ItemGroup>
   <ItemGroup Label="Logging">
     <!-- The abstraction only, in every shipped assembly: ILogger, NullLogger and
