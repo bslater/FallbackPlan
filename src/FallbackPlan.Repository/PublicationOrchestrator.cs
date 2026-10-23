@@ -100,7 +100,7 @@ public sealed record PublishedSnapshot(
     ObjectId FileVersionObjectId,
     ObjectId RootTreeObjectId,
     ObjectId PolicyObjectId,
-    DeltaId DeltaId,
+    IReadOnlyList<DeltaId> DeltaIds,
     ulong IntentSequence,
     ArchiveResult Archive,
     IReadOnlyList<ArchivedBlob> MetadataBlobs);
@@ -213,6 +213,17 @@ public sealed partial class PublicationOrchestrator
         _progress = progress;
         _logger = logger ?? NullLogger.Instance;
     }
+
+    /// <summary>
+    /// The most one of this publication's deltas may hold, encoded
+    /// (<see cref="IndexDeltaBudget"/>; FR-MAN-008). A publication whose
+    /// entries exceed it publishes several deltas, cut at blob boundaries.
+    /// </summary>
+    /// <remarks>
+    /// Set lower only by a test that needs a cut without the quarter of a
+    /// million records the default takes to reach.
+    /// </remarks>
+    public int DeltaByteBudget { get; init; } = IndexDeltaBudget.Default;
 
     /// <summary>Runs one publication end to end.</summary>
     public async ValueTask<PublishedSnapshot> PublishAsync(BackupJob job, CancellationToken cancellationToken)
@@ -386,40 +397,8 @@ public sealed partial class PublicationOrchestrator
 
             // Step 6: index deltas referencing the now-durable blobs —
             // entries projected from the sealed record tables (07 §10).
-            var entries = new List<IndexEntry>();
-            var covered = new List<BlobId>();
-            var digests = new List<ReadOnlyMemory<byte>>();
-
-            // The Merkle commitment beside the flat digest, at format 3 and
-            // above only (07 §2.3): a reader that predates key 11 refuses a
-            // delta carrying it, and such a reader is entitled to read a
-            // format-2 repository.
-            var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
-            var merkleRoots = new List<ReadOnlyMemory<byte>>();
-            foreach (var blob in archive.Blobs.Concat(builder.Blobs))
-            {
-                covered.Add(blob.BlobId);
-                digests.Add(blob.Digest.ToArray());
-                if (publishRoots)
-                {
-                    merkleRoots.Add(blob.MerkleRoot.ToArray());
-                }
-
-                foreach (var record in blob.RecordTable)
-                {
-                    entries.Add(new IndexEntry(
-                        record.ObjectId,
-                        blob.BlobId,
-                        record.PhysicalOffset,
-                        record.StoredLength,
-                        record.CompressionProfileValue,
-                        record.EncryptionProfileValue,
-                        IndexEntryType.Insertion));
-                }
-            }
-
-            var (deltaId, _) = await indexPublisher.PublishDeltaDetailedAsync(
-                _generation.Value, covered, entries, digests, merkleRoots, cancellationToken).ConfigureAwait(false);
+            var deltas = await PublishIndexDeltasAsync(
+                indexPublisher, archive.Blobs.Concat(builder.Blobs), cancellationToken).ConfigureAwait(false);
             _observer?.AfterStep(PublicationStep.PublishIndexDeltas);
             RecordStep(PublicationStep.PublishIndexDeltas, snapshotForLog);
 
@@ -459,7 +438,54 @@ public sealed partial class PublicationOrchestrator
                 archive.Blobs.Count);
 
             return new PublishedSnapshot(
-                snapshotObjectId, fileVersionId, rootTreeId, policyId, deltaId, intentSequence, archive, builder.Blobs);
+                snapshotObjectId, fileVersionId, rootTreeId, policyId, [.. deltas.Select(delta => delta.DeltaId)],
+                intentSequence, archive, builder.Blobs);
         }
+    }
+
+    /// <summary>
+    /// Step 6: every record of every blob the publication wrote, as entries
+    /// cut into deltas at blob boundaries under <see cref="DeltaByteBudget"/>
+    /// and published in that order (07 §2; FR-MAN-008).
+    /// </summary>
+    /// <remarks>
+    /// The Merkle commitment over the same bytes as the flat digest is the one
+    /// a peer can be challenged under without the blob crossing the wire. It
+    /// rides beside the digest at format 3 and above only (07 §2.3): a reader
+    /// that predates key 11 refuses a delta carrying it, and such a reader is
+    /// entitled to read a format-2 repository.
+    /// </remarks>
+    private async ValueTask<IReadOnlyList<(DeltaId DeltaId, IndexDelta Delta)>> PublishIndexDeltasAsync(
+        IndexPublisher indexPublisher, IEnumerable<ArchivedBlob> blobs, CancellationToken cancellationToken)
+    {
+        var publishRoots = FormatVersions.HasRelocatableRecords(_repositoryFormatVersion);
+        var covered = blobs
+            .Select(blob => new CoveredBlob(
+                blob.BlobId,
+                blob.Digest.ToArray(),
+                publishRoots ? (ReadOnlyMemory<byte>?)blob.MerkleRoot.ToArray() : null,
+                [.. blob.RecordTable.Select(record => new IndexEntry(
+                    record.ObjectId,
+                    blob.BlobId,
+                    record.PhysicalOffset,
+                    record.StoredLength,
+                    record.CompressionProfileValue,
+                    record.EncryptionProfileValue,
+                    IndexEntryType.Insertion))]))
+            .ToList();
+
+        var published = new List<(DeltaId DeltaId, IndexDelta Delta)>();
+        foreach (var part in IndexDeltaBudget.Split(covered, DeltaByteBudget))
+        {
+            published.Add(await indexPublisher.PublishDeltaDetailedAsync(
+                _generation.Value,
+                part.CoveredBlobIds,
+                part.Entries,
+                part.CoveredBlobDigests,
+                part.CoveredBlobMerkleRoots,
+                cancellationToken).ConfigureAwait(false));
+        }
+
+        return published;
     }
 }

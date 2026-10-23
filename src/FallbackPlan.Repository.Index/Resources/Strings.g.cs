@@ -203,6 +203,17 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, IndexPublisher_StoreRefusedIndexObjectWith, arg0);
 
     /// <summary>
+    /// Index object '{0}' would be {1} bytes, over the 16 MiB a metadata object may be (specification 00 §8). Every reader refuses such an object before reading it, so it is not written.
+    /// </summary>
+    private static string IndexPublisher_IndexObjectOverMetadataLimit => Get(nameof(IndexPublisher_IndexObjectOverMetadataLimit));
+
+    /// <summary>
+    /// Index object '{0}' would be {1} bytes, over the 16 MiB a metadata object may be (specification 00 §8). Every reader refuses such an object before reading it, so it is not written.
+    /// </summary>
+    internal static string FormatIndexPublisher_IndexObjectOverMetadataLimit(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, IndexPublisher_IndexObjectOverMetadataLimit, arg0, arg1);
+
+    /// <summary>
     /// The store refused journal record {0} with a failed precondition.
     /// </summary>
     private static string JournalPublisher_StoreRefusedJournalRecordWith => Get(nameof(JournalPublisher_StoreRefusedJournalRecordWith));

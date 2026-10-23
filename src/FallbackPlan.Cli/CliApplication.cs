@@ -620,7 +620,11 @@ public static class CliApplication
                 output.WriteLine($"snapshot object   {Hex(published.SnapshotObjectId.ToArray())}");
                 output.WriteLine($"file version      {Hex(published.FileVersionObjectId.ToArray())}");
                 output.WriteLine($"root tree         {Hex(published.RootTreeObjectId.ToArray())}");
-                output.WriteLine($"index delta       {published.DeltaId.ToBase32()}");
+                foreach (var deltaId in published.DeltaIds)
+                {
+                    output.WriteLine($"index delta       {deltaId.ToBase32()}");
+                }
+
                 output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                     $"segments          {published.Archive.SegmentReferences.Count} ({published.Archive.LogicalLength} bytes) in {published.Archive.Blobs.Count} data blob(s)"));
                 return 0;

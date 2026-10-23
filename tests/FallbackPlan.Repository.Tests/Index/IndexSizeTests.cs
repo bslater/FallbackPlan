@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Crypto;
 using FallbackPlan.Repository.Index;
 using FallbackPlan.Repository.Packing;
-using FallbackPlan.Storage.Local;
 using FallbackPlan.TestSupport;
 
 namespace FallbackPlan.Repository.Tests.Index;
@@ -43,13 +43,14 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// What this measures is a checkpoint's encoding, not a repository's index.
 /// Nothing in the product publishes a checkpoint, so a repository's index is
 /// its deltas (ADR-0008 Amendment 1). And the larger checkpoint here, about
-/// 38 MB, is over the 16 MiB a standalone record may be: it is put, measured
-/// and never read, because no reader would accept it. A checkpoint a reader
-/// accepts holds about 210 000 objects.
+/// 38 MB, is over the 16 MiB a standalone record may be. The publisher
+/// refuses to put one (FR-MAN-008), so each checkpoint is signed and sealed
+/// in memory, exactly as the publisher would seal it, and measured there. A
+/// checkpoint a reader accepts holds about 210 000 objects.
 /// </para>
 /// </remarks>
 [TestClass]
-public sealed class IndexSizeTests : IDisposable
+public sealed class IndexSizeTests
 {
     private const int BytesPerObjectBound = 80;
 
@@ -58,9 +59,6 @@ public sealed class IndexSizeTests : IDisposable
 
     private static readonly WriterId Writer =
         WriterId.FromBytes(Convert.FromHexString("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"));
-
-    private readonly string _root =
-        Path.Combine(Path.GetTempPath(), "fbp-index-size-tests", Guid.NewGuid().ToString("n"));
 
     /// <summary>
     /// One entry per distinct object, keyed on a hash of the ordinal so the
@@ -86,13 +84,13 @@ public sealed class IndexSizeTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Checkpoint_AtScale_CostsNoMoreThanEightyStoredBytesPerDistinctObject()
+    public void Checkpoint_AtScale_CostsNoMoreThanEightyStoredBytesPerDistinctObject()
     {
         const int smaller = 131_072;
         const int larger = 524_288;
 
-        var small = await MeasureCheckpointAsync(smaller, generation: 1);
-        var large = await MeasureCheckpointAsync(larger, generation: 2);
+        var small = MeasureCheckpoint(smaller, generation: 1);
+        var large = MeasureCheckpoint(larger, generation: 2);
 
         // The marginal cost: what one more distinct object adds, with the
         // fixed shard table cancelling out of both sides.
@@ -107,13 +105,9 @@ public sealed class IndexSizeTests : IDisposable
         Assert.IsTrue(total <= BytesPerObjectBound, $"The whole index is over the bound at scale. {detail}");
     }
 
-    private async Task<long> MeasureCheckpointAsync(int objects, ulong generation)
+    private static long MeasureCheckpoint(int objects, ulong generation)
     {
-        var label = objects.ToString(CultureInfo.InvariantCulture);
-        var store = new LocalFileSystemObjectStore(Path.Combine(_root, "store", label));
         using var credential = TestAuthority.Shared.Credential.Clone();
-        var sequence = new WriterSequence(
-            new FileSequenceStateStore(Path.Combine(_root, "state", label, "sequence.txt")));
 
         var entries = new List<IndexEntry>(objects);
         for (var ordinal = 0; ordinal < objects; ordinal++)
@@ -125,32 +119,34 @@ public sealed class IndexSizeTests : IDisposable
         // assumed — a generator that collided would flatter the result.
         Assert.AreEqual(objects, entries.Select(entry => entry.ObjectId).Distinct().Count());
 
-        CheckpointId checkpointId;
-        using (var publisher = new IndexPublisher(store, Repo, Writer, credential, sequence))
+        var (shardSet, hashes) = ShardHashes.Compute(entries);
+        var checkpoint = new Checkpoint
         {
-            var delta = await publisher.PublishDeltaAsync(generation, [], entries, CancellationToken.None);
-            checkpointId = await publisher.PublishCheckpointAsync(
-                generation,
-                subsumedDeltaIds: [delta],
-                writerWatermarks: [new WriterWatermark(Writer, 1)],
-                entries: entries,
-                predecessor: null,
-                CancellationToken.None);
+            Generation = generation,
+            SubsumedDeltaIds = [DeltaId.NewRandom()],
+            WriterWatermarks = [new WriterWatermark(Writer, 1)],
+            ShardSet = shardSet,
+            ShardHashesList = [.. hashes.Select(hash => (ReadOnlyMemory<byte>)hash)],
+            Entries = entries,
+            WriterId = Writer,
+        };
+
+        // Signed, encoded and sealed as the publisher seals it, so what is
+        // measured is what a store would hold: framing, header and tag
+        // included.
+        var keyGeneration = new KeyGeneration((uint)generation);
+        using var signer = RepositorySigner.Create(credential, keyGeneration);
+        var encoded = CheckpointCodec.Encode(checkpoint, signer.Sign(CheckpointCodec.EncodeForSigning(checkpoint)));
+        var metadataKey = credential.DeriveMetadataKey(keyGeneration);
+        try
+        {
+            return StandaloneRecordCipher.Seal(
+                Repo, metadataKey, keyGeneration, Writer, counter: 2, ObjectType.IndexCheckpoint,
+                ObjectId.FromBytes(SHA256.HashData(encoded)), encoded).Length;
         }
-
-        var metadata = await store.GetMetadataAsync(
-            MetadataStoreKeys.IndexCheckpoint(generation, checkpointId), CancellationToken.None);
-
-        Assert.IsTrue(metadata.Found);
-        return metadata.Metadata!.Length;
-    }
-
-    /// <inheritdoc />
-    public void Dispose()
-    {
-        if (Directory.Exists(_root))
+        finally
         {
-            Directory.Delete(_root, recursive: true);
+            CryptographicOperations.ZeroMemory(metadataKey);
         }
     }
 }

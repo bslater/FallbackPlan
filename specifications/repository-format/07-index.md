@@ -38,6 +38,16 @@ The signature covers every key except itself, stated that way rather than as a n
 
 Key 4 names the key generation the delta is signed and sealed under, and from format 4 it names nothing else: an entry ranks by key 12 (§3).
 
+A delta's stored form is a metadata object, bounded by [00 §8](00-conventions.md#8-lengths-and-limits), and a reader refuses one over that bound before reading it. **A writer MUST NOT publish a delta over the bound.** A writer whose entries would not fit one delta publishes several, each covering whole blobs: every blob is covered by exactly one of them, and that delta carries the blob's digest, its root and every entry that locates a record in it. Nothing else about a delta changes when there are several; each is signed, sequenced and chained as §4 describes.
+
+> **Erratum (2026-10).** This implementation published one delta per backup
+> until then, so a backup that wrote more than about 245 000 records
+> published a delta over the bound, which every reader refused. Such a
+> delta cannot be read by anything, and the locations it held are recovered
+> from the blobs' recovery footers (§10). Publications now cut their
+> entries at blob boundaries, and the publisher refuses any index object
+> over the bound rather than write it (FR-MAN-008).
+
 > **Erratum (phase 0).** Three resolutions pending normative edits, all per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): (1) "encrypted as a metadata record" is under-specified for an object outside a blob — the `FBPKSREC` standalone framing (Decision 1) supplies the encryption context, with object type `0x08`; (2) `<delta-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); (3) key 5 `shard` is **optional** — present only when every entry falls in that one shard, absent otherwise (Decision 4), since §8 permits multi-shard deltas that a scalar cannot describe.
 
 ### 2.1 Index entry

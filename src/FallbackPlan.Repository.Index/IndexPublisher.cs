@@ -247,6 +247,15 @@ public sealed class IndexPublisher : IDisposable
         ObjectKey key,
         CancellationToken cancellationToken)
     {
+        // The framing refuses a stored length over the limit at read, so an
+        // object past it would be put, look published, and fail the first
+        // load that needed it. The number already drawn stays outstanding and
+        // is voided as any failed publication's is.
+        if (encoded.Length > FormatLimits.MaxMetadataObjectSize)
+        {
+            throw new IndexFormatException(Strings.FormatIndexPublisher_IndexObjectOverMetadataLimit(key, encoded.Length));
+        }
+
         var keyGeneration = ToKeyGeneration(generation);
         var objectId = _objectIdDeriver.Derive(objectType, ContentHasher.Hash(encoded));
         var metadataKey = _credential.DeriveMetadataKey(keyGeneration);
