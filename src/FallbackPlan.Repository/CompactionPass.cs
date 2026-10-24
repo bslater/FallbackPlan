@@ -125,6 +125,7 @@ public static class CompactionPass
     /// <param name="deltaByteBudget">Overrides the delta size budget; tests only.</param>
     /// <returns>What the pass did.</returns>
     /// <exception cref="InvalidOperationException">The repository is below format 3, where relocation is impossible.</exception>
+    /// <exception cref="NewerFormatException">The repository is at a format newer than this build writes.</exception>
     public static async ValueTask<CompactionOutcome> RunAsync(
         IReadOnlyList<CompactionSource> candidates,
         OpenedRepository repository,
@@ -149,6 +150,10 @@ public static class CompactionPass
         ThrowHelper.ThrowIfNull(destination);
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNull(catalogue);
+
+        // Before the empty pass returns, so the refusal is the repository's
+        // and never depends on what the plan offered (specification 11 §5.3).
+        NewerFormatException.ThrowIfNewer(repository.EffectiveFormatVersion);
 
         if (!FormatVersions.HasRelocatableRecords(repository.EffectiveFormatVersion))
         {

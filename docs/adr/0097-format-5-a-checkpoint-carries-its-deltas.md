@@ -126,8 +126,14 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 - **Stop listing every delta.** A load lists the delta prefix whole, as before.
 - **Refuse to write above the newest format this build knows.** As at format 4, an upgrade record naming a version above 5 sets the effective version above it, and this build would still write format 5's objects. That is owed.
 
+> **Amended 2026-10 ([ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements)).** The refusal is built. A build writes
+> only a repository whose effective version it implements; one upgraded past
+> it is read and copied, and nothing is authored in it or converged away on
+> this build's reading of it.
+
 ## Status history
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-10 | Accepted; built (amended) | The refusal to write above the newest format this build knows, owed here, is built by [ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): at a newer effective version a publication, compaction, retention apply, deletion request and upgrade record are refused naming both versions, and a destination is given a whole copy (`Repository/NewerFormatException`, `Hosts.Tests/NewerFormatServiceTests`) |
 | 2026-10 | Accepted; built | Key 10 is written by every format-5 checkpointer and read by every reader; a load reads each carried delta from its checkpoint and fetches only the rest; no watermark and no checkpoint entry is acted on; the service checkpoints a format-5 set after a committed backup once 64 deltas are uncovered; a repository is born at 5 and lists `0x0005`. Recorded in [ADR-0008 Amendment 2](0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six) |

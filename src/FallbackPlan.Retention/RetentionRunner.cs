@@ -97,6 +97,7 @@ public static class RetentionRunner
     /// every blob past the threshold.
     /// </param>
     /// <returns>The report.</returns>
+    /// <exception cref="NewerFormatException">An apply in a repository at a format newer than this build writes.</exception>
     public static async ValueTask<RetentionReport> RunAsync(
         IObjectStore store,
         OpenedRepository repository,
@@ -128,6 +129,14 @@ public static class RetentionRunner
         ThrowHelper.ThrowIfNull(syncRecordFor);
         ThrowHelper.ThrowIfNull(trimVerificationFor);
         ArgumentOutOfRangeException.ThrowIfLessThan(margin, TimeSpan.Zero, nameof(clockSkewMargin));
+
+        // What is live is read off an index whose newest format this build
+        // has never seen, so it condemns nothing on that reading; a dry run
+        // writes nothing and still reports (specification 11 §5.3).
+        if (apply)
+        {
+            NewerFormatException.ThrowIfNewer(repository.EffectiveFormatVersion);
+        }
 
         // The journal before the snapshots (11 §3.2 step 3): the grace clock
         // and the live intents are read first, and the snapshot set every

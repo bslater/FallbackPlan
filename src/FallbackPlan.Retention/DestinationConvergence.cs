@@ -38,6 +38,14 @@ public enum ConvergenceRefusal
     /// is ([ADR-0012](../../docs/adr/0012-storage-provider-contract.md)).
     /// </summary>
     LaggingListing = 2,
+
+    /// <summary>
+    /// The repository is at a format newer than this build writes, and which
+    /// objects are live is read off an index in that format: a keep-set built
+    /// from this build's reading of it is not one to delete on (specification
+    /// 11 §5.3).
+    /// </summary>
+    NewerFormat = 3,
 }
 
 /// <summary>
@@ -106,6 +114,11 @@ public static class DestinationConvergence
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(repository);
         ThrowHelper.ThrowIfNull(policy);
+
+        if (!repository.WritableByThisBuild)
+        {
+            return ConvergencePlan.Refused(ConvergenceRefusal.NewerFormat);
+        }
 
         var survey = await StagingMark.SurveyAsync(store, repository, cancellationToken).ConfigureAwait(false);
         if (survey.Undecodable.Count > 0)

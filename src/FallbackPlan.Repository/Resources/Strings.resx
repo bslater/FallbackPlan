@@ -112,6 +112,12 @@
   <data name="RepositoryLifecycle_UpgradeBelowEffectiveVersion" xml:space="preserve">
     <value>Format version {0} is not above this repository's effective version, {1}; an upgrade moves forward.</value>
   </data>
+  <data name="RepositoryLifecycle_UpgradeAboveThisBuild" xml:space="preserve">
+    <value>An upgrade to format {0} is refused: it is newer than format {1}, the newest this build writes, and a build records an upgrade only to a format it implements.</value>
+  </data>
+  <data name="NewerFormat_NotWritten" xml:space="preserve">
+    <value>This repository is at format {0}, newer than format {1}, the newest this build writes. This build still reads it but writes nothing to it; back it up, collect it or delete from it with a build that writes format {0} (ADR-0066 Amendment 1).</value>
+  </data>
   <data name="BlobCompactor_CompactionNeedsFormatThree" xml:space="preserve">
     <value>Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).</value>
   </data>

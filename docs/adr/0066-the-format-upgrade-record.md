@@ -2,10 +2,10 @@
 
 **Status:** Accepted
 **Date:** 2026-09
-**Requirements:** FR-MAN-019, FR-WOR-001, FR-SVC-015, NFR-COMP-004, NFR-SEC-003
+**Requirements:** FR-MAN-019, FR-WOR-001, FR-SVC-015, NFR-COMP-003, NFR-COMP-004, NFR-SEC-003
 **Related:** [ADR-0052](0052-relocatable-records-format-v3.md), [ADR-0014](0014-format-versioning-and-stability.md), [ADR-0055](0055-reclaim-authority.md), [ADR-0046](0046-direct-to-destination-publication.md), [ADR-0061](0061-adopt-a-destinations-archives.md), [ADR-0065](0065-merkle-commitment-and-chunk-possession.md), [repository-format 11 §5](../../specifications/repository-format/11-lifecycle-objects.md#5-format-upgrade-record), [command-contract 1.36](../../specifications/command-contract/README.md)
 
-**Built:** `Repository.Format/Lifecycle/FormatUpgradeRecord.cs` (the record, its canonical encoding, the bytes that are signed, and `EffectiveVersion` — the pure decision every reader shares), `Repository/RepositoryLifecycle` (`ReadEffectiveFormatAsync` on every open path, `WriteFormatUpgradeAsync`, and `OpenedRepository.EffectiveFormatVersion`, fixed at open), `Domain/FormatLimits` (the creation default at the latest version this build writes), `Agent/ServiceRuntime` (`ArchiveFormatVersion` as the service's creation version, `SetStorePath`, `UpgradeSetFormatAsync` — the write and the eviction in one method — and the `format-upgradable` notice raised at archive open), `Agent/ServiceCommandHandler.Configuration.cs` (the verb and its refusals), `Agent/ReplicationResponder` (the record on the never-deletable list), `Agent/BackupRunner`, `Cli/OperationGateway` and `Cli/CliApplication` (the publication paths reading the effective version), `Recovery/RecoverySession` and `Recovery/RecoveryHost` (the recovery tool's own listing, and `format 3 (created at 2)`), `Agent/AgentHost` (`upgrade-format`), `Api/Commands.cs` and `Api/ContractVersion.cs` (contract 1.36), the console's notice control; `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Repository.Tests/EndToEnd/WriteOnlyRepositoryTests`, `Hosts.Tests/FormatUpgradeTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DirectShipPeerTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`.
+**Built:** `Repository.Format/Lifecycle/FormatUpgradeRecord.cs` (the record, its canonical encoding, the bytes that are signed, and `EffectiveVersion` — the pure decision every reader shares), `Repository/RepositoryLifecycle` (`ReadEffectiveFormatAsync` on every open path, `WriteFormatUpgradeAsync`, and `OpenedRepository.EffectiveFormatVersion`, fixed at open), `Domain/FormatLimits` (the creation default at the latest version this build writes), `Agent/ServiceRuntime` (`ArchiveFormatVersion` as the service's creation version, `SetStorePath`, `UpgradeSetFormatAsync` — the write and the eviction in one method — and the `format-upgradable` notice raised at archive open), `Agent/ServiceCommandHandler.Configuration.cs` (the verb and its refusals), `Agent/ReplicationResponder` (the record on the never-deletable list), `Agent/BackupRunner`, `Cli/OperationGateway` and `Cli/CliApplication` (the publication paths reading the effective version), `Recovery/RecoverySession` and `Recovery/RecoveryHost` (the recovery tool's own listing, and `format 3 (created at 2)`), `Agent/AgentHost` (`upgrade-format`), `Api/Commands.cs` and `Api/ContractVersion.cs` (contract 1.36), the console's notice control; and, from Amendment 1, `Repository/NewerFormatException` and `Domain/FormatVersions` (`IsWritable`), checked by `Repository/PublicationOrchestrator`, `Repository/CompactionPass`, `Retention/RetentionRunner`, `Retention/SnapshotDeletion` and `Retention/DestinationConvergence`; `Repository.Tests/Format/FormatUpgradeRecordTests`, `Repository.Tests/EndToEnd/EffectiveFormatTests`, `Repository.Tests/EndToEnd/WriteOnlyRepositoryTests`, `Hosts.Tests/FormatUpgradeTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Hosts.Tests/PeerRetentionReplayTests`, `Hosts.Tests/DirectShipPeerTests`, `Api.Tests/ConfigurationContractTests`, `Web.Tests/ConsoleFormatUpgradeScriptTests`, `Repository.Tests/EndToEnd/NewerFormatTests`, `Retention.Tests/NewerFormatRetentionTests`, `Hosts.Tests/NewerFormatServiceTests`, `Cli.Tests/NewerFormatCommandTests`.
 
 ---
 
@@ -119,6 +119,11 @@ handle, and the two live in one method (`ServiceRuntime.UpgradeSetFormatAsync`)
 so that a caller cannot reach the write without the eviction. An upgrade that
 quietly did nothing until the next restart, having reported success, is the
 worst failure shape available here.
+
+> **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-build-writes-only-a-format-it-implements)).**
+> The effective version is whatever the newest verified record names, and a
+> build that does not implement it reads the repository and writes nothing
+> into it.
 
 ### 4 An unverifiable record is ignored, never damage
 
@@ -269,10 +274,62 @@ It does not withdraw format 2. `init --format-version 2` remains a supported
 choice, the format-2 fixture stays frozen, and NFR-COMP-004 reads against
 both.
 
+## Amendment 1 (2026-10) — a build writes only a format it implements
+
+§3 makes the effective version whatever the newest verified record names, and
+nothing bounded that by the build reading it. A repository a newer build had
+upgraded past format 5 read as format 6 here, and this build wrote into it as
+though 6 were 5: `FormatVersions.ContainerVersion` answered 3 for every
+version from 3 up, so a backup stamped format-3 containers, format-4 deltas
+and format-5 checkpoints into a repository whose rules it had never seen.
+[ADR-0096](0096-format-4-an-index-generation-per-delta.md) and
+[ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md) each listed the
+refusal as owed.
+
+A build now writes only a repository whose effective version it implements
+([specification 11 §5.3](../../specifications/repository-format/11-lifecycle-objects.md#53-a-writer-writes-only-a-format-it-implements)).
+Above that:
+
+- **Nothing is authored.** A publication, a compaction pass, a retention
+  apply and a person's deletion request each refuse before they write a key.
+  All four throw `NewerFormatException`, whose message names both versions. `FormatVersions.ContainerVersion` refuses a version it does not
+  know instead of naming a container for it, so a writing path that missed the
+  check fails at its first blob rather than guessing. An upgrade record naming
+  a version above this build's is refused too, because the record is the
+  claim that the repository writes that format.
+- **Nothing is reclaimed on this build's reading.** Which objects are live is
+  read off an index in the newer format. So a destination's keep-set is
+  refused, as an unwalkable closure already was, and the destination receives
+  a whole copy. It keeps history its policy would drop until a build that
+  writes the format converges it: more is kept, never less.
+- **Everything that reads goes on.** The archive opens on every path, so the
+  set's snapshots list, restore and verify read, and copies carry what is
+  there, the newer build's record included. A retention dry run, which writes
+  nothing, still reports.
+
+The service raises `format-newer` at archive open and resolves it at an open
+this build can write. The set's backup fails permanently, because only another
+build can make it run, and a command that would write answers `refused` with
+the message. The upgrade verb has nothing to move such a set to. The CLI
+prints the refusal as an operator's error with exit code 1.
+
+The refusal is enforced in the shared layers where each act begins, not at a
+host's door. The service opens one handle per set for its reads and its
+writes, so refusing the open would have taken restore and copy down with the
+backup. The CLI takes its writer role for the catalogue rebuild too, which
+writes nothing into the repository. Placed in the shared layers, the check
+reaches both hosts and every verb that reaches the act.
+
+What this does not do: reach a build older than this one. A build that
+predates the amendment still writes into a repository a newer build upgraded.
+That is why the refusal had to ship before the next format rather than with
+it.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): a build writes only a repository whose effective version it implements. Above it the repository is opened, read and copied, nothing is authored in it, and no destination is converged on this build's reading of it (`Repository/NewerFormatException`, `Domain/FormatVersions`, `Retention/DestinationConvergence`; `Repository.Tests/EndToEnd/NewerFormatTests`, `Retention.Tests/NewerFormatRetentionTests`, `Hosts.Tests/NewerFormatServiceTests`, `Cli.Tests/NewerFormatCommandTests`) |
 | 2026-10 | Accepted (amended) | The upgrade verb targets the latest format, 5 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)): an upgraded set checkpoints its deltas from its next backup, and an older build reads its checkpoints as damage and its deltas as before (`Hosts.Tests/FormatUpgradeTests`) |
 | 2026-10 | Accepted (amended) | The upgrade verb targets format 4 ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): an upgraded set stamps its next delta with an index generation, and its older deltas keep none (`Hosts.Tests/FormatUpgradeTests`). The service's notice and the verb's lines say the newer format begins with what the set writes next, rather than at its next blob |
 | 2026-09 | Accepted | Built over five commits: the creation default moved to the latest format the product writes; the record, its codec and the never-deletable refusal; the writer reading the effective version, with the recovery tool sharing the one decision; the verb, the agent verb and the console control at contract 1.36; and this record. The owner's installation stays format 2 by choice — both formats are supported and nothing pushes |
