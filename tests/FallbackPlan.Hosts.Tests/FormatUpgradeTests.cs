@@ -255,7 +255,7 @@ public sealed class FormatUpgradeTests : IDisposable
     /// history, which a format-4 reader ranks at zero.
     /// </summary>
     [TestMethod]
-    public async Task AFormatThreeSet_UpgradedToFour_StampsItsNextDeltaWithAnIndexGeneration()
+    public async Task AFormatThreeSet_UpgradedToTheLatest_StampsItsNextDeltaWithAnIndexGeneration()
     {
         ServiceRuntime.ArchiveFormatVersion = FormatVersions.RelocatableRecords;
         Directory.CreateDirectory(Vault);
@@ -276,8 +276,8 @@ public sealed class FormatUpgradeTests : IDisposable
         Assert.IsTrue(
             File.Exists(Path.Combine(
                 MetadataRoot,
-                FormatUpgradeRecordCodec.KeyFor(FormatVersions.IndexGenerations).Replace('/', Path.DirectorySeparatorChar))),
-            "the upgrade wrote no record for format 4");
+                FormatUpgradeRecordCodec.KeyFor(FormatLimits.LatestFormatVersion).Replace('/', Path.DirectorySeparatorChar))),
+            "the upgrade wrote no record for the latest format, which carries index generations");
 
         _harness.WriteSourceFile("docs/after.txt", "written after the upgrade");
         await RunOnAsync(runtime, set);

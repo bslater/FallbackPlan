@@ -54,4 +54,9 @@ internal static partial class Log
         EventId = 1704, Level = LogLevel.Debug,
         Message = "Published a void delta for the unaccounted ordinal {Ordinal}")]
     internal static partial void VoidDeltaPublished(ILogger logger, ulong ordinal);
+
+    [LoggerMessage(
+        EventId = 1705, Level = LogLevel.Information,
+        Message = "Published index checkpoint {CheckpointId} carrying {Deltas} deltas")]
+    internal static partial void CheckpointPublished(ILogger logger, CheckpointId checkpointId, int deltas);
 }

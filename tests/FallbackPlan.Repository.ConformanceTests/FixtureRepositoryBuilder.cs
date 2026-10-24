@@ -18,14 +18,15 @@ namespace FallbackPlan.Repository.ConformanceTests;
 /// Writes a complete, tiny repository of a given format version: descriptor
 /// with the sealing public key and its required features, <b>no key object
 /// anywhere</b> (FR-WOR-001), one sealed data blob, one metadata blob, a
-/// standalone snapshot, an index delta, and a two-record journal — the
-/// shared-sequence layout of specification 08 §2.
+/// standalone snapshot, an index delta, a two-record journal and, at format 5,
+/// a checkpoint carrying the delta — the shared-sequence layout of
+/// specification 08 §2.
 /// </summary>
 /// <remarks>
 /// One generator, one identity per fixture. It exists parameterised rather
 /// than copied because the only thing a format-3 fixture changes is the
 /// version it asks for — and a copy would let the two drift while both
-/// claimed to describe the same six-step sequence.
+/// claimed to describe the same sequence.
 /// <para>
 /// Nothing here is byte-reproducible and nothing is meant to be: a sealed
 /// blob draws a fresh content key and a fresh ephemeral share per seal
@@ -90,23 +91,27 @@ internal static class FixtureRepositoryBuilder
     }
 
     /// <summary>The required features a descriptor of this version declares.</summary>
-    private static ushort[] RequiredFeaturesFor(ushort formatVersion) =>
-        FormatVersions.HasIndexGenerations(formatVersion)
-            ?
-            [
-                RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                RepositoryDescriptorCodec.FeatureReclaimAuthority,
-                RepositoryDescriptorCodec.FeatureRelocatableRecords,
-                RepositoryDescriptorCodec.FeatureIndexGenerations,
-            ]
-            : FormatVersions.HasRelocatableRecords(formatVersion)
-                ?
-                [
-                    RepositoryDescriptorCodec.FeatureSealedDataPlane,
-                    RepositoryDescriptorCodec.FeatureReclaimAuthority,
-                    RepositoryDescriptorCodec.FeatureRelocatableRecords,
-                ]
-                : [RepositoryDescriptorCodec.FeatureSealedDataPlane];
+    private static ushort[] RequiredFeaturesFor(ushort formatVersion)
+    {
+        List<ushort> features = [RepositoryDescriptorCodec.FeatureSealedDataPlane];
+        if (FormatVersions.HasRelocatableRecords(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureReclaimAuthority);
+            features.Add(RepositoryDescriptorCodec.FeatureRelocatableRecords);
+        }
+
+        if (FormatVersions.HasIndexGenerations(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureIndexGenerations);
+        }
+
+        if (FormatVersions.HasDeltaCheckpoints(formatVersion))
+        {
+            features.Add(RepositoryDescriptorCodec.FeatureDeltaCheckpoints);
+        }
+
+        return [.. features];
+    }
 
     /// <summary>Generates the complete fixture store under <paramref name="rootDirectory"/>.</summary>
     internal static async Task GenerateAsync(Identity identity, string rootDirectory, CancellationToken cancellationToken)
@@ -135,7 +140,8 @@ internal static class FixtureRepositoryBuilder
                 cancellationToken).ConfigureAwait(false);
 
             // Shared-sequence layout (08 §2): 1 intent · 2 sealed data blob ·
-            // 3 metadata blob · 4 standalone snapshot · 5 delta · 6 retirement.
+            // 3 metadata blob · 4 standalone snapshot · 5 delta · 6 retirement
+            // · 7 checkpoint, at format 5 only.
             var dataBlobId = BlobId.FromWriterCounter(identity.Writer, 2);
             var metaBlobId = BlobId.FromWriterCounter(identity.Writer, 3);
 
@@ -288,17 +294,48 @@ internal static class FixtureRepositoryBuilder
                 storedDelta = IndexDeltaCodec.Encode(delta, signer.Sign(IndexDeltaCodec.EncodeForSigning(delta)));
             }
 
-            await PutAsync(store, MetadataStoreKeys.IndexDelta(0, deltaId),
-                StandaloneRecordCipher.Seal(
-                    identity.Repo, metadataKey, KeyGeneration.Zero, identity.Writer, counter: 5,
-                    ObjectType.IndexDelta, objectIds.Derive(ObjectType.IndexDelta, ContentHasher.Hash(storedDelta)),
-                    storedDelta, Salt(0xE4)),
-                cancellationToken).ConfigureAwait(false);
+            var sealedDelta = StandaloneRecordCipher.Seal(
+                identity.Repo, metadataKey, KeyGeneration.Zero, identity.Writer, counter: 5,
+                ObjectType.IndexDelta, objectIds.Derive(ObjectType.IndexDelta, ContentHasher.Hash(storedDelta)),
+                storedDelta, Salt(0xE4));
+            await PutAsync(store, MetadataStoreKeys.IndexDelta(0, deltaId), sealedDelta, cancellationToken)
+                .ConfigureAwait(false);
 
             // --- intent retirement (sequence 6) ---------------------------
             await PublishJournalAsync(store, identity, credential, objectIds, sequence: 6,
                 new JournalPayload.IntentRetirement(1, IntentOutcome.Completed),
                 Salt(0xE6), cancellationToken).ConfigureAwait(false);
+
+            // --- checkpoint (sequence 7), format 5 only ---------------------
+            // It carries the delta's sealed object exactly as stored (07 §5
+            // key 10), so a reader opens the copy as it would the object at
+            // the delta's key, and a reader that predates the form would
+            // refuse key 10 outright.
+            if (FormatVersions.HasDeltaCheckpoints(identity.FormatVersion))
+            {
+                var checkpoint = new Checkpoint
+                {
+                    Generation = 0,
+                    WriterId = identity.Writer,
+                    SubsumedDeltaIds = [deltaId],
+                    SubsumedDeltas = [sealedDelta],
+                };
+                byte[] storedCheckpoint;
+                using (var signer = RepositorySigner.Create(credential, KeyGeneration.Zero))
+                {
+                    storedCheckpoint = CheckpointCodec.Encode(
+                        checkpoint, signer.Sign(CheckpointCodec.EncodeForSigning(checkpoint)));
+                }
+
+                var checkpointId = CheckpointId.FromBytes(Enumerable.Repeat((byte)0xCB, 16).ToArray());
+                await PutAsync(store, MetadataStoreKeys.IndexCheckpoint(0, checkpointId),
+                    StandaloneRecordCipher.Seal(
+                        identity.Repo, metadataKey, KeyGeneration.Zero, identity.Writer, counter: 7,
+                        ObjectType.IndexCheckpoint,
+                        objectIds.Derive(ObjectType.IndexCheckpoint, ContentHasher.Hash(storedCheckpoint)),
+                        storedCheckpoint, Salt(0xE7)),
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {

@@ -159,6 +159,10 @@ internal static class FuzzCorpus
 
             new("checkpoint", BuildCheckpoint(), bytes => CheckpointCodec.Decode(bytes)),
 
+            // Format 5's form (07 §5 key 10): the deltas it subsumes, carried
+            // as their stored bytes.
+            new("checkpoint-bundled", BuildBundledCheckpoint(), bytes => CheckpointCodec.Decode(bytes)),
+
             new("journal-record",
                 JournalRecordCodec.Encode(
                     new JournalRecord(JournalRecordKind.WriteIntent, Writer, 1, 1000,
@@ -246,6 +250,15 @@ internal static class FuzzCorpus
             Entries = entries,
         }, new byte[64]);
     }
+
+    private static byte[] BuildBundledCheckpoint() =>
+        CheckpointCodec.Encode(new Checkpoint
+        {
+            Generation = 0,
+            WriterId = Writer,
+            SubsumedDeltaIds = [DeltaId.FromBytes(Fill16(5)), DeltaId.FromBytes(Fill16(6))],
+            SubsumedDeltas = [BuildStandaloneRecord(), BuildStandaloneRecord()],
+        }, new byte[64]);
 
     private static byte[] BuildStandaloneRecord()
     {

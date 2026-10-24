@@ -1,4 +1,5 @@
 using Bodu;
+using FallbackPlan.Domain;
 using FallbackPlan.Domain.Identifiers;
 using FallbackPlan.Repository.Format.Cbor;
 using FallbackPlan.Repository.Index.Resources;
@@ -9,9 +10,13 @@ namespace FallbackPlan.Repository.Index;
 public sealed record WriterWatermark(WriterId WriterId, ulong HighestSequence);
 
 /// <summary>
-/// An index checkpoint (specification 07 §5): a compacted view of the deltas
-/// it subsumes, with the complete shard coverage enumerated so a reader can
-/// tell "no entries in this shard" from "this shard not covered".
+/// An index checkpoint (specification 07 §5). From format 5 it carries the
+/// deltas it subsumes as their stored objects (key 10), each beside its
+/// identifier in key 2, and nothing of its own; a reader opens each copy as it
+/// would the object at the delta's key
+/// ([ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).
+/// The earlier form, entries and watermarks of its own (keys 3–5 and 7), is
+/// still decoded, and a loader acts on neither.
 /// </summary>
 public sealed record Checkpoint
 {
@@ -38,18 +43,28 @@ public sealed record Checkpoint
 
     /// <summary>The publishing writer (key 8).</summary>
     public required WriterId WriterId { get; init; }
+
+    /// <summary>
+    /// The stored object of each subsumed delta (key 10), parallel to
+    /// <see cref="SubsumedDeltaIds"/>: the sealed bytes exactly as they sit at
+    /// the delta's key. Empty for the earlier form.
+    /// </summary>
+    public IReadOnlyList<ReadOnlyMemory<byte>> SubsumedDeltas { get; init; } = [];
+
+    /// <summary>Whether this checkpoint carries its deltas (format 5's form).</summary>
+    public bool CarriesDeltas => SubsumedDeltas.Count > 0;
 }
 
 /// <summary>A decoded checkpoint with its signed bytes and signature.</summary>
 public sealed record DecodedCheckpoint(Checkpoint Checkpoint, ReadOnlyMemory<byte> SignedBytes, ReadOnlyMemory<byte> Signature);
 
 /// <summary>
-/// Encodes and decodes checkpoints with the two-pass signature over keys
-/// 1–8 (specification 07 §5, 06 §6.1 semantics).
+/// Encodes and decodes checkpoints with the two-pass signature over every key
+/// but the signature's own, key 9 (specification 07 §5, 06 §6.1 semantics).
 /// </summary>
 public static class CheckpointCodec
 {
-    /// <summary>Encodes keys 1–8 — the exact bytes the signature covers.</summary>
+    /// <summary>Encodes every key but 9 — the exact bytes the signature covers.</summary>
     public static byte[] EncodeForSigning(Checkpoint checkpoint)
     {
         ThrowHelper.ThrowIfNull(checkpoint);
@@ -60,7 +75,7 @@ public static class CheckpointCodec
         return writer.Encode();
     }
 
-    /// <summary>Encodes the stored form: keys 1–8 plus the signature at key 9.</summary>
+    /// <summary>Encodes the stored form: the signed keys plus the signature at key 9.</summary>
     public static byte[] Encode(Checkpoint checkpoint, ReadOnlySpan<byte> signature)
     {
         ThrowHelper.ThrowIfNull(checkpoint);
@@ -104,6 +119,8 @@ public static class CheckpointCodec
         List<IndexEntry> entries = [];
         WriterId? writerId = null;
         byte[]? signature = null;
+        List<ReadOnlyMemory<byte>> bundled = [];
+        var bundledPresent = false;
 
         for (var i = 0; i < count; i++)
         {
@@ -169,6 +186,16 @@ public static class CheckpointCodec
                 case 9:
                     signature = reader.ReadFixedByteString(64);
                     break;
+                case 10:
+                    bundledPresent = true;
+                    var bundledCount = reader.ReadStartArray(maxCount: 1_000_000);
+                    for (var j = 0; j < bundledCount; j++)
+                    {
+                        bundled.Add(reader.ReadByteString(FormatLimits.MaxMetadataObjectSize));
+                    }
+
+                    reader.ReadEndArray();
+                    break;
                 default:
                     throw new IndexFormatException(Strings.CheckpointCodec_CheckpointCarriesUnknownKeySpecification);
             }
@@ -182,6 +209,13 @@ public static class CheckpointCodec
             throw new IndexFormatException(Strings.CheckpointCodec_CheckpointOmitsMandatoryKey);
         }
 
+        // An empty key 10 has a second encoding, without the key, that signs
+        // differently; the writer never emits it.
+        if (bundledPresent && bundled.Count == 0)
+        {
+            throw new IndexFormatException(Strings.CheckpointCodec_CarriedDeltasEmpty);
+        }
+
         var checkpoint = new Checkpoint
         {
             Generation = generation.Value,
@@ -192,6 +226,7 @@ public static class CheckpointCodec
             PredecessorCheckpointId = predecessor,
             Entries = entries,
             WriterId = writerId.Value,
+            SubsumedDeltas = bundled,
         };
 
         Validate(checkpoint);
@@ -201,6 +236,23 @@ public static class CheckpointCodec
 
     private static void Validate(Checkpoint checkpoint)
     {
+        // The two forms do not mix: entries or watermarks beside carried
+        // deltas would rank at the checkpoint rather than where each delta
+        // ranks, which is the defect format 5 exists to remove (ADR-0097).
+        if (checkpoint.CarriesDeltas)
+        {
+            if (checkpoint.SubsumedDeltas.Count != checkpoint.SubsumedDeltaIds.Count)
+            {
+                throw new IndexFormatException(Strings.FormatCheckpointCodec_CarriedDeltasParallelToIdentifiers(
+                    checkpoint.SubsumedDeltas.Count, checkpoint.SubsumedDeltaIds.Count));
+            }
+
+            if (checkpoint.Entries.Count > 0 || checkpoint.WriterWatermarks.Count > 0 || checkpoint.ShardSet.Count > 0)
+            {
+                throw new IndexFormatException(Strings.CheckpointCodec_CarriedDeltasBesideOwnEntries);
+            }
+        }
+
         if (checkpoint.ShardSet.Count != checkpoint.ShardHashesList.Count)
         {
             throw new IndexFormatException(Strings.CheckpointCodec_ShardSetShardHashesPositionally);
@@ -222,7 +274,8 @@ public static class CheckpointCodec
     {
         var keyCount = 7
             + (checkpoint.PredecessorCheckpointId is not null ? 1 : 0)
-            + (signature is not null ? 1 : 0);
+            + (signature is not null ? 1 : 0)
+            + (checkpoint.CarriesDeltas ? 1 : 0);
 
         writer.WriteStartMap(keyCount);
         writer.WriteKey(1);
@@ -278,6 +331,20 @@ public static class CheckpointCodec
         {
             writer.WriteKey(9);
             writer.WriteByteString(signature);
+        }
+
+        // Key 10 sorts after the signature and is signed all the same: the
+        // signing form omits key 9 alone.
+        if (checkpoint.CarriesDeltas)
+        {
+            writer.WriteKey(10);
+            writer.WriteStartArray(checkpoint.SubsumedDeltas.Count);
+            foreach (var stored in checkpoint.SubsumedDeltas)
+            {
+                writer.WriteByteString(stored.Span);
+            }
+
+            writer.WriteEndArray();
         }
 
         writer.WriteEndMap();

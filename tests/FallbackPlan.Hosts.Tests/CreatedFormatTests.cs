@@ -8,12 +8,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// <summary>
 /// What format a repository is born at (FR-ARCH-012, NFR-COMP-004;
 /// [ADR-0052](../../docs/adr/0052-relocatable-records-format-v3.md),
-/// [ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md)).
+/// [ADR-0096](../../docs/adr/0096-format-4-an-index-generation-per-delta.md),
+/// [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).
 /// Format 3 was built over two slices and nothing live wrote it: the only
 /// opt-in was the CLI's <c>--format-version</c>, and the service created at
 /// format 2, so no installation published a Merkle commitment and no peer
 /// could be challenged by chunk. A product that can read a format creates at
-/// it, and that is format 4 now.
+/// it, and that is format 5 now.
 /// </summary>
 /// <remarks>
 /// These assert the <b>literal</b> version rather than
@@ -39,8 +40,8 @@ public sealed class CreatedFormatTests : IDisposable
             new LocalFileSystemObjectStore(_harness.RepositoryPath), _timeout.Token);
 
         Assert.AreEqual(
-            FormatVersions.IndexGenerations, descriptor.FormatVersion,
-            "a set created today is a format-4 repository, or its compactions under a second writer still decline");
+            FormatVersions.DeltaCheckpoints, descriptor.FormatVersion,
+            "a set created today is a format-5 repository, or every full load still reads every delta");
         Assert.Contains(
             RepositoryDescriptorCodec.FeatureRelocatableRecords,
             descriptor.RequiredFeatures,
@@ -49,6 +50,10 @@ public sealed class CreatedFormatTests : IDisposable
             RepositoryDescriptorCodec.FeatureIndexGenerations,
             descriptor.RequiredFeatures,
             "and this one makes a reader that cannot rank by index generation refuse by name (ADR-0096)");
+        Assert.Contains(
+            RepositoryDescriptorCodec.FeatureDeltaCheckpoints,
+            descriptor.RequiredFeatures,
+            "and this one makes a reader that cannot open a checkpoint's deltas refuse by name (ADR-0097)");
     }
 
     [TestMethod]

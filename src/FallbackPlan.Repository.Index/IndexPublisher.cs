@@ -11,6 +11,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FallbackPlan.Repository.Index;
 
+/// <summary>One delta a checkpoint carries: its identifier and its stored object, exactly as at its key.</summary>
+/// <param name="DeltaId">The delta's identifier (07 §5 key 2).</param>
+/// <param name="Stored">The sealed bytes at the delta's key (07 §5 key 10).</param>
+public sealed record BundledDelta(DeltaId DeltaId, ReadOnlyMemory<byte> Stored);
+
 /// <summary>
 /// Publishes index deltas, void deltas, and checkpoints (specification
 /// 07 §2, §4, §5; FR-MAN-008): each object is signed over every key but its
@@ -205,6 +210,57 @@ public sealed class IndexPublisher : IDisposable
             cancellationToken).ConfigureAwait(false);
 
         _sequence.MarkAccounted(sequence);
+        return checkpointId;
+    }
+
+    /// <summary>
+    /// Publishes a format-5 checkpoint carrying <paramref name="deltas"/>
+    /// verbatim (07 §5 key 10;
+    /// [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)):
+    /// each delta's stored object beside its identifier, and nothing of the
+    /// checkpoint's own to rank. A reader opens each copy exactly as it would
+    /// the object at the delta's key, so this changes how many objects a load
+    /// reads and nothing it reaches.
+    /// </summary>
+    /// <param name="generation">The generation the checkpoint is keyed and signed at.</param>
+    /// <param name="deltas">The deltas, each as its stored bytes; at least one.</param>
+    /// <param name="predecessor">This writer's previous checkpoint, or null.</param>
+    /// <param name="cancellationToken">Cancels the publication.</param>
+    public async ValueTask<CheckpointId> PublishBundledCheckpointAsync(
+        ulong generation,
+        IReadOnlyList<BundledDelta> deltas,
+        CheckpointId? predecessor,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(deltas);
+        ArgumentOutOfRangeException.ThrowIfZero(deltas.Count);
+
+        var sequence = _sequence.AllocateNext();
+        var checkpoint = new Checkpoint
+        {
+            Generation = generation,
+            SubsumedDeltaIds = [.. deltas.Select(delta => delta.DeltaId)],
+            SubsumedDeltas = [.. deltas.Select(delta => delta.Stored)],
+            PredecessorCheckpointId = predecessor,
+            WriterId = _writerId,
+        };
+
+        var stored = SignAndEncode(
+            CheckpointCodec.EncodeForSigning(checkpoint),
+            bytes => CheckpointCodec.Encode(checkpoint, bytes),
+            generation);
+
+        var checkpointId = CheckpointId.NewRandom();
+        await SealAndPutAsync(
+            stored,
+            ObjectType.IndexCheckpoint,
+            sequence,
+            generation,
+            MetadataStoreKeys.IndexCheckpoint(generation, checkpointId),
+            cancellationToken).ConfigureAwait(false);
+
+        _sequence.MarkAccounted(sequence);
+        Log.CheckpointPublished(_log, checkpointId, deltas.Count);
         return checkpointId;
     }
 

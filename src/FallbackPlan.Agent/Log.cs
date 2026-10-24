@@ -244,6 +244,14 @@ internal static partial class Log
     internal static partial void SyncCountUnavailable(
         ILogger logger, LogLabel set, LogLabel destination, string reason);
 
+    // A checkpoint changes how many objects a load reads and nothing it
+    // reaches (ADR-0097), so one that cannot be published costs the next load
+    // some reads, never the backup that committed before it.
+    [LoggerMessage(
+        EventId = 3793, Level = LogLevel.Warning,
+        Message = "Set {Set}: the index checkpoint due after this backup was not published; the next backup tries again")]
+    internal static partial void CheckpointDeferred(ILogger logger, LogLabel set, Exception exception);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

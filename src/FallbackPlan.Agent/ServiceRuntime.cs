@@ -89,6 +89,14 @@ public sealed record ServiceOptions
     internal bool? SameDrivePlacementOverride { get; init; }
 
     /// <summary>
+    /// How many uncovered index deltas make a checkpoint due after a format-5
+    /// set's backup (ADR-0097). A test harness's knob, so a suite reaches a
+    /// checkpoint in a few backups; null, the production value, is
+    /// <see cref="Repository.Index.IndexCheckpointer.DefaultThreshold"/>.
+    /// </summary>
+    internal int? CheckpointThresholdOverride { get; init; }
+
+    /// <summary>
     /// A test harness's view of the destination-sync ledger: each row as it
     /// is written, so every state a reader could have read — which polling
     /// can only hope to catch. Null, the production value, observes nothing.
@@ -103,6 +111,14 @@ public sealed record ServiceOptions
     /// run's own cancellation path. Null, the production value, holds nothing.
     /// </summary>
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
+
+    /// <summary>
+    /// Awaited by every backup run of a format-5 set as it begins to
+    /// checkpoint its index after the commit (ADR-0097), with the run's job id
+    /// and cancellation token: a test harness's way to hold a committed run at
+    /// the last thing it does. Null, the production value, holds nothing.
+    /// </summary>
+    internal Func<string, CancellationToken, ValueTask>? EnteredCheckpointing { get; init; }
 
     /// <summary>
     /// Called with a set id and a destination name whenever a drill of that

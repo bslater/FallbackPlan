@@ -59,8 +59,8 @@ public sealed record ReuseCandidate(WriterId WriterId, bool Verified);
 /// the blob derives its store key from <see cref="BlobId"/> instead.
 /// <see cref="Generation"/>, <see cref="WriterId"/> and <see cref="Sequence"/>
 /// are the winning entry's rank (07 §3): its generation is its delta's index
-/// generation, zero for a delta that predates format 4, or its checkpoint's
-/// generation.
+/// generation, or zero for a delta that predates format 4. A delta a
+/// checkpoint carries ranks as it would read from its own key.
 /// </remarks>
 public sealed record ResolvedLocation(
     BlobId BlobId,
@@ -424,7 +424,7 @@ public sealed class Catalogue : IDisposable
         command.ExecuteNonQuery();
     }
 
-    /// <summary>Applies one checkpoint idempotently, entries carrying the checkpoint's provenance.</summary>
+    /// <summary>Records one checkpoint idempotently: its ledger row and any watermarks it states, which nothing ranks by.</summary>
     public void ApplyCheckpoint(CheckpointId checkpointId, Checkpoint checkpoint)
     {
         ThrowHelper.ThrowIfNull(checkpoint);
@@ -464,14 +464,11 @@ public sealed class Catalogue : IDisposable
             command.ExecuteNonQuery();
         }
 
-        var ownWatermark = checkpoint.WriterWatermarks
-            .FirstOrDefault(mark => mark.WriterId == checkpoint.WriterId)?.HighestSequence ?? 0;
-
-        foreach (var entry in checkpoint.Entries)
-        {
-            InsertLocation(transaction, entry, checkpoint.Generation, checkpoint.WriterId, ownWatermark);
-        }
-
+        // A checkpoint's own entries, the earlier form, are recorded nowhere:
+        // they would rank at the checkpoint rather than where each delta
+        // ranks (ADR-0008 Amendment 1, constraint 1), and the loader does not
+        // apply them either. The deltas a format-5 checkpoint carries reach
+        // the catalogue through ApplyDelta, as every other delta does.
         transaction.Commit();
     }
 

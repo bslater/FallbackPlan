@@ -1,6 +1,6 @@
 # ADR-0017 — Index entry supersession and precedence
 
-**Status:** Accepted (amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)
+**Status:** Accepted (amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-format-5-checkpoints-them-and-two-writers-are-ranked-by-id)
 **Date:** 2026-08
 **Requirements:** FR-MAN-008, FR-MAN-013, FR-MAN-015, FR-GC-004
 **Pressure-test finding:** [PT-2](../review/2026-08-fix-pressure-test.md#pt-2--c6s-commutativity-claim-is-false-once-c1-is-in-place)
@@ -314,10 +314,16 @@ own last delta. An entry ranks by its delta's index generation first.
   ([ADR-0008 Amendment 1](0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first),
   constraint 1).
 
+  > **Amended 2026-10 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).** A checkpoint's own entries are
+  > now ranked nowhere. From format 5 a checkpoint carries deltas rather than
+  > entries, and every entry it carries ranks as its delta's, by this
+  > amendment's rule.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended); partly built | A checkpoint's own entries are ranked nowhere, by the loader or the catalogue, and from format 5 a checkpoint carries deltas, each entry ranked as its delta's ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Tests/Index/CheckpointBundleTests`). Partly built still: superseded entries are never retired |
 | 2026-10 | Accepted (amended); partly built | [Amendment 3](#amendment-3-2026-10--format-4-ranks-an-entry-by-its-index-generation): the fix, as format 4. An entry ranks by its delta's index generation (`Repository.Index/IndexLoader`, `Repository.Catalogue/Catalogue`), so a compaction under the lower of two writer ids stands and is not declined (`Retention.Tests/CompactionCollectionTests`, `Hosts.Tests/CompactionRetentionTests`, [ADR-0096](0096-format-4-an-index-generation-per-delta.md)). Partly built still: a checkpoint's entries are not ranked this way, and superseded entries are never retired |
 | 2026-10 | Accepted (amended); partly built | Of the three conditions Amendment 1 sets for the fix, the third is met ahead of it: the product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so moving generations will not read a stopped writer's journal records and blobs as missing deltas (`ArchitectureTests/IndexLoadAccountingTests`) |
 | 2026-10 | Accepted (amended); partly built | [Amendment 2](#amendment-2-2026-10--the-compactor-declines-a-relocation-that-would-not-stand): the compactor declines a relocation that would not stand. `IndexPrecedence.WouldOutrank`, asked by `CompactionPass` of the entry that holds each live record, declines a candidate before its intent, and `CompactionPolicy` leaves the blob whole and says why. A published compaction now stands whichever writer published it (FR-MAN-015, `Retention.Tests/CompactionCollectionTests`). The rank rule and the reuse shortcut are unchanged, and the fix Amendment 1 owes is format 4's |

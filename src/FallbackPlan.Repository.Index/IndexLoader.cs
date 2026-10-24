@@ -60,9 +60,9 @@ public sealed class IndexState
     /// The writer's own <c>sequence</c> file is allocation state: it says what
     /// this machine has handed out, and it is exactly as durable as the state
     /// directory holding it. This is the other half, and it is the half that
-    /// travels: every applied delta carries its signed sequence, and a
-    /// checkpoint would carry a signed per-writer watermark (07 §§5–6), so any
-    /// replica of the repository can say how far its writers had got. A
+    /// travels: every applied delta carries its signed sequence, whether it
+    /// was read from its key or from a checkpoint carrying it (07 §§2, 5), so
+    /// any replica of the repository can say how far its writers had got. A
     /// machine whose local state was lost or rolled back can therefore learn
     /// the truth from the repository rather than from a collision partway
     /// through its next backup.
@@ -78,17 +78,6 @@ public sealed class IndexState
     public ulong ObservedHeadFor(WriterId writer)
     {
         var head = 0UL;
-
-        foreach (var checkpoint in Checkpoints)
-        {
-            foreach (var watermark in checkpoint.Checkpoint.WriterWatermarks)
-            {
-                if (watermark.WriterId == writer)
-                {
-                    head = Math.Max(head, watermark.HighestSequence);
-                }
-            }
-        }
 
         foreach (var delta in Deltas)
         {
@@ -114,12 +103,15 @@ public sealed class IndexState
 
 /// <summary>
 /// Loads the index (specification 07 §5–§8): every checkpoint at every
-/// generation is applied (07 §6), then every listed delta whose sequence
-/// exceeds its writer's highest watermark. A delta's key carries a random
-/// identifier, so one the listing omits is never fetched; it is seen only as
-/// a gap once a later number of its writer is. The watermark alone decides
-/// what a checkpoint covers: <c>subsumed_delta_ids</c> and <c>shard_set</c>
-/// are not read (ADR-0008 Amendment 1).
+/// generation is read (07 §6), every delta it carries is opened from its copy
+/// and applied, and every listed delta no verified copy carries is fetched
+/// from its key and applied
+/// ([ADR-0097](../../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).
+/// A copy that does not open is reported and the delta is read from its key
+/// instead. A delta's key carries a random identifier, so one the listing
+/// omits and no checkpoint carries is never fetched; it is seen only as a gap
+/// once a later number of its writer is. A checkpoint's own entries and
+/// watermarks, the earlier form, are not acted on (ADR-0008 Amendment 1).
 /// Signatures verify against the derived signing key per generation; a
 /// failure is a <b>security finding</b> and the object is excluded. Sequence
 /// gaps follow ADR-0022 §Decision 7: a number is accounted for by a delta, a
@@ -192,93 +184,64 @@ public sealed class IndexLoader : IDisposable
         var checkpoints = new List<DecodedCheckpoint>();
         var deltas = new List<DecodedDelta>();
         var checkpointCounters = new HashSet<(WriterId, ulong)>();
+        var carried = new Dictionary<DeltaId, DecodedDelta>();
 
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/checkpoint/"), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            var opened = await OpenObjectAsync(entry.Key, ObjectType.IndexCheckpoint, findings, cancellationToken)
-                .ConfigureAwait(false);
-            if (opened is not { } checkpointRecord)
+            var bytes = await FetchAsync(entry.Key, findings, cancellationToken).ConfigureAwait(false);
+            if (bytes is null || OpenCheckpoint(entry.Key, bytes, findings) is not { } opened)
             {
                 continue;
             }
 
-            checkpointCounters.Add((checkpointRecord.Record.WriterId, checkpointRecord.Record.Counter));
+            checkpointCounters.Add(opened.Counter);
+            checkpoints.Add(opened.Checkpoint);
 
-            DecodedCheckpoint decoded;
-            try
+            // A carried copy is opened exactly as the object at the delta's
+            // key would be (07 §5). One that does not open is reported and
+            // left out, and the delta is read from its key instead. Every
+            // copy is opened, even of a delta another checkpoint already
+            // carries soundly, so whether damage is reported does not depend
+            // on the order a listing returns checkpoints in.
+            var checkpoint = opened.Checkpoint.Checkpoint;
+            for (var index = 0; index < checkpoint.SubsumedDeltas.Count; index++)
             {
-                decoded = CheckpointCodec.Decode(checkpointRecord.Plaintext);
+                var deltaId = checkpoint.SubsumedDeltaIds[index];
+                if (OpenDelta($"{entry.Key}, delta {deltaId}", checkpoint.SubsumedDeltas[index].ToArray(), findings) is { } delta)
+                {
+                    carried.TryAdd(deltaId, delta with { DeltaId = deltaId });
+                }
             }
-            catch (IndexFormatException exception)
-            {
-                findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Checkpoint '{entry.Key}': {exception.Message}"));
-                continue;
-            }
-
-            if (!VerifySignature(decoded.Checkpoint.Generation, decoded.SignedBytes.Span, decoded.Signature.Span, entry.Key, findings))
-            {
-                continue;
-            }
-
-            checkpoints.Add(decoded);
         }
 
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/delta/"), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            var opened = await OpenObjectAsync(entry.Key, ObjectType.IndexDelta, findings, cancellationToken)
-                .ConfigureAwait(false);
-            if (opened is not { } deltaRecord)
+            var named = MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId);
+            if (named && carried.ContainsKey(deltaId))
             {
                 continue;
             }
 
-            DecodedDelta decoded;
-            try
+            var bytes = await FetchAsync(entry.Key, findings, cancellationToken).ConfigureAwait(false);
+            if (bytes is not null && OpenDelta(entry.Key.Value, bytes, findings) is { } delta)
             {
-                decoded = IndexDeltaCodec.Decode(deltaRecord.Plaintext);
-            }
-            catch (IndexFormatException exception)
-            {
-                findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Delta '{entry.Key}': {exception.Message}"));
-                continue;
-            }
-
-            if (!VerifySignature(decoded.Delta.Generation, decoded.SignedBytes.Span, decoded.Signature.Span, entry.Key, findings))
-            {
-                continue;
-            }
-
-            deltas.Add(decoded);
-        }
-
-        // Watermarks: the highest any retained checkpoint states per writer.
-        var watermarks = new Dictionary<WriterId, ulong>();
-        foreach (var checkpoint in checkpoints)
-        {
-            foreach (var watermark in checkpoint.Checkpoint.WriterWatermarks)
-            {
-                watermarks[watermark.WriterId] = Math.Max(
-                    watermarks.GetValueOrDefault(watermark.WriterId), watermark.HighestSequence);
+                deltas.Add(named ? delta with { DeltaId = deltaId } : delta);
             }
         }
 
-        // Apply: every checkpoint, then every delta above its writer's
-        // watermark (07 §5) — safe under any arrival order because of §3.
+        // A carried delta is applied whether or not the listing still shows
+        // it: the copy is the delta.
+        deltas.AddRange(carried.Values);
+
+        // Apply every delta (07 §5) — safe under any arrival order because of
+        // §3. A checkpoint contributes only the deltas it carries: its own
+        // entries would rank at the checkpoint rather than where each delta
+        // ranks, and its watermarks would hide whatever its builder's listing
+        // missed (ADR-0008 Amendment 1, constraints 1 and 3). Neither is acted
+        // on.
         var allEntries = new List<ProvenancedEntry>();
-
-        foreach (var checkpoint in checkpoints)
-        {
-            var watermark = checkpoint.Checkpoint.WriterWatermarks
-                .FirstOrDefault(mark => mark.WriterId == checkpoint.Checkpoint.WriterId)?.HighestSequence ?? 0;
-
-            foreach (var entry in checkpoint.Checkpoint.Entries)
-            {
-                allEntries.Add(new ProvenancedEntry(
-                    entry, checkpoint.Checkpoint.Generation, checkpoint.Checkpoint.WriterId, watermark));
-            }
-        }
 
         var appliedSequences = new Dictionary<WriterId, HashSet<ulong>>();
         var newestGenerationPerWriter = new Dictionary<WriterId, ulong>();
@@ -291,19 +254,14 @@ public sealed class IndexLoader : IDisposable
             newestGenerationPerWriter[writer] = Math.Max(
                 newestGenerationPerWriter.GetValueOrDefault(writer), delta.Delta.Generation);
 
-            if (delta.Delta.Sequence <= watermarks.GetValueOrDefault(writer))
-            {
-                continue; // subsumed by a checkpoint
-            }
-
             foreach (var entry in delta.Delta.Entries)
             {
                 allEntries.Add(new ProvenancedEntry(entry, delta.Delta.RankGeneration, writer, delta.Delta.Sequence));
             }
         }
 
-        // Gap accounting (07 §4; ADR-0022 §Decision 7): every number from the
-        // watermark to the writer's highest seen must be accounted for.
+        // Gap accounting (07 §4; ADR-0022 §Decision 7): every number up to the
+        // writer's highest seen must be accounted for.
         var unresolved = new List<(WriterId, ulong)>();
         var currentIndexGeneration = deltas.Count == 0 ? 0 : deltas.Max(delta => delta.Delta.RankGeneration);
         var indexGenerationsBySequence = deltas
@@ -316,12 +274,11 @@ public sealed class IndexLoader : IDisposable
 
         foreach (var (writer, sequences) in appliedSequences)
         {
-            var floor = watermarks.GetValueOrDefault(writer);
             var ceiling = sequences.Max();
             var published = indexGenerationsBySequence[writer];
             var above = 0;
 
-            for (var sequence = floor + 1; sequence <= ceiling; sequence++)
+            for (var sequence = 1UL; sequence <= ceiling; sequence++)
             {
                 if (sequences.Contains(sequence) || checkpointCounters.Contains((writer, sequence)))
                 {
@@ -380,16 +337,96 @@ public sealed class IndexLoader : IDisposable
         return new IndexState(resolved, allEntries, deltas, checkpoints, unresolved, findings);
     }
 
+    /// <summary>
+    /// Opens a checkpoint read from <paramref name="key"/>: framing, type,
+    /// authentication, identifier, decoding and signature, each failure a
+    /// finding. Returns the checkpoint and the writer and counter its
+    /// cleartext prefix accounts for, or null.
+    /// </summary>
+    internal (DecodedCheckpoint Checkpoint, (WriterId Writer, ulong Counter) Counter)? OpenCheckpoint(
+        ObjectKey key, byte[] bytes, List<DamageFinding> findings)
+    {
+        if (Open(key.Value, bytes, ObjectType.IndexCheckpoint, findings) is not { } opened)
+        {
+            return null;
+        }
+
+        DecodedCheckpoint decoded;
+        try
+        {
+            decoded = CheckpointCodec.Decode(opened.Plaintext);
+        }
+        catch (IndexFormatException exception)
+        {
+            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Checkpoint '{key}': {exception.Message}"));
+            return null;
+        }
+
+        if (!VerifySignature(decoded.Checkpoint.Generation, decoded.SignedBytes.Span, decoded.Signature.Span, key.Value, findings))
+        {
+            return null;
+        }
+
+        return (decoded, (opened.Record.WriterId, opened.Record.Counter));
+    }
+
+    /// <summary>
+    /// Opens a delta's stored object, read from its key or carried in a
+    /// checkpoint, by one path: framing, type, authentication, identifier,
+    /// decoding and signature, each failure a finding. Null when it does not
+    /// open.
+    /// </summary>
+    /// <param name="label">Where the bytes came from, for the finding.</param>
+    /// <param name="bytes">The stored object.</param>
+    /// <param name="findings">Where a failure is reported.</param>
+    internal DecodedDelta? OpenDelta(string label, byte[] bytes, List<DamageFinding> findings)
+    {
+        if (Open(label, bytes, ObjectType.IndexDelta, findings) is not { } opened)
+        {
+            return null;
+        }
+
+        DecodedDelta decoded;
+        try
+        {
+            decoded = IndexDeltaCodec.Decode(opened.Plaintext);
+        }
+        catch (IndexFormatException exception)
+        {
+            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Delta '{label}': {exception.Message}"));
+            return null;
+        }
+
+        return VerifySignature(decoded.Delta.Generation, decoded.SignedBytes.Span, decoded.Signature.Span, label, findings)
+            ? decoded
+            : null;
+    }
+
+    /// <summary>Reads the whole object at <paramref name="key"/>, or reports it vanished.</summary>
+    internal async ValueTask<byte[]?> FetchAsync(ObjectKey key, List<DamageFinding> findings, CancellationToken cancellationToken)
+    {
+        using var read = await _store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false);
+        if (read.Outcome != OpenReadOutcome.Found)
+        {
+            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{key}' vanished between listing and read."));
+            return null;
+        }
+
+        using var memory = new MemoryStream();
+        await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
+        return memory.ToArray();
+    }
+
     private bool VerifySignature(
         ulong generation,
         ReadOnlySpan<byte> signedBytes,
         ReadOnlySpan<byte> signature,
-        ObjectKey key,
+        string label,
         List<DamageFinding> findings)
     {
         if (generation > uint.MaxValue)
         {
-            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{key}' declares generation {generation}, beyond the u32 key space."));
+            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{label}' declares generation {generation}, beyond the u32 key space."));
             return false;
         }
 
@@ -401,33 +438,19 @@ public sealed class IndexLoader : IDisposable
             // (06 §6.1) — reported as security, and the object is excluded.
             findings.Add(new DamageFinding(
                 DamageKind.SecurityFinding,
-                $"Index object '{key}' failed signature verification for generation {generation}."));
+                $"Index object '{label}' failed signature verification for generation {generation}."));
             return false;
         }
 
         return true;
     }
 
-    private async ValueTask<(StandaloneRecord Record, byte[] Plaintext)?> OpenObjectAsync(
-        ObjectKey key,
+    private (StandaloneRecord Record, byte[] Plaintext)? Open(
+        string label,
+        byte[] bytes,
         ObjectType expectedType,
-        List<DamageFinding> findings,
-        CancellationToken cancellationToken)
+        List<DamageFinding> findings)
     {
-        byte[] bytes;
-        using (var read = await _store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false))
-        {
-            if (read.Outcome != OpenReadOutcome.Found)
-            {
-                findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{key}' vanished between listing and read."));
-                return null;
-            }
-
-            using var memory = new MemoryStream();
-            await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
-            bytes = memory.ToArray();
-        }
-
         StandaloneRecord record;
         try
         {
@@ -435,7 +458,7 @@ public sealed class IndexLoader : IDisposable
         }
         catch (RecordFormatException exception)
         {
-            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{key}': {exception.Message}"));
+            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{label}': {exception.Message}"));
             return null;
         }
 
@@ -443,7 +466,7 @@ public sealed class IndexLoader : IDisposable
         {
             findings.Add(new DamageFinding(
                 DamageKind.MissingIndexObject,
-                $"Index object '{key}' carries object type {record.Header.ObjectType}, not {expectedType}."));
+                $"Index object '{label}' carries object type {record.Header.ObjectType}, not {expectedType}."));
             return null;
         }
 
@@ -454,7 +477,7 @@ public sealed class IndexLoader : IDisposable
             {
                 findings.Add(new DamageFinding(
                     DamageKind.CorruptRecord,
-                    $"Index object '{key}' failed authentication (specification 04 §7)."));
+                    $"Index object '{label}' failed authentication (specification 04 §7)."));
                 return null;
             }
 
@@ -465,7 +488,7 @@ public sealed class IndexLoader : IDisposable
             {
                 findings.Add(new DamageFinding(
                     DamageKind.CorruptRecord,
-                    $"Index object '{key}' decrypted but its content does not match its identifier (04 §6 step 7)."));
+                    $"Index object '{label}' decrypted but its content does not match its identifier (04 §6 step 7)."));
                 return null;
             }
 

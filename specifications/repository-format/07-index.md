@@ -175,23 +175,67 @@ Stored at `/index/checkpoint/<generation>/<checkpoint-id>`.
 |-----|------|-------|
 | 1 | u64 | `generation` |
 | 2 | array | `subsumed_delta_ids` — the exact deltas this checkpoint covers |
-| 3 | array | `writer_watermarks` — array of `[writer_id, highest_sequence]` |
-| 4 | array | `shard_set` — every shard this checkpoint covers |
-| 5 | array | `shard_hashes` — SHA-256 per shard, parallel to `shard_set` |
+| 3 | array | `writer_watermarks` — array of `[writer_id, highest_sequence]`; the earlier form only (§5.2) |
+| 4 | array | `shard_set` — every shard this checkpoint covers; the earlier form only |
+| 5 | array | `shard_hashes` — SHA-256 per shard, parallel to `shard_set`; the earlier form only |
 | 6 | bytes[16] | `predecessor_checkpoint_id` |
-| 7 | array | `entries` — as §2.1 |
+| 7 | array | `entries` — as §2.1; the earlier form only (§5.2) |
 | 8 | bytes[16] | `writer_id` |
-| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of keys 1–8; semantics as [06 §6.1](06-manifests.md#61-signature) |
+| 9 | bytes[64] | `signature` — Ed25519 over the canonical encoding of **every other key present**; semantics as [06 §6.1](06-manifests.md#61-signature) |
+| 10 | array | `subsumed_deltas` — array of bytes, parallel to `subsumed_delta_ids`: each delta's stored object (§5.1) |
+
+The signature covers every key except itself, as a delta's does (§2). Key 10 sorts after the signature and is signed all the same.
+
+> **Amended (format 5, [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> Key 9 was stated as covering keys 1–8. For a checkpoint without key 10 the
+> two statements say the same; with it, only this one is true.
 
 > **Erratum (phase 0).** Pending normative edits, per [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md): `<checkpoint-id>` is 16 CSPRNG bytes rendered base32 (Decision 2); the object is sealed under the `FBPKSREC` standalone framing with object type `0x09` (Decision 1); key 3's elements are `[bytes[16], u64]` pairs, key 4's are u16 shard values; and key 5's preimage — unstated above — is pinned by Decision 6: `shard_hashes[i]` = SHA-256 over the deterministic CBOR array of shard `shard_set[i]`'s post-precedence entries in §2.1 form, sorted by `object_id` bytes ascending.
 
-A reader applies a checkpoint and then **any delta whose `sequence` exceeds that checkpoint's watermark for its writer** — whether or not a store listing revealed it. This is what removes the dependency on listing freshness: a delta written moments ago and not yet visible in a listing is still applied when found, and its absence is detectable via the sequence chain.
+### 5.1 Carried deltas
+
+`subsumed_deltas` carries each delta the checkpoint subsumes as its **stored object**: the bytes at the delta's key, exactly, framing, nonce and tag included. Element *i* is the delta named by `subsumed_delta_ids[i]`.
+
+**A writer at repository format 5 or above MAY publish a checkpoint carrying deltas. A writer below format 5 MUST NOT.** The reason is §2.3's: an unknown key in a checkpoint is refused as it is in a delta (§2.5), so a repository a reader that predates key 10 is entitled to read never holds one.
+
+When present, key 10:
+- MUST have exactly the length of `subsumed_delta_ids`;
+- MUST NOT be empty — a checkpoint that carries no delta omits the key, so each fact has one encoding;
+- MUST stand alone: the checkpoint carries no `entries`, `shard_set`, `shard_hashes` or `writer_watermarks`, each present and empty.
+
+A reader MUST refuse a checkpoint that breaks any of these as malformed.
+
+Each carried delta is a metadata object, and so is the checkpoint carrying it; both are bounded by [00 §8](00-conventions.md#8-lengths-and-limits). **A writer MUST NOT publish a checkpoint over the bound.** A writer whose deltas would not fit one checkpoint publishes several, and a delta too large for any checkpoint stays at its key alone.
+
+What carrying buys is that a checkpoint restates nothing. A carried delta is the delta: its entries rank at its own index generation, writer and sequence (§3), its covered blobs keep their signed digests and roots (§2.2, §2.3), and the sequence it carries accounts for its number (§4).
+
+### 5.2 Reading a checkpoint
+
+A reader opens each carried delta **exactly as it would open the object at the delta's key**: framing, object type, authentication, identifier, decoding and signature. A copy that opens is that delta, applied as §3 applies any delta. A copy that does not open is the damage finding the object at the key would be, and the reader reads the delta from its key instead. A reader opens every copy, including one of a delta another checkpoint carries soundly, so the findings do not depend on the order checkpoints are listed in.
+
+A reader need not fetch a listed delta that a copy it has opened carries. It applies a carried delta whether or not a listing returns it, and applies each delta once, however many checkpoints carry it.
+
+**A reader MUST NOT act on a checkpoint's own `entries` (key 7) or `writer_watermarks` (key 3).** It ranks no entry of key 7, drops no delta at or below a watermark, and accounts for every sequence number of a writer from 1 (§4). A checkpoint of the earlier form is read, its signature checked, and contributes nothing.
+
+> **Amended (format 5, [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> This section said a reader applies a checkpoint and then any delta whose
+> `sequence` exceeds that checkpoint's watermark for its writer. A watermark
+> is only as safe as its builder's listing, so one placed past a delta the
+> listing missed hid it from every reader; and an entry a checkpoint carried
+> for itself ranked at the checkpoint, not where its delta ranked
+> ([ADR-0008 Amendment 1](../../docs/adr/0008-index-generations-and-checkpoints.md#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first),
+> constraints 1 and 3). No implementation published that form. Listing
+> freshness stops mattering for a different reason: a delta a checkpoint
+> carries is read from the checkpoint, and one it does not is applied when a
+> listing returns it and detected as a gap until then.
 
 ## 6 Concurrent checkpoints
 
 Two writers may publish a checkpoint at the same generation. **Both are retained and both applied.**
 
 This is safe because of §3, not because entries commute. There is no election, no lock, and no leader — the outcome is determined by the entries themselves.
+
+Two checkpoints carrying one delta apply it once (§5.2).
 
 ## 7 Delta retirement
 
@@ -201,11 +245,18 @@ Retiring a delta on one checkpoint's authority while another live checkpoint omi
 
 Retirement is a deletion and follows the same discipline as any other: tombstone, grace period, revalidate, delete.
 
+> **Implementation note (2026-10).** This implementation retires no delta,
+> at staging or at a destination. A delta a checkpoint carries stays at its
+> key too, so it is stored twice until retirement is built
+> ([ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).
+
 ## 8 Sharding
 
 `shard` is the **top 16 bits of the object identifier**, giving 65 536 shards. A reader resolving one file fetches only the shards covering its segments — the index never has to be loaded whole.
 
 A writer MAY publish a single delta spanning multiple shards for a small job. A checkpoint MUST enumerate every shard it covers in `shard_set`, so a reader can tell the difference between "this shard has no entries" and "this checkpoint does not cover this shard".
+
+A checkpoint that carries deltas (§5.1) has no entries and covers no shard of its own; its deltas cover what they cover.
 
 ## 9 Filters
 

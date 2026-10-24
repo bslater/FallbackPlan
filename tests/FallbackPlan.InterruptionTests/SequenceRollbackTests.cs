@@ -124,11 +124,11 @@ public sealed class SequenceRollbackTests : InterruptionHarness
         // bytes it will not accept. Nothing had ever asked the repository what
         // sequence it attests.
         //
-        // It does attest one. Every checkpoint carries a per-writer watermark
-        // and every applied delta carries its sequence (07 §§5-6), all signed,
-        // and all of it lives at every destination rather than in the state
-        // directory that was lost. Consulting it before publishing turns the
-        // collision into an adoption (NFR-SEC-005).
+        // It does attest one. Every applied delta carries its sequence, signed,
+        // whether it is read from its key or from a checkpoint carrying it
+        // (07 §§2, 5), and all of it lives at every destination rather than in
+        // the state directory that was lost. Consulting it before publishing
+        // turns the collision into an adoption (NFR-SEC-005).
         var store = CreateStore();
         using var keys = CreateKeys();
         using var credential = CreateCredential();

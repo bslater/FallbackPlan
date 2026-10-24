@@ -1,6 +1,6 @@
 # ADR-0008 — Index generations, deltas, and checkpoints
 
-**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md); amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-the-checkpoints-are-not-and-two-writers-are-ranked-by-id)
+**Status:** Accepted (amended 2026-08 after [pressure test](../review/2026-08-fix-pressure-test.md); amended 2026-10) · Partly built — see [implementation status](../implementation-status.md#0008-0017--the-deltas-are-built-format-5-checkpoints-them-and-two-writers-are-ranked-by-id)
 **Date:** 2026-08
 **Requirements:** FR-MAN-008, FR-MAN-013, NFR-SEC-005, NFR-PERF-005
 **Review finding:** [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on)
@@ -77,6 +77,13 @@ A reader applies any delta whose sequence exceeds the checkpoint's watermark for
 > reading `subsumed_delta_ids`, and it ignores `shard_set`, so a watermark is
 > only as safe as the accounting behind it.
 
+> **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six); [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)).**
+> From format 5 a checkpoint carries the deltas it subsumes, verbatim, beside
+> their identifiers, and nothing of its own. A loader reads each carried delta
+> from the checkpoint and fetches only the listed deltas no verified copy
+> carries. No watermark is acted on, so a delta a builder's listing missed is
+> applied when it is listed, and gap accounting starts from 1.
+
 ### Retirement requires uncontested coverage
 
 The original rule — retire a delta once "a checkpoint explicitly naming it" has been durable for the safety window — is ambiguous when two checkpoints exist at the same generation naming different delta sets. If `CP-a` names `{D1, D2, D3}` and concurrent `CP-b` names `{D1, D2}`, retiring `D3` on `CP-a`'s authority strands its entries for any reader holding only `CP-b` ([PT-7](../review/2026-08-fix-pressure-test.md#pt-7--delta-retirement-is-ambiguous-under-concurrent-checkpoints)).
@@ -107,6 +114,11 @@ Merging is then safe for the reason that actually holds: the winner is a propert
 > own writer and watermark, so a merge is safe only once constraint 1 of the
 > amendment is met.
 
+> **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six)).** Met at format 5 by carrying
+> deltas rather than entries: every carried entry ranks as its own delta does,
+> and a checkpoint's own entries are ranked nowhere. Two checkpoints carrying
+> one delta apply it once.
+
 ## Consequences
 
 **Positive**
@@ -125,6 +137,11 @@ Merging is then safe for the reason that actually holds: the winner is a propert
 > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--what-is-built-and-what-a-checkpoint-must-satisfy-first)).** None of these costs is
 > paid, because no checkpoint is written. The cost paid instead is that every
 > full load reads every delta.
+
+> **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six)).** A format-5 set writes
+> checkpoints, and pays different costs from these: no watermark is tracked,
+> and every carried delta is stored twice, at its key and in its checkpoint,
+> until a delta can be retired.
 
 ## Alternatives considered
 
@@ -187,6 +204,9 @@ built; that design comes next, under this record.
   A normal rebuild applies every delta, and "the latest checkpoint" that
   [architecture 02 §8.1](../architecture/02-repository-format.md#81-normal-rebuild)
   starts from does not exist.
+
+  > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six)).** A format-5 set publishes
+  > them after its backups, carrying its deltas.
 - **No delta is retired**, at staging or at a destination. A destination
   never deletes an index key: convergence keeps every key outside `blobs/`
   and `snapshots/`.
@@ -321,10 +341,49 @@ because nothing the product does depends on a checkpoint. The cost is that a
 full load reads every delta, and that cost grows with the number of backups
 and compaction passes.
 
+> **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six)).** Format 5 meets constraints 1
+> to 5. Constraint 6 stands: nothing retires a delta.
+
+## Amendment 2 (2026-10) — format 5 meets five of the six
+
+[ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md) is the design
+Amendment 1 said would come next. A format-5 checkpoint carries the deltas it
+subsumes as their stored objects, verbatim, at key 10 beside their identifiers
+in key 2, and carries nothing of its own. A loader opens each copy exactly as
+it would the object at the delta's key and fetches only the listed deltas no
+verified copy carries.
+
+Against the six constraints:
+1. **Rank.** A carried delta's entries rank at its own index generation,
+   writer and sequence. A checkpoint's own entries, the earlier form, are
+   ranked nowhere, by the loader or the catalogue.
+2. **Writer and sequence.** Kept, because the copy is the delta. A catalogue
+   rebuilt through a checkpoint credits each location as one rebuilt from the
+   deltas does.
+3. **Watermarks.** No watermark is acted on. The loader skips only what a
+   verified copy carries, so nothing a builder's listing missed is hidden,
+   and gap accounting starts from 1.
+4. **Size.** Each checkpoint is held under the metadata limit, and a delta too
+   large for one is never carried. Nothing depends on `shard_set`.
+5. **Digests and roots.** Kept: they are signed inside each delta, and the
+   delta is carried whole.
+6. **Retirement.** Not met. Nothing retires a delta, so every carried delta is
+   stored twice. Retirement is owed under FR-MAN-017.
+
+The service checkpoints a format-5 set after a committed backup, inside the
+run, once 64 of its deltas sit outside every checkpoint
+(`Repository.Index/IndexCheckpointer`). A set below format 5 publishes none,
+because a reader that predates key 10 would report the checkpoint as damage.
+
+What a checkpoint buys, as Amendment 1 put it, is now bought at the loader:
+it no longer fetches a delta a checkpoint carries, so every full load
+gains, at staging and at every destination, without a delta being retired.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Partly built (amended) | [Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six): format 5's checkpoint carries the deltas it subsumes, verbatim, and a load reads each carried delta from it and fetches only the rest ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Index/CheckpointCodec`, `Repository.Index/IndexLoader`, `Repository.Index/IndexCheckpointer`). No watermark and no checkpoint entry is acted on. Constraints 1 to 5 are met; retirement, constraint 6, is not built |
 | 2026-10 | Partly built (amended) | Every delta a writer publishes is one a reader can open. A backup put every record it wrote into one delta, so one past about 245 000 records published a delta over the 16 MiB metadata bound that every reader refused. A publication now cuts its entries into deltas at blob boundaries under that bound, the cut compaction already made (`Repository/IndexDeltaBudget`), and the publisher refuses any index object over it (`Repository.Tests/DeltaSplitPublicationTests`, `Repository.Tests/Index/OversizedIndexObjectTests`; 07 §2) |
 | 2026-10 | Partly built (amended) | The gap patience runs out at format 4: every delta carries an index generation, a gap ages per gap from the first later delta of its writer, and the product's rebuilds judge it at 8 (`Repository.Index/IndexLoader`, `Repository.Tests/Index/IndexGenerationTests`, [ADR-0096](0096-format-4-an-index-generation-per-delta.md) §4). Checkpoints are still unpublished |
 | 2026-10 | Partly built (amended) | The product's index loads pass sequence accounting ([ADR-0022](0022-standalone-metadata-records-and-index-identifiers.md) §Decision 7, amended), so a journal record or a named blob is not a gap (`Repository.Index/SequenceAccounting`, `ArchitectureTests/IndexLoadAccountingTests`). The patience still never runs out |

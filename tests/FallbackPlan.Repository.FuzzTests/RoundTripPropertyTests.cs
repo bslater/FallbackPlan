@@ -141,6 +141,37 @@ public sealed class RoundTripPropertyTests
     }
 
     [TestMethod]
+    public void BundledCheckpoint_AnyGeneratedCheckpoint_RoundTripsByteIdentically() =>
+        PropertyCheck.Holds(this, maxTest: 100);
+
+    public static void BundledCheckpoint_AnyGeneratedCheckpoint_RoundTripsByteIdenticallyProperty(
+        byte deltaCount, ushort deltaLength, ulong generation)
+    {
+        var count = 1 + (deltaCount % 16);
+        var checkpoint = new Checkpoint
+        {
+            Generation = generation,
+            WriterId = Writer,
+            SubsumedDeltaIds = [.. Enumerable.Range(0, count).Select(index => DeltaId.FromBytes(BlobFrom(index).ToArray()))],
+            SubsumedDeltas =
+            [
+                .. Enumerable.Range(0, count)
+                    .Select(index => (ReadOnlyMemory<byte>)SHA256.HashData(BitConverter.GetBytes(index))
+                        .AsSpan(0, 1 + ((deltaLength + index) % 32)).ToArray()),
+            ],
+        };
+
+        var encoded = CheckpointCodec.Encode(checkpoint, new byte[64]);
+        var decoded = CheckpointCodec.Decode(encoded);
+
+        SequenceAssert.AreEqual(encoded, CheckpointCodec.Encode(decoded.Checkpoint, decoded.Signature.Span));
+
+        // Key 10 is inside the signed bytes although it sorts after the
+        // signature (07 §5).
+        SequenceAssert.AreEqual(CheckpointCodec.EncodeForSigning(decoded.Checkpoint), decoded.SignedBytes.ToArray());
+    }
+
+    [TestMethod]
     public void JournalRecord_EveryKind_RoundTripsByteIdentically() =>
         PropertyCheck.Holds(this, maxTest: 100);
 

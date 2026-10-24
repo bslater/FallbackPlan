@@ -14,8 +14,9 @@ using FallbackPlan.TestSupport;
 /// deleted outright, rebuilt from the index deltas, and a restore succeeds —
 /// with the rebuilt catalogue proving itself by locating a record's blob
 /// without any repository scan (the NFR-PERF-004 path). No checkpoint is
-/// published here, as none is in the product, so the criterion's "checkpoint
-/// plus deltas" is met from deltas alone (ADR-0008 Amendment 1).
+/// published here, so the criterion's "checkpoint plus deltas" is met from
+/// deltas alone; a rebuild through a format-5 checkpoint is
+/// <c>Index/CheckpointBundleTests</c>'s (ADR-0097).
 ///
 /// Deleting it and still restoring is what makes the catalogue a cache rather
 /// than a second source of truth, which is the pair of claims FR-MAN-001 (no

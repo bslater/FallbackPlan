@@ -249,23 +249,37 @@ public static class BackupRunner
             // null, and a preempted run's prior detail is "resumed" — which
             // must not survive onto the terminal record a person reads.
             var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged";
-            jobs.Transition(
-                jobId,
-                outcome,
-                nowMs,
-                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
-                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
-                stats: StatsOf(progress.Latest));
-            progress.Enter(outcome);
-            runCommitted = true;
+            try
+            {
+                // Inside the run, so a direct-ship set's checkpoint reaches its
+                // destinations through the same fan-out its deltas did; and
+                // before the journal settles the run, because a settled row
+                // lets the set's next run begin (ADR-0027 §1) while this one
+                // still draws on the writer sequence.
+                await CheckpointIndexAsync(runtime, set, jobId, archive, generation, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // The snapshot committed whatever the checkpoint did.
+                jobs.Transition(
+                    jobId,
+                    outcome,
+                    nowMs,
+                    detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
+                    snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
+                    stats: StatsOf(progress.Latest));
+                progress.Enter(outcome);
+                runCommitted = true;
 
-            // The set-changed notice's condition is "the last backup predates
-            // the settings" (ADR-0038). This backup captured the settings it
-            // was queued with, which clears it only when they are still the
-            // current ones: a run queued before an edit leaves the edit's
-            // notice standing for the run that follows it (Amendment 2).
-            runtime.SetSettings.Captured(
-                set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
+                // The set-changed notice's condition is "the last backup predates
+                // the settings" (ADR-0038). This backup captured the settings it
+                // was queued with, which clears it only when they are still the
+                // current ones: a run queued before an edit leaves the edit's
+                // notice standing for the run that follows it (Amendment 2).
+                runtime.SetSettings.Captured(
+                    set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
+            }
 
             return new BackupOutcome(set.Name, "ran", summary);
         }
@@ -314,6 +328,58 @@ public static class BackupRunner
             {
                 await sink.CompleteRunAsync(nowMs, runCommitted).ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Carries a format-5 archive's uncovered index deltas into checkpoints
+    /// once enough have gathered (07 §5, ADR-0097), so a load reads one object
+    /// where it read many.
+    /// </summary>
+    /// <remarks>
+    /// Best effort, after the snapshot committed: a checkpoint changes how
+    /// many objects a load reads and nothing it reaches, so one that fails is
+    /// logged and the run still ran. The number it drew stays outstanding and
+    /// the next publication voids it, as any failed publication's is. Below
+    /// format 5 nothing is published, because a reader that predates key 10
+    /// would report the checkpoint as damage.
+    /// </remarks>
+    private static async ValueTask CheckpointIndexAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        string jobId,
+        ArchiveHandle archive,
+        Domain.KeyGeneration generation,
+        CancellationToken cancellationToken)
+    {
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(archive.Repository.EffectiveFormatVersion))
+        {
+            return;
+        }
+
+        var log = runtime.LoggerFor<Repository.Index.IndexCheckpointer>();
+        try
+        {
+            if (runtime.Options.EnteredCheckpointing is { } entered)
+            {
+                await entered(jobId, cancellationToken).ConfigureAwait(false);
+            }
+
+            using var checkpointer = new Repository.Index.IndexCheckpointer(
+                archive.Store, archive.Repository.RepositoryId, runtime.Writer, archive.Repository.Credential,
+                archive.Sequence, log)
+            {
+                Coverage = archive.CheckpointCoverage,
+            };
+            await checkpointer.CheckpointAsync(
+                generation.Value,
+                runtime.Options.CheckpointThresholdOverride ?? Repository.Index.IndexCheckpointer.DefaultThreshold,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or Repository.Index.IndexFormatException or OperationCanceledException)
+        {
+            Log.CheckpointDeferred(log, new Domain.Diagnostics.LogLabel(set.Name), exception);
         }
     }
 
