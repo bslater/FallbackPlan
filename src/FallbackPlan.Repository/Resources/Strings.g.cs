@@ -184,6 +184,28 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_UpgradeBelowEffectiveVersion, arg0, arg1);
 
     /// <summary>
+    /// An upgrade to format {0} is refused: it is newer than format {1}, the newest this build writes, and a build records an upgrade only to a format it implements.
+    /// </summary>
+    private static string RepositoryLifecycle_UpgradeAboveThisBuild => Get(nameof(RepositoryLifecycle_UpgradeAboveThisBuild));
+
+    /// <summary>
+    /// An upgrade to format {0} is refused: it is newer than format {1}, the newest this build writes, and a build records an upgrade only to a format it implements.
+    /// </summary>
+    internal static string FormatRepositoryLifecycle_UpgradeAboveThisBuild(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, RepositoryLifecycle_UpgradeAboveThisBuild, arg0, arg1);
+
+    /// <summary>
+    /// This repository is at format {0}, newer than format {1}, the newest this build writes. This build still reads it but writes nothing to it; back it up, collect it or delete from it with a build that writes format {0} (ADR-0066 Amendment 1).
+    /// </summary>
+    private static string NewerFormat_NotWritten => Get(nameof(NewerFormat_NotWritten));
+
+    /// <summary>
+    /// This repository is at format {0}, newer than format {1}, the newest this build writes. This build still reads it but writes nothing to it; back it up, collect it or delete from it with a build that writes format {0} (ADR-0066 Amendment 1).
+    /// </summary>
+    internal static string FormatNewerFormat_NotWritten(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, NewerFormat_NotWritten, arg0, arg1);
+
+    /// <summary>
     /// Compaction relocates sealed records, which only format 3 permits; at format 2 a record's key is its blob's and moving it means opening it, which a write-only service cannot do (ADR-0025, ADR-0052).
     /// </summary>
     internal static string BlobCompactor_CompactionNeedsFormatThree => Get(nameof(BlobCompactor_CompactionNeedsFormatThree));

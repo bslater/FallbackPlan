@@ -145,6 +145,12 @@ one restores only part of it (NFR-COMP-004 as amended).
 > repository refuses each checkpoint carrying deltas, as damage, and still
 > reads every delta at its key.
 
+> **Amended 2026-10 ([ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements)).**
+> *Refuse, never misread* binds a writer too. A build that opens a repository
+> upgraded past it reads what it can and writes nothing into it. Before, it
+> wrote its own newest format's objects there, under a version whose rules it
+> had never seen.
+
 ## Status history
 
 | Date | Status | Note |
@@ -155,3 +161,4 @@ one restores only part of it (NFR-COMP-004 as amended).
 | 2026-10 | Amended | Format 4 admitted beside formats 2 and 3, and created by default ([ADR-0096](0096-format-4-an-index-generation-per-delta.md)): a format-4 descriptor lists `0x0004` beside `0x0003`, either mismatch is a violation, and a version above 4 is refused naming 2 to 4 (`Repository.Format/Descriptor/RepositoryDescriptorCodec`, `Domain/FormatVersions`). Blobs are still stamped 3. `fixture-repository-v4` joins the fixtures |
 | 2026-09 | Amended | Format 3 admitted beside format 2: readers accept both, a repository's version is fixed at creation and declared by a required descriptor feature, and a build without that feature refuses by name ([ADR-0052](0052-relocatable-records-format-v3.md)). `Domain/FormatVersions` and `Domain/FormatLimits` carry the two versions and the container stamp each implies; `Repository.Format/Descriptor/RepositoryDescriptorCodec` holds the feature and its consistency rule. The freeze gate is unchanged and still reads against format 2 |
 | 2026-09 | Amended | A repository's version is carried by two objects rather than one ([Amendment 2](#amendment-2-2026-09--a-repositorys-version-is-carried-by-two-objects)): the descriptor states what it was created at, and a signed append-only format-upgrade record states what it writes ([ADR-0066](0066-the-format-upgrade-record.md)). Format 3 is now the creation default (`Domain/FormatLimits`, `Agent/ServiceRuntime`), the effective version is read on every open (`Repository/RepositoryLifecycle`, `Repository.Format/Lifecycle/FormatUpgradeRecord`), and the freeze gate reads against every version a repository may hold. *Refuse, never misread* holds and loses its diagnosis: an older build meets an upgraded repository at its first newer object rather than at the door |
+| 2026-10 | Amended | A build writes only a repository whose effective version it implements, and reads one upgraded past it without writing ([ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements); `Repository/NewerFormatException`) |

@@ -5,7 +5,10 @@ namespace FallbackPlan.Domain.Tests;
 /// specification 00 §5; ADR-0096, ADR-0097). Format 4 changes the index
 /// delta and nothing else: it ranks entries by an index generation, and its
 /// records and blobs are format 3's byte for byte. Format 5 adds a
-/// checkpoint that carries deltas verbatim and changes nothing else.
+/// checkpoint that carries deltas verbatim and changes nothing else. A
+/// version above the newest this build knows is never written (NFR-COMP-003;
+/// specification 11 §5.3): what such a repository's objects must carry is the
+/// newer build's to say.
 /// </summary>
 [TestClass]
 public sealed class FormatVersionsTests
@@ -63,5 +66,30 @@ public sealed class FormatVersionsTests
         Assert.IsTrue(FormatVersions.IsReadable(FormatVersions.DeltaCheckpoints));
         Assert.IsFalse(FormatVersions.IsReadable(6));
         Assert.AreEqual((ushort)5, FormatLimits.LatestFormatVersion);
+    }
+
+    [TestMethod]
+    public void ThisBuild_WritesFormatsTwoToFive_AndNothingAfter()
+    {
+        Assert.IsFalse(FormatVersions.IsWritable(FormatVersions.Symmetric));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.SealedDataPlane));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.RelocatableRecords));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatVersions.IndexGenerations));
+        Assert.IsTrue(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion));
+        Assert.IsFalse(FormatVersions.IsWritable(FormatLimits.LatestFormatVersion + 1));
+    }
+
+    [TestMethod]
+    public void ContainerVersion_OfAFormatThisBuildDoesNotKnow_IsRefused()
+    {
+        // Answering 3 for a format-6 repository, as every version from 3 up
+        // once did, would stamp a container this build cannot vouch for into
+        // a repository whose rules it has never seen.
+        const ushort unknown = FormatLimits.LatestFormatVersion + 1;
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => FormatVersions.ContainerVersion(unknown, dataClass: true));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+            () => FormatVersions.ContainerVersion(unknown, dataClass: false));
     }
 }

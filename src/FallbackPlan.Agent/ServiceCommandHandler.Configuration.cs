@@ -551,6 +551,7 @@ public sealed partial class ServiceCommandHandler
         }
 
         var effective = archive.Repository.EffectiveFormatVersion;
+        Repository.NewerFormatException.ThrowIfNewer(effective);
         if (effective >= FormatLimits.FormatVersion)
         {
             return new ServiceError(

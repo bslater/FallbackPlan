@@ -57,6 +57,15 @@ public sealed class OpenedRepository : IDisposable
     /// </remarks>
     public ushort EffectiveFormatVersion { get; }
 
+    /// <summary>
+    /// Whether this build implements the effective format, and so may write
+    /// the repository (specification 11 §5.3). One a newer build upgraded
+    /// past it is opened, read, restored, verified and copied as any other,
+    /// and nothing is written into it: no object authored, and none reclaimed
+    /// on this build's reading of what is live.
+    /// </summary>
+    public bool WritableByThisBuild => FormatVersions.IsWritable(EffectiveFormatVersion);
+
     /// <summary>The repository identity, from the descriptor.</summary>
     public RepositoryId RepositoryId => Descriptor.RepositoryId;
 
@@ -599,6 +608,7 @@ public static class RepositoryLifecycle
     /// the passphrase, exactly as it publishes without one.
     /// </summary>
     /// <exception cref="InvalidOperationException">The repository is already at or above that version.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The version is newer than this build writes.</exception>
     /// <exception cref="IOException">The store refused the record.</exception>
     public static async ValueTask WriteFormatUpgradeAsync(
         IObjectStore store,
@@ -626,6 +636,16 @@ public static class RepositoryLifecycle
         {
             throw new InvalidOperationException(
                 Strings.FormatRepositoryLifecycle_UpgradeBelowEffectiveVersion(toVersion, effective));
+        }
+
+        // The record is the claim that the repository writes that format from
+        // now on, and only a build that implements it can make the claim true.
+        if (!FormatVersions.IsWritable(toVersion))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(toVersion),
+                toVersion,
+                Strings.FormatRepositoryLifecycle_UpgradeAboveThisBuild(toVersion, FormatLimits.LatestFormatVersion));
         }
 
         var record = new FormatUpgradeRecord(effective, toVersion, upgradedAtUnixMilliseconds, writerId);

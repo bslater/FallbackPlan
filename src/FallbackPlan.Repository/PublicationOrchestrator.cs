@@ -147,6 +147,7 @@ public sealed partial class PublicationOrchestrator
     /// incremental jobs. The catalogue stays a cache: publication
     /// correctness never depends on it.
     /// </summary>
+    /// <exception cref="NewerFormatException">The repository is at a format newer than this build writes.</exception>
     public PublicationOrchestrator(
         CapturePolicy policy,
         RepositoryId repositoryId,
@@ -171,6 +172,11 @@ public sealed partial class PublicationOrchestrator
         ThrowHelper.ThrowIfNull(store);
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNullOrWhiteSpace(spoolDirectory);
+
+        // Before any spool, intent or blob exists: a publication into a
+        // repository a newer build upgraded would be this build's guess at
+        // that format's rules (specification 11 §5.3).
+        NewerFormatException.ThrowIfNewer(repositoryFormatVersion);
 
         // FR-DED-004's gate, enforced where publications start: the
         // unverified domain reuses other writers' segments without reading

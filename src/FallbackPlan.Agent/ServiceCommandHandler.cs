@@ -135,6 +135,12 @@ public sealed partial class ServiceCommandHandler(
         {
             return new ServiceError(ServiceErrorReason.Failed, exception.Message);
         }
+        catch (NewerFormatException exception)
+        {
+            // Every verb that would write a set a newer build upgraded meets
+            // the one refusal, wherever in the verb the write would have begun.
+            return new ServiceError(ServiceErrorReason.Refused, exception.Message);
+        }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return new ServiceError(ServiceErrorReason.Failed, exception.Message);
