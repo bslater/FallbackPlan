@@ -216,6 +216,14 @@ Rewriting the descriptor instead was considered and cannot work, because the des
 
 So a rewritten descriptor would move the source alone and leave every destination and every replica claiming the older format over newer blobs — a recovery from one of those copies would read a format-2 descriptor over format-3 records. An append-only record needs none of this: it is an ordinary immutable object, which is the one thing all three paths already move. For the same reason it joins `repository-format` on the never-deletable list: a commander that could have a spoke delete it could revert that replica's format claim while the source went on writing the newer format into it.
 
+### 5.3 A writer writes only a format it implements
+
+A writer MUST NOT write into a repository whose effective version is above the newest format it implements. What an object written at that version must carry, and what the index written at it says about which objects are live, are that format's to define, and a writer that does not implement it can only guess. So it MUST NOT author an object there, and it MUST NOT delete one, at the source or at a copy, on its own reading of which objects are live. Nor may it write an upgrade record naming a version it does not implement, because the record is the claim that the repository writes that format from now on.
+
+It MAY read such a repository, and a reader SHOULD: every object declares its own container in its envelope and every index object its own keys, so a reader opens what it implements and refuses the rest by the ordinary rules ([§5.1](#51-the-effective-format-version)). Copying an object verbatim, to a destination or back to the source from a sound copy, counts as a read here. The bytes were written by a writer that implements the format, and a copy changes none of them.
+
+A refusal SHOULD name both versions: the effective version the writer will not write, and the newest it implements.
+
 ## 6 What this section does not settle
 
 Named so a phase-4 implementer does not read silence as completeness:
