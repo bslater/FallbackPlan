@@ -307,11 +307,12 @@ public static class BackupRunner
             progress.Enter(JobState.FailedRecoverable);
             return new BackupOutcome(set.Name, "failed", exception.Message);
         }
-        catch (Exception exception) when (exception is RepositoryOpenException or Repository.Crypto.KeyUnwrapFailedException)
+        catch (Exception exception) when (exception is RepositoryOpenException
+            or Repository.Crypto.KeyUnwrapFailedException or NewerFormatException)
         {
             // The set's archive refused to open — damage, or a passphrase
-            // that no longer matches. Retrying cannot fix either; a human can
-            // (10 §3).
+            // that no longer matches — or opened at a format a newer build
+            // wrote. Retrying cannot fix any of them; a human can (10 §3).
             jobs.Transition(jobId, JobState.FailedPermanent, nowMs, exception.Message, stats: StatsOf(progress.Latest));
             progress.Enter(JobState.FailedPermanent);
             return new BackupOutcome(set.Name, "failed", exception.Message);

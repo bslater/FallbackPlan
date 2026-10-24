@@ -1088,6 +1088,28 @@ public sealed class ServiceRuntime : IAsyncDisposable
             // from a notice. Raised at open and resolved by the verb, so an
             // upgrade that did not take asks again at the next open rather
             // than going quiet.
+            // A set a newer build upgraded is opened and read, and written by
+            // nothing here (11 §5.3). Each refusal names the versions where
+            // it happens; this says it once, at open, for a person who never
+            // asked for a backup and would otherwise only see one fail.
+            var newerKey = $"format-newer:{setId}";
+            if (!repository.WritableByThisBuild)
+            {
+                Notices.Raise(
+                    newerKey,
+                    $"Set '{setId}' is at repository format {repository.EffectiveFormatVersion}, which a newer "
+                    + $"build wrote; this build writes up to format {FormatLimits.FormatVersion}. Its snapshots "
+                    + "can still be browsed, restored, verified and copied to its destinations, but this build "
+                    + "writes nothing to it: no backup, retention, compaction or deletion runs, and no "
+                    + "destination is trimmed to its policy. Run a build that writes format "
+                    + $"{repository.EffectiveFormatVersion} to back it up again (ADR-0066 Amendment 1).",
+                    (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
+            else
+            {
+                Notices.Resolve(newerKey, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            }
+
             if (repository.EffectiveFormatVersion < FormatLimits.FormatVersion)
             {
                 Notices.Raise(

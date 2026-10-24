@@ -540,7 +540,9 @@ public static class FanOut
                         DateTimeOffset.FromUnixTimeMilliseconds((long)nowMs), cancellationToken,
                         runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
                     keeps = convergence.Keeps;
-                    ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+                    ReportConvergence(
+                        runtime, set, destination.Name, archive.Repository.EffectiveFormatVersion,
+                        convergence.Refusal, nowMs);
                     ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
                     runtime.Notices.Resolve(awaitsGrantKey, nowMs);
                 }
@@ -1234,7 +1236,9 @@ public static class FanOut
                 runtime.Configuration.EffectiveClockSkewMargin).ConfigureAwait(false);
             keeps = convergence.Keeps;
             keepFingerprint = convergence.Fingerprint ?? KeepsEverything;
-            ReportConvergence(runtime, set, destination.Name, convergence.Refusal, nowMs);
+            ReportConvergence(
+                runtime, set, destination.Name, archive.Repository.EffectiveFormatVersion,
+                convergence.Refusal, nowMs);
             ImplausibleCaptureNotice.Report(runtime.Notices, set, convergence.Implausible, nowMs);
         }
 
@@ -2018,13 +2022,26 @@ public static class FanOut
     }
 
     private static void ReportConvergence(
-        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName, ushort formatVersion,
         Retention.ConvergenceRefusal? refusal, ulong nowMs)
     {
         var key = $"convergence-unavailable:{set.Id}:{destinationName}";
         if (refusal is not { } reason)
         {
             runtime.Notices.Resolve(key, nowMs);
+            return;
+        }
+
+        if (reason == Retention.ConvergenceRefusal.NewerFormat)
+        {
+            runtime.Notices.Raise(
+                key,
+                $"destination '{destinationName}' of set '{set.Name}' received a whole copy instead of its "
+                + $"retention keep-set: the set is at format {formatVersion}, newer than format "
+                + $"{Domain.FormatLimits.FormatVersion}, the newest this build writes, so which of its objects are live "
+                + "is not this build's to judge. It keeps history it was configured to drop until a build that "
+                + $"writes format {formatVersion} converges it (ADR-0066 Amendment 1).",
+                nowMs);
             return;
         }
 

@@ -48,6 +48,18 @@ public static class FormatVersions
         formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
 
     /// <summary>
+    /// Whether this implementation may write a repository whose effective
+    /// version is <paramref name="formatVersion"/>: one it implements
+    /// (specification 11 §5.3). A repository a newer build upgraded past
+    /// <see cref="FormatLimits.LatestFormatVersion"/> is still read, because
+    /// every object declares its own container and every index object its own
+    /// keys, but what an object written at that version must carry is the
+    /// newer build's to say.
+    /// </summary>
+    public static bool IsWritable(ushort formatVersion) =>
+        formatVersion is >= SealedDataPlane and <= FormatLimits.LatestFormatVersion;
+
+    /// <summary>
     /// Whether a blob of this version and class carries one sealed content
     /// key in its envelope for every record in it (05 §2.1) — format 2's data
     /// blobs, and nothing else.
@@ -103,8 +115,13 @@ public static class FormatVersions
     /// </remarks>
     /// <param name="repositoryFormatVersion">The descriptor's format version.</param>
     /// <param name="dataClass">Whether the blob is a data blob.</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The repository is at a version this implementation does not write, whose containers it cannot name.
+    /// </exception>
     public static ushort ContainerVersion(ushort repositoryFormatVersion, bool dataClass)
     {
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(repositoryFormatVersion, FormatLimits.LatestFormatVersion);
+
         if (HasRelocatableRecords(repositoryFormatVersion))
         {
             return RelocatableRecords;

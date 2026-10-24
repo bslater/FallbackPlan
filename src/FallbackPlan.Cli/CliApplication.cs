@@ -403,6 +403,13 @@ public static class CliApplication
                 error.WriteLine($"error: {exception.Message}");
                 return 1;
             }
+            catch (NewerFormatException exception)
+            {
+                // A write into a repository a newer build upgraded: the
+                // operator's to resolve with that build, never a bug.
+                error.WriteLine($"error: {exception.Message}");
+                return 1;
+            }
             catch (FormatException exception)
             {
                 error.WriteLine($"error: {exception.Message}");

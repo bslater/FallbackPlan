@@ -112,6 +112,7 @@ public static class SnapshotDeletion
     /// <returns>What was written.</returns>
     /// <exception cref="ArgumentException">The actor is empty or too long for the audit record to carry.</exception>
     /// <exception cref="IOException">The store would not hold a request.</exception>
+    /// <exception cref="NewerFormatException">The repository is at a format newer than this build writes.</exception>
     public static async ValueTask<SnapshotDeletionRequest> RequestAsync(
         IObjectStore store,
         OpenedRepository repository,
@@ -128,6 +129,7 @@ public static class SnapshotDeletion
         ThrowHelper.ThrowIfNull(sequence);
         ThrowHelper.ThrowIfNull(snapshots);
         ThrowHelper.ThrowIfNullOrWhiteSpace(actor);
+        NewerFormatException.ThrowIfNewer(repository.EffectiveFormatVersion);
 
         // Checked before anything is written: an audit record that would not
         // encode, found after the tombstones, would leave requests nobody is
