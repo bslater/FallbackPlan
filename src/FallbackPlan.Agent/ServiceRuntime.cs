@@ -113,6 +113,14 @@ public sealed record ServiceOptions
     internal Func<string, CancellationToken, ValueTask>? EnteredScanning { get; init; }
 
     /// <summary>
+    /// Awaited by every backup run of a format-5 set as it begins to
+    /// checkpoint its index after the commit (ADR-0097), with the run's job id
+    /// and cancellation token: a test harness's way to hold a committed run at
+    /// the last thing it does. Null, the production value, holds nothing.
+    /// </summary>
+    internal Func<string, CancellationToken, ValueTask>? EnteredCheckpointing { get; init; }
+
+    /// <summary>
     /// Called with a set id and a destination name whenever a drill of that
     /// pair joins the one already under way (FR-DRL-003): a test harness's
     /// way to know the join happened before it lets the first drill finish.

@@ -12,7 +12,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// upsert's first backup — because two runs of one set share a spool
 /// directory, and the second run's crash-hygiene sweep deletes the first
 /// run's live spool out from under it (a sharing violation on Windows,
-/// silent data destruction where the delete wins). The FR-SVC-015 half —
+/// silent data destruction where the delete wins). A run is the set's run
+/// until it has finished everything it does, its index checkpoint after the
+/// commit included. The FR-SVC-015 half —
 /// that the upsert still queues a first backup at all — stays established
 /// by SetChangeTests; here only its collision with a manual trigger.
 /// </summary>
@@ -133,6 +135,36 @@ public sealed class BackupConcurrencyTests : IDisposable
         Assert.HasCount(7, outcomes.Where(outcome => outcome.Outcome == "already-running").ToList());
     }
 
+    [TestMethod]
+    public async Task Enqueue_WhileTheSetsRunCheckpointsItsIndex_IsAnsweredWithThatRun()
+    {
+        // A run checkpoints its index after its snapshot commits (ADR-0097),
+        // on its own writer sequence. Until it has, it is still the set's one
+        // run: a second begun beside it shares the sequence and the spool, and
+        // the first one's settling takes the follow-up an edit asked of the
+        // second.
+        var checkpointing = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var runtime = await StartAsync(async (jobId, cancellationToken) =>
+        {
+            checkpointing.TrySetResult(jobId);
+            await release.Task.WaitAsync(cancellationToken);
+        });
+
+        var set = runtime.Configuration.BackupSets.Single();
+        _ = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        var running = await checkpointing.Task.WaitAsync(Timeout);
+
+        var second = Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true);
+        Assert.IsTrue(second.IsCompleted, "a backup asked for while the set's run checkpoints must not begin");
+        Assert.AreEqual("already-running", (await second).Outcome);
+        Assert.AreEqual(running, Assert.ContainsSingle(runtime.Jobs.Jobs.Where(job => job.BackupSetId == set.Id)).Id);
+
+        release.SetResult();
+        await WaitForSettledAsync(runtime, set.Id);
+        Assert.AreEqual(Domain.Jobs.JobState.Complete, runtime.Jobs.Jobs.Single(job => job.Id == running).State);
+    }
+
     /// <summary>
     /// Parks one lane worker until released, honouring cancellation so
     /// disposal never hangs behind it.
@@ -177,7 +209,7 @@ public sealed class BackupConcurrencyTests : IDisposable
         }
     }
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(Func<string, CancellationToken, ValueTask>? enteredCheckpointing = null)
     {
         await _harness.CreateRepositoryAsync();
         _harness.WriteSourceFile("notes.txt", "bytes for the capture to carry");
@@ -195,6 +227,7 @@ public sealed class BackupConcurrencyTests : IDisposable
                 // fixture's every path shares one real volume — the vaults are
                 // told apart by name, the compliant install's shape.
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+                EnteredCheckpointing = enteredCheckpointing,
             },
             Timeout);
     }

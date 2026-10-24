@@ -269,7 +269,7 @@ public static class BackupRunner
 
             // Inside the run, so a direct-ship set's checkpoint reaches its
             // destinations through the same fan-out its deltas did.
-            await CheckpointIndexAsync(runtime, set, archive, generation, cancellationToken).ConfigureAwait(false);
+            await CheckpointIndexAsync(runtime, set, jobId, archive, generation, cancellationToken).ConfigureAwait(false);
 
             return new BackupOutcome(set.Name, "ran", summary);
         }
@@ -337,6 +337,7 @@ public static class BackupRunner
     private static async ValueTask CheckpointIndexAsync(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
+        string jobId,
         ArchiveHandle archive,
         Domain.KeyGeneration generation,
         CancellationToken cancellationToken)
@@ -349,6 +350,11 @@ public static class BackupRunner
         var log = runtime.LoggerFor<Repository.Index.IndexCheckpointer>();
         try
         {
+            if (runtime.Options.EnteredCheckpointing is { } entered)
+            {
+                await entered(jobId, cancellationToken).ConfigureAwait(false);
+            }
+
             using var checkpointer = new Repository.Index.IndexCheckpointer(
                 archive.Store, archive.Repository.RepositoryId, runtime.Writer, archive.Repository.Credential,
                 archive.Sequence, log)
