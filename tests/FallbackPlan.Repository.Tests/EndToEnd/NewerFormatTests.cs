@@ -186,8 +186,8 @@ public sealed class NewerFormatTests : IDisposable
         using var _ = reopened;
         using var __ = authority;
 
-        // Refused before it looks at what it was handed: even an empty pass
-        // writes an intent and a delta, at a format this build would guess.
+        // Refused before it looks at what it was handed, so the refusal is
+        // the repository's and does not wait for a plan with work in it.
         var spool = Path.Combine(_root, "compact-spool");
         var refused = await Assert.ThrowsExactlyAsync<NewerFormatException>(
             async () => await CompactionPass.RunAsync(
