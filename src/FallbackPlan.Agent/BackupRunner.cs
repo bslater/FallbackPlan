@@ -249,27 +249,37 @@ public static class BackupRunner
             // null, and a preempted run's prior detail is "resumed" — which
             // must not survive onto the terminal record a person reads.
             var summary = $"{published.Files.Count} file(s), {published.Files.Count(file => file.Reused)} unchanged";
-            jobs.Transition(
-                jobId,
-                outcome,
-                nowMs,
-                detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
-                snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
-                stats: StatsOf(progress.Latest));
-            progress.Enter(outcome);
-            runCommitted = true;
+            try
+            {
+                // Inside the run, so a direct-ship set's checkpoint reaches its
+                // destinations through the same fan-out its deltas did; and
+                // before the journal settles the run, because a settled row
+                // lets the set's next run begin (ADR-0027 §1) while this one
+                // still draws on the writer sequence.
+                await CheckpointIndexAsync(runtime, set, jobId, archive, generation, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                // The snapshot committed whatever the checkpoint did.
+                jobs.Transition(
+                    jobId,
+                    outcome,
+                    nowMs,
+                    detail: partial ? $"partial: {published.Failures.Count} failure(s)" : summary,
+                    snapshotId: Convert.ToHexString(snapshotId).ToLowerInvariant(),
+                    stats: StatsOf(progress.Latest));
+                progress.Enter(outcome);
+                runCommitted = true;
 
-            // The set-changed notice's condition is "the last backup predates
-            // the settings" (ADR-0038). This backup captured the settings it
-            // was queued with, which clears it only when they are still the
-            // current ones: a run queued before an edit leaves the edit's
-            // notice standing for the run that follows it (Amendment 2).
-            runtime.SetSettings.Captured(
-                set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
-
-            // Inside the run, so a direct-ship set's checkpoint reaches its
-            // destinations through the same fan-out its deltas did.
-            await CheckpointIndexAsync(runtime, set, jobId, archive, generation, cancellationToken).ConfigureAwait(false);
+                // The set-changed notice's condition is "the last backup predates
+                // the settings" (ADR-0038). This backup captured the settings it
+                // was queued with, which clears it only when they are still the
+                // current ones: a run queued before an edit leaves the edit's
+                // notice standing for the run that follows it (Amendment 2).
+                runtime.SetSettings.Captured(
+                    set.Id, settingsGeneration, () => runtime.Notices.Resolve(SetChangeScan.NoticeKey(set.Id), nowMs));
+            }
 
             return new BackupOutcome(set.Name, "ran", summary);
         }

@@ -81,7 +81,7 @@ Nothing ever published either: the product never called the earlier form's publi
 
 ### 5 After a committed backup, inside the run
 
-The service checkpoints a format-5 set after its backup commits, inside the run. A direct-ship set's checkpoint therefore reaches its destinations through the same fan-out its deltas did, and a staging set's through the next sync, as every index object does. It is best effort: a checkpoint changes how many objects a load reads and nothing it reaches, so one that fails is logged and the backup still ran. `ServiceOptions.CheckpointThresholdOverride` lowers the threshold for a test.
+The service checkpoints a format-5 set after its backup commits, inside the run. A direct-ship set's checkpoint therefore reaches its destinations through the same fan-out its deltas did, and a staging set's through the next sync, as every index object does. It is best effort: a checkpoint changes how many objects a load reads and nothing it reaches, so one that fails is logged and the backup still ran. The run stays the set's run until the checkpoint is done: its journal row settles only then, because a settled row lets the set's next run begin (FR-SVC-012) while this one still draws on the writer sequence. `ServiceOptions.CheckpointThresholdOverride` lowers the threshold for a test, and `ServiceOptions.EnteredCheckpointing` holds a run at the checkpoint.
 
 ### 6 Format 5 names itself, and the product creates at it
 
