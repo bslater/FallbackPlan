@@ -94,6 +94,33 @@ public sealed class NewerFormatServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Notice_OfASetThisBuildCanWriteAgain_IsResolvedAtOpen()
+    {
+        // Taking the newer build's record away stands in for running the
+        // build that implements its format: the set is writable here again,
+        // and the notice that said it was not must not outlive that.
+        await BackUpTwiceAsync();
+        await UpgradePastThisBuildAsync();
+        await using (var runtime = await StartAsync())
+        {
+            var set = runtime.Configuration.BackupSets.Single();
+            Assert.IsNotNull(await runtime.ExistingArchiveAsync(set.Id, Timeout));
+            Assert.IsTrue(runtime.Notices.Unacknowledged.Any(notice => notice.Key == $"format-newer:{set.Id}"));
+        }
+
+        File.Delete(Path.Combine(
+            _harness.RepositoryPath,
+            ObjectKeyFor(NewerBuildUpgrade.UnknownVersion).Replace('/', Path.DirectorySeparatorChar)));
+
+        await using var reopened = await StartAsync();
+        var docs = reopened.Configuration.BackupSets.Single();
+        Assert.IsTrue((await reopened.ExistingArchiveAsync(docs.Id, Timeout))!.Repository.WritableByThisBuild);
+        Assert.IsFalse(
+            reopened.Notices.Unacknowledged.Any(notice => notice.Key == $"format-newer:{docs.Id}"),
+            "the notice outlived the set being written by this build again");
+    }
+
+    [TestMethod]
     public async Task RetentionApply_OfASetANewerBuildUpgraded_IsRefusedByName()
     {
         await BackUpTwiceAsync();
