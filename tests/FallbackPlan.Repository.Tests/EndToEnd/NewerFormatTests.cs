@@ -53,7 +53,7 @@ public sealed class NewerFormatTests : IDisposable
     public async Task Open_ARepositoryANewerBuildUpgraded_OpensToReadAndToWrite_AtTheNewerVersion()
     {
         var store = Store("open");
-        await CreateBackedUpAndUpgradedPastThisBuildAsync(store);
+        using var catalogue = await CreateBackedUpAndUpgradedPastThisBuildAsync(store);
 
         using var passphrase = Passphrase.Create(PassphraseText);
         var (read, authority) = await RepositoryLifecycle.OpenForReadAsync(store, passphrase, CancellationToken.None);
