@@ -63,6 +63,12 @@ named. The first full test run after the change failed a verification on a
 hint object that had stopped crossing, which is the check that has to exist
 for this rule to be safe.
 
+> **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries)).**
+> The rule was broken by the next prefix the product added: `format-upgrade/`
+> ([ADR-0066](0066-the-format-upgrade-record.md)) was never named, and the
+> verification that should have caught it sampled the whole listing. It is
+> named now, and a pass's verification asks only about what that pass carries.
+
 ### 3 A pass decides what to do before it reads anything
 
 `Application/ReconciliationGate` answers from the ledger row, the source's
@@ -193,8 +199,47 @@ metadata about the destination; the destination is the ground truth. An
 unexpiring skip inverts that quietly, and the inversion is invisible until
 somebody needs the data.
 
+## Amendment 1 (2026-10) — every prefix this build writes is named, and a pass is asked only about what it carries
+
+§2's rule held for the namespace as it stood in 2026-09. The format-upgrade
+record ([ADR-0066](0066-the-format-upgrade-record.md)) arrived later under a
+prefix of its own, and nothing named it. It fell to the catch-all phase, and an
+incremental pass left it behind.
+
+§2 said the check that made the rule safe was a verification that fails when
+an object stops crossing. That check was looking at the wrong population. The
+verification sample was drawn from the whole staging listing, catch-all keys
+included, while an incremental pass carried only the named phases. So the
+missing name produced no clean failure pointing at the copier. It produced a
+false failure at the destination instead. The first sync after an upgraded
+set's next backup asked the destination for the record, found it absent, and
+marked a healthy destination Failed until the reconciling pass up to a day
+later.
+
+Two things change:
+
+- **`format-upgrade/` is a named phase.** It sits beside the descriptor it
+  qualifies, so a destination learns of a move before the objects written
+  under it arrive. The record crosses on the sync after the set's next
+  backup.
+- **A pass is asked only about what it carries.** The sampler takes the pass's
+  scope and leaves out what that scope does not carry, through the copier's
+  own phase list (`Replication/StoreToStoreCopier`, `Replication/VerificationSampler`).
+  A pass that skips samples as an incremental one does: a stray written since
+  the last reconciliation is not at the destination either. This holds for
+  any prefix, not only the ones this build names. A store a newer build has
+  written to is still synced by this one, which reads it and never writes it,
+  and may hold objects under prefixes nothing here knows.
+
+§2's check is narrower for the second change, and still exists in the form it
+needs. `Replication.Tests/CopierScopeTests` copies one object under every
+prefix of specification 01 §2 this build writes, on an incremental pass, and
+fails if any is left behind. A new prefix that is not named now fails that
+test, not a customer's destination.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries): `format-upgrade/` is a named phase, and a pass's verification asks only about what the pass carries (`Replication/StoreToStoreCopier`, `Replication/VerificationSampler`, `Agent/FanOut`; `Replication.Tests/CopierScopeTests`, `Replication.Tests/VerificationSamplerTests`, `Hosts.Tests/FormatUpgradeTests`) |
 | 2026-09 | Accepted | In response to the 2026-09 architecture review's R6. Built: `Replication/StoreToStoreCopier` lists per phase and takes a `CopyScope`, `Application/ReconciliationGate` decides, `Application/DestinationSyncStore` carries `keep_fingerprint` and stamps `last_reconciled_at`, `Agent/DestinationShipSink` records the sequence it published, and `Retention/DestinationConvergence` renders the keep and spare sets. Takes up the `baseline_snapshot_id` and `last_reconciled_at` that [ADR-0047](0047-backup-pool-and-priorities.md) decision 6 left to a later record |

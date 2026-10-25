@@ -87,6 +87,13 @@ that the key parses and nothing else; `Agent/DestinationShipSink` branches on
 default on every path, which is what makes an append-only record the cheap
 mechanism and not merely the correct one.
 
+> **Amended 2026-10 ([ADR-0056 Amendment 1](0056-incremental-reconciliation.md#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries)).**
+> Carried by default, but not promptly. The catch-all phase runs only on a
+> reconciling pass, and the sync between reconciliations, which verified
+> against the whole listing, marked a destination Failed for lacking the
+> record. `format-upgrade/` is now a named phase, so the record crosses on the
+> sync after the set's next backup.
+
 ### 2 Signed under the signing key, not the reclaim key
 
 An upgrade changes what the writer will emit and destroys nothing, so it
@@ -329,6 +336,7 @@ it.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Accepted (amended) | The record is a named copy phase, so it reaches a destination with the sync after the set's next backup rather than at the daily reconciliation, and that sync's verification no longer fails for lacking it ([ADR-0056 Amendment 1](0056-incremental-reconciliation.md#amendment-1-2026-10--every-prefix-this-build-writes-is-named-and-a-pass-is-asked-only-about-what-it-carries); `Hosts.Tests/FormatUpgradeTests`) |
 | 2026-10 | Accepted (amended) | A destination's delta retirement ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)) is one more act Amendment 1 refuses above the implemented format: the sync still copies the set, and the destination retires nothing (`Agent/FanOut`; `Hosts.Tests/DeltaRetirementServiceTests`) |
 | 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): a build writes only a repository whose effective version it implements. Above it the repository is opened, read and copied, nothing is authored in it, and no destination is converged on this build's reading of it (`Repository/NewerFormatException`, `Domain/FormatVersions`, `Retention/DestinationConvergence`; `Repository.Tests/EndToEnd/NewerFormatTests`, `Retention.Tests/NewerFormatRetentionTests`, `Hosts.Tests/NewerFormatServiceTests`, `Cli.Tests/NewerFormatCommandTests`) |
 | 2026-10 | Accepted (amended) | The upgrade verb targets the latest format, 5 ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)): an upgraded set checkpoints its deltas from its next backup, and an older build reads its checkpoints as damage and its deltas as before (`Hosts.Tests/FormatUpgradeTests`) |
