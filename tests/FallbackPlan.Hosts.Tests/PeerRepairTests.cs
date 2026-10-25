@@ -196,6 +196,58 @@ public sealed class PeerRepairTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AReplicaHeldHereForAnotherPeer_IsNotRepairableByThisOne()
+    {
+        // Repair is the owner's, as retrieval is (08 §1): a replica another
+        // peer stores here refuses exactly as one never stored here does.
+        var theirs = RandomNumberGenerator.GetBytes(16);
+        var theirsHex = Convert.ToHexStringLower(theirs);
+        const string key = "blobs/data/aaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var held = new byte[64];
+        await using var runtime = await StartAsync(beforeListening: state =>
+        {
+            Assert.IsTrue(ReplicaOwnerStore.Open(state).TryAttribute(theirsHex, "another-peer"));
+            var path = PathOf(Path.Combine(state, "replicas", theirsHex), key);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, held);
+        });
+        await ReplicatedAsync(runtime);
+        await using var repair = await DialAsync(runtime, theirs);
+
+        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(
+            async () => await repair.OfferAsync(key, held.Length, Timeout));
+        Assert.AreEqual(PeerRefusalReason.TermsRefused, refusal.Reason);
+    }
+
+    [TestMethod]
+    public async Task AnOfferOutsideTheNegotiatedFeatures_IsRefused_NotServed()
+    {
+        // A source requires the feature, so a current one never sends this.
+        // The peer does not lean on that: an offer outside the intersection
+        // is a violation, not a capability probe (02 §6).
+        await using var runtime = await StartAsync(
+            offeredFeatures: [.. PeerSessionNegotiation.SupportedFeatures.Where(
+                feature => feature != PeerSessionNegotiation.ReplicaRepairFeature)]);
+        var (replica, repositoryId) = await ReplicatedAsync(runtime);
+        var key = FirstDataBlob(replica);
+        var damaged = Rot(replica, key);
+        Assert.IsTrue(PeerAddress.TryResolve(
+            runtime, runtime.Configuration.FindDestination("friend")!, out var address, out var unresolved), unresolved);
+        var (grants, grant, host, port) = address!;
+        using var keypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        await using var connection = await PeerTlsConnection.DialAsync(host, port, DateTimeOffset.UtcNow, Timeout);
+        var session = await PeerSessionDriver.DialAsync(
+            connection, keypair, grants, grant.Identity, "fallbackplan-agent/test", cancellationToken: Timeout);
+
+        await PeerFrame.WriteAsync(session.Stream, new RepairOffer(repositoryId, key, (ulong)damaged.Length), Timeout);
+
+        var refusal = await Assert.ThrowsExactlyAsync<PeerProtocolException>(async () =>
+            await ReplicationWire.ReadAsync(session.Stream, PeerMessageType.RepairVerdict, RepairVerdict.Read, Timeout));
+        Assert.AreEqual(PeerRefusalReason.FeatureUnsupported, refusal.Reason);
+        CollectionAssert.AreEqual(damaged, await File.ReadAllBytesAsync(PathOf(replica, key), Timeout));
+    }
+
+    [TestMethod]
     public async Task APeerWhoseBuildTakesNoRepair_IsNotAskedForOne()
     {
         // Gated on the feature (02 §6), so an older build is never sent a
@@ -262,9 +314,9 @@ public sealed class PeerRepairTests : IDisposable
         var row = runtime.DestinationSync.Find(set.Id, "friend");
         Assert.AreEqual(DestinationSyncState.InSync, row?.State, row?.LastError);
 
-        var replicas = Path.Combine(_destinationState, "replicas");
-        var replica = Assert.ContainsSingle(Directory.GetDirectories(replicas));
-        return (replica, Convert.FromHexString(Path.GetFileName(replica)));
+        var archive = await runtime.ExistingArchiveAsync(set.Id, Timeout);
+        var repositoryId = archive!.Repository.RepositoryId.ToArray();
+        return (Path.Combine(_destinationState, "replicas", Convert.ToHexStringLower(repositoryId)), repositoryId);
     }
 
     private async Task BackUpAsync(ServiceRuntime runtime)
@@ -295,11 +347,12 @@ public sealed class PeerRepairTests : IDisposable
         return bytes;
     }
 
-    private async Task<ServiceRuntime> StartAsync(IReadOnlyList<string>? offeredFeatures = null)
+    private async Task<ServiceRuntime> StartAsync(
+        IReadOnlyList<string>? offeredFeatures = null, Action<string>? beforeListening = null)
     {
         _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
         _harness.WriteSourceFile("docs/big.bin", new string('b', 300_000));
-        var fingerprint = StartPeer(offeredFeatures);
+        var fingerprint = StartPeer(offeredFeatures, beforeListening);
 
         new ClientConfiguration
         {
@@ -335,9 +388,15 @@ public sealed class PeerRepairTests : IDisposable
             Timeout);
     }
 
-    /// <summary>A paired destination listening on loopback, as the peer suites stand one up.</summary>
-    private string StartPeer(IReadOnlyList<string>? offeredFeatures)
+    /// <summary>
+    /// A paired destination listening on loopback, as the peer suites stand
+    /// one up, after <paramref name="beforeListening"/> has had its state
+    /// directory to arrange what it already holds.
+    /// </summary>
+    private string StartPeer(IReadOnlyList<string>? offeredFeatures, Action<string>? beforeListening)
     {
+        beforeListening?.Invoke(_destinationState);
+
         using var sourceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
         using var destinationKeypair = PeerKeypairStore.Open(_destinationState);
 
