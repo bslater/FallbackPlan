@@ -129,6 +129,15 @@ public enum PeerMessageType : ushort
     /// to produce them (07 §3.6).
     /// </summary>
     MerkleProof = 279,
+
+    /// <summary>
+    /// An owner offers a replacement for a blob its sweep found damaged at the
+    /// destination (08 §3.1; feature-gated as "replica-repair").
+    /// </summary>
+    RepairOffer = 280,
+
+    /// <summary>What the destination will do with an offered, or a sent, replacement (08 §3.2).</summary>
+    RepairVerdict = 281,
 }
 
 /// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>

@@ -384,7 +384,9 @@ public static class FanOut
                     return;
 
                 case DestinationKind.Peer:
-                    await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, limiter: limiter)
+                    await PushToPeerAsync(
+                            runtime, set, destination, archive, nowMs, cancellationToken, limiter: limiter,
+                            userInitiated: userInitiated)
                         .ConfigureAwait(false);
                     return;
 
@@ -421,7 +423,7 @@ public static class FanOut
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
         Func<byte[], byte[]>? grantedSigner = null, ReceiptFate? receiptFate = null,
-        Application.ByteRateLimiter? limiter = null)
+        Application.ByteRateLimiter? limiter = null, bool userInitiated = false)
     {
         var ledger = runtime.DestinationSync;
 
@@ -706,9 +708,7 @@ public static class FanOut
             // did not declare holding when this push began, has been removed
             // there — the remedy the finding named — and this push sent it
             // again whole if the peer is still owed it. Either way the damage
-            // is no longer held there (ADR-0035 Amendment 2). Nothing here
-            // can do more at a peer: a key it still declares is still the
-            // damaged object, and stays on the ledger.
+            // is no longer held there (ADR-0035 Amendment 2).
             if (ledger.Find(set.Id, destination.Name)?.DamagedKeys is { Count: > 0 } damagedHere
                 && outcome.HeldKeys is { } declared)
             {
@@ -716,6 +716,28 @@ public static class FanOut
                 if (gone.Count > 0)
                 {
                     ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], gone, nowMs);
+                }
+            }
+
+            // The repair sync's half at a peer (ADR-0100). A key it still
+            // declares is still the damaged object: found when no copy here
+            // was sound, by a restore that read around it, or while the peer
+            // took no repair. Each sync offers it a copy proven sound here,
+            // which the peer takes only where its own check of its copy agrees,
+            // and which is proven again where it landed before it is cleared.
+            // Offered first and read only after, so a key the peer refuses
+            // costs its link the offer and nothing more.
+            if (ledger.Find(set.Id, destination.Name)?.DamagedKeys is { Count: > 0 } stillHeld
+                && session.Supports(Protocol.PeerSessionNegotiation.ReplicaRepairFeature))
+            {
+                await using var repairer = ReplicaRepairer.ForPeer(runtime, set, destination.Name, archive, userInitiated);
+                await using var target = new PeerRepairTarget(
+                    runtime, destination, archive.Repository.RepositoryId.ToArray(), limiter, landed: null);
+                var repairs = await repairer.RepairAsync(target, stillHeld, cancellationToken).ConfigureAwait(false);
+                var resolved = repairs.Where(repair => repair.Repaired || repair.Gone).Select(repair => repair.Key).ToList();
+                if (resolved.Count > 0)
+                {
+                    ledger.RecordDamage(set.Id, destination.Name, unrepaired: [], resolved, nowMs);
                 }
             }
 

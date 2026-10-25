@@ -91,6 +91,11 @@ internal static partial class Log
         Message = "Retrieval session served for {Fingerprint}")]
     internal static partial void RetrievalServed(ILogger logger, LogId fingerprint);
 
+    [LoggerMessage(
+        EventId = 3797, Level = LogLevel.Information,
+        Message = "Repair session served for {Fingerprint}: {Count} damaged blob(s) here replaced")]
+    internal static partial void ReplicaRepaired(ILogger logger, LogId fingerprint, int count);
+
 
 
 

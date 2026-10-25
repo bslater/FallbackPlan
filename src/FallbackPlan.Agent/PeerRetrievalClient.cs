@@ -37,6 +37,14 @@ internal sealed class PeerRetrievalClient : IAsyncDisposable
         _session.Supports(PeerSessionNegotiation.ChunkPossessionFeature);
 
     /// <summary>
+    /// Whether the peer takes a repair (08; ADR-0100). Learned here because
+    /// the sweep that finds the damage reads over this session, and a peer's
+    /// features are its build's, whichever session asks.
+    /// </summary>
+    public bool SupportsReplicaRepair =>
+        _session.Supports(PeerSessionNegotiation.ReplicaRepairFeature);
+
+    /// <summary>
     /// Dials the destination, opens the named replica, and returns the live
     /// client. An all-zero repository id opens the owner inventory instead
     /// (07 §3.5): listings then answer the repository ids this peer owns

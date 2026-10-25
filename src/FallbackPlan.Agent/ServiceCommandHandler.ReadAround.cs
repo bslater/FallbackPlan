@@ -80,11 +80,12 @@ public sealed partial class ServiceCommandHandler
             runtime.Notices.Raise(
                 $"restore-found-damage:{set.Id}:{destination.Name}",
                 destination.Kind == DestinationKind.Peer
-                    ? said + "A peer's replica cannot be repaired from here — this installation can read what it "
-                        + "holds but not replace it — so those bytes cannot be restored from there until they are "
-                        + "gone. Ask the owner of that machine to remove them from its replica of repository "
-                        + $"{repositoryId}: {string.Join(", ", keys)}; the next sync sends them again whole. Its "
-                        + "storage altered a backup once and may again."
+                    ? said + "The next sync offers the peer a sound copy from here, which it takes only where its "
+                        + "own check of its copy finds it damaged too (ADR-0100), and re-verifies what it took where "
+                        + "it landed. What it will not take — or cannot be offered, with no sound copy here — cannot "
+                        + "be restored from there until it is gone. Ask the owner of that machine to remove it from "
+                        + $"its replica of repository {repositoryId}: {string.Join(", ", keys)}; the next sync sends "
+                        + "it again whole. Its storage altered a backup once and may again."
                     : said + "The next sync replaces them from a sound copy and re-verifies them where they land. "
                         + "Its storage altered a backup once and may again: check the device, the filesystem, and "
                         + "anything else that writes there before counting on it.",

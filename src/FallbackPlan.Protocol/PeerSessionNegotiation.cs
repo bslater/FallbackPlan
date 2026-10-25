@@ -132,6 +132,20 @@ public static class PeerSessionNegotiation
     /// </remarks>
     public const string ChunkPossessionFeature = "chunk-possession";
 
+    /// <summary>
+    /// The peer replaces a blob in a replica it holds for the dialing owner
+    /// where its own copy fails the locator check, with bytes that pass it
+    /// and state the locator its copy states (08;
+    /// [ADR-0100](../../docs/adr/0100-a-peer-replaces-what-its-own-check-finds-damaged.md)).
+    /// </summary>
+    /// <remarks>
+    /// Offered, never required. A gate is safe here for the reason 02 §6
+    /// permits one: withholding the feature can only leave a peer's damage
+    /// where it is. The check that defends the peer is made on its own copy
+    /// and on the bytes it receives, never on anything the hello says.
+    /// </remarks>
+    public const string ReplicaRepairFeature = "replica-repair";
+
     /// <summary>The features this build offers (02 §4).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
     [
@@ -144,6 +158,7 @@ public static class PeerSessionNegotiation
         PartialObjectResumeFeature,
         ReplicaClaimFeature,
         ChunkPossessionFeature,
+        ReplicaRepairFeature,
     ];
 
     /// <summary>Builds the hello this build sends.</summary>

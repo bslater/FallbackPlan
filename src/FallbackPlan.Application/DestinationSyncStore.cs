@@ -1156,8 +1156,9 @@ public sealed class DestinationSyncStore
         ThrowHelper.ThrowIfLessThan(damagedKeys.Count, 1);
 
         // Worded for both kinds: a local path's damage stands because no
-        // sound copy was found, a peer's because nothing here can put one
-        // there, and either way the same thing is true of the destination.
+        // sound copy was found, a peer's because none was or the peer would
+        // not take it, and either way the same thing is true of the
+        // destination.
         var others = damagedKeys.Count - 1;
         return $"{damagedKeys.Count} object(s) found damaged here have had no sound copy put in their place: "
             + $"blob {damagedKeys[0]}{(others > 0 ? $" and {others} more" : string.Empty)} — "
