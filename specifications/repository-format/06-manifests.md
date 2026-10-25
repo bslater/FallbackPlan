@@ -173,6 +173,15 @@ snapshot's single `source_filesystem` map (§6 key 12) records the
 if any is, capabilities only all can honour, the minimum of each limit.
 → [ADR-0040](../../docs/adr/0040-multi-root-backup-sets.md)
 
+A writer MAY state, for a directory whose tree would be identical to one an
+earlier snapshot published but for `accessed_at`, the earlier `accessed_at`,
+so that the tree is the earlier object — a directory's access time moves
+when the writer itself reads it, and it is not evidence that the directory
+changed. A directory's `accessed_at` is therefore its access time when a tree
+with these contents was first captured, as a reused file version's is, and
+not necessarily its access time when the referencing snapshot was taken.
+→ [ADR-0099](../../docs/adr/0099-a-folder-that-was-only-read-keeps-its-tree.md)
+
 ## 6 Snapshot manifest
 
 Object type `0x04`. Unlike other manifests, a snapshot is stored **both** as a metadata record and as a standalone object at `/snapshots/<device-id>/<backup-set-id>/<snapshot-id>`, so a reader can enumerate snapshots from a bounded prefix without an index.
