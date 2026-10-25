@@ -104,6 +104,10 @@ public static class StoreToStoreCopier
     private static readonly string[] PhasePrefixes =
     [
         "repository-format",
+
+        // Beside the descriptor it qualifies, so a destination learns of a
+        // move before the objects written under it arrive (ADR-0066).
+        "format-upgrade/",
         "blobs/",
         "journal/",
         "index/delta/",
@@ -128,6 +132,19 @@ public static class StoreToStoreCopier
     /// lease at a replica would be an instruction nobody there may act on.
     /// </summary>
     private static readonly string[] StagingOnlyPrefixes = ["tombstones/", "leases/"];
+
+    /// <summary>
+    /// Whether a pass under <paramref name="scope"/> carries the object at
+    /// <paramref name="key"/>: what a caller asking about the destination
+    /// afterwards may expect to find there.
+    /// </summary>
+    /// <param name="key">The object's store key.</param>
+    /// <param name="scope">The pass's scope.</param>
+    public static bool Carries(string key, CopyScope scope)
+    {
+        ThrowHelper.ThrowIfNull(key);
+        return !StagingOnly(key) && (scope == CopyScope.Reconcile || !InPhase(key, string.Empty));
+    }
 
     /// <summary>Converges the destination to hold every object the source holds.</summary>
     /// <param name="source">The archive to read — a set's staging archive, ordinarily.</param>

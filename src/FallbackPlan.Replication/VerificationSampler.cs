@@ -12,11 +12,12 @@ namespace FallbackPlan.Replication;
 /// <remarks>
 /// <para>
 /// The sample is drawn from the staging listing taken <b>before</b> the copy
-/// begins, filtered by the destination's keep filter. Both halves matter: a
-/// key published mid-sync may not have crossed yet, and a key the
-/// destination's own retention policy drops is legitimately absent there —
-/// sampling either would manufacture a verification failure out of a healthy
-/// destination.
+/// begins, filtered by the destination's keep filter and by what the pass
+/// carries. All three matter: a key published mid-sync may not have crossed
+/// yet, a key the destination's own retention policy drops is legitimately
+/// absent there, and so is a key under no named phase until a reconciling pass
+/// carries it — sampling any of them would manufacture a verification failure
+/// out of a healthy destination.
 /// </para>
 /// <para>
 /// This sits beside <see cref="ReplicaVerifier"/> rather than in the agent
@@ -94,6 +95,11 @@ public static class VerificationSampler
     /// assembly does not speak the protocol.
     /// </param>
     /// <param name="cancellationToken">Cancels the listing.</param>
+    /// <param name="scope">
+    /// What the pass being verified carries (<see cref="StoreToStoreCopier.Carries"/>);
+    /// a pass that skipped or copied incrementally carries nothing under the
+    /// catch-all phase.
+    /// </param>
     /// <returns>The samples — at most <paramref name="budget"/> — the eligible population, and the next cursor.</returns>
     public static async Task<SamplePlan> SampleAsync(
         IObjectStore source,
@@ -103,7 +109,8 @@ public static class VerificationSampler
         int budget,
         int reservoirShare,
         uint maximumRangeLength,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CopyScope scope = CopyScope.Reconcile)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfLessThan(budget, 1);
@@ -118,11 +125,12 @@ public static class VerificationSampler
             .ConfigureAwait(false))
         {
             var key = entry.Key.Value;
-            if (entry.Length <= 0 || IsStagingOnly(key) || (keeps is not null && !keeps(key)))
+            if (entry.Length <= 0 || !StoreToStoreCopier.Carries(key, scope) || (keeps is not null && !keeps(key)))
             {
                 // Zero-length objects have no range to challenge; lifecycle
-                // objects never replicate; dropped keys are legitimately
-                // absent at this destination.
+                // objects never replicate, and a stray waits for the
+                // reconciling pass; dropped keys are legitimately absent at
+                // this destination.
                 continue;
             }
 
@@ -318,8 +326,4 @@ public static class VerificationSampler
             window.RemoveAt(window.Count - 1);
         }
     }
-
-    private static bool IsStagingOnly(string key) =>
-        key.StartsWith("tombstones/", StringComparison.Ordinal)
-        || key.StartsWith("leases/", StringComparison.Ordinal);
 }

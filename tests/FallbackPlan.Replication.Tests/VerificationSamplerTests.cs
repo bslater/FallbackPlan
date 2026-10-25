@@ -180,6 +180,26 @@ public sealed class VerificationSamplerTests
     }
 
     [TestMethod]
+    public async Task Sample_OnAnIncrementalPass_AsksAboutNothingThePassDoesNotCarry()
+    {
+        // A pass between reconciliations leaves the catch-all phase out, so an
+        // object under a prefix this build has never heard of is legitimately
+        // absent at the destination until the reconciling pass carries it.
+        // Asking about it turns a healthy destination into a failed one.
+        var store = ListingStore.Of(["blobs/k00", "format-upgrade/0005", "something-else/object-c"]);
+
+        var between = await SampleAsync(store, cursor: null, budget: 5, scope: CopyScope.Incremental);
+        var reconciling = await SampleAsync(store, cursor: null, budget: 5, scope: CopyScope.Reconcile);
+
+        CollectionAssert.AreEqual(
+            new[] { "blobs/k00", "format-upgrade/0005" },
+            between.Samples.Select(sample => sample.Key).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "blobs/k00", "format-upgrade/0005", "something-else/object-c" },
+            reconciling.Samples.Select(sample => sample.Key).ToArray());
+    }
+
+    [TestMethod]
     public async Task Sample_LifecycleObjectsAndEmptyOnes_AreNeverAskedAbout()
     {
         // Preserved from before the rotation existed: tombstones and leases
@@ -301,10 +321,11 @@ public sealed class VerificationSamplerTests
         string? cursor,
         int budget,
         string? newestSnapshotKey = null,
-        Func<string, bool>? keeps = null) =>
+        Func<string, bool>? keeps = null,
+        CopyScope scope = CopyScope.Reconcile) =>
         VerificationSampler.SampleAsync(
             store, keeps, newestSnapshotKey, cursor, budget, reservoirShare: 0, MaximumRangeLength,
-            CancellationToken.None);
+            CancellationToken.None, scope);
 
     private static string[] Keys(int count) =>
         [.. Enumerable.Range(0, count).Select(index => $"blobs/k{index:D2}")];

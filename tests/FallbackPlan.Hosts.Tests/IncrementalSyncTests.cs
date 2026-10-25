@@ -204,6 +204,53 @@ public sealed class IncrementalSyncTests : IDisposable
             "a pair that is not level is read through, and reading through is what restores it");
     }
 
+    [TestMethod]
+    public async Task Sync_BetweenReadingsThrough_LeavesAStrayForTheReadingThrough_AndAsksNothingAboutIt()
+    {
+        // A store a newer build has written to may hold objects under prefixes
+        // this build never named, and this build still syncs it. The pass
+        // between readings-through leaves them to the pass that reads through
+        // (ADR-0056), so its verification may not ask the destination for
+        // them: each of these passes would otherwise fail a healthy pair.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        _harness.WriteSourceFile("docs/content.txt", "the first thing");
+
+        await using var runtime = await StartAsync();
+        var set = runtime.Configuration.BackupSets[0];
+        var first = DateTimeOffset.Now;
+        var pass = await Scheduler.RunPassAsync(runtime, first, Timeout);
+        await pass.Transfers.WaitAsync(Timeout);
+        await pass.Drills.WaitAsync(Timeout);
+
+        var stray = ObjectKey.Parse("from-a-newer-build/object");
+        await new LocalFileSystemObjectStore(runtime.ArchivePath(set.Id)).PutAsync(
+            stray,
+            _ => ValueTask.FromResult<Stream>(new MemoryStream(new byte[512], writable: false)),
+            PutConditions.None,
+            Timeout);
+
+        // Enough published since the reading-through that every pass after
+        // it is incremental, each one verifying a sample.
+        for (var run = 1; run <= 4; run++)
+        {
+            _harness.WriteSourceFile($"docs/run-{run}.txt", $"run {run}");
+            var outcome = await Scheduler.Enqueue(runtime, set, first.AddMinutes(run * 10), userInitiated: true)
+                .WaitAsync(Timeout);
+            Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+            await SyncAsync(runtime, first.AddMinutes((run * 10) + 5));
+
+            var row = runtime.DestinationSync.Find(_harness.DocsSetId, "vault")!;
+            Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
+        }
+
+        var replica = new LocalFileSystemObjectStore(Assert.ContainsSingle(Directory.GetDirectories(Vault)));
+        Assert.IsFalse((await replica.GetMetadataAsync(stray, Timeout)).Found, "the stray is the reading-through's to carry");
+
+        await SyncAsync(runtime, first.AddMilliseconds(ReconciliationGate.DefaultIntervalMilliseconds + 1));
+        Assert.IsTrue((await replica.GetMetadataAsync(stray, Timeout)).Found, "and the reading-through carries it");
+    }
+
     private static async Task SyncAsync(ServiceRuntime runtime, DateTimeOffset at)
     {
         var set = runtime.Configuration.BackupSets[0];

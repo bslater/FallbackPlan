@@ -109,6 +109,43 @@ public sealed class FormatUpgradeTests : IDisposable
     }
 
     [TestMethod]
+    public async Task AnUpgradedStagingSet_TheSyncAfterItsNextBackup_CarriesTheRecord_AndStaysInSync()
+    {
+        // The pass that follows a backup between reconciliations walks the
+        // named phases alone (ADR-0056), and its verification draws from the
+        // staging listing. The record has to travel on that pass: the next
+        // reconciliation is up to a day away, and every sync until then would
+        // otherwise ask the destination for an object it was never offered.
+        ServiceRuntime.ArchiveFormatVersion = FormatVersions.IndexGenerations;
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        _harness.WriteSourceFile("docs/before.txt", "written while this set was at format 4");
+
+        await using var runtime = await StartAsync();
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        await RunOnAsync(runtime, set);
+        await SyncAsync(runtime, set);
+        var reconciledAt = runtime.DestinationSync.Find(set.Id, "vault")!.LastReconciledAt;
+
+        Assert.IsInstanceOfType<ConfigurationChangeResult>(
+            await handler.ExecuteAsync(new UpgradeSetFormatCommand("docs"), Timeout), out _);
+        _harness.WriteSourceFile("docs/after.txt", "written after the upgrade");
+        await RunOnAsync(runtime, set);
+        await SyncAsync(runtime, set);
+
+        Assert.AreEqual(
+            reconciledAt, runtime.DestinationSync.Find(set.Id, "vault")!.LastReconciledAt,
+            "the pass read the inventories through, so it is not the pass this is about");
+        var replica = Assert.ContainsSingle(Directory.GetDirectories(Vault));
+        Assert.IsTrue(
+            File.Exists(Path.Combine(
+                replica,
+                FormatUpgradeRecordCodec.KeyFor(FormatLimits.LatestFormatVersion).Replace('/', Path.DirectorySeparatorChar))),
+            "the upgrade record waits for the reconciling pass");
+    }
+
+    [TestMethod]
     public async Task ASetUpgradedBetweenBackups_SealsTheNewerFormatAndStillRestoresTheOlder()
     {
         // The whole point of the record, through the real service. The
@@ -149,8 +186,8 @@ public sealed class FormatUpgradeTests : IDisposable
 
         // The window, pinned rather than hidden. A capture ships the blobs it
         // wrote; the upgrade record is an ordinary immutable object that no
-        // capture produced, so it rides the next reconciling pass. Until then
-        // the destination holds format-3 blobs and does not yet hold the
+        // capture produced, so it rides the next sync rather than the run.
+        // Until then the destination holds format-3 blobs and does not yet hold the
         // record that explains them — which costs nothing, because every
         // blob declares its own container, and is the honest thing for the
         // tool to report while it is true.
@@ -298,7 +335,7 @@ public sealed class FormatUpgradeTests : IDisposable
         // left and throws — after the local copy has already landed, which
         // would report a completed upgrade as a failure. An upgrade must not
         // turn on whether a drive happens to be writable; propagation is the
-        // next reconciling pass's business.
+        // next sync's business.
         ServiceRuntime.ArchiveFormatVersion = FormatVersions.SealedDataPlane;
         Directory.CreateDirectory(Vault);
         WriteConfiguration();
@@ -400,6 +437,15 @@ public sealed class FormatUpgradeTests : IDisposable
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
     }
 
+    private async Task SyncAsync(ServiceRuntime runtime, BackupSetConfiguration set)
+    {
+        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: true);
+        Assert.IsNotNull(sync);
+        await sync.WaitAsync(Timeout);
+        var row = runtime.DestinationSync.Find(set.Id, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
+    }
+
     /// <summary>The stamped container version of every data blob at a replica, read off the disk.</summary>
     private async Task<List<ushort>> DataBlobVersionsAsync(string replica)
     {
@@ -460,7 +506,7 @@ public sealed class FormatUpgradeTests : IDisposable
         }
     }
 
-    private void WriteConfiguration() => new ClientConfiguration
+    private void WriteConfiguration(bool directShip = true) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -479,7 +525,7 @@ public sealed class FormatUpgradeTests : IDisposable
                 Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                 Schedule = "every 4h",
                 Destinations = [new SetDestinationReference { Ref = "vault" }],
-                DirectShip = true,
+                DirectShip = directShip,
             },
         ],
     }.Save(Path.Combine(_harness.StateDirectory, "config.json"));

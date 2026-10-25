@@ -296,7 +296,8 @@ Full verification of every blob on every cycle is prohibitive; verifying nothing
 - a bounded random sample per verification interval;
 - weighted towards blobs longest since their last successful challenge;
 - always covering the objects a *recent* snapshot depends on, so the newest recovery point is the best-verified one;
-- full verification available on demand and before a recovery drill.
+- full verification available on demand and before a recovery drill;
+- never an object the pass did not carry: a pass between readings-through leaves objects under unknown prefixes for the reconciling one, and asking about those would fail a healthy destination ([ADR-0056](../adr/0056-incremental-reconciliation.md) Amendment 1).
 
 Status reports **coverage and challenge age**, not a boolean. "Verified" with no indication of how much was checked or how long ago is the kind of green light §23 of the original proposal warned about under "consumer UI hides degraded state".
 

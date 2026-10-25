@@ -353,11 +353,12 @@ public sealed class DeltaRetirementServiceTests : IDisposable
                 Domain.FormatLimits.LatestFormatVersion, Timeout);
         }
 
-        // A day on, so the pass is the reconciling one: the record sits under
-        // no prefix the copy's named phases walk (ADR-0056).
+        // The pass between reconciliations, which walks the named phases
+        // alone (ADR-0056): the record is one of them, so the pass carries it
+        // and its verification has nothing to ask about that it did not copy.
         await using (var runtime = await StartAsync(checkpointThreshold: 2))
         {
-            await SyncAsync(runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now.AddDays(1));
+            await SyncAsync(runtime, runtime.Configuration.BackupSets.Single());
         }
 
         Assert.IsTrue(
