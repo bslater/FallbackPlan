@@ -181,6 +181,53 @@ public sealed class DeltaRetirementServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task RetireStaging_ADeltaOnlyStagingHolds_ThatNoCheckpointThereCarries_HoldsTheArchive()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+        await using (var runtime = await StartAsync(checkpointThreshold: null))
+        {
+            var pass = await Scheduler.RunPassAsync(runtime, DateTimeOffset.Now, Timeout);
+            Assert.AreEqual(1, pass.Ran);
+            await pass.Transfers.WaitAsync(Timeout);
+            await BackUpAsync(runtime, runtime.Configuration.BackupSets.Single(), "second-era");
+        }
+
+        var stagingOnly = Assert.ContainsSingle(
+            (await DeltasAtTheirKeysAsync(StagingPath)).Except(await DeltasAtTheirKeysAsync(Replica)));
+
+        WriteConfiguration(directShip: true);
+        await using (var runtime = await StartAsync(checkpointThreshold: null))
+        {
+            // The first open after the flip migrates; then the migrated copy
+            // goes, as no completed migration loses it, and nothing at the
+            // metadata store carries it.
+            Assert.IsNotNull(await runtime.ExistingArchiveAsync(runtime.Configuration.BackupSets.Single().Id, Timeout));
+            var metadata = new LocalFileSystemObjectStore(MetadataRoot);
+            var deleted = 0;
+            await foreach (var entry in metadata.ListAsync(ObjectPrefix.Parse("index/delta/"), ListOptions.Default, Timeout))
+            {
+                if (MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId) && deltaId == stagingOnly)
+                {
+                    Assert.AreEqual(
+                        DeleteOutcome.Deleted, (await metadata.DeleteAsync(entry.Key, DeleteConditions.None, Timeout)).Outcome);
+                    deleted++;
+                }
+            }
+
+            Assert.AreEqual(1, deleted, "the flip's migration did not carry the staging-only delta");
+            Assert.IsEmpty(CarriedBy(await LoadAsync(MetadataRoot)));
+
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            Assert.IsInstanceOfType<ServiceError>(
+                await handler.ExecuteAsync(new RetireStagingCommand("docs"), Timeout), out var refused);
+            Assert.AreEqual(ServiceErrorReason.Refused, refused.Reason);
+            Assert.Contains("index/delta/", refused.Message, StringComparison.Ordinal);
+            Assert.IsTrue(Directory.Exists(StagingPath), "a refused retirement must not touch the archive");
+        }
+    }
+
+    [TestMethod]
     public async Task ALocalPathDestination_RetiresInItsSync_WhatThePlaneRetired_AndRestoresFromItAlone()
     {
         Directory.CreateDirectory(Vault);
