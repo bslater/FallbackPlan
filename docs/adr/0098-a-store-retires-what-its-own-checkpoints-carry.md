@@ -75,6 +75,7 @@ A local path or an object store retires by the same rule (§1), from what it hol
 
 - **In a sync**, after the copy and its proof, before the pass is recorded in sync. Never in a pass that found the state directory rolled back, which keeps everything (ADR-0062), and never in a pass that skips because nothing was published, so a skip still costs only its sequence read.
 - **In a direct-ship run**, right after its plane retires anything, at each destination the run wrote. The run shipped its own journal record there, so the checkpoint it just settled at home is settled there too. The run also left each such pair level, so the sync after it skips and would never get to retire anything.
+- **Never for a set a newer build upgraded.** Its sync still copies, because copying is a read, but which of its objects a reader still needs is the newer build's to say ([ADR-0066](0066-the-format-upgrade-record.md) Amendment 1). The plane's format is the one asked, since a replica receives the upgrade record only on a reconciling pass. The plane itself never reaches retirement there: a backup of such a set is refused before it writes.
 
 A destination's failure is logged and the pair is still in sync. The checkpoint coverage is shared as a hint, since a checkpoint's key names one immutable object at every replica.
 

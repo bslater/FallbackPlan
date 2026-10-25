@@ -258,6 +258,8 @@ A delta MAY be deleted from a store when, at that store and at the time of the d
 
 Every condition is read from the store the delta is deleted from. A replica decides for itself; nothing is taken from another copy.
 
+Retirement is a delete on the writer's reading of the index, so a writer MUST NOT retire a delta in a repository whose effective version it does not implement, at the source or at a copy ([11 §5.3](11-lifecycle-objects.md#53-a-writer-writes-only-a-format-it-implements)).
+
 **A checkpoint is never retired.** That is what makes concurrent checkpoints safe (§6): a delta may be deleted on any carrier's authority, because every carrier stays at the store and every reader applies every delta any of them carries.
 
 A writer SHOULD NOT delete at a replica a delta the store it copies to that replica from still lists, or the next copy brings it back.
