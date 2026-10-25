@@ -258,6 +258,7 @@ public static class BackupRunner
                 // still draws on the writer sequence.
                 await CheckpointIndexAsync(runtime, set, jobId, archive, generation, cancellationToken)
                     .ConfigureAwait(false);
+                await RetireIndexDeltasAsync(runtime, set, archive, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -381,6 +382,65 @@ public static class BackupRunner
             or Repository.Index.IndexFormatException or OperationCanceledException)
         {
             Log.CheckpointDeferred(log, new Domain.Diagnostics.LogLabel(set.Name), exception);
+        }
+    }
+
+    /// <summary>
+    /// Retires from the set's own plane the index deltas its settled
+    /// checkpoints carry (07 §7, FR-MAN-017), so a load and a sync stop paying
+    /// for each delta twice.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only while nothing else holds the set. A sync copying the plane, a
+    /// sweep reading it and retention trimming it each take the set gate,
+    /// and a delta deleted under a copy would make the copy prove what it no
+    /// longer reads. The run never waits for the gate: it is not a backup's
+    /// to take, and the retirement left undone is the next run's.
+    /// </para>
+    /// <para>
+    /// Against the plane itself, never through a direct-ship sink: each
+    /// destination decides what it may let go, after its own sync (07 §7).
+    /// Best effort, like the checkpoint before it: nothing a retirement fails
+    /// to delete is lost, only stored twice for a run longer.
+    /// </para>
+    /// </remarks>
+    private static async ValueTask RetireIndexDeltasAsync(
+        ServiceRuntime runtime,
+        BackupSetConfiguration set,
+        ArchiveHandle archive,
+        CancellationToken cancellationToken)
+    {
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(archive.Repository.EffectiveFormatVersion))
+        {
+            return;
+        }
+
+        var log = runtime.LoggerFor<Repository.Index.DeltaRetirer>();
+        var gate = runtime.SetGate(set.Id);
+        if (!gate.Wait(0, CancellationToken.None))
+        {
+            Log.RetirementSkippedBusy(log, new Domain.Diagnostics.LogLabel(set.Name));
+            return;
+        }
+
+        try
+        {
+            using var retirer = new Repository.Index.DeltaRetirer(
+                archive.Plane, archive.Repository.RepositoryId, archive.Repository.Credential, log)
+            {
+                Coverage = archive.CheckpointCoverage,
+            };
+            await retirer.RetireAsync(admit: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or Repository.Index.IndexFormatException or OperationCanceledException)
+        {
+            Log.RetirementDeferred(log, new Domain.Diagnostics.LogLabel(set.Name), exception);
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 

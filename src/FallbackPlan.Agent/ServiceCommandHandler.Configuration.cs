@@ -717,6 +717,7 @@ public sealed partial class ServiceCommandHandler
         var staging = new Storage.Local.LocalFileSystemObjectStore(stagingPath);
         var missing = new List<string>();
         var unmigrated = new List<string>();
+        var stagingOnlyDeltas = new List<(string Key, Domain.Identifiers.DeltaId DeltaId)>();
         var discarded = 0L;
         await foreach (var entry in staging.ListAsync(
             Storage.Abstractions.ObjectPrefix.All, Storage.Abstractions.ListOptions.Default, cancellationToken)
@@ -734,7 +735,14 @@ public sealed partial class ServiceCommandHandler
             {
                 if (!metadataHeld.Contains(key))
                 {
-                    unmigrated.Add(key);
+                    if (Repository.Packing.MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId))
+                    {
+                        stagingOnlyDeltas.Add((key, deltaId));
+                    }
+                    else
+                    {
+                        unmigrated.Add(key);
+                    }
                 }
 
                 continue;
@@ -752,6 +760,19 @@ public sealed partial class ServiceCommandHandler
             {
                 discarded++;
             }
+        }
+
+        // A delta the metadata store no longer holds at its key may be one it
+        // retired (07 §7): migrated, carried by a checkpoint there, and then
+        // deleted. A reader of the metadata store applies it from that
+        // checkpoint, so staging's copy is not the only one.
+        if (stagingOnlyDeltas.Count > 0)
+        {
+            using var retirer = new Repository.Index.DeltaRetirer(
+                metadata, archive.Repository.RepositoryId, archive.Repository.Credential);
+            var carried = await retirer.CarriedAsync(
+                stagingOnlyDeltas.Select(delta => delta.DeltaId), cancellationToken).ConfigureAwait(false);
+            unmigrated.AddRange(stagingOnlyDeltas.Where(delta => !carried.Contains(delta.DeltaId)).Select(delta => delta.Key));
         }
 
         if (unmigrated.Count > 0)

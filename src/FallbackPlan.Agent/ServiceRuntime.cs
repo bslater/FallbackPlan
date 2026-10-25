@@ -850,31 +850,78 @@ public sealed class ServiceRuntime : IAsyncDisposable
 
         var objects = 0L;
         var bytes = 0L;
-        foreach (var phase in phases)
+        for (var index = 0; index < phases.Length; index++)
         {
-            foreach (var entry in phase)
+            var retired = false;
+            foreach (var entry in phases[index])
             {
-                var put = await to.PutAsync(
-                    entry.Key,
-                    async token =>
-                    {
-                        var read = await from.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
-                        return read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null
-                            ? read.Content
-                            : throw new IOException($"Object {entry.Key.Value} listed but could not be read to copy.");
-                    },
-                    Storage.Abstractions.PutConditions.IfNotExists,
-                    cancellationToken).ConfigureAwait(false);
-                if (put.Outcome == Storage.Abstractions.PutOutcome.Created)
+                if (await CopyBackOneAsync(from, to, entry.Key, cancellationToken).ConfigureAwait(false) is not { } put)
+                {
+                    retired = true;
+                }
+                else if (put.Outcome == Storage.Abstractions.PutOutcome.Created)
                 {
                     objects++;
                     bytes += entry.Length;
+                }
+            }
+
+            // A delta gone since the listing was retired after a checkpoint
+            // carrying it was durable there (07 §7), and that checkpoint may
+            // postdate the listing. It is looked for before anything that
+            // follows the index, so no manifest arrives ahead of its entries.
+            if (retired)
+            {
+                await foreach (var entry in from.ListAsync(
+                    Storage.Abstractions.ObjectPrefix.Parse("index/checkpoint/"),
+                    Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+                {
+                    if (await CopyBackOneAsync(from, to, entry.Key, cancellationToken).ConfigureAwait(false)
+                        is { Outcome: Storage.Abstractions.PutOutcome.Created })
+                    {
+                        objects++;
+                        bytes += entry.Length;
+                    }
                 }
             }
         }
 
         return new CopiedBack(objects, bytes);
     }
+
+    // One object, if-absent; null for a delta gone since it was listed, which
+    // its source retired. Anything else gone is a store losing what it listed.
+    private static async ValueTask<Storage.Abstractions.PutResult?> CopyBackOneAsync(
+        Storage.Abstractions.IObjectStore from, Storage.Abstractions.IObjectStore to,
+        Storage.Abstractions.ObjectKey key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await to.PutAsync(
+                key,
+                async token =>
+                {
+                    var read = await from.OpenReadAsync(key, range: null, token).ConfigureAwait(false);
+                    if (read.Outcome == Storage.Abstractions.OpenReadOutcome.Found && read.Content is not null)
+                    {
+                        return read.Content;
+                    }
+
+                    throw key.Value.StartsWith("index/delta/", StringComparison.Ordinal)
+                        ? new RetiredDeltaException()
+                        : new IOException($"Object {key.Value} listed but could not be read to copy.");
+                },
+                Storage.Abstractions.PutConditions.IfNotExists,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RetiredDeltaException)
+        {
+            return null;
+        }
+    }
+
+    // Thrown out of a put's content factory, so the store abandons the put.
+    private sealed class RetiredDeltaException : Exception;
 
     /// <summary>Publication order for a copy-back; the catch-all phase sits between the named prefixes and the manifests.</summary>
     private static readonly string[] CopyBackPhases =
@@ -1151,6 +1198,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 {
                     Store = (Storage.Abstractions.IObjectStore?)sink ?? store,
                     ShipSink = sink,
+                    Plane = store,
                     Repository = repository,
                     Catalogue = CatalogueDb.Open(cataloguePath, repository.RepositoryId, catalogueLogger),
                     CatalogueLogger = catalogueLogger,

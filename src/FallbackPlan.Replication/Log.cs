@@ -60,4 +60,12 @@ internal static partial class Log
         Message = "Converging {Destination} spared {Spared} object(s) its policy dropped: "
             + "a sibling destination has not yet received the snapshots they belong to")]
     internal static partial void ConvergeSpared(ILogger logger, LogLabel destination, long spared);
+
+    // A delta its source retired between the listing and the read: its
+    // checkpoint was durable at the source first and is copied in its own
+    // phase, so nothing is lost and nothing is said above Debug.
+    [LoggerMessage(
+        EventId = 3005, Level = LogLevel.Debug,
+        Message = "Skipped {Key}: the source retired it after listing it, and its checkpoint is copied instead")]
+    internal static partial void RetiredDeltaSkipped(ILogger logger, ObjectKey key);
 }

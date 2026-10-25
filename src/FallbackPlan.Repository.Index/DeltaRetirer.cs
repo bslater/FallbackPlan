@@ -105,7 +105,7 @@ public sealed class DeltaRetirer : IDisposable
             return DeltaRetirement.None;
         }
 
-        var carriers = await CarriersAsync(present, cancellationToken).ConfigureAwait(false);
+        var carriers = await CarriersAsync([.. present.Keys], cancellationToken).ConfigureAwait(false);
 
         var journalHeads = new Dictionary<WriterId, ulong>();
         var retired = new List<DeltaId>();
@@ -114,7 +114,7 @@ public sealed class DeltaRetirer : IDisposable
         foreach (var (deltaId, copies) in carriers)
         {
             var settled = new List<ReadOnlyMemory<byte>>();
-            foreach (var (writer, counter, copy) in copies)
+            foreach (var (_, writer, counter, copy) in copies)
             {
                 if (!journalHeads.TryGetValue(writer, out var head))
                 {
@@ -156,19 +156,37 @@ public sealed class DeltaRetirer : IDisposable
         return new DeltaRetirement(retired, unsettled);
     }
 
-    // Every checkpoint copy of a present delta that opens, with the writer and
-    // number of the checkpoint carrying it.
-    private async ValueTask<Dictionary<DeltaId, List<(WriterId Writer, ulong Counter, ReadOnlyMemory<byte> Copy)>>> CarriersAsync(
-        Dictionary<DeltaId, ObjectKey> present, CancellationToken cancellationToken)
+    /// <summary>
+    /// Which of <paramref name="deltaIds"/> a checkpoint at the store carries
+    /// in a copy that opens: the deltas a reader of the store applies whether
+    /// or not their keys are there.
+    /// </summary>
+    /// <param name="deltaIds">The deltas asked about.</param>
+    /// <param name="cancellationToken">Cancels the listing and the reads.</param>
+    public async ValueTask<IReadOnlySet<DeltaId>> CarriedAsync(
+        IEnumerable<DeltaId> deltaIds, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(deltaIds);
+
+        var wanted = deltaIds.ToHashSet();
+        return wanted.Count == 0
+            ? wanted
+            : (await CarriersAsync(wanted, cancellationToken).ConfigureAwait(false)).Keys.ToHashSet();
+    }
+
+    // Every checkpoint copy of a wanted delta that opens, with the key, writer
+    // and number of the checkpoint carrying it.
+    private async ValueTask<Dictionary<DeltaId, List<(ObjectKey Checkpoint, WriterId Writer, ulong Counter, ReadOnlyMemory<byte> Copy)>>> CarriersAsync(
+        HashSet<DeltaId> wanted, CancellationToken cancellationToken)
     {
         // The loader reports damage; a retirer only declines to act on it.
         var findings = new List<DamageFinding>();
-        var carriers = new Dictionary<DeltaId, List<(WriterId, ulong, ReadOnlyMemory<byte>)>>();
+        var carriers = new Dictionary<DeltaId, List<(ObjectKey, WriterId, ulong, ReadOnlyMemory<byte>)>>();
 
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/checkpoint/"), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            if (Coverage.TryGetCarried(entry.Key, out var known) && !known.Any(present.ContainsKey))
+            if (Coverage.TryGetCarried(entry.Key, out var known) && !known.Any(wanted.Contains))
             {
                 continue;
             }
@@ -191,7 +209,7 @@ public sealed class DeltaRetirer : IDisposable
             {
                 var deltaId = checkpoint.SubsumedDeltaIds[index];
                 var copy = checkpoint.SubsumedDeltas[index];
-                if (!present.ContainsKey(deltaId) ||
+                if (!wanted.Contains(deltaId) ||
                     _loader.OpenDelta($"{entry.Key}, delta {deltaId}", copy.ToArray(), findings) is null)
                 {
                     continue;
@@ -203,7 +221,7 @@ public sealed class DeltaRetirer : IDisposable
                     carriers[deltaId] = copies;
                 }
 
-                copies.Add((carrier.Counter.Writer, carrier.Counter.Counter, copy));
+                copies.Add((entry.Key, carrier.Counter.Writer, carrier.Counter.Counter, copy));
             }
         }
 
