@@ -580,7 +580,8 @@ public sealed partial class ServiceCommandHandler
             + "signed under the repository's signing key and appended; the descriptor is unchanged.",
             "Everything already sealed stays exactly as it is and reads as it always did; the newer format "
             + "begins with what the set writes next.",
-            "The record reaches each destination on the next reconciling pass — until it arrives, a copy holds "
+            "The record reaches each destination with the sync after the set's next backup, or at its daily "
+            + "reconciliation if that comes first — until it arrives, a copy holds "
             + "newer objects than the record it has, which costs nothing because every blob declares its own "
             + "container and every index delta carries its own keys.",
             "This cannot be undone, and a build older than this one would read what the set writes next as "

@@ -1281,11 +1281,16 @@ public static class FanOut
         // provider has somebody on the other side, and the rotation is
         // predictable from what was asked before, so it takes the peer's
         // share drawn at random from the whole set (ADR-0091).
+        //
+        // A pass that skips carries nothing, and one since the last
+        // reconciliation may not have found a stray the catch-all phase holds:
+        // neither may be asked about what only a reconciling pass carries.
+        var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
         var plan = await VerificationSampler.SampleAsync(
             archive.Store, keeps, newestSnapshot, previous?.SampleCursor,
             VerificationSampler.DefaultBudget,
             destination.Kind == DestinationKind.LocalPath ? 0 : VerificationSampler.PeerReservoirShare,
-            Protocol.VerificationChallenge.MaximumLength, cancellationToken)
+            Protocol.VerificationChallenge.MaximumLength, cancellationToken, copyScope)
             .ConfigureAwait(false);
 
         // The converge spare (FR-GC-009's direct-ship shape): under
@@ -1350,7 +1355,6 @@ public static class FanOut
         }
         else
         {
-            var copyScope = scope == SyncScope.Reconcile ? CopyScope.Reconcile : CopyScope.Incremental;
             try
             {
                 if (keeps is not null)

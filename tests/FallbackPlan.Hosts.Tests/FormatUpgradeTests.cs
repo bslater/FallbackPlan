@@ -186,8 +186,8 @@ public sealed class FormatUpgradeTests : IDisposable
 
         // The window, pinned rather than hidden. A capture ships the blobs it
         // wrote; the upgrade record is an ordinary immutable object that no
-        // capture produced, so it rides the next reconciling pass. Until then
-        // the destination holds format-3 blobs and does not yet hold the
+        // capture produced, so it rides the next sync rather than the run.
+        // Until then the destination holds format-3 blobs and does not yet hold the
         // record that explains them — which costs nothing, because every
         // blob declares its own container, and is the honest thing for the
         // tool to report while it is true.
@@ -335,7 +335,7 @@ public sealed class FormatUpgradeTests : IDisposable
         // left and throws — after the local copy has already landed, which
         // would report a completed upgrade as a failure. An upgrade must not
         // turn on whether a drive happens to be writable; propagation is the
-        // next reconciling pass's business.
+        // next sync's business.
         ServiceRuntime.ArchiveFormatVersion = FormatVersions.SealedDataPlane;
         Directory.CreateDirectory(Vault);
         WriteConfiguration();
