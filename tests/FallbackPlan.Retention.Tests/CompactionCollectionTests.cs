@@ -674,11 +674,18 @@ public sealed class CompactionCollectionTests : IDisposable
     // this class asserts must not depend on how a machine mounted it.
     private async Task BackUpAsync(DateTimeOffset now)
     {
+        // Windows opens a folder for its times only through the folder's own
+        // call, so files and folders are touched apart.
         var read = DateTime.UtcNow;
-        foreach (var path in Directory.EnumerateFileSystemEntries(SourceRoot, "*", SearchOption.AllDirectories)
+        foreach (var file in Directory.EnumerateFiles(SourceRoot, "*", SearchOption.AllDirectories))
+        {
+            File.SetLastAccessTimeUtc(file, read);
+        }
+
+        foreach (var folder in Directory.EnumerateDirectories(SourceRoot, "*", SearchOption.AllDirectories)
             .Append(SourceRoot))
         {
-            File.SetLastAccessTimeUtc(path, read);
+            Directory.SetLastAccessTimeUtc(folder, read);
         }
 
         var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
