@@ -400,6 +400,42 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Sync_ThatSkips_ListsNoDeltaAtTheStore()
+    {
+        // A pass with nothing published since costs its sequence read, and
+        // retirement adds nothing to that: whatever the plane let go was
+        // already let go here by the pass that copied its checkpoint.
+        WriteConfiguration(directShip: false);
+        var at = DateTimeOffset.Now;
+        await using var runtime = await StartAsync(checkpointThreshold: 2);
+        await StoreCredentialAsync(runtime);
+        foreach (var name in (string[])["a", "b", "c"])
+        {
+            Harness.WriteSourceFile($"docs/{name}.txt", $"the {name} run");
+            await BackUpAsync(runtime, at);
+            at = at.AddHours(2);
+        }
+
+        Assert.IsTrue(
+            Store.Requests.Any(request => request.Method == "DELETE" && request.Target.Contains("/index/delta/", StringComparison.Ordinal)),
+            "the premise: the store retired in a sync");
+        var reconciledAt = Pair(runtime, "cloud").LastReconciledAt;
+        var mark = Store.Listings.Count;
+
+        var sync = FanOut.Enqueue(runtime, Assert.ContainsSingle(runtime.Configuration.BackupSets), "cloud", at, userInitiated: true);
+        Assert.IsNotNull(sync);
+        await sync.WaitAsync(Timeout);
+
+        var row = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
+        Assert.AreEqual(reconciledAt, row.LastReconciledAt, "the premise: the pass skipped");
+        Assert.AreEqual((ulong)at.ToUnixTimeMilliseconds(), row.LastAttemptAt);
+        var deltaListings = Store.Listings.Skip(mark)
+            .Count(listing => Uri.UnescapeDataString(listing.Target).Contains("index/delta/", StringComparison.Ordinal));
+        Assert.AreEqual(0, deltaListings, "a skipping pass listed the store's deltas");
+    }
+
+    [TestMethod]
     public async Task DirectShip_TheRunLeavesTheStore_ToTheSyncThatFollowsIt()
     {
         // The run writes through the destinations it can ship to and leaves
