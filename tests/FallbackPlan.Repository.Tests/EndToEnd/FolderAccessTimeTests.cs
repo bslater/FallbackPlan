@@ -188,6 +188,36 @@ public sealed class FolderAccessTimeTests : ArchiveTestHarness
         Assert.AreEqual(SecondRead, (await ReadTreeAsync(keys, store, second.RootTreeObjectId)).Metadata!.AccessedAt);
     }
 
+    // A folder too large for one tree is judged by the identity of its head,
+    // which names its continuations; an identity derived from the head's own
+    // entries alone would never match, and such a folder would be written
+    // again on every backup.
+    [TestMethod]
+    public async Task AFolderWrittenAsAChain_IsJudgedByTheIdentityItsChainIsWrittenUnder()
+    {
+        var store = CreateStore();
+        using var keys = CreateKeys();
+        await using var builder = new ManifestBuilder(
+            Repo, Writer, KeyGeneration.Zero, keys, store,
+            new WriterSequence(new FileSequenceStateStore(Path.Combine(SpoolDirectory, "sequence.txt"))),
+            SpoolDirectory, SmallBlobPolicy.BlobWriteProfile, FormatVersions.SealedDataPlane);
+        var entries = Enumerable.Range(0, 40)
+            .Select(i => new TreeEntry(
+                System.Text.Encoding.UTF8.GetBytes($"file-{i:D3}.txt"), ObjectId.FromBytes(new byte[32]), EntryKind.File))
+            .ToList();
+        var metadata = new EntryMetadata { ModifiedAt = 1_721_000_000_000, AccessedAt = FirstRead };
+        var written = new List<ObjectId>();
+
+        var head = await TreeChainWriter.WriteAsync(
+            builder, entries, "docs"u8.ToArray(), NameNormalisation.Nfc, metadata, CancellationToken.None,
+            shardBudget: 256, written: written);
+
+        Assert.IsGreaterThan(1, written.Count, "a budget this small writes forty entries as a chain");
+        Assert.AreEqual(
+            head,
+            TreeChainWriter.HeadIdOf(builder, entries, "docs"u8.ToArray(), NameNormalisation.Nfc, metadata, shardBudget: 256));
+    }
+
     [TestMethod]
     public async Task OnlyTheFoldersAccessTimesMoved_AfterTheCatalogueIsProjectedFromTheRepository_TheTreesAreKept()
     {
