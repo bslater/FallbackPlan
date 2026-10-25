@@ -1453,6 +1453,12 @@ public static class FanOut
                 return;
             }
 
+            if (!rolledBack && scope != SyncScope.Skip)
+            {
+                await RetireAtReplicaAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             ledger.RecordSuccess(
                 set.Id, destination.Name, copied, nowMs, syncedSequence,
                 keepFingerprint, reconciled, newestSnapshot,
@@ -1461,9 +1467,76 @@ public static class FanOut
             return;
         }
 
+        if (!rolledBack && scope != SyncScope.Skip)
+        {
+            await RetireAtReplicaAsync(runtime, set, destination.Name, archive, replica, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         ledger.RecordSuccess(
             set.Id, destination.Name, copied, nowMs, syncedSequence,
             keepFingerprint, reconciled, newestSnapshot, convergedSequence: convergedAt);
+    }
+
+    /// <summary>
+    /// Retires at a replica the index deltas its own checkpoints carry and the
+    /// set's plane no longer lists (07 §7, FR-MAN-017).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A sync calls it after the copy and its proof, so the replica is level
+    /// before anything leaves it, and never in a pass that found the state
+    /// directory rolled back; a direct-ship run calls it for the destinations
+    /// it has just written, which hold its journal record and so settle its
+    /// set's last checkpoint as the plane did. The replica decides from what it
+    /// holds itself: a checkpoint there
+    /// whose copy opens and matches the delta's object there, and a journal
+    /// key there above that checkpoint's number. Nothing is taken on the
+    /// plane's word.
+    /// </para>
+    /// <para>
+    /// Only what the plane has already let go, so the replica never retires
+    /// ahead of the store it copies from: a delta the plane still lists would
+    /// be copied straight back by the next pass. Best effort: a delta left
+    /// here is stored twice for a pass longer, and the pair is still in sync.
+    /// </para>
+    /// </remarks>
+    internal static async ValueTask RetireAtReplicaAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
+        ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
+    {
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(archive.Repository.EffectiveFormatVersion))
+        {
+            return;
+        }
+
+        var log = runtime.LoggerFor<DeltaRetirer>();
+        try
+        {
+            var planeDeltas = new HashSet<Domain.Identifiers.DeltaId>();
+            await foreach (var entry in archive.Plane.ListAsync(
+                Storage.Abstractions.ObjectPrefix.Parse("index/delta/"),
+                Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+            {
+                if (Repository.Packing.MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId))
+                {
+                    planeDeltas.Add(deltaId);
+                }
+            }
+
+            using var retirer = new DeltaRetirer(
+                replica, archive.Repository.RepositoryId, archive.Repository.Credential, log)
+            {
+                Coverage = archive.CheckpointCoverage,
+            };
+            await retirer.RetireAsync(deltaId => !planeDeltas.Contains(deltaId), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or IndexFormatException)
+        {
+            Log.ReplicaRetirementDeferred(log, new LogLabel(set.Name), new LogLabel(destinationName), exception);
+        }
     }
 
     /// <summary>

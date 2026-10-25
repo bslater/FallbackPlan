@@ -400,7 +400,7 @@ public static class BackupRunner
     /// </para>
     /// <para>
     /// Against the plane itself, never through a direct-ship sink: each
-    /// destination decides what it may let go, after its own sync (07 §7).
+    /// destination decides what it may let go, from what it holds (07 §7).
     /// Best effort, like the checkpoint before it: nothing a retirement fails
     /// to delete is lost, only stored twice for a run longer.
     /// </para>
@@ -431,7 +431,20 @@ public static class BackupRunner
             {
                 Coverage = archive.CheckpointCoverage,
             };
-            await retirer.RetireAsync(admit: null, cancellationToken).ConfigureAwait(false);
+            var retirement = await retirer.RetireAsync(admit: null, cancellationToken).ConfigureAwait(false);
+
+            // A direct-ship run has written its own journal record to each
+            // destination it reached, so the checkpoint just settled here is
+            // settled there too. The sync after it skips, because the run left
+            // the pair level, so the run retires there itself.
+            if (archive.ShipSink is { } sink && retirement.Retired.Count > 0)
+            {
+                foreach (var (name, store) in sink.DirectDestinationsThisRun)
+                {
+                    await FanOut.RetireAtReplicaAsync(runtime, set, name, archive, store, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
             or Repository.Index.IndexFormatException or OperationCanceledException)
