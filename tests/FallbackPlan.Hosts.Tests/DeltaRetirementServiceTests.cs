@@ -278,6 +278,47 @@ public sealed class DeltaRetirementServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ASetUpgradedPastThisBuild_RetiresNothingAtItsDestination()
+    {
+        // Which of a newer format's objects may go is not this build's to
+        // judge (ADR-0066 Amendment 1): its sync still copies, and deletes
+        // nothing on its reading of the format.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+
+        HashSet<DeltaId> carried;
+        await using (var runtime = await StartAsync(checkpointThreshold: 2))
+        {
+            var set = runtime.Configuration.BackupSets.Single();
+            await BackUpAndSyncAsync(runtime, set, "first");
+            await BackUpAndSyncAsync(runtime, set, "second");
+            carried = CarriedBy(await LoadAsync(Replica));
+            await BackUpAsync(runtime, set, "third");
+            Assert.IsFalse((await DeltasAtTheirKeysAsync(StagingPath)).Overlaps(carried));
+            Assert.IsTrue(carried.IsSubsetOf(await DeltasAtTheirKeysAsync(Replica)));
+        }
+
+        using (var provisioning = new InstallationCredentialStore(_harness.StateDirectory).TryLoad())
+        {
+            Assert.IsNotNull(provisioning, "the installation is not set up");
+            await NewerBuildUpgrade.PlantAsync(
+                new LocalFileSystemObjectStore(StagingPath), provisioning.Credential,
+                Domain.FormatLimits.LatestFormatVersion, Timeout);
+        }
+
+        // A day on, so the pass is the reconciling one: the record sits under
+        // no prefix the copy's named phases walk (ADR-0056).
+        await using (var runtime = await StartAsync(checkpointThreshold: 2))
+        {
+            await SyncAsync(runtime, runtime.Configuration.BackupSets.Single(), DateTimeOffset.Now.AddDays(1));
+        }
+
+        Assert.IsTrue(
+            carried.IsSubsetOf(await DeltasAtTheirKeysAsync(Replica)),
+            "The destination's copies are kept, though staging let them go before the upgrade.");
+    }
+
+    [TestMethod]
     public async Task ACopyBack_ADeltaRetiredUnderIt_IsSkipped_AndTheCheckpointPublishedSinceTheListingIsCopied()
     {
         var from = new LocalFileSystemObjectStore(Path.Combine(_harness.WorkPath, "from"));
@@ -367,11 +408,12 @@ public sealed class DeltaRetirementServiceTests : IDisposable
         await SyncAsync(runtime, set);
     }
 
-    // On the clock as it stands after the run: a direct-ship set leaves out
-    // of its next run a destination whose last success predates its last.
-    private async Task SyncAsync(ServiceRuntime runtime, BackupSetConfiguration set)
+    // On the clock as it stands after the run unless told otherwise: a
+    // direct-ship set leaves out of its next run a destination whose last
+    // success predates its last.
+    private async Task SyncAsync(ServiceRuntime runtime, BackupSetConfiguration set, DateTimeOffset? at = null)
     {
-        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: true);
+        var sync = FanOut.Enqueue(runtime, set, "vault", at ?? DateTimeOffset.Now, userInitiated: true);
         Assert.IsNotNull(sync);
         await sync.WaitAsync(Timeout);
         var row = runtime.DestinationSync.Find(set.Id, "vault")!;
