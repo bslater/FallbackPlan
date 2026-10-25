@@ -50,8 +50,13 @@ public sealed class PeerDeepSweepTests : IDisposable
     private readonly string _destinationState =
         Path.Combine(Path.GetTempPath(), "fbp-peer-sweep", Guid.NewGuid().ToString("n"));
 
+    private readonly string _neighbourState =
+        Path.Combine(Path.GetTempPath(), "fbp-peer-sweep", Guid.NewGuid().ToString("n"));
+
     private RemoteServiceListener? _listener;
     private PeerKeypair? _listenerKeypair;
+    private RemoteServiceListener? _neighbour;
+    private PeerKeypair? _neighbourKeypair;
 
     private CancellationToken Timeout => _timeout.Token;
 
@@ -267,6 +272,34 @@ public sealed class PeerDeepSweepTests : IDisposable
         var repaired = Row(runtime);
         Assert.IsNull(repaired.DamagedKeys, "the sync that replaced it and proved it where it landed clears it");
         Assert.AreEqual(DestinationSyncState.InSync, repaired.State, repaired.LastError);
+    }
+
+    [TestMethod]
+    public async Task APeersRepair_DialsNoOtherPeer_ThoughOneHoldsTheBlobSound()
+    {
+        // ADR-0100 §3: a peer is repaired from the copies this installation
+        // reads without dialling a peer. A finding at one peer is no reason to
+        // put a session on another's link, and a refusal the first peer's own
+        // copy decides would spend that link again on every sync that offered
+        // the repair.
+        await using var runtime = await StartAsync(cadenceDays: 30, neighbour: true);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var (key, victim) = Rot(await PeerReplicaAsync());
+        Assert.IsTrue(
+            File.Exists(PathOf(await ReplicaAsync(_neighbourState), key)), "the control: the other peer holds the blob");
+        var staged = PathOf(_harness.RepositoryPath, key);
+        var rotted = await File.ReadAllBytesAsync(staged, Timeout);
+        rotted[rotted.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(staged, rotted, Timeout);
+        var damaged = await File.ReadAllBytesAsync(victim, Timeout);
+
+        var outcome = await SweepAsync(runtime);
+
+        Assert.AreEqual(1, outcome.Damaged);
+        Assert.AreEqual(0, outcome.Repaired, "the other peer's copy is not one a peer's repair reads");
+        CollectionAssert.AreEqual(damaged, await File.ReadAllBytesAsync(victim, Timeout));
+        Assert.AreEqual(key, Assert.ContainsSingle(Row(runtime).DamagedKeys!));
     }
 
     [TestMethod]
@@ -502,19 +535,24 @@ public sealed class PeerDeepSweepTests : IDisposable
     {
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
+        _neighbour?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _neighbourKeypair?.Dispose();
         _timeout.Dispose();
         _harness.Dispose();
 
-        try
+        foreach (var state in new[] { _destinationState, _neighbourState })
         {
-            if (Directory.Exists(_destinationState))
+            try
             {
-                Directory.Delete(_destinationState, recursive: true);
+                if (Directory.Exists(state))
+                {
+                    Directory.Delete(state, recursive: true);
+                }
             }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Best effort: a test directory that will not delete is not a test failure.
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Best effort: a test directory that will not delete is not a test failure.
+            }
         }
     }
 
@@ -645,24 +683,35 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     private async Task<ServiceRuntime> StartAsync(
-        int? cadenceDays, string? transferLimit = null, IReadOnlyList<string>? offeredFeatures = null)
+        int? cadenceDays, string? transferLimit = null, IReadOnlyList<string>? offeredFeatures = null,
+        bool neighbour = false)
     {
         _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
         _harness.WriteSourceFile("docs/big.bin", new string('b', 300_000));
         var fingerprint = StartPeer(offeredFeatures);
+        List<DestinationConfiguration> destinations =
+        [
+            new DestinationConfiguration
+            {
+                Id = new string('f', 32), Name = "friend", Kind = DestinationKind.Peer,
+                Fingerprint = fingerprint, Endpoint = $"{_listener!.Endpoint.Address}:{_listener.Endpoint.Port}",
+                DeepVerifyIntervalDays = cadenceDays, TransferLimit = transferLimit,
+            },
+        ];
+        if (neighbour)
+        {
+            var theirs = StartNeighbour();
+            destinations.Add(new DestinationConfiguration
+            {
+                Id = new string('e', 32), Name = "neighbour", Kind = DestinationKind.Peer,
+                Fingerprint = theirs, Endpoint = $"{_neighbour!.Endpoint.Address}:{_neighbour.Endpoint.Port}",
+            });
+        }
 
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
-            Destinations =
-            [
-                new DestinationConfiguration
-                {
-                    Id = new string('f', 32), Name = "friend", Kind = DestinationKind.Peer,
-                    Fingerprint = fingerprint, Endpoint = $"{_listener!.Endpoint.Address}:{_listener.Endpoint.Port}",
-                    DeepVerifyIntervalDays = cadenceDays, TransferLimit = transferLimit,
-                },
-            ],
+            Destinations = destinations,
             BackupSets =
             [
                 new BackupSetConfiguration
@@ -670,7 +719,7 @@ public sealed class PeerDeepSweepTests : IDisposable
                     Id = _harness.DocsSetId,
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
-                    Destinations = [new SetDestinationReference { Ref = "friend" }],
+                    Destinations = [.. destinations.Select(destination => new SetDestinationReference { Ref = destination.Name })],
                     DirectShip = false,
                 },
             ],
@@ -707,13 +756,35 @@ public sealed class PeerDeepSweepTests : IDisposable
         return destinationKeypair.Identity.Fingerprint;
     }
 
+    /// <summary>A second paired peer, which holds the set too and is swept on no cadence.</summary>
+    private string StartNeighbour()
+    {
+        using var sourceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        using var neighbourKeypair = PeerKeypairStore.Open(_neighbourState);
+
+        var neighbourGrants = PeerGrantStore.Open(_neighbourState);
+        neighbourGrants.Pin(new PeerGrant(
+            sourceKeypair.Identity, "source", PeerRole.StoresHere, PeerTerms.None, PairedAt));
+        PeerGrantStore.Open(_harness.StateDirectory).Pin(new PeerGrant(
+            neighbourKeypair.Identity, "neighbour", PeerRole.StoresForUs, PeerTerms.None, PairedAt));
+
+        _neighbourKeypair = PeerKeypairStore.Open(_neighbourState);
+        _neighbour = RemoteServiceListener.Start(
+            _neighbourKeypair, neighbourGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
+            log: null, replicationStateDirectory: _neighbourState);
+        _neighbour.Bind(new UnusedService());
+        return neighbourKeypair.Identity.Fingerprint;
+    }
+
     /// <summary>
     /// The peer's replica directory, waited for: the destination finishes
     /// committing its side after the sender has already returned.
     /// </summary>
-    private async Task<string> PeerReplicaAsync()
+    private Task<string> PeerReplicaAsync() => ReplicaAsync(_destinationState);
+
+    private async Task<string> ReplicaAsync(string state)
     {
-        var replicas = Path.Combine(_destinationState, "replicas");
+        var replicas = Path.Combine(state, "replicas");
         var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
         while (true)
         {
