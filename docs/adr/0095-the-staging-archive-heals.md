@@ -64,7 +64,7 @@ Three facts shaped the design.
 
 ## Consequences
 
-- **FR-VER-009 is met, and Phase 4's healing criterion is met for the staging archive.** A peer's replica is still not repaired from here: replacing an object there needs a write the retrieval session does not offer (ADR-0035 Amendment 2).
+- **FR-VER-009 is met, and Phase 4's healing criterion is met for the staging archive.** A peer's replica is still not repaired from here: replacing an object there needs a write the retrieval session does not offer (ADR-0035 Amendment 2). Since [ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md) it is, over a repair session of its own.
 - **A staging archive is read in full once a week.** A segment holds the transfer worker for as long as it reads four gibibytes off a local disk. The first circuit begins on the first pass after an upgrade, as a destination's did when its sweep arrived, and a shut background window holds it as it holds every transfer.
 - **A destination's swap of equal length is now found.** Its finding names the different blob rather than a length.
 - **A staging copy is no longer blamed on a destination.** Destination damage a staging copy caused, and the circuit-by-circuit repair it triggered, stop.
@@ -83,6 +83,8 @@ Three facts shaped the design.
 ## What this record does not do
 
 - **Repair a peer's replica.** Still held until its owner removes the objects (FR-VER-008).
+
+  > **Built 2026-10 ([ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md)):** a peer whose build takes a repair is offered a copy proven sound here, and takes it where its own check of its copy finds that copy damaged.
 - **Read the staging archive on demand.** `verify-destination` reads destinations, and `check` still prints what it finds.
 - **Make the staging archive's cadence configurable.**
 
@@ -91,3 +93,4 @@ Three facts shaped the design.
 | Date | Status | Note |
 |------|--------|------|
 | 2026-10 | Accepted | Built tests first: the key binding in `Repository/VerifyEngine`, the sweep's source proof in `Repository/ReplicaSweep`, `Agent/StagingSweepJob` and its record in `Application/StagingSweepStore`, the repair through `Agent/ReplicaRepairer`, the destination sweep's and the restore's findings handed to it, outstanding damage in `Application/StatusModel`, and contract 1.63's staging sweep with the CLI and the console. Amends [ADR-0035](0035-destination-fitness.md) §4 and [ADR-0075](0075-a-restore-reads-around-damage.md) §7 |
+| 2026-10 | Amended (related) | [ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md) repairs a peer's replica, which this record listed as not done: from a copy here proven sound, taken by the peer only where its own check of its copy agrees the copy is damaged. Phase 4's healing criterion is met for every destination kind. `Agent/PeerRepairTarget`; `Hosts.Tests/PeerDeepSweepTests` |

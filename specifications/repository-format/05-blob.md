@@ -133,6 +133,8 @@ A reader fetches the final 16 bytes, seeks to `footer_offset`, and reads the foo
 
 `digest_prefix` is a cheap corruption check for a reader that has the whole blob. It is **not** an integrity guarantee: it is unkeyed and truncated. Authenticity comes from the footer's AEAD tag and each record's own tag.
 
+A holder with no key at all can make that check, and a peer destination judges a repair on it alone: it replaces its copy of a blob only when the copy fails it, and only with bytes that pass it and carry the locator the copy still carries ([peer-protocol 08](../peer-protocol/08-repair.md)). Rot that lands anywhere before the locator leaves the locator naming the bytes that were sealed, which is what lets a check this weak bind a replacement to them.
+
 ### 4.1 Stores where reading the tail is expensive
 
 Where a store makes tail reads costly or unreliable, a writer MAY additionally publish a **sidecar** object at `/blobs/<class>/<shard>/<store-blob-key>.footer` containing a byte-identical copy of the footer and locator. The sidecar's name uses the same HMAC-rendered store blob key as the blob itself ([02 §4.3](02-identifiers.md#43-not-leaking-writer-identity)) — a raw `blob_id` in a store key would leak the writer identity the rendering exists to hide.
