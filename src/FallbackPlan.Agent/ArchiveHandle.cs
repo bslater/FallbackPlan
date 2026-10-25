@@ -40,6 +40,19 @@ public sealed class ArchiveHandle : IDisposable
     /// </summary>
     public DestinationShipSink? ShipSink { get; init; }
 
+    /// <summary>
+    /// The set's own store on this machine: the staging archive, or a
+    /// direct-ship set's metadata store. The same object as <see cref="Store"/>
+    /// for a staging archive; for a direct-ship one, the store the sink keeps
+    /// metadata in, without the destinations behind it.
+    /// </summary>
+    /// <remarks>
+    /// What is deleted here is deleted from this store alone. A delete through
+    /// the sink would reach every destination too, each of which decides for
+    /// itself what it may let go (07 §7).
+    /// </remarks>
+    public required IObjectStore Plane { get; init; }
+
     /// <summary>The unlocked repository.</summary>
     public required OpenedRepository Repository { get; init; }
 

@@ -127,6 +127,13 @@ Only two processes delete objects: garbage collection ([`07-retention-and-gc.md`
 
 Both proceed by tombstone, grace period, and revalidation before the delete — the tombstone object and the rules a collector must satisfy before deleting are [11 §3](11-lifecycle-objects.md#3-tombstone). A reader that encounters a missing object referenced by a live object MUST report it as a damage finding, and MUST NOT infer that the reference was invalid.
 
+> **Amended (delta retirement, [ADR-0098](../../docs/adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)).** Index-delta
+> retirement takes no tombstone. It deletes a delta only when a checkpoint at
+> the same store carries an identical copy that opens and that checkpoint's
+> writer has published there since ([07 §7](07-index.md#7-delta-retirement)),
+> and a reader looks for a listed delta it finds gone among the checkpoints
+> before reporting it ([07 §5.2](07-index.md#52-reading-a-checkpoint)).
+
 ## 6 Discovery order
 
 A reader bootstraps in this order:

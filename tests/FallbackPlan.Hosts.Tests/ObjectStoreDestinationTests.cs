@@ -346,6 +346,96 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     [TestMethod]
+    public async Task Sync_RetiresAtTheStore_TheDeltasStagingRetired_AndTheStoreAloneStillRestoresThem()
+    {
+        // FR-MAN-017: the store decides from what it holds itself, after the
+        // copy has brought it level, and lets go only what staging already has.
+        WriteConfiguration(directShip: false);
+        var at = DateTimeOffset.Now;
+
+        string firstSnapshot;
+        await using (var runtime = await StartAsync(checkpointThreshold: 2))
+        {
+            await StoreCredentialAsync(runtime);
+            Harness.WriteSourceFile("docs/a.txt", "alpha");
+            await BackUpAsync(runtime, at);
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var staging = await Harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, Timeout);
+            firstSnapshot = Assert.ContainsSingle(staging.Snapshots).SnapshotId;
+            await handler.ExecuteAsync(new CloseRestoreSourceCommand(staging.SourceId), Timeout);
+
+            Harness.WriteSourceFile("docs/b.txt", "bravo");
+            await BackUpAsync(runtime, at.AddHours(2));
+            var deltasBefore = Store.KeysIn(Namespace).Count(key => key.Contains("/index/delta/", StringComparison.Ordinal));
+
+            Harness.WriteSourceFile("docs/c.txt", "charlie");
+            await BackUpAsync(runtime, at.AddHours(4));
+
+            Assert.AreEqual("in-sync", (await RowAsync(runtime, "cloud")).State);
+            var deltasAfter = Store.KeysIn(Namespace).Count(key => key.Contains("/index/delta/", StringComparison.Ordinal));
+            Assert.AreEqual(
+                deltasBefore + 1 - 2, deltasAfter,
+                "The third run's delta arrives, and the two the second run's checkpoint carries go.");
+            Assert.IsTrue(
+                Store.Requests.Any(request => request.Method == "DELETE" && request.Target.Contains("/index/delta/", StringComparison.Ordinal)),
+                "The deltas went from the store by being deleted there.");
+        }
+
+        Directory.Delete(Harness.ArchivesRoot, recursive: true);
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        await using (var runtime = await StartAsync())
+        {
+            var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+            var replica = await Harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", "cloud", Timeout);
+            var restored = Path.Combine(Harness.WorkPath, "from-cloud");
+            Assert.IsInstanceOfType<RestoreResult>(
+                await handler.ExecuteAsync(
+                    new RunRestoreCommand(firstSnapshot, null, restored, Source: replica.SourceId, InPlace: true),
+                    Timeout),
+                out var restore);
+            Assert.AreEqual("complete", restore.Outcome);
+            Assert.AreEqual("alpha", File.ReadAllText(Path.Combine(restored, "docs", "a.txt")));
+        }
+    }
+
+    [TestMethod]
+    public async Task Sync_ThatSkips_ListsNoDeltaAtTheStore()
+    {
+        // A pass with nothing published since costs its sequence read, and
+        // retirement adds nothing to that: whatever the plane let go was
+        // already let go here by the pass that copied its checkpoint.
+        WriteConfiguration(directShip: false);
+        var at = DateTimeOffset.Now;
+        await using var runtime = await StartAsync(checkpointThreshold: 2);
+        await StoreCredentialAsync(runtime);
+        foreach (var name in (string[])["a", "b", "c"])
+        {
+            Harness.WriteSourceFile($"docs/{name}.txt", $"the {name} run");
+            await BackUpAsync(runtime, at);
+            at = at.AddHours(2);
+        }
+
+        Assert.IsTrue(
+            Store.Requests.Any(request => request.Method == "DELETE" && request.Target.Contains("/index/delta/", StringComparison.Ordinal)),
+            "the premise: the store retired in a sync");
+        var reconciledAt = Pair(runtime, "cloud").LastReconciledAt;
+        var mark = Store.Listings.Count;
+
+        var sync = FanOut.Enqueue(runtime, Assert.ContainsSingle(runtime.Configuration.BackupSets), "cloud", at, userInitiated: true);
+        Assert.IsNotNull(sync);
+        await sync.WaitAsync(Timeout);
+
+        var row = Pair(runtime, "cloud");
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
+        Assert.AreEqual(reconciledAt, row.LastReconciledAt, "the premise: the pass skipped");
+        Assert.AreEqual((ulong)at.ToUnixTimeMilliseconds(), row.LastAttemptAt);
+        var deltaListings = Store.Listings.Skip(mark)
+            .Count(listing => Uri.UnescapeDataString(listing.Target).Contains("index/delta/", StringComparison.Ordinal));
+        Assert.AreEqual(0, deltaListings, "a skipping pass listed the store's deltas");
+    }
+
+    [TestMethod]
     public async Task DirectShip_TheRunLeavesTheStore_ToTheSyncThatFollowsIt()
     {
         // The run writes through the destinations it can ship to and leaves
@@ -1107,7 +1197,8 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
     }
 
     /// <summary>Starts the service over the harness.</summary>
-    protected async Task<ServiceRuntime> StartAsync()
+    /// <param name="checkpointThreshold">How many deltas make a checkpoint due, when not the default.</param>
+    protected async Task<ServiceRuntime> StartAsync(int? checkpointThreshold = null)
     {
         await Harness.SetupAsync();
 
@@ -1117,6 +1208,7 @@ public abstract class ObjectStoreDestinationTests : IAsyncDisposable
                 ArchivesRoot = Harness.ArchivesRoot,
                 StateDirectory = Harness.StateDirectory,
                 VolumeIdentityOverride = path => path.Contains("vault", StringComparison.Ordinal) ? 2UL : 1UL,
+                CheckpointThresholdOverride = checkpointThreshold,
             },
             Timeout);
     }

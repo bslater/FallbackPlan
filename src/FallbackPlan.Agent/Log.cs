@@ -252,6 +252,22 @@ internal static partial class Log
         Message = "Set {Set}: the index checkpoint due after this backup was not published; the next backup tries again")]
     internal static partial void CheckpointDeferred(ILogger logger, LogLabel set, Exception exception);
 
+    [LoggerMessage(
+        EventId = 3794, Level = LogLevel.Warning,
+        Message = "Set {Set}: the index deltas its checkpoints carry were not retired; the next backup tries again")]
+    internal static partial void RetirementDeferred(ILogger logger, LogLabel set, Exception exception);
+
+    [LoggerMessage(
+        EventId = 3795, Level = LogLevel.Debug,
+        Message = "Set {Set}: no index delta retired this run, because a sync, sweep or retention pass holds the set")]
+    internal static partial void RetirementSkippedBusy(ILogger logger, LogLabel set);
+
+    [LoggerMessage(
+        EventId = 3796, Level = LogLevel.Warning,
+        Message = "Set {Set} at {Destination}: the index deltas the destination's checkpoints carry were not retired; "
+            + "the next sync tries again")]
+    internal static partial void ReplicaRetirementDeferred(ILogger logger, LogLabel set, LogLabel destination, Exception exception);
+
     // The Information-tier half of configuration loading: the load itself is
     // Debug (Application's 3400, once per scheduler pass); this fires on the
     // first load and then only when the content differs from the last one, so

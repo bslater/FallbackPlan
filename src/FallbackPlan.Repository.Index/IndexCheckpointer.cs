@@ -15,31 +15,47 @@ namespace FallbackPlan.Repository.Index;
 /// </summary>
 /// <remarks>
 /// A checkpointer consults it so that a run reads only the checkpoints
-/// published since the last, rather than every one the repository holds. It
-/// is a cache and nothing depends on it being right: a delta it wrongly counts
-/// as carried is merely not checkpointed, and a load reads that delta from its
-/// key as it always did.
+/// published since the last, rather than every one the repository holds, and
+/// a retirer so that it opens only the checkpoints carrying a delta still at
+/// its key. It is a cache and nothing depends on it being right: a delta it
+/// wrongly counts as carried is merely not checkpointed, and a load reads that
+/// delta from its key as it always did; a checkpoint it wrongly says carries
+/// nothing present merely retires nothing, and one it wrongly says carries a
+/// delta is opened and found not to. A checkpoint's key names one immutable
+/// object, so what it learned at one store holds for every replica of the
+/// repository.
 /// </remarks>
 public sealed class CheckpointCoverage
 {
     private readonly Lock _gate = new();
-    private readonly HashSet<ObjectKey> _read = [];
+    private readonly Dictionary<ObjectKey, DeltaId[]> _read = [];
     private readonly HashSet<DeltaId> _carried = [];
 
     internal bool HasRead(ObjectKey checkpointKey)
     {
         lock (_gate)
         {
-            return _read.Contains(checkpointKey);
+            return _read.ContainsKey(checkpointKey);
         }
     }
 
     internal void Read(ObjectKey checkpointKey, IEnumerable<DeltaId> carried)
     {
+        var deltaIds = carried.ToArray();
         lock (_gate)
         {
-            _read.Add(checkpointKey);
-            _carried.UnionWith(carried);
+            _read[checkpointKey] = deltaIds;
+            _carried.UnionWith(deltaIds);
+        }
+    }
+
+    internal bool TryGetCarried(ObjectKey checkpointKey, out IReadOnlyList<DeltaId> carried)
+    {
+        lock (_gate)
+        {
+            var known = _read.TryGetValue(checkpointKey, out var deltaIds);
+            carried = deltaIds ?? [];
+            return known;
         }
     }
 
@@ -69,7 +85,8 @@ public sealed class CheckpointCoverage
 /// </para>
 /// <para>
 /// Nothing here deletes a delta. A checkpoint changes how many objects a load
-/// reads; retiring what it carries is owed (FR-MAN-017).
+/// reads; <see cref="DeltaRetirer"/> retires what it carries once its writer
+/// has published again (FR-MAN-017).
 /// </para>
 /// </remarks>
 public sealed class IndexCheckpointer : IDisposable

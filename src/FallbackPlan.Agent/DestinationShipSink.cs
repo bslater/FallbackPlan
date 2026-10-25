@@ -46,7 +46,9 @@ namespace FallbackPlan.Agent;
 /// </remarks>
 public sealed class DestinationShipSink : IObjectStore
 {
-    private sealed record Shipment(string Name, IObjectStore Store, int Priority);
+    // Direct: a local path or an object store, which this hub reads and
+    // deletes at itself. A peer is reached only through its exchange.
+    private sealed record Shipment(string Name, IObjectStore Store, int Priority, bool Direct = true);
 
     private readonly ServiceRuntime _runtime;
     private readonly LocalFileSystemObjectStore _metadata;
@@ -151,6 +153,25 @@ public sealed class DestinationShipSink : IObjectStore
             lock (_gate)
             {
                 return _runActive ? [.. _inScope.Select(shipment => shipment.Name)] : [];
+            }
+        }
+    }
+
+    /// <summary>
+    /// The run's destinations this hub reaches itself, with the store it
+    /// writes them through: every local path and object store still in scope.
+    /// Empty outside a run. A peer is not among them, because it is reached
+    /// only through its exchange.
+    /// </summary>
+    internal IReadOnlyList<(string Name, IObjectStore Store)> DirectDestinationsThisRun
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _runActive
+                    ? [.. _inScope.Where(shipment => shipment.Direct).Select(shipment => (shipment.Name, shipment.Store))]
+                    : [];
             }
         }
     }
@@ -314,7 +335,8 @@ public sealed class DestinationShipSink : IObjectStore
                         await StoreForAsync(destination, reclaimPublicKey, claimPublicKey, cancellationToken)
                             .ConfigureAwait(false),
                         userInitiated ? null : _runtime.Pacing.ForDestination(destination)),
-                    SetDestinationReference.EffectivePriority(reference, destination)));
+                    SetDestinationReference.EffectivePriority(reference, destination),
+                    Direct: destination.Kind != DestinationKind.Peer));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {

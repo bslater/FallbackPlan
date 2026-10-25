@@ -88,6 +88,12 @@ MUST refuse a value outside it. A reader written before *requested* was
 assigned therefore refuses one and deletes nothing for it, which is the closed
 vocabulary doing its job: the failure is a deletion not made.
 
+> **Amended (delta retirement, [ADR-0098](../../docs/adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)).** A
+> delta is now retired, and still no tombstone names it: a store deletes a
+> delta its own settled checkpoint carries without one
+> ([07 §7](07-index.md#7-delta-retirement)). *Retired delta* stays defined and
+> unproduced.
+
 The reason is inside the signed bytes, so it is an attested claim about why
 data was destroyed rather than an annotation. A writer that cannot tell two
 cases apart MUST say *unreferenced* rather than guess: an audit record that

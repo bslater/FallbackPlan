@@ -212,18 +212,11 @@ public static class StoreToStoreCopier
                     continue;
                 }
 
-                var put = await destination.PutAsync(
-                    entry.Key,
-                    async token =>
-                    {
-                        var read = await source.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
-                        return read.Outcome == OpenReadOutcome.Found && read.Content is not null
-                            ? read.Content
-                            : throw new IOException(
-                                $"Object {entry.Key.Value} listed but could not be read to copy.");
-                    },
-                    PutConditions.None,
-                    cancellationToken).ConfigureAwait(false);
+                if (await PutFromAsync(source, destination, entry.Key, log, cancellationToken).ConfigureAwait(false)
+                    is not { } put)
+                {
+                    continue;
+                }
 
                 if (put.Outcome == PutOutcome.AlreadyExists)
                 {
@@ -345,18 +338,11 @@ public static class StoreToStoreCopier
                     continue;
                 }
 
-                var put = await destination.PutAsync(
-                    entry.Key,
-                    async token =>
-                    {
-                        var read = await source.OpenReadAsync(entry.Key, range: null, token).ConfigureAwait(false);
-                        return read.Outcome == OpenReadOutcome.Found && read.Content is not null
-                            ? read.Content
-                            : throw new IOException(
-                                $"Object {entry.Key.Value} listed but could not be read to copy.");
-                    },
-                    PutConditions.None,
-                    cancellationToken).ConfigureAwait(false);
+                if (await PutFromAsync(source, destination, entry.Key, log, cancellationToken).ConfigureAwait(false)
+                    is not { } put)
+                {
+                    continue;
+                }
 
                 if (put.Outcome == PutOutcome.AlreadyExists)
                 {
@@ -442,6 +428,52 @@ public static class StoreToStoreCopier
         Log.ReplicationComplete(log, new LogLabel(name), new LogLabel("converge"), copied, alreadyHeld, deleted);
 
         return new ConvergeOutcome(copied, alreadyHeld, deleted, spared);
+    }
+
+    /// <summary>
+    /// Copies one listed object, or answers null for a delta the source
+    /// retired after listing it.
+    /// </summary>
+    /// <remarks>
+    /// A delta is deleted only once a checkpoint carrying it is durable at the
+    /// same store (07 §7), and the checkpoint phase lists after the delta
+    /// phase, so the carrier is copied in its own phase. Any other object that
+    /// is gone when read is a store losing what it listed, and fails the pass.
+    /// </remarks>
+    private static async ValueTask<PutResult?> PutFromAsync(
+        IObjectStore source, IObjectStore destination, ObjectKey key, ILogger log, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await destination.PutAsync(
+                key,
+                async token =>
+                {
+                    var read = await source.OpenReadAsync(key, range: null, token).ConfigureAwait(false);
+                    if (read.Outcome == OpenReadOutcome.Found && read.Content is not null)
+                    {
+                        return read.Content;
+                    }
+
+                    throw key.Value.StartsWith(RetiredDeltaException.Prefix, StringComparison.Ordinal)
+                        ? new RetiredDeltaException()
+                        : new IOException($"Object {key.Value} listed but could not be read to copy.");
+                },
+                PutConditions.None,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RetiredDeltaException)
+        {
+            Log.RetiredDeltaSkipped(log, key);
+            return null;
+        }
+    }
+
+    // Thrown out of a put's content factory, so the store abandons the put
+    // and nothing is written under the key.
+    private sealed class RetiredDeltaException : Exception
+    {
+        public const string Prefix = "index/delta/";
     }
 
     /// <summary>The listing prefix a phase walks under.</summary>
