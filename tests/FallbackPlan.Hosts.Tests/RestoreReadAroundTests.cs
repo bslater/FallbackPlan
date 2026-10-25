@@ -269,9 +269,10 @@ public sealed class RestoreReadAroundTests : IDisposable
     [TestMethod]
     public async Task Restore_APeerCopyFoundDamaged_IsHeldAgainstThePair_AndNamesTheRemedy()
     {
-        // Nothing here can write at a peer (ADR-0035 Amendment 2), so the
-        // damage a restore finds there stands until the peer's owner removes
-        // it — and the notice says exactly what to remove.
+        // No copy here holds the objects sound, so nothing can be offered the
+        // peer (ADR-0100): the damage a restore finds there stands until the
+        // peer's owner removes it — and the notice says exactly what to
+        // remove.
         var fingerprint = StartPeer();
         await using var runtime = await StartAsync(directShip: true, [("vault", null)], fingerprint);
         await BackUpAsync(runtime);
