@@ -668,8 +668,26 @@ public sealed class CompactionCollectionTests : IDisposable
         return found;
     }
 
+    // Each backup is preceded by what a filesystem that moves access times on
+    // every read would have done since the last: a temp directory on a tmpfs
+    // without relatime does, one on a relatime disk does at most daily. What
+    // this class asserts must not depend on how a machine mounted it.
     private async Task BackUpAsync(DateTimeOffset now)
     {
+        // Windows opens a folder for its times only through the folder's own
+        // call, so files and folders are touched apart.
+        var read = DateTime.UtcNow;
+        foreach (var file in Directory.EnumerateFiles(SourceRoot, "*", SearchOption.AllDirectories))
+        {
+            File.SetLastAccessTimeUtc(file, read);
+        }
+
+        foreach (var folder in Directory.EnumerateDirectories(SourceRoot, "*", SearchOption.AllDirectories)
+            .Append(SourceRoot))
+        {
+            Directory.SetLastAccessTimeUtc(folder, read);
+        }
+
         var result = await AgentPass.RunAsync(ArchivesRoot, StateDirectory, now, CancellationToken.None);
         Assert.AreEqual(1, result.Ran, string.Join("; ", result.Sets.Select(set => $"{set.Outcome}:{set.Detail}")));
     }

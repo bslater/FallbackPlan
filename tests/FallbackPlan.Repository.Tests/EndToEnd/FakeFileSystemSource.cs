@@ -108,8 +108,10 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
     public List<string> OpenedPaths { get; } = [];
 
     /// <summary>
-    /// A folder's own captured metadata, by its path. A folder not named here
-    /// carries a modification time and the permissions <c>rwxr-xr-x</c>.
+    /// A folder's own captured metadata, by its path; the root's is under the
+    /// empty path. A folder not named here carries a modification time and the
+    /// permissions <c>rwxr-xr-x</c>, and the root a modification time alone. A
+    /// folder named here that holds nothing is walked as an empty folder.
     /// </summary>
     public Dictionary<string, EntryMetadata> Folders { get; } = new(StringComparer.Ordinal);
 
@@ -173,7 +175,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
             NameNormalisation = NameNormalisation.Nfc,
             Kind = ScanEntryKind.Directory,
             Length = 0,
-            Metadata = new EntryMetadata { ModifiedAt = 1_722_000_000_000 },
+            Metadata = Folders.GetValueOrDefault(string.Empty) ?? new EntryMetadata { ModifiedAt = 1_722_000_000_000 },
             FullPath = rootPath,
         };
 
@@ -202,6 +204,7 @@ internal sealed class FakeFileSystemSource : IFileSystemSource
         var prefix = directory.Length == 0 ? string.Empty : directory + "/";
 
         var children = _nodes.Keys
+            .Concat(Folders.Keys)
             .Where(path => path.StartsWith(prefix, StringComparison.Ordinal) && path.Length > prefix.Length)
             .Select(path =>
             {

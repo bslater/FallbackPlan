@@ -194,6 +194,13 @@ public sealed class ManifestBuilder : IAsyncDisposable
         return objectId;
     }
 
+    /// <summary>
+    /// The object identifier <see cref="AppendManifestAsync"/> returns for
+    /// <paramref name="encodedManifest"/>, without appending it.
+    /// </summary>
+    public ObjectId IdentifierOf(ObjectType objectType, ReadOnlySpan<byte> encodedManifest) =>
+        _objectIdDeriver.Derive(objectType, ContentHasher.Hash(encodedManifest));
+
     /// <summary>Seals and uploads the open metadata blob, if any.</summary>
     public async ValueTask FlushAsync(CancellationToken cancellationToken)
     {

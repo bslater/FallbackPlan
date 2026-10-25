@@ -656,6 +656,11 @@ public sealed partial class PublicationOrchestrator
             _catalogue.RecordTreeEntry(job.SnapshotId.Span, path, EntryKind.DirectoryPlaceholder, treeId);
         }
 
+        foreach (var (treeId, accessedAt) in walker.DirectoryAccessTimes)
+        {
+            _catalogue.RecordDirectoryAccessTime(treeId, accessedAt);
+        }
+
         foreach (var file in walker.Files)
         {
             _catalogue.RecordTreeEntry(job.SnapshotId.Span, file.RelativePath, file.EntryKind, file.ObjectId);
@@ -734,6 +739,7 @@ public sealed partial class PublicationOrchestrator
         private readonly List<CaptureFailure> _failures = [];
         private readonly List<(string Path, ObjectId ObjectId)> _directories = [];
         private readonly List<ObjectId> _trees = [];
+        private readonly List<(ObjectId TreeId, ulong AccessedAt)> _accessTimes = [];
         private readonly Dictionary<SourceKey, SourceIdentityPackEntry?> _hints = [];
 
         private sealed record Frame(ScanEntry Directory, List<TreeEntry> Entries);
@@ -749,6 +755,9 @@ public sealed partial class PublicationOrchestrator
 
         /// <summary>Every tree manifest this walk appended — each directory's head and its continuations, the root's included.</summary>
         public IReadOnlyList<ObjectId> Trees => _trees;
+
+        /// <summary>The access time each directory's head tree states, the root's included; a head that states none is absent.</summary>
+        public IReadOnlyList<(ObjectId TreeId, ulong AccessedAt)> DirectoryAccessTimes => _accessTimes;
 
         /// <summary>
         /// The 06 §11 hints this snapshot owes, published as its pack (06
@@ -847,9 +856,14 @@ public sealed partial class PublicationOrchestrator
             }
 
             var name = isRoot ? "/"u8.ToArray() : frame.Directory.NameBytes;
+            var metadata = MetadataToState(frame, name);
             var headId = await TreeChainWriter.WriteAsync(
-                builder, frame.Entries, name, frame.Directory.NameNormalisation, frame.Directory.Metadata,
+                builder, frame.Entries, name, frame.Directory.NameNormalisation, metadata,
                 cancellationToken, written: _trees).ConfigureAwait(false);
+            if (metadata.AccessedAt is { } accessedAt)
+            {
+                _accessTimes.Add((headId, accessedAt));
+            }
 
             if (isRoot)
             {
@@ -861,6 +875,35 @@ public sealed partial class PublicationOrchestrator
                     new TreeEntry(frame.Directory.NameBytes, headId, EntryKind.DirectoryPlaceholder));
                 _directories.Add((frame.Directory.RelativePath, headId));
             }
+        }
+
+        /// <summary>
+        /// The metadata a directory's head states: the access time its prior
+        /// tree stated when that is all that differs, and what the scan saw
+        /// otherwise (NFR-PERF-003).
+        /// </summary>
+        /// <remarks>
+        /// A backup reads every directory it walks, which moves the access time
+        /// wherever reads do, and a tree's identity is its bytes. Stating the
+        /// new time would write every directory, and every directory above
+        /// it, anew on every backup for a change nothing made. A directory
+        /// with anything else changed states the time it has now, as a new
+        /// file version does.
+        /// </remarks>
+        private EntryMetadata MetadataToState(Frame frame, ReadOnlyMemory<byte> name)
+        {
+            var metadata = frame.Directory.Metadata;
+            if (catalogue is null || job.PriorSnapshotId is not { } priorSnapshot ||
+                catalogue.Read(c => c.LookupDirectory(priorSnapshot.Span, frame.Directory.RelativePath)) is not { } prior ||
+                prior.AccessedAt == metadata.AccessedAt)
+            {
+                return metadata;
+            }
+
+            var kept = metadata with { AccessedAt = prior.AccessedAt };
+            return TreeChainWriter.HeadIdOf(builder, frame.Entries, name, frame.Directory.NameNormalisation, kept) == prior.TreeId
+                ? kept
+                : metadata;
         }
 
         private async ValueTask PublishLeafAsync(ScanEntry entry, CancellationToken cancellationToken)
@@ -1616,6 +1659,40 @@ public static class TreeChainWriter
             ObjectType.TreeManifest, TreeManifestCodec.Encode(head), cancellationToken).ConfigureAwait(false);
         written?.Add(headId);
         return headId;
+    }
+
+    /// <summary>
+    /// The head manifest's object identifier <see cref="WriteAsync"/> returns
+    /// for the same arguments, without appending anything.
+    /// </summary>
+    public static ObjectId HeadIdOf(
+        ManifestBuilder builder,
+        IReadOnlyList<TreeEntry> entries,
+        ReadOnlyMemory<byte> name,
+        NameNormalisation normalisation,
+        EntryMetadata metadata,
+        int shardBudget = DefaultShardBudget)
+    {
+        ThrowHelper.ThrowIfNull(builder);
+
+        var shards = Shard(entries, shardBudget);
+        ObjectId? continuation = null;
+        for (var i = shards.Count - 1; i >= 1; i--)
+        {
+            var shard = new TreeManifest { Entries = shards[i], Continuation = continuation };
+            continuation = builder.IdentifierOf(ObjectType.TreeManifest, TreeManifestCodec.Encode(shard));
+        }
+
+        var head = new TreeManifest
+        {
+            Entries = shards[0],
+            Name = name,
+            NameNormalisation = normalisation,
+            Metadata = metadata,
+            Continuation = continuation,
+        };
+
+        return builder.IdentifierOf(ObjectType.TreeManifest, TreeManifestCodec.Encode(head));
     }
 
     private static List<List<TreeEntry>> Shard(IReadOnlyList<TreeEntry> entries, int shardBudget)

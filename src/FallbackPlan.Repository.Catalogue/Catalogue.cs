@@ -43,6 +43,12 @@ public sealed record CatalogueTreeEntry(
     ReadOnlyMemory<byte>? MetadataDigest = null);
 
 /// <summary>
+/// A folder's head tree within one snapshot (schema v11), with the access time
+/// that tree states, or <see langword="null"/> when it states none.
+/// </summary>
+public sealed record CatalogueDirectoryVersion(ObjectId TreeId, ulong? AccessedAt);
+
+/// <summary>
 /// What the reuse decision needs to know about an object the index already
 /// locates ([ADR-0006](../../docs/adr/0006-object-identifiers-and-dedup-trust-domains.md)):
 /// who wrote the winning entry, and whether this device has already confirmed
@@ -555,6 +561,22 @@ public sealed class Catalogue : IDisposable
     }
 
     /// <summary>
+    /// Records the access time the folder tree <paramref name="treeId"/>
+    /// states (schema v11 <c>directory_access_times</c>), so a later capture
+    /// can rebuild the identity that tree has without reading it.
+    /// </summary>
+    public void RecordDirectoryAccessTime(ObjectId treeId, ulong accessedAt)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO directory_access_times (object_id, accessed_at) VALUES ($object, $accessed);
+            """;
+        command.Parameters.AddWithValue("$object", treeId.ToArray());
+        command.Parameters.AddWithValue("$accessed", unchecked((long)accessedAt));
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Records the content objects <paramref name="versionId"/> needs — its
     /// segments and its alternate streams' content — so that damage to one
     /// can be traced to the version, and through it to the snapshots and
@@ -1004,6 +1026,41 @@ public sealed class Catalogue : IDisposable
         var entry = reader.Read() ? ReadTreeEntry(reader) : null;
         EngineDiagnostics.CatalogueLookupDuration.Record(Stopwatch.GetElapsedTime(started).TotalMicroseconds);
         return entry;
+    }
+
+    /// <summary>
+    /// A folder's head tree within one snapshot, and the access time it
+    /// states, or <see langword="null"/> when the snapshot holds no folder at
+    /// <paramref name="path"/>. The root is the empty string.
+    /// </summary>
+    public CatalogueDirectoryVersion? LookupDirectory(ReadOnlySpan<byte> snapshotId, string path)
+    {
+        ThrowHelper.ThrowIfNull(path);
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = path.Length == 0
+            ? """
+              SELECT s.root_tree, d.accessed_at
+              FROM snapshots s
+              LEFT JOIN directory_access_times d ON d.object_id = s.root_tree
+              WHERE s.snapshot_id = $snapshot;
+              """
+            : """
+              SELECT t.object_id, d.accessed_at
+              FROM tree_entries t
+              LEFT JOIN directory_access_times d ON d.object_id = t.object_id
+              WHERE t.snapshot_id = $snapshot AND t.path = $path AND t.entry_kind = $directory;
+              """;
+        command.Parameters.AddWithValue("$snapshot", snapshotId.ToArray());
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$directory", (long)EntryKind.DirectoryPlaceholder);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new CatalogueDirectoryVersion(
+                ObjectId.FromBytes((byte[])reader.GetValue(0)),
+                reader.IsDBNull(1) ? null : unchecked((ulong)reader.GetInt64(1)))
+            : null;
     }
 
     /// <summary>

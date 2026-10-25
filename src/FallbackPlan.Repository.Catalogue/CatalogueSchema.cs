@@ -73,8 +73,16 @@ public static class CatalogueSchema
     /// generation, zero for a delta without one. A catalogue at v9 ranked by
     /// key generation, so it is rebuilt rather than read under the new rule.
     /// </para>
+    /// <para>
+    /// v11 over v10: <c>directory_access_times</c>, the access time each
+    /// folder's tree states, so a capture can tell a folder whose only change
+    /// is that it was read from one whose tree has to be written again
+    /// (NFR-PERF-003). A folder's tree states its access time in the bytes its
+    /// identity derives from, so without the prior value a capture cannot
+    /// rebuild the prior identity, and every folder it read was written anew.
+    /// </para>
     /// </remarks>
-    public const int Version = 10;
+    public const int Version = 11;
 
     /// <summary>The complete DDL.</summary>
     public const string Ddl = """
@@ -186,6 +194,14 @@ public static class CatalogueSchema
         CREATE INDEX ix_tree_entries_parent ON tree_entries (snapshot_id, parent, path, entry_kind, object_id);
 
         CREATE INDEX ix_tree_entries_casefold ON tree_entries (snapshot_id, path_casefold);
+
+        -- The access time a folder's head tree states, keyed by the tree: the
+        -- identity derives from the bytes, so one tree states one access time
+        -- wherever it is referenced. A tree that states none has no row.
+        CREATE TABLE directory_access_times (
+            object_id   BLOB PRIMARY KEY,
+            accessed_at INTEGER NOT NULL
+        ) WITHOUT ROWID;
 
         -- The content objects each file version needs — its segments and its
         -- alternate streams' content — keyed by the object: the reverse of the

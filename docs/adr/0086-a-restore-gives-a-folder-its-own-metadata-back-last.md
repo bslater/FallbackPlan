@@ -87,3 +87,4 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A folder the restore makes gets its captured times, permissions and ownership back by the file's rule, last and deepest first. One already there keeps its own, nothing is applied through a link, and the plan and receipt count folders apart from files. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes a folder's extended attributes back by the file's rule, in §2's end pass, so a folder's default ACL goes on after what is restored into it. |
+| 2026-10 | Accepted | [ADR-0099](0099-a-folder-that-was-only-read-keeps-its-tree.md) keeps a folder's tree when only its access time moved, so the access time this restores is the folder's when a tree with its contents was first captured, as a reused file version's already was. |
