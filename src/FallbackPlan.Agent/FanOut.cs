@@ -1505,7 +1505,11 @@ public static class FanOut
         ServiceRuntime runtime, BackupSetConfiguration set, string destinationName,
         ArchiveHandle archive, Storage.Abstractions.IObjectStore replica, CancellationToken cancellationToken)
     {
-        if (!Domain.FormatVersions.HasDeltaCheckpoints(archive.Repository.EffectiveFormatVersion))
+        // A set a newer build upgraded is still copied, because copying is a
+        // read; which of its objects a reader still needs is the newer
+        // build's to say (ADR-0066 Amendment 1).
+        var version = archive.Repository.EffectiveFormatVersion;
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(version) || !Domain.FormatVersions.IsWritable(version))
         {
             return;
         }
