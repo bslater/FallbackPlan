@@ -38,6 +38,9 @@ public sealed class DeltaRetirementServiceTests : IDisposable
 
     private string MetadataRoot => Path.Combine(_harness.StateDirectory, "sets", _harness.DocsSetId);
 
+    // A local destination holds each repository it receives under its own directory.
+    private string Replica => Assert.ContainsSingle(Directory.GetDirectories(Vault));
+
     public void Dispose()
     {
         _timeout.Dispose();
@@ -178,6 +181,103 @@ public sealed class DeltaRetirementServiceTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ALocalPathDestination_RetiresInItsSync_WhatThePlaneRetired_AndRestoresFromItAlone()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync(checkpointThreshold: 2);
+        var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
+        var set = runtime.Configuration.BackupSets.Single();
+        await BackUpAndSyncAsync(runtime, set, "first");
+        var firstSnapshot = Assert.ContainsSingle(await SnapshotIdsAsync(handler));
+        await BackUpAndSyncAsync(runtime, set, "second");
+        var before = await LoadAsync(Replica);
+        var carried = CarriedBy(before);
+        Assert.IsTrue(carried.IsSubsetOf(await DeltasAtTheirKeysAsync(Replica)));
+
+        await BackUpAndSyncAsync(runtime, set, "third");
+
+        Assert.IsFalse((await DeltasAtTheirKeysAsync(StagingPath)).Overlaps(carried));
+        Assert.IsFalse(
+            (await DeltasAtTheirKeysAsync(Replica)).Overlaps(carried),
+            "The sync retires at the destination what the plane retired.");
+        Assert.AreEqual(DestinationSyncState.InSync, runtime.DestinationSync.Find(set.Id, "vault")!.State);
+        Assert.IsTrue(before.AllEntries.ToHashSet().IsSubsetOf((await LoadAsync(Replica)).AllEntries));
+
+        // The first snapshot's delta is gone from both; the destination
+        // restores it from the checkpoint it holds.
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", "vault", Timeout);
+        var output = Path.Combine(_harness.WorkPath, "restored");
+        Assert.IsInstanceOfType<Api.RestoreResult>(
+            await handler.ExecuteAsync(new RunRestoreCommand(firstSnapshot, null, output, Source: source.SourceId), Timeout),
+            out var restored);
+        Assert.AreEqual("complete", restored.Outcome);
+        var recovered = Assert.ContainsSingle(Directory.GetFiles(output, "first.txt", SearchOption.AllDirectories));
+        Assert.Contains("first: the run's own file", await File.ReadAllTextAsync(recovered, Timeout), StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ADestination_RetiresNothingThePlaneStillHolds()
+    {
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: false);
+
+        await using var runtime = await StartAsync(checkpointThreshold: 2);
+        var set = runtime.Configuration.BackupSets.Single();
+        await BackUpAndSyncAsync(runtime, set, "first");
+        await BackUpAndSyncAsync(runtime, set, "second");
+        var carried = CarriedBy(await LoadAsync(StagingPath));
+
+        // The third run cannot retire at staging, so staging still lists
+        // what the checkpoint carries. Were the destination to retire it, the
+        // next sync would copy it straight back.
+        var gate = runtime.SetGate(set.Id);
+        await gate.WaitAsync(Timeout);
+        try
+        {
+            await BackUpAsync(runtime, set, "third");
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        await SyncAsync(runtime, set);
+
+        Assert.IsTrue(carried.IsSubsetOf(await DeltasAtTheirKeysAsync(StagingPath)));
+        Assert.IsTrue(carried.IsSubsetOf(await DeltasAtTheirKeysAsync(Replica)));
+
+        await BackUpAndSyncAsync(runtime, set, "fourth");
+
+        Assert.IsFalse((await DeltasAtTheirKeysAsync(Replica)).Overlaps(carried));
+    }
+
+    [TestMethod]
+    public async Task ADirectShipRun_RetiresAtTheDestinationsItWrote()
+    {
+        // The run leaves each destination level with the metadata store, so
+        // the sync after it has nothing to read and skips: the run itself
+        // retires at the destinations it wrote, as it did in its own store.
+        Directory.CreateDirectory(Vault);
+        WriteConfiguration(directShip: true);
+
+        await using var runtime = await StartAsync(checkpointThreshold: 2);
+        var set = runtime.Configuration.BackupSets.Single();
+        await BackUpAsync(runtime, set, "first");
+        await BackUpAsync(runtime, set, "second");
+        var before = await LoadAsync(Replica);
+        var carried = CarriedBy(before);
+        Assert.IsNotEmpty(carried);
+
+        await BackUpAsync(runtime, set, "third");
+
+        Assert.IsFalse((await DeltasAtTheirKeysAsync(MetadataRoot)).Overlaps(carried));
+        Assert.IsFalse((await DeltasAtTheirKeysAsync(Replica)).Overlaps(carried));
+        Assert.IsTrue(before.AllEntries.ToHashSet().IsSubsetOf((await LoadAsync(Replica)).AllEntries));
+    }
+
+    [TestMethod]
     public async Task ACopyBack_ADeltaRetiredUnderIt_IsSkipped_AndTheCheckpointPublishedSinceTheListingIsCopied()
     {
         var from = new LocalFileSystemObjectStore(Path.Combine(_harness.WorkPath, "from"));
@@ -259,6 +359,23 @@ public sealed class DeltaRetirementServiceTests : IDisposable
         _harness.WriteSourceFile($"docs/{name}.txt", $"{name}: the run's own file");
         var outcome = await Scheduler.Enqueue(runtime, set, DateTimeOffset.Now, userInitiated: true).WaitAsync(Timeout);
         Assert.AreEqual("ran", outcome.Outcome, outcome.Detail);
+    }
+
+    private async Task BackUpAndSyncAsync(ServiceRuntime runtime, BackupSetConfiguration set, string name)
+    {
+        await BackUpAsync(runtime, set, name);
+        await SyncAsync(runtime, set);
+    }
+
+    // On the clock as it stands after the run: a direct-ship set leaves out
+    // of its next run a destination whose last success predates its last.
+    private async Task SyncAsync(ServiceRuntime runtime, BackupSetConfiguration set)
+    {
+        var sync = FanOut.Enqueue(runtime, set, "vault", DateTimeOffset.Now, userInitiated: true);
+        Assert.IsNotNull(sync);
+        await sync.WaitAsync(Timeout);
+        var row = runtime.DestinationSync.Find(set.Id, "vault")!;
+        Assert.AreEqual(DestinationSyncState.InSync, row.State, row.LastError);
     }
 
     private async Task<HashSet<string>> SnapshotIdsAsync(ServiceCommandHandler handler)
