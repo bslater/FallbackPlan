@@ -368,6 +368,10 @@ public sealed class ForensicRebuilder : IDisposable
         }
 
         var tree = TreeManifestCodec.Decode(plaintext);
+        if (tree.Metadata?.AccessedAt is { } accessedAt)
+        {
+            catalogue.RecordDirectoryAccessTime(treeId, accessedAt);
+        }
 
         foreach (var entry in tree.Entries)
         {

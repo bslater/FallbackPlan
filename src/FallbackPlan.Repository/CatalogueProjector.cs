@@ -163,6 +163,10 @@ public sealed class CatalogueProjector
             }
 
             var tree = TreeManifestCodec.Decode(read.Plaintext!);
+            if (tree.Metadata?.AccessedAt is { } accessedAt)
+            {
+                target.RecordDirectoryAccessTime(id, accessedAt);
+            }
 
             foreach (var child in tree.Entries)
             {
