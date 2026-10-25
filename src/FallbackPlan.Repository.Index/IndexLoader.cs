@@ -110,7 +110,10 @@ public sealed class IndexState
 /// A copy that does not open is reported and the delta is read from its key
 /// instead. A delta's key carries a random identifier, so one the listing
 /// omits and no checkpoint carries is never fetched; it is seen only as a gap
-/// once a later number of its writer is. A checkpoint's own entries and
+/// once a later number of its writer is. The deltas are listed before the
+/// checkpoints, and a listed delta found gone is looked for in a second
+/// listing of them, so a load racing a delta's retirement loses nothing
+/// (07 §5.2). A checkpoint's own entries and
 /// watermarks, the earlier form, are not acted on (ADR-0008 Amendment 1).
 /// Signatures verify against the derived signing key per generation; a
 /// failure is a <b>security finding</b> and the object is excluded. Sequence
@@ -185,55 +188,69 @@ public sealed class IndexLoader : IDisposable
         var deltas = new List<DecodedDelta>();
         var checkpointCounters = new HashSet<(WriterId, ulong)>();
         var carried = new Dictionary<DeltaId, DecodedDelta>();
+        var checkpointsSeen = new HashSet<ObjectKey>();
 
-        await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/checkpoint/"), ListOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            var bytes = await FetchAsync(entry.Key, findings, cancellationToken).ConfigureAwait(false);
-            if (bytes is null || OpenCheckpoint(entry.Key, bytes, findings) is not { } opened)
-            {
-                continue;
-            }
-
-            checkpointCounters.Add(opened.Counter);
-            checkpoints.Add(opened.Checkpoint);
-
-            // A carried copy is opened exactly as the object at the delta's
-            // key would be (07 §5). One that does not open is reported and
-            // left out, and the delta is read from its key instead. Every
-            // copy is opened, even of a delta another checkpoint already
-            // carries soundly, so whether damage is reported does not depend
-            // on the order a listing returns checkpoints in.
-            var checkpoint = opened.Checkpoint.Checkpoint;
-            for (var index = 0; index < checkpoint.SubsumedDeltas.Count; index++)
-            {
-                var deltaId = checkpoint.SubsumedDeltaIds[index];
-                if (OpenDelta($"{entry.Key}, delta {deltaId}", checkpoint.SubsumedDeltas[index].ToArray(), findings) is { } delta)
-                {
-                    carried.TryAdd(deltaId, delta with { DeltaId = deltaId });
-                }
-            }
-        }
-
+        // Deltas before checkpoints (07 §5.2). A delta is deleted only once a
+        // checkpoint carrying it is durable at the same store, so one this
+        // listing misses was retired before it began and the checkpoint
+        // listing after it shows the carrier; one it returns is either still
+        // at its key when fetched or found gone, which the second checkpoint
+        // listing below answers.
+        var listed = new List<ObjectKey>();
         await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/delta/"), ListOptions.Default, cancellationToken)
             .ConfigureAwait(false))
         {
-            var named = MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId);
+            listed.Add(entry.Key);
+        }
+
+        await ReadCheckpointsAsync(checkpointsSeen, checkpoints, checkpointCounters, carried, findings, cancellationToken)
+            .ConfigureAwait(false);
+
+        var vanished = new List<ObjectKey>();
+        var readFromKey = new HashSet<DeltaId>();
+        foreach (var key in listed)
+        {
+            var named = MetadataStoreKeys.TryParseIndexDelta(key, out var deltaId);
             if (named && carried.ContainsKey(deltaId))
             {
                 continue;
             }
 
-            var bytes = await FetchAsync(entry.Key, findings, cancellationToken).ConfigureAwait(false);
-            if (bytes is not null && OpenDelta(entry.Key.Value, bytes, findings) is { } delta)
+            var bytes = await TryFetchAsync(key, cancellationToken).ConfigureAwait(false);
+            if (bytes is null)
+            {
+                vanished.Add(key);
+                continue;
+            }
+
+            if (OpenDelta(key.Value, bytes, findings) is { } delta)
             {
                 deltas.Add(named ? delta with { DeltaId = deltaId } : delta);
+                if (named)
+                {
+                    readFromKey.Add(deltaId);
+                }
+            }
+        }
+
+        if (vanished.Count > 0)
+        {
+            await ReadCheckpointsAsync(checkpointsSeen, checkpoints, checkpointCounters, carried, findings, cancellationToken)
+                .ConfigureAwait(false);
+
+            foreach (var key in vanished)
+            {
+                if (!MetadataStoreKeys.TryParseIndexDelta(key, out var deltaId) || !carried.ContainsKey(deltaId))
+                {
+                    findings.Add(VanishedFinding(key));
+                }
             }
         }
 
         // A carried delta is applied whether or not the listing still shows
-        // it: the copy is the delta.
-        deltas.AddRange(carried.Values);
+        // it: the copy is the delta. One also read from its key, because its
+        // carrier appeared only in the second listing, is applied once.
+        deltas.AddRange(carried.Where(pair => !readFromKey.Contains(pair.Key)).Select(pair => pair.Value));
 
         // Apply every delta (07 §5) — safe under any arrival order because of
         // §3. A checkpoint contributes only the deltas it carries: its own
@@ -405,16 +422,75 @@ public sealed class IndexLoader : IDisposable
     /// <summary>Reads the whole object at <paramref name="key"/>, or reports it vanished.</summary>
     internal async ValueTask<byte[]?> FetchAsync(ObjectKey key, List<DamageFinding> findings, CancellationToken cancellationToken)
     {
+        var bytes = await TryFetchAsync(key, cancellationToken).ConfigureAwait(false);
+        if (bytes is null)
+        {
+            findings.Add(VanishedFinding(key));
+        }
+
+        return bytes;
+    }
+
+    /// <summary>Reads the whole object at <paramref name="key"/>; null when it is not there.</summary>
+    internal async ValueTask<byte[]?> TryFetchAsync(ObjectKey key, CancellationToken cancellationToken)
+    {
         using var read = await _store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false);
         if (read.Outcome != OpenReadOutcome.Found)
         {
-            findings.Add(new DamageFinding(DamageKind.MissingIndexObject, $"Index object '{key}' vanished between listing and read."));
             return null;
         }
 
         using var memory = new MemoryStream();
         await read.Content!.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
         return memory.ToArray();
+    }
+
+    private static DamageFinding VanishedFinding(ObjectKey key) =>
+        new(DamageKind.MissingIndexObject, $"Index object '{key}' vanished between listing and read.");
+
+    // Lists the checkpoints and opens each one not opened before, so a second
+    // listing pays only for what appeared since the first.
+    private async ValueTask ReadCheckpointsAsync(
+        HashSet<ObjectKey> seen,
+        List<DecodedCheckpoint> checkpoints,
+        HashSet<(WriterId, ulong)> checkpointCounters,
+        Dictionary<DeltaId, DecodedDelta> carried,
+        List<DamageFinding> findings,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var entry in _store.ListAsync(ObjectPrefix.Parse("index/checkpoint/"), ListOptions.Default, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (!seen.Add(entry.Key))
+            {
+                continue;
+            }
+
+            var bytes = await FetchAsync(entry.Key, findings, cancellationToken).ConfigureAwait(false);
+            if (bytes is null || OpenCheckpoint(entry.Key, bytes, findings) is not { } opened)
+            {
+                continue;
+            }
+
+            checkpointCounters.Add(opened.Counter);
+            checkpoints.Add(opened.Checkpoint);
+
+            // A carried copy is opened exactly as the object at the delta's
+            // key would be (07 §5). One that does not open is reported and
+            // left out, and the delta is read from its key instead. Every
+            // copy is opened, even of a delta another checkpoint already
+            // carries soundly, so whether damage is reported does not depend
+            // on the order a listing returns checkpoints in.
+            var checkpoint = opened.Checkpoint.Checkpoint;
+            for (var index = 0; index < checkpoint.SubsumedDeltas.Count; index++)
+            {
+                var deltaId = checkpoint.SubsumedDeltaIds[index];
+                if (OpenDelta($"{entry.Key}, delta {deltaId}", checkpoint.SubsumedDeltas[index].ToArray(), findings) is { } delta)
+                {
+                    carried.TryAdd(deltaId, delta with { DeltaId = deltaId });
+                }
+            }
+        }
     }
 
     private bool VerifySignature(
