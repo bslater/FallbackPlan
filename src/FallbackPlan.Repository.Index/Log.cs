@@ -59,4 +59,9 @@ internal static partial class Log
         EventId = 1705, Level = LogLevel.Information,
         Message = "Published index checkpoint {CheckpointId} carrying {Deltas} deltas")]
     internal static partial void CheckpointPublished(ILogger logger, CheckpointId checkpointId, int deltas);
+
+    [LoggerMessage(
+        EventId = 1706, Level = LogLevel.Information,
+        Message = "Retired {Retired} index deltas their checkpoints carry; {Unsettled} wait for their checkpoint's writer to publish again")]
+    internal static partial void DeltasRetired(ILogger logger, int retired, int unsettled);
 }
