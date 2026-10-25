@@ -206,6 +206,47 @@ public sealed class DeltaRetirerTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ADeltaDamagedAlikeAtItsKeyAndInTheCopyCarryingIt_IsKept()
+    {
+        // The copy has to open on its own account, not only match: where the
+        // same damage reached the key and the copy, they match and the copy
+        // carries nothing, and the damaged key is what a repair from a sound
+        // copy elsewhere mends.
+        var store = CreateStore();
+        var sequence = Sequence();
+        var deltas = await PublishDeltasAsync(store, sequence, count: 2);
+
+        var key = MetadataStoreKeys.IndexDelta(0, deltas[0]);
+        var damaged = await ReadAsync(store, key);
+        damaged[^1] ^= 0xFF;
+        using (var publisher = new IndexPublisher(store, Repo, Writer, TestAuthority.Shared.Credential, sequence))
+        {
+            _ = await publisher.PublishBundledCheckpointAsync(
+                0,
+                [
+                    new BundledDelta(deltas[0], damaged),
+                    new BundledDelta(deltas[1], await ReadAsync(store, MetadataStoreKeys.IndexDelta(0, deltas[1]))),
+                ],
+                predecessor: null,
+                CancellationToken.None);
+        }
+
+        Assert.AreEqual(DeleteOutcome.Deleted, (await store.DeleteAsync(key, DeleteConditions.None, CancellationToken.None)).Outcome);
+        Assert.AreEqual(
+            PutOutcome.Created,
+            (await store.PutAsync(
+                key, _ => ValueTask.FromResult<Stream>(new MemoryStream(damaged, writable: false)),
+                PutConditions.IfNotExists, CancellationToken.None)).Outcome);
+        await PublishAgainAsync(store, sequence);
+
+        var retirement = await RetireAsync(store);
+
+        Assert.AreEqual(deltas[1], Assert.ContainsSingle(retirement.Retired));
+        Assert.AreEqual(deltas[0], Assert.ContainsSingle(await DeltasAtTheirKeysAsync(store)));
+        CollectionAssert.AreEqual(damaged, await ReadAsync(store, key));
+    }
+
+    [TestMethod]
     public async Task ADeltaWhoseKeyHoldsOtherBytesThanTheCopyNamedForIt_IsKept()
     {
         var store = CreateStore();
