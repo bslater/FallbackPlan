@@ -215,6 +215,17 @@ A reader opens each carried delta **exactly as it would open the object at the d
 
 A reader need not fetch a listed delta that a copy it has opened carries. It applies a carried delta whether or not a listing returns it, and applies each delta once, however many checkpoints carry it.
 
+**A reader MUST list the deltas before it lists the checkpoints, and fetch a listed delta only after both.** A listed delta that is gone from its key when fetched MUST be looked for in a second listing of the checkpoints, and is reported as missing only if no copy opened from either listing carries it. A store retires a delta only once a checkpoint carrying it is durable there (§7), so:
+- a delta the first listing misses was retired before that listing began, and the checkpoint listing after it shows the carrier;
+- a delta found gone was retired before the fetch, and the second checkpoint listing shows the carrier.
+
+The argument holds at a store whose listing reflects every put completed before the listing began, which is the only kind §7 retires at.
+
+> **Amended (delta retirement, [ADR-0098](../../docs/adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)).** This section set
+> no order between the two listings. Under retirement a reader that lists the
+> checkpoints first can miss a delta retired between its two listings, and
+> apply the index without it.
+
 **A reader MUST NOT act on a checkpoint's own `entries` (key 7) or `writer_watermarks` (key 3).** It ranks no entry of key 7, drops no delta at or below a watermark, and accounts for every sequence number of a writer from 1 (§4). A checkpoint of the earlier form is read, its signature checked, and contributes nothing.
 
 > **Amended (format 5, [ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).**
@@ -239,16 +250,35 @@ Two checkpoints carrying one delta apply it once (§5.2).
 
 ## 7 Delta retirement
 
-A delta may be retired only when it is named by a checkpoint that **no live checkpoint at or above its generation contradicts** — in practice, when every retained checkpoint at that generation names it, or a later checkpoint supersedes them all.
+A delta MAY be deleted from a store when, at that store and at the time of the delete:
+1. a checkpoint carries it, in a copy that opens as §5.2 opens one;
+2. that copy is byte for byte the object at the delta's key;
+3. the store holds a journal key of the checkpoint's writer whose sequence is above the checkpoint's own counter (08 §1): the writer has published at that store since;
+4. the store's listing reflects every put completed before the listing began.
 
-Retiring a delta on one checkpoint's authority while another live checkpoint omits it would strand its entries for any reader holding only the second. → [PT-7](../../docs/review/2026-08-fix-pressure-test.md#pt-7--delta-retirement-is-ambiguous-under-concurrent-checkpoints)
+Every condition is read from the store the delta is deleted from. A replica decides for itself; nothing is taken from another copy.
 
-Retirement is a deletion and follows the same discipline as any other: tombstone, grace period, revalidate, delete.
+**A checkpoint is never retired.** That is what makes concurrent checkpoints safe (§6): a delta may be deleted on any carrier's authority, because every carrier stays at the store and every reader applies every delta any of them carries.
 
-> **Implementation note (2026-10).** This implementation retires no delta,
-> at staging or at a destination. A delta a checkpoint carries stays at its
-> key too, so it is stored twice until retirement is built
-> ([ADR-0097](../../docs/adr/0097-format-5-a-checkpoint-carries-its-deltas.md)).
+A writer SHOULD NOT delete at a replica a delta the store it copies to that replica from still lists, or the next copy brings it back.
+
+No tombstone is written for a retired delta. A reader that listed the delta before it went finds it through §5.2's second listing.
+
+> **Amended (delta retirement, [ADR-0098](../../docs/adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)).** This section allowed a
+> delta to be retired only when named by a checkpoint that no live checkpoint
+> at or above its generation contradicts, by tombstone, grace period,
+> revalidation and delete. That rule was for checkpoints that restated their
+> deltas' entries. A checkpoint that carries its deltas restates nothing, so
+> one that omits a delta contradicts nothing, and
+> [PT-7](../../docs/review/2026-08-fix-pressure-test.md#pt-7--delta-retirement-is-ambiguous-under-concurrent-checkpoints)'s stranded reader would
+> need a store without the checkpoint the delta went on, which condition 1
+> rules out. The grace is now one publication of the checkpoint's writer,
+> attested at the store.
+
+> **Implementation note (2026-10, amended).** This implementation retires at a
+> set's staging archive or metadata store, after a backup's checkpoint, and at
+> every local-path and object-store destination, in its sync or in the
+> direct-ship run that wrote to it. A peer keeps every delta.
 
 ## 8 Sharding
 

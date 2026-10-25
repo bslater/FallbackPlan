@@ -18,6 +18,11 @@
   - `Hosts.Tests/IndexCheckpointServiceTests`, `Hosts.Tests/CreatedFormatTests`, `Hosts.Tests/FormatUpgradeTests`: a format-5 direct-ship set checkpoints after enough backups, in its own plane and at its destination, and a load at either fetches no delta; a format-4 set never checkpoints; a set created today is format 5; and an upgrade lands on the latest
   - `Repository.ConformanceTests/FixtureRepositoryV5Tests`: the committed `fixture-repository-v5` declares format 5 and its three features, carries its one delta in a checkpoint that a load reads instead, loads the same index with the delta gone from its key, and restores byte for byte
 
+> **Amended 2026-10 ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).** "Nothing retires a delta" no
+> longer holds. A store retires the deltas its own settled checkpoints carry,
+> at staging, a metadata store, a local path and an object store, which
+> establishes FR-MAN-017 there. This record still retires nothing itself.
+
 ---
 
 ## Context
@@ -100,6 +105,10 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 | 5 | Digests and roots | Kept: they are signed inside the delta, and the delta is carried whole |
 | 6 | Retirement | **Not met.** Nothing retires a delta. It is owed, under FR-MAN-017 |
 
+> **Amended 2026-10 ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).** Constraint 6 is met, except at
+> a peer: each store retires a delta its own checkpoint carries in an identical
+> copy that opens, once that checkpoint's writer has published there again.
+
 ## Consequences
 
 **Positive**
@@ -109,6 +118,9 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 
 **Negative**
 - **Every delta is stored twice.** Nothing retires a delta, so a checkpoint adds its deltas' bytes again. The index roughly doubles in bytes while halving nothing but object count. Retirement is what pays this back.
+
+  > **Amended 2026-10 ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).** Twice only until the
+  > checkpoint's writer publishes again, everywhere but at a peer.
 - **A load still lists every delta.** It fetches only the uncovered ones, but the listing grows with the history, as before.
 - **The first backup after a service start reads every checkpoint,** to learn what they carry. Later backups read only new ones.
 - **An older reader of an upgraded repository reports each checkpoint as damage.** The descriptor of a repository upgraded to 5 still says what it was created at, so an older build opens it, refuses each checkpoint's key 10, and reports an index object it cannot read. It still reads every delta at its key, so it loses nothing but the speed. That is ADR-0066's stated price, as at format 4. A repository created at 5 is refused at the door.
@@ -123,6 +135,9 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 ## What this record does not do
 
 - **Retire a delta.** Every delta stays at its key, at staging and at every destination. Retirement must survive the copies (constraint 6), and is owed under FR-MAN-017.
+
+  > **Amended 2026-10 ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).** Built there, for every store but
+  > a peer.
 - **Stop listing every delta.** A load lists the delta prefix whole, as before.
 - **Refuse to write above the newest format this build knows.** As at format 4, an upgrade record naming a version above 5 sets the effective version above it, and this build would still write format 5's objects. That is owed.
 
@@ -135,5 +150,6 @@ Format 5 changes the checkpoint and nothing else. Its deltas are format 4's and 
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-10 | Accepted; built (amended) | Retirement, owed here as constraint 6, is built by [ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md) for staging, a metadata store, a local path and an object store (`Repository.Index/DeltaRetirer`); a carried delta is stored twice only until its checkpoint's writer publishes again. A peer keeps every delta |
 | 2026-10 | Accepted; built (amended) | The refusal to write above the newest format this build knows, owed here, is built by [ADR-0066 Amendment 1](0066-the-format-upgrade-record.md#amendment-1-2026-10--a-build-writes-only-a-format-it-implements): at a newer effective version a publication, compaction, retention apply, deletion request and upgrade record are refused naming both versions, and a destination is given a whole copy (`Repository/NewerFormatException`, `Hosts.Tests/NewerFormatServiceTests`) |
 | 2026-10 | Accepted; built | Key 10 is written by every format-5 checkpointer and read by every reader; a load reads each carried delta from its checkpoint and fetches only the rest; no watermark and no checkpoint entry is acted on; the service checkpoints a format-5 set after a committed backup once 64 deltas are uncovered; a repository is born at 5 and lists `0x0005`. Recorded in [ADR-0008 Amendment 2](0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six) |

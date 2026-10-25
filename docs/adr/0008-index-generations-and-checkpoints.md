@@ -94,6 +94,14 @@ A delta may therefore be retired only when it is named by a checkpoint that **no
 > at staging or at a destination. Constraint 6 of the amendment says what
 > retirement would have to survive first.
 
+> **Amended 2026-10 ([Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry)).** This rule is
+> replaced at format 5, where a checkpoint restates nothing and so contradicts
+> nothing by omitting a delta. A store retires a delta when a checkpoint *at
+> that store* carries an identical copy that opens, and its writer has
+> published there since. Checkpoints are never retired, so a delta retired on
+> one concurrent checkpoint's authority is still applied from it by every
+> reader of the store. No tombstone is written ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md)).
+
 ### Conflicting checkpoints are merged under explicit precedence
 
 Two checkpoints at the same generation are **both retained and both applied**.
@@ -142,6 +150,11 @@ Merging is then safe for the reason that actually holds: the winner is a propert
 > checkpoints, and pays different costs from these: no watermark is tracked,
 > and every carried delta is stored twice, at its key and in its checkpoint,
 > until a delta can be retired.
+
+> **Amended 2026-10 ([Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry)).** A carried delta
+> is stored twice only until its checkpoint's writer publishes again; then
+> staging, a metadata store and every local-path and object-store destination
+> retire it. A peer still keeps it.
 
 ## Alternatives considered
 
@@ -344,6 +357,10 @@ and compaction passes.
 > **Amended 2026-10 ([Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six)).** Format 5 meets constraints 1
 > to 5. Constraint 6 stands: nothing retires a delta.
 
+> **Amended 2026-10 ([Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry)).** Constraint 6 is
+> met for every store this hub reads and deletes at itself. Each of its five
+> parts is answered there; a peer still keeps every delta.
+
 ## Amendment 2 (2026-10) — format 5 meets five of the six
 
 [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md) is the design
@@ -370,6 +387,9 @@ Against the six constraints:
 6. **Retirement.** Not met. Nothing retires a delta, so every carried delta is
    stored twice. Retirement is owed under FR-MAN-017.
 
+   > **Amended 2026-10 ([Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry)).** Met, except
+   > at a peer.
+
 The service checkpoints a format-5 set after a committed backup, inside the
 run, once 64 of its deltas sit outside every checkpoint
 (`Repository.Index/IndexCheckpointer`). A set below format 5 publishes none,
@@ -379,10 +399,53 @@ What a checkpoint buys, as Amendment 1 put it, is now bought at the loader:
 it no longer fetches a delta a checkpoint carries, so every full load
 gains, at staging and at every destination, without a delta being retired.
 
+## Amendment 3 (2026-10) — a store retires what its own checkpoints carry
+
+[ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md) meets
+constraint 6. A delta is deleted from a store only on facts read from that
+store, at that moment:
+- a checkpoint there carries a copy of it that opens;
+- the copy is byte for byte the object at the delta's key;
+- the checkpoint's writer has a journal key there above the checkpoint's own
+  number;
+- the store's listing shows every put that completed before it began.
+
+Checkpoints are never deleted, and no tombstone is written. The rule in
+§Retirement, "no live checkpoint contradicts it", was for checkpoints that
+restated their deltas. A format-5 checkpoint restates nothing, so omitting a
+delta contradicts nothing. PT-7's stranded reader would need a store without
+the checkpoint the delta went on, which the first condition rules out.
+
+Against constraint 6's five parts:
+- **No identity.** No tombstone is needed. A delta goes on the proof of a
+  carrier at the same store, and a reader lists the deltas before the
+  checkpoints and looks for one found gone in a second listing of them
+  ([07 §5.2](../../specifications/repository-format/07-index.md#52-reading-a-checkpoint)).
+- **The copies bring it back.** A destination retires only what the set's
+  plane no longer lists, so a sync never copies a delta back to it. A heal
+  that copies one back to the plane, from a destination that still holds it,
+  is undone by the plane's next run.
+- **Readers mid-flight.** A loader is covered by its listing order. A copier
+  and a copy-back skip a delta retired under them and still carry its
+  checkpoint. A sync, a sweep and retention hold the set gate, and the run
+  retires at the plane only when the gate is free.
+- **retire_staging.** A delta the metadata store retired is carried there,
+  and is not counted as unmigrated.
+- **A delete through the sink.** Nothing is deleted through it. Staging or the
+  metadata store retires after the run's checkpoint. A destination retires in
+  its own sync, or in the direct-ship run that wrote to it, each from what it
+  holds.
+
+What is not met: a peer keeps every delta. The hub deletes at a peer only by
+an instruction signed under the reclaim grant, which only a person's retention
+apply or deletion carries, and a peer is told to drop only what staging still
+lists ([ADR-0034](0034-hub-and-spoke-destinations.md) §6).
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Partly built (amended) | [Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry): constraint 6 is met at staging, a metadata store, a local path and an object store, which each retire the deltas their own settled checkpoints carry; a reader lists deltas first and looks again for one gone ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md); `Repository.Index/DeltaRetirer`, `Repository.Index/IndexLoader`, `Agent/BackupRunner`, `Agent/FanOut`). A peer keeps every delta |
 | 2026-10 | Partly built (amended) | [Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six): format 5's checkpoint carries the deltas it subsumes, verbatim, and a load reads each carried delta from it and fetches only the rest ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Index/CheckpointCodec`, `Repository.Index/IndexLoader`, `Repository.Index/IndexCheckpointer`). No watermark and no checkpoint entry is acted on. Constraints 1 to 5 are met; retirement, constraint 6, is not built |
 | 2026-10 | Partly built (amended) | Every delta a writer publishes is one a reader can open. A backup put every record it wrote into one delta, so one past about 245 000 records published a delta over the 16 MiB metadata bound that every reader refused. A publication now cuts its entries into deltas at blob boundaries under that bound, the cut compaction already made (`Repository/IndexDeltaBudget`), and the publisher refuses any index object over it (`Repository.Tests/DeltaSplitPublicationTests`, `Repository.Tests/Index/OversizedIndexObjectTests`; 07 §2) |
 | 2026-10 | Partly built (amended) | The gap patience runs out at format 4: every delta carries an index generation, a gap ages per gap from the first later delta of its writer, and the product's rebuilds judge it at 8 (`Repository.Index/IndexLoader`, `Repository.Tests/Index/IndexGenerationTests`, [ADR-0096](0096-format-4-an-index-generation-per-delta.md) §4). Checkpoints are still unpublished |

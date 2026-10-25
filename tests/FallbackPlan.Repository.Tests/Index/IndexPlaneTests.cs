@@ -18,7 +18,7 @@ namespace FallbackPlan.Repository.Tests.Index;
 /// The patience is counted in generations, and the test advances the
 /// generation by hand to exhaust it, which nothing in the product does
 /// (ADR-0008 Amendment 1). The one checkpoint here is published by the test.
-/// Nothing retires a delta, so this class does not establish FR-MAN-017.
+/// Nothing here retires a delta, so this class does not establish FR-MAN-017.
 /// </remarks>
 [TestClass]
 public sealed class IndexPlaneTests : IDisposable
