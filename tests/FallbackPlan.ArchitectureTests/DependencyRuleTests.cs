@@ -969,7 +969,7 @@ public sealed class DependencyRuleTests
                 .ShouldNot()
                 .HaveDependencyOnAny("FallbackPlan.Api", "FallbackPlan.Application")
                 .GetResult(),
-            "FallbackPlan.Recovery must run from repository plus kit alone (11 §2, NFR-OPS-005).");
+            "FallbackPlan.Recovery must run from the repository and the passphrase alone (NFR-OPS-005).");
     }
 
     /// <summary>

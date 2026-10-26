@@ -15,16 +15,16 @@ namespace FallbackPlan.Repository.Tests.Crypto;
 /// <para>
 /// ADR-0053 §1 derived it from the repository master key. Building the drill
 /// showed that unreachable: a machine claiming a replica has lost the
-/// repository, and what it holds is an <em>installation</em> kit, which names
-/// no repository. So the derivation is the installation's — the passphrase
-/// and the installation's KDF salt, which is exactly what such a kit plus
-/// its owner supply.
+/// repository, and with it every repository identifier. So the derivation is
+/// the installation's: the passphrase, and the installation's KDF salt,
+/// which the destination serves from the replica's own descriptor
+/// (ADR-0053 Amendment 2).
 /// </para>
 /// <para>
 /// This is not a weakening. One passphrase already stamps every archive an
-/// installation writes (ADR-0044), and an installation kit already opens
-/// every one of them — "whoever holds this installation's kit and passphrase"
-/// and "whoever can open this repository" name the same person.
+/// installation writes (ADR-0044) and opens every one of them, so "whoever
+/// holds this installation's passphrase" and "whoever can open this
+/// repository" name the same person.
 /// </para>
 /// <para>
 /// What these do not establish: nothing here puts a claim on the wire. That
@@ -50,9 +50,9 @@ public sealed class ClaimAuthorityTests
     [TestMethod]
     public void Claim_ThePassphraseAndTheSalt_ReproduceTheKeyExactly()
     {
-        // The whole proposition: the two things that survive a dead machine —
-        // the passphrase in someone's head and the salt printed on the kit —
-        // are enough to reach the key again.
+        // The whole proposition: the passphrase in someone's head and the
+        // salt the peer serves from the replica are enough to reach the key
+        // again.
         using var first = Derive("one long passphrase to rule them", Salt(0x51));
         using var second = Derive("one long passphrase to rule them", Salt(0x51));
 
