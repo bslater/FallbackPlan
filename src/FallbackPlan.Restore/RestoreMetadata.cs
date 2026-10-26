@@ -203,7 +203,9 @@ public static class RestoreMetadata
             captured |= CapturedMetadata.Group;
         }
 
-        if (metadata.WindowsSecurityDescriptor is not null)
+        // An empty one is no descriptor (06 §4.1 key 7), and is what earlier
+        // builds wrote for every entry captured where none was read.
+        if (metadata.WindowsSecurityDescriptor is { IsEmpty: false })
         {
             captured |= CapturedMetadata.SecurityDescriptor;
         }

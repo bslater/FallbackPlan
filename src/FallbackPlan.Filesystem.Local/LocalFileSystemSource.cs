@@ -562,10 +562,14 @@ public sealed class LocalFileSystemSource(ILogger? logger = null) : IFileSystemS
             PosixMode = OperatingSystem.IsWindows() ? null : stat.PermissionBits,
             OwnerName = OperatingSystem.IsWindows() ? null : PosixNames.UserName(stat.Uid),
             GroupName = OperatingSystem.IsWindows() ? null : PosixNames.GroupName(stat.Gid),
+            // Typed as the field is: an array-typed conditional turns a null
+            // array into an empty descriptor, which 06 §4.1 key 7 does not
+            // allow, and every entry captured where none was read carried one.
             WindowsSecurityDescriptor =
                 OperatingSystem.IsWindows() && options.CaptureSecurityDescriptors
-                    ? WindowsInterop.GetSecurityDescriptor(fullPath)
-                    : null,
+                    && WindowsInterop.GetSecurityDescriptor(fullPath) is { Length: > 0 } securityDescriptor
+                    ? securityDescriptor
+                    : (ReadOnlyMemory<byte>?)null,
             ExtendedAttributes = xattrs,
             FileAttributes = OperatingSystem.IsWindows()
                 ? (uint)File.GetAttributes(fullPath)
