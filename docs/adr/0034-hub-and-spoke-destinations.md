@@ -202,7 +202,14 @@ that protects trimmed objects (a key staging no longer lists is never
 condemned, because it may be the only copy left) would let those superseded
 copies accumulate at destinations without bound. Keeping the current closure
 cached makes trim converge pass over pass: what leaves staging is history, and
-history does not come back. Two residual costs, accepted and stated: restoring
+history does not come back.
+
+> **Amended 2026-10.** One key staging no longer lists is condemned: a delta
+> the plane retired, named to a peer under a person's grant only after the
+> peer's own copies were judged to carry it ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)). It
+> is never the only copy left, because the checkpoint carrying it stays.
+
+Two residual costs, accepted and stated: restoring
 a trimmed snapshot **from staging** is impossible and the restore plan says so
 (`MissingObjects` names the files whose data lives only at destinations — the
 destination replica is the restore path, which is the architecture); and a

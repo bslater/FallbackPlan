@@ -22,6 +22,8 @@ The instruction follows a completed object exchange — after `ReplicationAck`, 
 
 The commander computes the drop-list as *inventory minus keep-closure*: what the spoke declared, less everything the destination's effective policy keeps ([architecture 07 §2](../../docs/architecture/07-retention-and-gc.md#2-retention-policy)). A commander that cannot sign the instruction (§3) — a write-only source outside a granted collection run ([ADR-0055 §6 and Amendment 2](../../docs/adr/0055-reclaim-authority.md#6-a-write-only-set-still-collects-under-a-grant-that-does-not-outlive-the-run)) — sends none: it pushes the whole copy and instructs on the run that carries the grant, rather than send a page the spoke will refuse whole. The commander MUST order snapshot keys before the keys of objects they reference, so an interruption leaves the replica lagging-but-valid, exactly as the copy order guarantees in the other direction.
 
+A drop-list MAY also name index deltas the spoke may retire: each one a settled checkpoint at the spoke carries in a copy that opens and is byte for byte the delta's object there ([repository-format 07 §7](../repository-format/07-index.md#7-delta-retirement)). The commander judges that from the spoke's own copies, read over retrieval ([07](07-retrieval.md)), and MUST NOT name a delta on the strength of its own store's checkpoints. Nothing about such a key changes what the spoke validates: it is a key under `index/`, under the same signature, and the spoke cannot open a checkpoint to check it, which is why the judgement is the commander's and the authority is the grant's.
+
 ## 3 What the spoke validates
 
 The spoke MUST refuse the whole instruction — `terms_refused`, deleting nothing — when any of the following holds:

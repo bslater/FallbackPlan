@@ -2,7 +2,7 @@
 
 **Status:** draft · **Supersedes:** [original proposal](../review/2026-08-original-proposal.md) §7.1–7.5, §7.7–7.9 · **Resolves:** [C1](../review/2026-08-architecture-review.md#c1--immutable-manifests-embed-physical-locations-that-compaction-changes), [C6](../review/2026-08-architecture-review.md#c6--checkpoint-compaction-requires-a-complete-listing-the-design-forbids-relying-on), [H1](../review/2026-08-architecture-review.md#h1--fixed-size-segmentation-is-under-argued-and-its-review-is-scheduled-after-the-point-of-no-return)
 
-**Built:** Yes, except checkpoint compaction in §7 and delta retirement at a peer. From format 5 a checkpoint carries the deltas it subsumes and a normal rebuild (§8.1) reads them from it; below format 5 none is published ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0008 Amendment 2](../adr/0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six)). Each store but a peer retires the deltas its own settled checkpoints carry (§7.2 rule 4, [ADR-0098](../adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)). Between two writers, the writer id decides a relocation (§7.2, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)). Everything else is implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
+**Built:** Yes, except checkpoint compaction in §7. From format 5 a checkpoint carries the deltas it subsumes and a normal rebuild (§8.1) reads them from it; below format 5 none is published ([ADR-0097](../adr/0097-format-5-a-checkpoint-carries-its-deltas.md), [ADR-0008 Amendment 2](../adr/0008-index-generations-and-checkpoints.md#amendment-2-2026-10--format-5-meets-five-of-the-six)). Each store but a peer retires the deltas its own settled checkpoints carry (§7.2 rule 4, [ADR-0098](../adr/0098-a-store-retires-what-its-own-checkpoints-carry.md)). Between two writers, the writer id decides a relocation (§7.2, [ADR-0017 Amendment 1](../adr/0017-index-entry-supersession.md#amendment-1-2026-10--precedence-as-built-and-the-writer-it-favours)). Everything else is implemented and covered by conformance vectors — see [implementation status](../implementation-status.md).
 
 ---
 
@@ -260,7 +260,9 @@ Five rules close it:
 > a reader lists the deltas before the checkpoints and looks for one it finds
 > gone in a second listing of them. Each replica decides from what it holds,
 > and lets go only what the store it is copied from already has. Staging, a
-> metadata store, a local path and an object store retire; a peer does not.
+> metadata store, a local path and an object store retire; a peer retires
+> under a person's grant, judged from its own copies over retrieval and told in
+> the drop list the grant signs ([ADR-0098](../adr/0098-a-store-retires-what-its-own-checkpoints-carry.md) Amendment 1).
 
 **5 — Conflicting checkpoints are merged under an explicit precedence rule.** Two writers may publish a checkpoint at the same generation. Both are retained and both applied.
 

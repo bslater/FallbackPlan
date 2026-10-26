@@ -1,6 +1,6 @@
 # ADR-0098 — A store retires what its own checkpoints carry
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-10, [Amendment 1](#amendment-1-2026-10--a-peer-retires-under-a-persons-grant))
 **Date:** 2026-10
 **Requirements:** FR-MAN-017 (amended: a delta is retired from a store only when a checkpoint there carries a sound, identical copy of it and its writer has published there since; concurrent checkpoints need no tie-break); FR-MAN-008 (a load racing a retirement reads the retired delta from its carrier); FR-MAN-013 (a delta carried by two checkpoints is retired once and applied once)
 **Related:** [ADR-0008](0008-index-generations-and-checkpoints.md) Amendment 1 constraint 6, and Amendment 3, which records this; [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md) (format 5, whose checkpoint carries the deltas this retires); [ADR-0029](0029-pipeline-and-service-concurrency.md) Amendment 2 (the set gate); [ADR-0046](0046-direct-to-destination-publication.md) (direct-ship and the staging migration); [ADR-0034](0034-hub-and-spoke-destinations.md) §6 (a peer is told to drop only what staging lists); [specification 07 §5.2, §7](../../specifications/repository-format/07-index.md#7-delta-retirement)
@@ -10,7 +10,8 @@
 - The rule: `Repository.Index/DeltaRetirer` deletes a delta's key from a store when a checkpoint at that store carries a copy that opens and equals the object at the key, and the checkpoint's writer has a journal key there above the checkpoint's own number. It touches no store whose listing may lag, and retires only what its caller admits. `Repository.Index/CheckpointCoverage` remembers what each checkpoint carries, so a pass opens only those carrying something still present.
 - The set's plane: `Agent/BackupRunner` retires at the staging archive, or a direct-ship set's metadata store (`Agent/ArchiveHandle`'s plane), after the run's checkpoint, only while nothing else holds the set.
 - The destinations: `Agent/FanOut` retires at a local path or object store after a sync's copy and proof, only what the plane no longer lists. A direct-ship run retires at the destinations it wrote (`Agent/DestinationShipSink`).
-- The copies: `Replication/StoreToStoreCopier` and `Agent/ServiceRuntime`'s copy-back skip a delta retired under them and still carry its checkpoint. `Agent/ServiceCommandHandler.Configuration.cs` lets staging go when the metadata store retired a delta only staging still holds.
+- The copies: `Replication/StoreToStoreCopier` and `Agent/ServiceRuntime`'s copy-back skip a delta retired under them and still carry its checkpoint.
+- The peer ([Amendment 1](#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)): `Agent/FanOut` judges a peer's replica over retrieval with `Repository.Index/DeltaRetirer`'s judgement, and `Agent/ReplicationInitiator` names what passes in the drop list signed under a person's grant. `Agent/ServiceCommandHandler.Configuration.cs` lets staging go when the metadata store retired a delta only staging still holds.
 - The tests:
   - `Repository.Tests/Index/RetiredDeltaLoadTests`: a delta retired after the checkpoint listing is read from the checkpoint a second listing shows, once; one retired after the delta listing is read from the checkpoint listed after it; a listed delta that vanishes uncarried is reported by key; and with nothing gone, the checkpoints are listed once
   - `Repository.Tests/Index/DeltaRetirerTests`: a settled carried delta is retired and a load is unchanged; an unsettled, uncarried, unopenable or mismatched one is kept; concurrent checkpoints from two writers carrying different sets retire every delta and lose no entry; only admitted deltas go; a store whose listing may lag is not even listed; and a known checkpoint is not reopened
@@ -127,11 +128,84 @@ A migrating direct-ship set keeps its staging archive until retire_staging prove
 ## What this record does not do
 
 - **Retire at a peer.** A peer keeps every delta. The hub reaches a peer only through its exchange, and deletes there only by a drop instruction signed under the reclaim grant, which only a person's retention apply or deletion carries. A drop also names only keys staging still lists (ADR-0034 §6), and a retired delta is one it no longer does. Owed.
+
+  > **Amended 2026-10 ([Amendment 1](#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)).** Built, under the grant: a peer is judged by §1's rule from its own copies, and told in the signed drop list.
 - **Stop listing every delta's key.** A load lists the delta prefix, which now holds only what no checkpoint carries yet.
 - **Retire a delta a checkpoint does not carry.** One too large for any checkpoint, or one that did not open when a checkpoint was built, stays at its key.
+
+## Amendment 1 (2026-10) — a peer retires under a person's grant
+
+A peer was the one store left keeping every delta. A carried delta was
+stored there twice, counted against the quota the peer lends, and listed by
+every recovery from it. It was never fetched, because §2's reader takes it
+from its carrier.
+
+Two things kept the peer out. The hub cannot delete at a peer: it can only
+send a drop list, which the peer verifies against the reclaim key it
+recorded at first attribution, and only a person's retention run or
+deletion holds that key. And a keyless peer cannot open a checkpoint to see
+what it carries, because a checkpoint is a sealed, signed record.
+
+So the decision is taken by the hub, from the peer's own copies, and the
+peer is told the result under the grant.
+
+### 1 The peer is judged by §1's rule, from what it holds
+
+Under a person's grant, before it converges a peer, the hub opens a
+retrieval session to that peer and reads its replica as a store. It asks of
+it what §1 asks of any store:
+- a checkpoint there carries a copy of the delta that opens;
+- the copy is byte for byte the delta's object there;
+- the checkpoint's writer has a journal key there above the checkpoint's own
+  number;
+- the listing is strong, which the peer's is (peer-protocol 07 §3.3).
+
+Every fact is read from the peer, and nothing is taken on the plane's word.
+The plane only admits: §4's rule holds, so a delta the plane still lists is
+not named. `Repository.Index/DeltaRetirer` gives the judgement without the
+deletes, and the retirement everywhere else is now that judgement followed by
+the deletes, so the two cannot drift.
+
+### 2 The result rides the drop list the grant signs
+
+The keys that pass are named in the convergence's drop list, beside what the
+keep filter drops. They are named only:
+- to a peer that offers retention instructions;
+- under a signer;
+- never in a session whose inventory shows the peer ahead of this side's
+  state, whether or not the session had a keep filter to set aside, because
+  such a pass keeps everything at the peer (ADR-0062 Amendment 1);
+- and only keys the peer declared holding.
+
+A drop list otherwise names only keys staging still lists (ADR-0034 §6),
+because a filter computed from staging cannot vouch for a key staging no
+longer has. A retired delta is the one exception, and the reason is that
+it was judged from the peer's copies, not from staging's.
+
+A grant visits a peer with no retention rules when it has something to
+retire, as it already did when a person's deletion was pending. A grant is
+the only time such a peer can be told. A deletion's convergence judges the
+peer the same way.
+
+### 3 What this hands a compromised hub
+
+Nothing it did not have. Without the grant, a hub can name no key, because
+the peer checks every page against the reclaim key. With the grant, it
+could already name any key under `index/` (06 §3). What a conforming hub
+names under it is bounded by the judgement: every delta named is carried,
+byte for byte, by a checkpoint that stays at the peer, because checkpoints
+are never retired.
+
+### The limit, stated
+
+A peer lets its deltas go only when a person is present: a retention run or
+a deletion under the set's grant. That is already when a peer trims its
+snapshots. Between grants the peer stores carried deltas twice, as every
+peer did before this amendment.
 
 ## Status history
 
 | Date | Status | Note |
 |---|---|---|
+| 2026-10 | Accepted; built (amended) | [Amendment 1](#amendment-1-2026-10--a-peer-retires-under-a-persons-grant): a peer retires too, under a person's grant. The hub judges the peer's replica over retrieval by §1's rule and names what passes in the signed drop list (`Repository.Index/DeltaRetirer` judgement, `Agent/FanOut`, `Agent/ReplicationInitiator`; `Hosts.Tests/PeerDeltaRetirementTests`) |
 | 2026-10 | Accepted; built | A store retires the deltas its own settled checkpoints carry, at staging, a metadata store, a local path and an object store, and a reader lists deltas first and looks again for one gone (`Repository.Index/DeltaRetirer`, `Repository.Index/IndexLoader`, `Agent/BackupRunner`, `Agent/FanOut`). Peers keep every delta. Recorded in [ADR-0008 Amendment 3](0008-index-generations-and-checkpoints.md#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry) |

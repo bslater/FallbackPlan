@@ -280,7 +280,11 @@ No tombstone is written for a retired delta. A reader that listed the delta befo
 > **Implementation note (2026-10, amended).** This implementation retires at a
 > set's staging archive or metadata store, after a backup's checkpoint, and at
 > every local-path and object-store destination, in its sync or in the
-> direct-ship run that wrote to it. A peer keeps every delta.
+> direct-ship run that wrote to it. A peer retires under a person's grant: its
+> owner reads its replica over retrieval, judges it by this section's rule from
+> the peer's own copies, and names what passes in the drop list it signs
+> ([peer-protocol 06 §2](../peer-protocol/06-retention.md#2-the-exchange);
+> [ADR-0098](../../docs/adr/0098-a-store-retires-what-its-own-checkpoints-carry.md) Amendment 1).
 
 ## 8 Sharding
 
