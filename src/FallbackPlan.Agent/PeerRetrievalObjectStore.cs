@@ -22,12 +22,15 @@ internal sealed class PeerRetrievalObjectStore(PeerRetrievalClient client) : IOb
 {
     /// <inheritdoc/>
     /// <summary>
-    /// What this adapter promises: ranged reads and nothing else, because a
-    /// peer replica is read-only over the retrieval session (07 §1) and it
-    /// has no put at all. Named so a test can hold the declaration to that.
+    /// What this adapter promises: ranged reads, and a listing that shows
+    /// every object the peer committed before the list was asked, because the
+    /// peer lists its own local replica (07 §3.3) and a replication session
+    /// commits each object before acknowledging it (03 §5). No put at all: a
+    /// peer replica is read-only over the retrieval session (07 §1). Named so
+    /// a test can hold the declaration to that.
     /// </summary>
     internal static StoreCapabilities DeclaredCapabilities { get; } =
-        new() { RangedReads = true, MaximumObjectSize = long.MaxValue };
+        new() { RangedReads = true, MaximumObjectSize = long.MaxValue, ListingConsistency = ListingConsistency.Strong };
 
     /// <inheritdoc />
     public StoreCapabilities Capabilities => DeclaredCapabilities;

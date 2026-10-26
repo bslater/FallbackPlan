@@ -234,6 +234,13 @@ internal static class ReplicationInitiator
     /// backup's files as their content reaches the destination. Sent is not
     /// yet acknowledged: the acknowledgement covers the whole push.
     /// </param>
+    /// <param name="retire">
+    /// Delta keys the caller judged retirable at this destination from the
+    /// destination's own copies (ADR-0098 Amendment 1), named in the drop
+    /// half beside what the keep filter drops. Named only under a signer and
+    /// never in a session whose inventory set the filter aside, and only
+    /// those the destination declared holding.
+    /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
         IObjectStore source, ReadOnlyMemory<byte> repositoryId, Stream stream,
@@ -247,7 +254,8 @@ internal static class ReplicationInitiator
         Func<IReadOnlyCollection<string>, bool>? onInventory = null,
         ReceiptExpectation? expectReceipt = null,
         bool pushOnly = false,
-        Action<string>? delivered = null)
+        Action<string>? delivered = null,
+        IReadOnlyCollection<string>? retire = null)
     {
         ThrowHelper.ThrowIfNull(source);
         ThrowHelper.ThrowIfNull(stream);
@@ -362,10 +370,17 @@ internal static class ReplicationInitiator
                     exchangeSent, exchangeReceived, verified.Receipt.IssuedAtUnixMilliseconds)
                 : null;
 
+            // A delta is named only where the destination's inventory let the
+            // filter stand: a destination attesting history this side's state
+            // has never heard of is left holding everything (ADR-0062).
+            var retiring = signer is not null && !convergenceWithheld && retire is not null
+                ? retire.Where(held.Contains).ToList()
+                : [];
+
             // A push-only filter narrows what is sent and instructs nothing:
             // the pass holds no authority to delete (ADR-0055 §6), and what it
             // leaves out is only what a person has asked to delete (FR-GC-013).
-            if (keeps is null || pushOnly)
+            if ((keeps is null || pushOnly) && retiring.Count == 0)
             {
                 return new PushOutcome(
                     (long)ack.Count, 0, held.Count, headroom, bytesSent, resumed, held, convergenceWithheld)
@@ -384,16 +399,24 @@ internal static class ReplicationInitiator
             // a filter computed from staging cannot vouch for it, and the
             // unknown is kept (ADR-0034 §6). Staging is listed afresh HERE,
             // after the push: an hours-long exchange must not condemn on the
-            // strength of a stale opening walk (ADR-0029 Amendment 2).
+            // strength of a stale opening walk (ADR-0029 Amendment 2). A
+            // retired delta is the one key named that staging does not list:
+            // it was judged from the spoke's own copies, not from staging's.
+            var filtering = keeps is not null && !pushOnly;
             var sourceKeys = new HashSet<string>(StringComparer.Ordinal);
-            await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
-                .ConfigureAwait(false))
+            if (filtering)
             {
-                sourceKeys.Add(entry.Key.Value);
+                await foreach (var entry in source.ListAsync(ObjectPrefix.All, ListOptions.Default, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    sourceKeys.Add(entry.Key.Value);
+                }
             }
 
             var drops = held
-                .Where(key => sourceKeys.Contains(key) && (!keeps(key) || IsStagingOnly(key)))
+                .Where(key => filtering && sourceKeys.Contains(key) && (!keeps!(key) || IsStagingOnly(key)))
+                .Concat(retiring)
+                .Distinct(StringComparer.Ordinal)
                 .OrderBy(DropRank)
                 .ThenBy(key => key, StringComparer.Ordinal)
                 .ToList();

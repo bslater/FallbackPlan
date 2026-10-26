@@ -423,7 +423,8 @@ public static class FanOut
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination,
         ArchiveHandle archive, ulong nowMs, CancellationToken cancellationToken,
         Func<byte[], byte[]>? grantedSigner = null, ReceiptFate? receiptFate = null,
-        Application.ByteRateLimiter? limiter = null, bool userInitiated = false)
+        Application.ByteRateLimiter? limiter = null, bool userInitiated = false,
+        IReadOnlyCollection<string>? retire = null)
     {
         var ledger = runtime.DestinationSync;
 
@@ -659,7 +660,8 @@ public static class FanOut
                 new ReplicationInitiator.ReceiptExpectation(
                     grant.Identity, session.Binding, keypair.Identity.PublicKey.ToArray()),
                 pushOnly,
-                count is null ? null : count.Holds)
+                count is null ? null : count.Holds,
+                session.Supports(Protocol.PeerSessionNegotiation.RetentionInstructionFeature) ? retire : null)
                 .ConfigureAwait(false);
 
             // The receipt is dealt with before anything else is judged: the
@@ -1505,6 +1507,76 @@ public static class FanOut
     }
 
     /// <summary>
+    /// The deltas a peer's own copies let it retire (ADR-0098 Amendment 1):
+    /// judged here, over the retrieval session, by the rule every store
+    /// retires on, and named to the peer in a drop list signed under a
+    /// person's grant.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A peer cannot be deleted from directly, and a keyless peer cannot open
+    /// a checkpoint to see what it carries. So this side reads the peer's
+    /// replica as a store and asks of it what <see cref="DeltaRetirer"/> asks
+    /// of any store: a checkpoint there whose copy opens and matches the
+    /// delta's object there, and a journal key there above that checkpoint's
+    /// number. Nothing is taken on the plane's word. The plane only admits:
+    /// a delta it still lists would be copied straight back by the next pass.
+    /// </para>
+    /// <para>
+    /// Not paced: a person is waiting, as a deletion's convergence is not
+    /// paced. Best effort: a peer that cannot be read, or that serves no
+    /// retrieval, retires nothing and holds its deltas until the next grant.
+    /// </para>
+    /// </remarks>
+    /// <returns>The deltas' keys at the peer; empty when nothing may go.</returns>
+    private static async ValueTask<IReadOnlyCollection<string>> RetirableAtPeerAsync(
+        ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration peer, ArchiveHandle archive,
+        CancellationToken cancellationToken)
+    {
+        // A set a newer build upgraded is that build's to judge (ADR-0066
+        // Amendment 1), and a format below 5 has no checkpoint that carries.
+        var version = archive.Repository.EffectiveFormatVersion;
+        if (!Domain.FormatVersions.HasDeltaCheckpoints(version) || !Domain.FormatVersions.IsWritable(version))
+        {
+            return [];
+        }
+
+        var log = runtime.LoggerFor<DeltaRetirer>();
+        try
+        {
+            var planeDeltas = new HashSet<Domain.Identifiers.DeltaId>();
+            await foreach (var entry in archive.Plane.ListAsync(
+                Storage.Abstractions.ObjectPrefix.Parse("index/delta/"),
+                Storage.Abstractions.ListOptions.Default, cancellationToken).ConfigureAwait(false))
+            {
+                if (Repository.Packing.MetadataStoreKeys.TryParseIndexDelta(entry.Key, out var deltaId))
+                {
+                    planeDeltas.Add(deltaId);
+                }
+            }
+
+            await using var retrieval = await PeerRetrievalClient.DialAsync(
+                runtime, peer, archive.Repository.RepositoryId.ToArray(), cancellationToken).ConfigureAwait(false);
+            using var retirer = new DeltaRetirer(
+                new PeerRetrievalObjectStore(retrieval), archive.Repository.RepositoryId,
+                archive.Repository.Credential, log)
+            {
+                Coverage = archive.CheckpointCoverage,
+            };
+            var judged = await retirer.JudgeAsync(deltaId => !planeDeltas.Contains(deltaId), cancellationToken)
+                .ConfigureAwait(false);
+            return [.. judged.Retirable.Select(retirable => retirable.Key.Value)];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or IndexFormatException or Protocol.PeerProtocolException or System.Net.Sockets.SocketException
+            or System.Security.Authentication.AuthenticationException)
+        {
+            Log.ReplicaRetirementDeferred(log, new LogLabel(set.Name), new LogLabel(peer.Name), exception);
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Retires at a replica the index deltas its own checkpoints carry and the
     /// set's plane no longer lists (07 §7, FR-MAN-017).
     /// </summary>
@@ -2008,7 +2080,9 @@ public static class FanOut
         ThrowHelper.ThrowIfNull(reclaim);
 
         // A peer with no rules converges too while a person's deletion is
-        // pending, or its whole copy keeps the snapshot (FR-GC-013).
+        // pending, or its whole copy keeps the snapshot (FR-GC-013), and when
+        // its checkpoints carry deltas it may now let go of (ADR-0098
+        // Amendment 1): a grant is the only time it can be told to.
         var deletionPending = await PendingDeletionAsync(archive, cancellationToken).ConfigureAwait(false) is not null;
 
         var lines = new List<string>();
@@ -2020,12 +2094,15 @@ public static class FanOut
                 continue;
             }
 
-            if (!deletionPending && !Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
+            var retire = await RetirableAtPeerAsync(runtime, set, destination, archive, cancellationToken)
+                .ConfigureAwait(false);
+            if (!deletionPending && retire.Count == 0
+                && !Retention.DestinationConvergence.HasRules(reference.Retention ?? set.Retention))
             {
                 continue;
             }
 
-            lines.Add(await ConvergePeerAsync(runtime, set, destination, archive, reclaim, nowMs, cancellationToken)
+            lines.Add(await ConvergePeerAsync(runtime, set, destination, archive, reclaim, nowMs, cancellationToken, retire)
                 .ConfigureAwait(false));
         }
 
@@ -2097,7 +2174,8 @@ public static class FanOut
 
     private static async ValueTask<string> ConvergePeerAsync(
         ServiceRuntime runtime, BackupSetConfiguration set, DestinationConfiguration destination, ArchiveHandle archive,
-        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken)
+        Repository.Crypto.ReclaimAuthority reclaim, ulong nowMs, CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? retire = null)
     {
         byte[] Sign(byte[] signed)
         {
@@ -2114,8 +2192,10 @@ public static class FanOut
             }
         }
 
+        retire ??= await RetirableAtPeerAsync(runtime, set, destination, archive, cancellationToken)
+            .ConfigureAwait(false);
         var receipt = new ReceiptFate();
-        await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt)
+        await PushToPeerAsync(runtime, set, destination, archive, nowMs, cancellationToken, Sign, receipt, retire: retire)
             .ConfigureAwait(false);
 
         var row = runtime.DestinationSync.Find(set.Id, destination.Name);

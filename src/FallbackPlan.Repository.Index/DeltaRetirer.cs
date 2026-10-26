@@ -21,6 +21,26 @@ public sealed record DeltaRetirement(IReadOnlyList<DeltaId> Retired, int Unsettl
     public static DeltaRetirement None { get; } = new([], 0);
 }
 
+/// <summary>One delta a retirement at a store may delete, and the key it sits at there.</summary>
+/// <param name="DeltaId">The delta.</param>
+/// <param name="Key">Its key at the store judged.</param>
+public sealed record RetirableDelta(DeltaId DeltaId, ObjectKey Key);
+
+/// <summary>What a retirement at one store would delete, judged and not done.</summary>
+/// <param name="Retirable">
+/// Each delta a settled checkpoint at the store carries in a copy that opens
+/// and is byte for byte the object at the delta's key.
+/// </param>
+/// <param name="Unsettled">
+/// How many deltas a checkpoint carries whose writer has not published at the
+/// store since.
+/// </param>
+public sealed record DeltaJudgement(IReadOnlyList<RetirableDelta> Retirable, int Unsettled)
+{
+    /// <summary>A judgement that found nothing to retire and nothing waiting.</summary>
+    public static DeltaJudgement None { get; } = new([], 0);
+}
+
 /// <summary>
 /// Retires the deltas a store's checkpoints carry (specification 07 §7;
 /// FR-MAN-017): deletes a delta's key once the same store holds a checkpoint
@@ -85,9 +105,42 @@ public sealed class DeltaRetirer : IDisposable
     /// <param name="cancellationToken">Cancels the pass; a delta already deleted stays retired.</param>
     public async ValueTask<DeltaRetirement> RetireAsync(Func<DeltaId, bool>? admit, CancellationToken cancellationToken)
     {
+        var judged = await JudgeAsync(admit, cancellationToken).ConfigureAwait(false);
+
+        var retired = new List<DeltaId>();
+        foreach (var (deltaId, key) in judged.Retirable)
+        {
+            var deleted = await _store.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+            if (deleted.Outcome == DeleteOutcome.Deleted)
+            {
+                retired.Add(deltaId);
+            }
+        }
+
+        if (retired.Count > 0 || judged.Unsettled > 0)
+        {
+            Log.DeltasRetired(_log, retired.Count, judged.Unsettled);
+        }
+
+        return new DeltaRetirement(retired, judged.Unsettled);
+    }
+
+    /// <summary>
+    /// What <see cref="RetireAsync"/> would delete, judged by the same rule
+    /// from the same store and deleting nothing.
+    /// </summary>
+    /// <remarks>
+    /// For a store this side reads and cannot delete from: a peer's replica,
+    /// read over retrieval, whose owner is told what passes in an instruction
+    /// the peer checks against the reclaim key (ADR-0098 Amendment 1).
+    /// </remarks>
+    /// <param name="admit">Which deltas may go; null admits every one.</param>
+    /// <param name="cancellationToken">Cancels the listings and the reads.</param>
+    public async ValueTask<DeltaJudgement> JudgeAsync(Func<DeltaId, bool>? admit, CancellationToken cancellationToken)
+    {
         if (_store.Capabilities.ListingConsistency != ListingConsistency.Strong)
         {
-            return DeltaRetirement.None;
+            return DeltaJudgement.None;
         }
 
         var present = new Dictionary<DeltaId, ObjectKey>();
@@ -102,13 +155,13 @@ public sealed class DeltaRetirer : IDisposable
 
         if (present.Count == 0)
         {
-            return DeltaRetirement.None;
+            return DeltaJudgement.None;
         }
 
         var carriers = await CarriersAsync([.. present.Keys], cancellationToken).ConfigureAwait(false);
 
         var journalHeads = new Dictionary<WriterId, ulong>();
-        var retired = new List<DeltaId>();
+        var retirable = new List<RetirableDelta>();
         var unsettled = 0;
 
         foreach (var (deltaId, copies) in carriers)
@@ -141,19 +194,10 @@ public sealed class DeltaRetirer : IDisposable
                 continue;
             }
 
-            var deleted = await _store.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
-            if (deleted.Outcome == DeleteOutcome.Deleted)
-            {
-                retired.Add(deltaId);
-            }
+            retirable.Add(new RetirableDelta(deltaId, key));
         }
 
-        if (retired.Count > 0 || unsettled > 0)
-        {
-            Log.DeltasRetired(_log, retired.Count, unsettled);
-        }
-
-        return new DeltaRetirement(retired, unsettled);
+        return new DeltaJudgement(retirable, unsettled);
     }
 
     /// <summary>
