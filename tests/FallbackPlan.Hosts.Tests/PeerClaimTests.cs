@@ -256,6 +256,41 @@ public sealed class PeerClaimTests : IDisposable
     }
 
     [TestMethod]
+    public async Task ADestinationPairedAfterSetup_IsArmedByABackupThatNeverHeldThePassphrase()
+    {
+        // A write-only service never holds the passphrase. Had the claim key
+        // been one each destination's own token had to be mixed into, only a
+        // session that ran while the passphrase was present could register
+        // it, and a peer paired a month after setup would be found unarmed
+        // on the morning it was needed. The key is the installation's
+        // instead (ADR-0053 Amendment 1): derived once at setup, its public
+        // half kept in the write credential the service runs on, and
+        // published on every offer. So this takes the order that would
+        // break the other design: setup, then the passphrase gone from
+        // everything the process can reach, then the peer.
+        var passphrase = Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!;
+        ProvisionInstallation();
+        Environment.SetEnvironmentVariable(_harness.PassphraseVariable, null);
+
+        await StartDestinationAsync();
+        WriteConfiguration();
+        _harness.WriteSourceFile("docs/report.txt", "written after the last time anyone typed the passphrase");
+        var run = await HostHarness.RunAsync(
+            AgentHost.RunAsync,
+            "run", "--archives", _harness.ArchivesRoot, "--state", _harness.StateDirectory,
+            "--once");
+        Assert.AreEqual(0, run.ExitCode, run.Error);
+        var repositoryId = Convert.FromHexString(Path.GetFileName(await ReplicaPathAsync()));
+
+        DestroyTheSourceMachine();
+        var rebuilt = PairRebuiltMachine();
+        var accepted = await ClaimAsync(rebuilt, passphrase);
+
+        Assert.IsTrue(Assert.ContainsSingle(accepted.RepositoryIds).Span.SequenceEqual(repositoryId));
+        await OpenReplicaAsync(rebuilt, repositoryId);
+    }
+
+    [TestMethod]
     public async Task TheFirstOffer_PublishesTheClaimKey_SoTheDestinationHasSomethingToCheck()
     {
         // The carrier, on its own. A destination holds no repository keys, so
