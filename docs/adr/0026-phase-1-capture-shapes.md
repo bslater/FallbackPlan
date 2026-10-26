@@ -38,6 +38,13 @@ reconstructs hardlinks by equal `hardlink_group` **within one snapshot**;
 equality across snapshots is informational. The field remains present only
 when link count > 1, per specification 06 §4.
 
+> **2026-10 ([ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md)).** Built, with a guard this decision did not foresee.
+> `device_id` is the machine's, not a filesystem's, so a device with several
+> filesystems can give two different files one group. A restore links a later
+> name only where it agrees with the group's first in content, length and
+> every attribute but the access time, and restores any other as a file of its
+> own.
+
 ### 2 `capture_diagnostics` vocabulary
 
 Key 13 strings are machine-parseable `key: value` pairs, one fact per
@@ -246,3 +253,4 @@ only cheap because the format is pre-freeze.
 |------|--------|------|
 | 2026-08 | Accepted | Ten shapes pinned ahead of the first scanner-written manifest (phase-1 wave G1) |
 | 2026-08 | Accepted | Decision 2 amended after a coverage pass found reason 4 specified and unreachable, and a file deleted mid-read recorded as clean. "No complete read" now says which reading it means and why the other one ends with a machine that backs up nightly and keeps nothing. Both are fixed and tested; `capture_status` still means exactly what decision 3 says, so no consumer of it moves |
+| 2026-10 | Accepted | Restore reconstructs links as decision 1 said, by [ADR-0102](0102-a-restore-gives-a-hard-link-group-back-as-one-file.md), which guards it: equal groups are linked only where their content, length and every attribute but the access time agree, because the group keys on the device and not the filesystem |
