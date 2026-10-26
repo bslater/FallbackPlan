@@ -1095,7 +1095,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
             }
 
             OpenedRepository repository;
-            var openedWithPassphrase = false;
             if (WriteCredentials.TryLoad(setId) is { } credential)
             {
                 // A provisioned write-only set (ADR-0042 §5): the credential
@@ -1206,7 +1205,6 @@ public sealed class ServiceRuntime : IAsyncDisposable
                         new FileSequenceStateStore(Path.Combine(Options.StateDirectory, $"sequence-{repositoryIdHex}.txt"))),
                     SpoolDirectory = Path.Combine(Options.StateDirectory, "spool", repositoryIdHex),
                     CataloguePath = cataloguePath,
-                    OpenedWithPassphrase = openedWithPassphrase,
                 };
             }
             catch
