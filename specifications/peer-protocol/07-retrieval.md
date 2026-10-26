@@ -76,7 +76,7 @@ by sending the last key of a page as `after`.
 
 ### 3.4 `retrieve_read` (276) / `retrieve_data` (277)
 
-`retrieve_read`: key 1 `key` (text), key 2 `offset` (uint64), key 3 `length`
+`retrieve_read`: key 1 `key` (text, ≤1024 bytes), key 2 `offset` (uint64), key 3 `length`
 (uint64, ≤ the chunk bound; 0 asks for existence and total length only).
 `retrieve_data`: key 1 `found` (bool), key 2 `total_length` (uint64), key 3
 `bytes` (bytes, ≤ the chunk bound).
@@ -101,7 +101,7 @@ derivations to run rather than asking this page which repositories to name.
 
 Gated by the `chunk-possession` feature ([02 §6](02-session.md#6-feature-negotiation)).
 
-`merkle_challenge`: key 1 `repository_id` (bytes[16]), key 2 `key` (text), key 3 `leaf_index` (uint32).
+`merkle_challenge`: key 1 `repository_id` (bytes[16]), key 2 `key` (text, ≤1024 bytes), key 3 `leaf_index` (uint32).
 `merkle_proof`: key 1 `status` (uint: `0` produced, `1` cannot produce), key 2 `leaf` (bytes, 1…1 MiB), key 3 `path` (array of bytes[32], at most 32 entries).
 
 Strictly request/response, one outstanding challenge: each challenge is answered by exactly one proof, and the verifier MUST NOT send a second before the first is answered. Status `1` carrying key 2 or key 3, status `0` carrying neither, a `path` step that is not 32 bytes, a `path` longer than the bound, or a `leaf` outside 1…1 MiB is `malformed` — a step of the wrong width is the check this message exists for, arriving broken, and dropping it would turn a verification into a shrug. An **empty** `path` with status `0` is not an error: a blob of one leaf has none.
@@ -133,14 +133,15 @@ Within an authorised replica every key is servable, the descriptor
 included: it carries only public parameters, indistinguishable in
 sensitivity from every other object the destination already holds for it.
 
-**The attribution the ledger assigns can move, and §5 is the only thing that
-moves it.** A device that has lost its durable local state is a new identity
-to every destination ([01 §1](01-identity-and-pairing.md#1-peer-identity)), and
-under this section alone its recovery is unreachable — the ledger names a
-fingerprint that no longer exists. §5 lets the holder of the repository
-passphrase re-point that attribution to its current identity. Nothing else
-does: re-pairing does not, an operator's assertion at either end does not, and
-possession of the recovery kit does not.
+**The attribution the ledger assigns can move, and only two things move it.**
+A device that has lost its durable local state is a new identity to every
+destination ([01 §1](01-identity-and-pairing.md#1-peer-identity)), and under
+this section alone its recovery is unreachable — the ledger names a
+fingerprint that no longer exists. The claim (§5, [03 §6](03-replication.md#6-the-claim))
+lets the holder of the repository passphrase re-point that attribution to its
+current identity, and an attribution recorded without a claim key is
+re-pointed by the destination's own operator, as above. Nothing else does:
+re-pairing does not, and nothing the source asserts does.
 
 ## 5 Claiming a replica
 

@@ -69,6 +69,7 @@ Separate files, not separate tables in one file, so "delete the catalogue and le
 **Neutral**
 
 - Recovery of **data** needs only repository plus kit. Recovery of **operation** additionally needs configuration and re-pairing. Stating the difference plainly is better than implying restore-and-done, which leaves a user believing they are protected when they are not.
+  > **Amended 2026-10.** There is no kit since [ADR-0060](0060-the-passphrase-is-the-recovery-credential.md): data recovers from the repository and the passphrase alone. The rest of the point stands.
 
 ## Alternatives considered
 

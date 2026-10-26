@@ -180,7 +180,7 @@ Worth separating, because a deferred option is a decision someone still has to m
 | Option | Waiting on |
 |--------|-----------|
 | CDC as the segmentation default | The benchmark at the [format freeze gate](adr/0002-segmentation-strategy.md) |
-| Shamir-split recovery kits | A kit format version, if high-value repositories justify it |
+| ~~Shamir-split recovery kits~~ | Moot since the kit was withdrawn ([ADR-0060](adr/0060-the-passphrase-is-the-recovery-credential.md)): there is no kit to split. Splitting the *passphrase* would be a different decision, not this one deferred |
 | Per-device signing keys | [Q13](open-questions.md#q13--device-level-signature-attribution) — whether device-level attribution should exist at all |
 | A blob writer per worker | Measurement showing the barrier is the bound ([ADR-0029](adr/0029-pipeline-and-service-concurrency.md)) |
 | RFC 7250, TLS exporters, Ed25519 certificates | Platform support; the protocol-layer proof stays authoritative either way ([ADR-0030 Amendment 1](adr/0030-peer-identity-and-pairing.md#amendment-1-2026-08--authentication-moves-out-of-tls)) |

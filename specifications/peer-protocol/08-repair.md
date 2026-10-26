@@ -73,7 +73,7 @@ Owner → destination.
 | Key | Type | Meaning |
 |-----|------|---------|
 | 1 | `bytes[16]` | Repository identifier |
-| 2 | `text` | The blob's store key, within [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own)'s key limit |
+| 2 | `text` | The blob's store key, ≤ 1024 bytes, the bound [03 §3.3](03-replication.md#33-replicationobject-and-replicationchunk) sets on an object's key |
 | 3 | `u64` | The length of the replacement the owner would send |
 
 A missing key, a repository identifier of another width, or an empty or over-long store key is `malformed`.

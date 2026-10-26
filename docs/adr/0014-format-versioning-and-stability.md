@@ -93,6 +93,10 @@ Format v1 freezes only when all of the following pass ([`../roadmap.md`](../road
 > of both, so the independent-reader criterion is a reader of every
 > version a repository may hold.
 
+> **Amended 2026-10.** The product now creates format 5
+> ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md)), and reads 2
+> to 5. The criterion above covers all four, and each has a committed fixture.
+
 **What the gate means now.** The freeze gate's six items are unchanged and read against format 2 — see the second amendment note at the gate for what format 3's arrival does and does not change. The conformance vectors and the committed fixture are format 2's ([conformance](../../specifications/repository-format/conformance/README.md)); the independent-reader criterion is a reader of format 2.
 
 **What was given up.** The choice at creation between two formats, and with it the service's passphrase mode, its platform keystore and the `unlock`/`lock` verbs ([ADR-0028 §9](0028-service-boundary-and-deployment-topologies.md), [ADR-0033](0033-hosting-under-an-os-service-manager.md), both amended). A format-1 recovery kit still parses — its wire shape is pinned until the kit itself goes — but cannot be opened.

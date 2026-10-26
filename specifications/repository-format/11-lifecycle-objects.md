@@ -18,11 +18,19 @@ A fourth namespace, `/format-upgrade/<to-version>`, belongs to nobody in particu
 
 Nothing before phase 4 writes any of them — no component takes a lease, tombstones an object, or writes an audit period — so their shapes were deliberately left uninvented rather than guessed at ([Q17](../../docs/open-questions.md#closed)). They are specified here, ahead of the collector, so that the collector is written against a format instead of establishing one by accident.
 
-All four are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`, set configuration `0x10`.
+The collector's three are **standalone metadata records**: the `FBPKSREC` framing of [ADR-0022](../../docs/adr/0022-standalone-metadata-records-and-index-identifiers.md) §Decision 1, sealed under the metadata key like an index delta or a journal record, with the object types [02 §3.1](02-identifiers.md#31-object-types) assigns — lease `0x0D`, tombstone `0x0E`, audit-period record `0x0F`.
 
-Two of the four are signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. A **set-configuration object tells a rebuilt machine what to protect and what to delete**, which is authority of the same kind, so it is signed too (§5.4). A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
+Two of the four are signed, and the difference is the point. A **tombstone authorises a deletion**, so it carries an Ed25519 signature and a reader verifies it before acting. The **format-upgrade record of §5** decides what a reader does, so it is signed for the same reason. A lease and an audit record authorise nothing; AEAD under the metadata key already establishes that a repository member wrote them, and a signature would imply an authority they do not have.
 
-The format-upgrade record of §5 is signed for the same reason a tombstone is — it decides what a reader does — and is the one lifecycle object that is **not** a sealed standalone record. §5.2 says why.
+The format-upgrade record is also the one lifecycle object that is **not** a sealed standalone record. §5.2 says why.
+
+> **Withdrawn (2026-10).** A fifth object, a signed set-configuration record of
+> type `0x10` ([ADR-0071](../../docs/adr/0071-recovering-operation-after-total-loss.md)),
+> was listed here and never specified: it was superseded before any build
+> wrote one, by the policy manifest carrying the set's shape
+> ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md)). Its type
+> is reserved ([02 §3.1](02-identifiers.md#31-object-types)) and its namespace
+> withdrawn ([01 §2](01-object-layout.md#2-namespace)).
 
 ## 2 Lease
 

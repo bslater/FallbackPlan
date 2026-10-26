@@ -50,6 +50,8 @@ Three facts shaped the design.
 
 7. **Where it is declared.** Schema 11 adds the field to a set's retention and a destination's override, written only when declared and refused at zero or below. The policy manifest records the set's own duration as retention inner key 6 of key 13 ([specification 06 §7](../../specifications/repository-format/06-manifests.md)), so a set adopted from its archive keeps deleted files as long as it did; a destination's override is still not recorded (FR-DEST-006). A reader that predates the key refuses a policy manifest carrying it, which is acceptable before the format freeze ([ADR-0014](0014-format-versioning-and-stability.md)), and a policy without one encodes as before. Contract 1.62 adds `keep_deleted_days` to `RetentionPolicyDescriptor`. Null keeps what stands, at the set and in each override, because a client before 1.62 cannot see the field to send it back. Zero clears it, and a descriptor holding only a zero is still the empty "no policy". The console's set editor and each destination's override take the duration and send zero for an emptied field. The adoption report says it in words, and the diagnostic bundle carries it. The set-configuration object [ADR-0071](0071-recovering-operation-after-total-loss.md) proposed, superseded and written by nothing, is left as it is.
 
+   > **Amended 2026-10.** It is no longer left: its codec and object type were removed, `0x10` is reserved, and its namespace is withdrawn (ADR-0071's status history).
+
 ## Consequences
 
 - **FR-GC-014 is met, and so is Phase 4's criterion.** A file deleted from the sources stays restorable from the snapshot holding its last version until the declared duration since the deletion was first seen.
