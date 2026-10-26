@@ -332,6 +332,33 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Receipt_AnEmptySecurityDescriptor_IsNoDescriptor_AndIsNotListed()
+    {
+        // What every manifest captured off Windows carries from the builds
+        // that wrote one (06 §4.1 key 7): no descriptor at all, so nothing a
+        // restore could leave out.
+        var (receipt, _) = await PublishAndRestoreAsync(EmptyDescriptor(), 0xD3, Posix);
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+    }
+
+    [TestMethod]
+    public async Task Plan_AnEmptySecurityDescriptor_IsNoDescriptor_AndIsNotDeclared()
+    {
+        var (plan, facts) = await PublishAndProbeAsync(EmptyDescriptor(), 0xD4);
+
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptors", RestoreMetadata.Declare(plan, facts, Posix));
+    }
+
+    private static FakeFileSystemSource EmptyDescriptor()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("plain.bin", Deterministic(700, 12)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = ReadOnlyMemory<byte>.Empty };
+        return source;
+    }
+
+    [TestMethod]
     public async Task Plan_CapturedMetadataTheTargetWillNotApply_IsDeclaredWithCounts_AndOwnershipNamesItsPrivilege()
     {
         var source = new FakeFileSystemSource();
