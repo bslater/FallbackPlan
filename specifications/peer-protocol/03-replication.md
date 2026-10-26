@@ -56,6 +56,8 @@ A source with no key to publish — an older build, or a repository provisioned 
 
 Key 5 is the **installation's** key rather than the repository's, so the same 32 bytes appear against every repository one installation stores at this destination; the attribution stays per repository, because the quota ([05 §1](05-quotas.md)) and the retrieval gate ([07 §4](07-retrieval.md)) are.
 
+**Key 5 is how disaster recovery is armed, ahead of the disaster and without the passphrase.** A destination can check a claim (§6) only against a key the owner published while the owner still existed. The claim key is derived once, at setup, when the passphrase is present, and its public half is kept in the write credential a write-only source runs on ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) Amendment 1). So an unattended backup publishes it on every offer, to every destination, including one paired long after the passphrase was last entered.
+
 ### 3.2 ReplicationInventory
 
 Destination → source, one or more pages.
@@ -67,7 +69,7 @@ Destination → source, one or more pages.
 | 1 | `array of text` | Object keys the destination already holds in scope, ≤ 4096 per page, each ≤ 1024 bytes |
 | 2 | `bool` | Whether another page follows |
 | 3 | `u64` | *(optional)* Bytes the destination can still accept under the quota in force ([05 §1](05-quotas.md)) |
-| 4 | `bytes[16]` | *(optional)* `claim_token` — present only when the `replica-claim` feature is in effect and this destination holds no claim credential for this repository ([07 §5.3](07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret)) |
+| 4 | — | *Reserved* — see below |
 
 The keys are the store's own object keys ([architecture 02](../repository-format/README.md) names them). A destination that holds nothing in scope sends one page with an empty array and `false`. The page cap keeps each frame under the [00 §2.3](00-conventions.md#23-limits-are-the-protocols-own) limit without the source having to trust the destination's framing.
 
@@ -77,47 +79,7 @@ The headroom rides here rather than in the hello or the terms, and both alternat
 
 A source MUST NOT treat a small headroom as a refusal. The boundary stop already refuses the exact object that would cross the line, with exact numbers, at the exact moment, and preserves everything committed before it; key 3 exists so the operator hears about it a session earlier, not so the source invents an earlier refusal.
 
-#### 3.2.1 Registering the claim credential
-
-**Key 4 is how disaster recovery is armed, one session ahead of the disaster.**
-
-A destination that has accepted a repository can serve it back ([07](07-retrieval.md)),
-but only to the identity its attribution ledger names. That identity dies with
-the source's durable local state, and nothing in the repository can rebuild it
-([architecture 00](../../docs/architecture/00-overview.md)). So the destination
-records, alongside the attribution, a credential the *passphrase* can
-reproduce — and it must do so while the pairing is still alive, because a
-machine that has already been lost cannot register anything.
-
-When key 4 is present, the source MUST answer with a **`ClaimRegister`** (282)
-before its first `ReplicationObject`:
-
-| Key | Type | Meaning |
-|-----|------|---------|
-| 1 | `bytes[16]` | `repository_id` the credential is for |
-| 2 | `bytes[32]` | `claim_public`, derived per [07 §5.2](07-retrieval.md#52-the-credential) from the passphrase and the destination's `claim_token` |
-
-The destination stores `claim_token` and `claim_public` with the attribution
-and MUST NOT send key 4 for that repository again. It never receives the
-private half and learns nothing about the passphrase: `claim_public` is one
-point on a curve, and recovering the root behind it is the discrete-log
-problem, not a KDF the destination could grind.
-
-A source that does not implement the feature simply does not answer, and the
-destination keeps serving that replica exactly as before — unclaimable, and
-[07 §5.3](07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret)
-says so plainly when someone tries.
-
-**A source that cannot derive the credential does not answer either, and this
-is not hypothetical.** A provisioned write-only (v2) service holds the write
-bundle and not the Argon2id root it came from ([ADR-0042](../../docs/adr/0042-write-only-repositories.md)),
-so it cannot compute `claim_public` during an unattended backup at all. Such a
-source MUST omit the answer rather than send anything derived from material
-that is not the root; the destination MAY re-offer key 4 on a later session,
-since nothing was registered. How a v2 set arms its recovery is unsettled and
-tracked as [Q23](../../docs/open-questions.md#q23--arming-disaster-recovery-on-a-write-only-repository);
-until it is settled, a v2 replica is registered only when a session happens to
-run while the passphrase is present.
+**Key 4 is reserved.** An earlier revision of this document assigned it to a claim token each destination minted per replica, and had the source answer it with a claim credential derived from the passphrase and that token ([ADR-0070](../../docs/adr/0070-replica-claim-after-total-loss.md)). That design was superseded before any build sent either ([ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md)), and both are withdrawn. Key 4 MUST NOT be assigned another meaning, and a reader skips a value there as it skips any key it does not know. Disaster recovery is armed by the offer instead (§3.1, key 5).
 
 ### 3.3 ReplicationObject and ReplicationChunk
 

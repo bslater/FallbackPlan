@@ -166,9 +166,11 @@ Two honest resolutions, one to pick: **(a)** implement sparse-aware write-out �
 
 ## Q23 — Arming disaster recovery on a write-only repository
 
+**Closed (2026-10): it was already armed.** The question was written against a claim design that was superseded before it was built. The claim that is built derives its key once, from the installation's passphrase at setup, and keeps the public half in the write credential a write-only service runs on ([ADR-0053](adr/0053-peer-claim-and-configuration-recovery.md) Amendment 1). Every offer publishes it to every destination, so no passphrase-bearing moment has to coincide with a session, and none of the three resolutions below is needed. `Hosts.Tests/PeerClaimTests` takes the order the superseded design could not survive, for a staging set and a direct-ship set: setup, then the passphrase gone from the service, then a peer paired, backed up to, and claimed back with the passphrase alone ([ADR-0053 Amendment 5](adr/0053-peer-claim-and-configuration-recovery.md#amendment-5-2026-10--a-write-only-installation-is-armed-at-setup)). The specification text that described the superseded design is withdrawn. The question as it stood is kept below.
+
 **Owner:** maintainer · **Blocks:** arming disaster recovery for format-v2 sets only; v1 is unaffected
 
-[ADR-0070](adr/0070-replica-claim-after-total-loss.md) arms disaster recovery by having a source register a passphrase-derived public key with each destination, during replication ([peer-protocol 03 §3.2.1](../specifications/peer-protocol/03-replication.md#321-registering-the-claim-credential)). That works for a v1 set, whose service holds the passphrase and can derive the credential whenever a backup runs.
+[ADR-0070](adr/0070-replica-claim-after-total-loss.md) arms disaster recovery by having a source register a passphrase-derived public key with each destination, during replication (peer-protocol 03 §3.2.1, since withdrawn). That works for a v1 set, whose service holds the passphrase and can derive the credential whenever a backup runs.
 
 **It does not work unattended for a write-only (v2) set, and the reason is ADR-0042 working correctly.** A provisioned v2 service holds only the write bundle — metadata, content-id, key-id and signing sub-roots — each an independently one-way HKDF domain of the Argon2id root. It cannot reach back to that root, so it cannot derive `claim_public`, so an ordinary v2 backup cannot arm the recovery it will one day need. The ordering is the difficulty: the token is minted by the destination and the credential is derived from the passphrase, and a v2 service never holds both at once.
 
@@ -180,7 +182,7 @@ Three resolutions, one to pick:
 
 **(c) Make the token the destination's own identity fingerprint** rather than a fresh random value. The source then knows it from the grant at pairing time and can derive the credential at any passphrase-bearing moment without a round trip, which collapses the ordering problem. It keeps per-destination uniqueness — the property that stops a proof captured at one destination working at another — but it makes the token predictable, so it must not be relied on for anything but separation.
 
-Until this is settled, a v2 set's replica is registered only if the passphrase happens to be present when a session runs, and [peer-protocol 07 §5.3](../specifications/peer-protocol/07-retrieval.md#53-the-token-is-per-destination-and-is-not-a-secret) makes an unregistered replica say so plainly rather than fail as a wrong passphrase.
+Until this is settled, a v2 set's replica is registered only if the passphrase happens to be present when a session runs, and peer-protocol 07 §5.3 (since withdrawn) makes an unregistered replica say so plainly rather than fail as a wrong passphrase.
 
 ---
 

@@ -34,11 +34,11 @@ All nine documents are now written; the table says which are also implemented. T
 | — | [Conventions](00-conventions.md) | What is inherited from the repository format, and what differs | Written |
 | 01 | [Identity and pairing](01-identity-and-pairing.md) | Peer keypairs, the pairing ceremony with negotiated storage roles, pinning, grants and terms | Written; implemented |
 | 02 | [Session](02-session.md) | Transport, handshake, feature negotiation, framing, errors | Written; implemented |
-| 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption | Written; base exchange implemented |
+| 03 | [Replication](03-replication.md) | The object exchange: scope, have/want, ranged transfer, resumption, and the passphrase-proved **claim** that restores an owner's access after total loss (§6) | Written; base exchange and claim implemented |
 | 04 | [Verification](04-verification.md) | The keyed random-range challenge and its sampling policy | Written; implemented |
 | 05 | [Quotas](05-quotas.md) | Exhaustion, disk-full, and their distinct reporting | Written; implemented |
 | 06 | [Retention instructions](06-retention.md) | Hub-planned aging of a peer replica, floor-bounded | Written; implemented |
-| 07 | [Retrieval](07-retrieval.md) | An owner reading its own replica back: listing, ranged reads, the owner inventory, and the passphrase-proved **claim** that restores an owner's access after total loss (§5) | Written; implemented except §5's claim |
+| 07 | [Retrieval](07-retrieval.md) | An owner reading its own replica back: listing, ranged reads, the owner inventory, chunk possession, and what a claim ([03 §6](03-replication.md#6-the-claim)) changes for retrieval (§5) | Written; implemented |
 | 08 | [Repair](08-repair.md) | An owner replacing a blob that rotted at a destination, which the destination takes only where its own keyless check finds its copy damaged and the replacement states that copy's locator | Written; implemented |
 
 Documents 01 and 02 are implemented in full and run over a real TLS 1.3 socket, in `FallbackPlan.Protocol`: the keypair and its durable device key, the pairing ceremony (key agreement, transcript, short authentication string, confirmation signature and the four messages that carry them), grants (01 §3) and terms (01 §4), and the whole session layer of 02 — the four-state machine, channel-bound authentication, framing with its pre-allocation bounds, version selection and feature negotiation, and the coarse refusal codes. `FallbackPlan.Protocol.Tests` exercises all of it over loopback TCP, including the man-in-the-middle relay that channel binding defeats; `FallbackPlan.Hosts.Tests` performs the pairing ceremony between two real operating-system processes.
