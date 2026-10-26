@@ -72,7 +72,7 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, RecoveryHost_UnknownCommandRunWithHelp, arg0);
 
     /// <summary>
-    /// The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.
+    /// The passphrase does not reproduce this repository's keys (ADR-0042): the public key it derives is not the sealing key the repository's descriptor records.
     /// </summary>
     internal static string RecoverySession_PassphraseDoesNotReproduce => Get(nameof(RecoverySession_PassphraseDoesNotReproduce));
 

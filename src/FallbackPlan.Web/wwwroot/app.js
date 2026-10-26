@@ -429,7 +429,7 @@ async function refreshDesc() {
     S.desc = result;
     // A service older than contract 1.13 answers null here, which reads as
     // "cannot tell" and so as no reason to interrupt anybody.
-    // kit_required is a value contracts 1.14–1.28 reported between the two;
+    // kit_required is a value contracts 1.14–1.30 reported between the two;
     // a service still saying it has an unfinished ceremony, and is treated so.
     const wants = result.setupState === "setup_required" || result.setupState === "kit_required";
     const changed = wants !== S.setupRequired || result.setupState !== S.setupState;

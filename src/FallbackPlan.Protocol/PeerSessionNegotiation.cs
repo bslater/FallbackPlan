@@ -4,7 +4,7 @@ namespace FallbackPlan.Protocol;
 
 /// <summary>
 /// Version selection and feature negotiation
-/// (specification peer-protocol 02 §3–§4).
+/// (specification peer-protocol 02 §5–§6).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -14,7 +14,7 @@ namespace FallbackPlan.Protocol;
 /// the feature set is a set intersection put in a fixed order.
 /// </para>
 /// <para>
-/// Nothing here consults the agent version. 02 §2 forbids branching on it, and
+/// Nothing here consults the agent version. 02 §4 forbids branching on it, and
 /// the reason is worth restating at the place where someone would be tempted:
 /// a protocol that sniffs versions acquires compatibility rules no specification
 /// can then describe, and it acquires them one bug fix at a time.
@@ -22,7 +22,7 @@ namespace FallbackPlan.Protocol;
 /// </remarks>
 public static class PeerSessionNegotiation
 {
-    /// <summary>The protocol version this build speaks (02 §3).</summary>
+    /// <summary>The protocol version this build speaks (02 §5).</summary>
     public const ushort CurrentVersion = 1;
 
     /// <summary>The oldest protocol version this build speaks.</summary>
@@ -146,7 +146,7 @@ public static class PeerSessionNegotiation
     /// </remarks>
     public const string ReplicaRepairFeature = "replica-repair";
 
-    /// <summary>The features this build offers (02 §4).</summary>
+    /// <summary>The features this build offers (02 §6).</summary>
     public static IReadOnlyList<string> SupportedFeatures { get; } =
     [
         DestinationVerificationFeature,
@@ -168,7 +168,7 @@ public static class PeerSessionNegotiation
     /// <param name="offered">
     /// What this endpoint offers, defaulting to everything this build supports.
     /// The offered set is a property of the endpoint rather than a global
-    /// constant (02 §4: "each side offers what it supports"), and narrowing it
+    /// constant (02 §6: "each side offers what it supports"), and narrowing it
     /// is the only way to stand an older peer in front of this one without
     /// checking out an older build — which is what the compatibility tests do
     /// with it. Nothing in production passes anything but the default.
@@ -197,7 +197,7 @@ public static class PeerSessionNegotiation
         return new SessionAccept(SelectVersion(ours, theirs), SelectFeatures(ours, theirs));
     }
 
-    /// <summary>Selects the highest version both sides speak (02 §3).</summary>
+    /// <summary>Selects the highest version both sides speak (02 §5).</summary>
     /// <param name="ours">The hello this side sent.</param>
     /// <param name="theirs">The hello the peer sent.</param>
     /// <returns>The selected version.</returns>
@@ -212,7 +212,7 @@ public static class PeerSessionNegotiation
 
         if (highest < lowest)
         {
-            // Both ranges, per 02 §3. A bare "unsupported" leaves the operator
+            // Both ranges, per 02 §5. A bare "unsupported" leaves the operator
             // with no way to tell which side needs upgrading, which is the one
             // question this refusal exists to answer.
             throw new PeerProtocolException(
@@ -224,7 +224,7 @@ public static class PeerSessionNegotiation
         return (ushort)highest;
     }
 
-    /// <summary>Intersects the offered sets and checks both required sets (02 §4).</summary>
+    /// <summary>Intersects the offered sets and checks both required sets (02 §6).</summary>
     /// <param name="ours">The hello this side sent.</param>
     /// <param name="theirs">The hello the peer sent.</param>
     /// <returns>The features in effect, ordinal-sorted.</returns>
@@ -241,7 +241,7 @@ public static class PeerSessionNegotiation
 
         // Their requirements are checked here too, though they will check them
         // themselves. Refusing before opening a session we know they will refuse
-        // costs one message and saves a half-open state 02 §6 says must not exist.
+        // costs one message and saves a half-open state 02 §8 says must not exist.
         RequireAll(theirs.FeaturesRequired, weOffer, "This device does not offer");
 
         // Sorted, because both sides compute this independently and a set with

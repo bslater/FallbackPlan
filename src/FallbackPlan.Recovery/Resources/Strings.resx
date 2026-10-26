@@ -71,7 +71,7 @@
     <value>Unknown command '{0}'. Run with --help.</value>
   </data>
   <data name="RecoverySession_PassphraseDoesNotReproduce" xml:space="preserve">
-    <value>The passphrase does not reproduce this repository's keys (ADR-0042): the derived public key disagrees with the kit's.</value>
+    <value>The passphrase does not reproduce this repository's keys (ADR-0042): the public key it derives is not the sealing key the repository's descriptor records.</value>
   </data>
   <data name="RecoverySession_ArchiveDescriptorDoesNotRead" xml:space="preserve">
     <value>This archive's repository-format descriptor does not read as a descriptor.</value>

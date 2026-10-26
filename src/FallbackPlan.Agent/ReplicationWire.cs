@@ -77,7 +77,7 @@ internal static class ReplicationWire
             // is written turns the peer's in-flight write into a reset that
             // purges the refusal out of its receive buffer unread. Draining
             // to end-of-stream keeps the connection alive exactly long enough
-            // for the refusal to be read (02 §6).
+            // for the refusal to be read (02 §8).
             var discard = new byte[4096];
             while (await stream.ReadAsync(discard, timeout.Token).ConfigureAwait(false) > 0)
             {

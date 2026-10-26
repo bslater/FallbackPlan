@@ -6,7 +6,7 @@ namespace FallbackPlan.Protocol;
 
 /// <summary>
 /// What a destination does with one offered replacement, and then with the
-/// bytes it asked for (specification peer-protocol 08 §3.2). Every verdict
+/// bytes it asked for (specification peer-protocol 08 §4.2). Every verdict
 /// but <see cref="Send"/> ends the exchange for that key.
 /// </summary>
 public enum RepairVerdictCode : ushort
@@ -32,7 +32,7 @@ public enum RepairVerdictCode : ushort
 
 /// <summary>
 /// An owner's offer of a replacement for one blob its sweep found damaged at
-/// the destination (specification peer-protocol 08 §3.1). The first offer of
+/// the destination (specification peer-protocol 08 §4.1). The first offer of
 /// a session opens the exchange, and every offer in it names the same
 /// repository.
 /// </summary>
@@ -64,7 +64,7 @@ public sealed record RepairOffer(ReadOnlyMemory<byte> RepositoryId, string Key, 
     }
 
     /// <summary>Reads an offer from a body positioned after the message type.</summary>
-    /// <exception cref="PeerProtocolException">The body violates 08 §3.1.</exception>
+    /// <exception cref="PeerProtocolException">The body violates 08 §4.1.</exception>
     public static RepairOffer Read(CborReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -98,7 +98,7 @@ public sealed record RepairOffer(ReadOnlyMemory<byte> RepositoryId, string Key, 
             || length is null)
         {
             throw new PeerProtocolException(
-                PeerRefusalReason.Malformed, "A repair offer is not the shape 08 §3.1 defines.");
+                PeerRefusalReason.Malformed, "A repair offer is not the shape 08 §4.1 defines.");
         }
 
         return new RepairOffer(repositoryId, objectKey, length.Value);
@@ -117,7 +117,7 @@ public sealed record RepairOffer(ReadOnlyMemory<byte> RepositoryId, string Key, 
 
 /// <summary>
 /// The destination's answer to an offer, and again to the bytes it asked for
-/// (specification peer-protocol 08 §3.2): reached from its own copy and the
+/// (specification peer-protocol 08 §4.2): reached from its own copy and the
 /// bytes it received, and from nothing the source said of them.
 /// </summary>
 /// <param name="Key">The blob's store key, as offered.</param>
@@ -142,7 +142,7 @@ public sealed record RepairVerdict(string Key, RepairVerdictCode Verdict) : IPee
     }
 
     /// <summary>Reads a verdict from a body positioned after the message type.</summary>
-    /// <exception cref="PeerProtocolException">The body violates 08 §3.2.</exception>
+    /// <exception cref="PeerProtocolException">The body violates 08 §4.2.</exception>
     public static RepairVerdict Read(CborReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -170,7 +170,7 @@ public sealed record RepairVerdict(string Key, RepairVerdictCode Verdict) : IPee
             || Encoding.UTF8.GetByteCount(objectKey) > ReplicationInventory.MaximumKeyBytes)
         {
             throw new PeerProtocolException(
-                PeerRefusalReason.Malformed, "A repair verdict is not the shape 08 §3.2 defines.");
+                PeerRefusalReason.Malformed, "A repair verdict is not the shape 08 §4.2 defines.");
         }
 
         // A verdict decides whether a blob crosses. One this build does not
@@ -178,7 +178,7 @@ public sealed record RepairVerdict(string Key, RepairVerdictCode Verdict) : IPee
         if (verdict is not { } code || code > ushort.MaxValue || !Enum.IsDefined((RepairVerdictCode)code))
         {
             throw new PeerProtocolException(
-                PeerRefusalReason.Malformed, $"A repair verdict carries a code 08 §3.2 does not define ({verdict}).");
+                PeerRefusalReason.Malformed, $"A repair verdict carries a code 08 §4.2 does not define ({verdict}).");
         }
 
         return new RepairVerdict(objectKey, (RepairVerdictCode)code);
