@@ -99,13 +99,37 @@ public sealed class PeerDeltaRetirementTests : IDisposable
             "a delta is retired only on a carrier at the store it is retired from");
     }
 
+    [TestMethod]
+    public async Task ADeltaThePlaneStillLists_IsKeptAtThePeer_ThoughThePeersOwnCopiesWouldLetItGo()
+    {
+        // A replica lets go only of what the store it is copied from has let
+        // go (ADR-0098 §4). The third run finds the set held, so the plane
+        // keeps what its checkpoint carries; the peer holds that checkpoint
+        // settled, and would pass the judgement on its own copies.
+        await using var peer = await PeerSite.StartAsync(_peer, Timeout);
+        await using var source = await PeerSite.StartAsync(_source, Timeout, checkpointThreshold: 2);
+        var (replica, _) = await ThreeBackupsAsync(source, peer, PeerSite.Noise(4096, seed: 1), holdTheThirdRun: true);
+        var carried = CarriedBy(await LoadAsync(replica));
+        Assert.IsNotEmpty(carried);
+        Assert.IsTrue(carried.IsSubsetOf(await DeltasAtTheirKeysAsync(_source.RepositoryPath)), "the held run retired nothing");
+
+        var grant = await _source.ReclaimGrantAsync(source.Operator, Timeout);
+        Assert.IsInstanceOfType<RetentionResult>(
+            await source.Operator.ExecuteAsync(new RetentionCommand(Apply: true, ReclaimGrant: grant), Timeout));
+
+        Assert.IsTrue(
+            carried.IsSubsetOf(await DeltasAtTheirKeysAsync(replica)),
+            "a delta the plane still lists would be copied straight back to the peer");
+    }
+
     /// <summary>
     /// Three backups to the peer, each proven there: the second checkpoints
     /// the first two runs' deltas, and the third settles that checkpoint, so
-    /// the plane retires what it carries.
+    /// the plane retires what it carries — unless the third run finds the
+    /// set held, when it retires nothing.
     /// </summary>
     private static async Task<(string Replica, string FirstSnapshot)> ThreeBackupsAsync(
-        PeerSite source, PeerSite peer, byte[] firstBytes)
+        PeerSite source, PeerSite peer, byte[] firstBytes, bool holdTheThirdRun = false)
     {
         source.WriteSourceBytes("first.bin", firstBytes);
         await source.PairToStoreAtAsync(peer, "site-b");
@@ -120,7 +144,21 @@ public sealed class PeerDeltaRetirementTests : IDisposable
         foreach (var (name, seed) in new[] { ("second.bin", 2), ("third.bin", 3) })
         {
             source.WriteSourceBytes(name, PeerSite.Noise(4096, seed));
-            await source.RunBackupAsync();
+            var gate = holdTheThirdRun && seed == 3 ? source.Runtime.SetGate(source.Harness.DocsSetId) : null;
+            if (gate is not null)
+            {
+                await gate.WaitAsync();
+            }
+
+            try
+            {
+                await source.RunBackupAsync();
+            }
+            finally
+            {
+                gate?.Release();
+            }
+
             synced = await source.WaitForProvenAsync("site-b", after: synced.SyncedSequence);
         }
 
