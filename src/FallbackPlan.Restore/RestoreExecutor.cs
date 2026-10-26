@@ -853,11 +853,13 @@ public sealed class RestoreExecutor(
                         continue;
                     }
 
+                    // Onto the link the run just made, never through it.
+                    var linkWritten = ApplyMetadata(linkLanding, manifest.Metadata, EntryKind.Symlink);
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = 0, WrittenAs = linkWrittenAs,
-                        NotApplied = RestoreMetadata.NotApplied(
-                            RestoreMetadata.Captured(manifest.Metadata), EntryKind.Symlink, target),
+                        Detail = linkWritten.Detail,
+                        NotApplied = RestoreMetadata.NotApplied(RestoreMetadata.Captured(manifest.Metadata), linkWritten.Applied),
                     }));
                     break;
                 }
@@ -1073,7 +1075,7 @@ public sealed class RestoreExecutor(
             };
         }
 
-        var written = ApplyMetadata(folder.Destination, values, folder: true);
+        var written = ApplyMetadata(folder.Destination, values, EntryKind.DirectoryPlaceholder);
         return made with
         {
             Detail = written.Detail, NotApplied = RestoreMetadata.NotApplied(folder.Captured, written.Applied),
@@ -1327,8 +1329,9 @@ public sealed class RestoreExecutor(
 
     /// <summary>
     /// Writes back what the target takes of <paramref name="metadata"/> onto
-    /// the file landed or the folder made at <paramref name="destination"/>,
-    /// one attribute at a time, and answers which writes landed, and which
+    /// the file landed, the folder made or the symlink made at
+    /// <paramref name="destination"/>, as <paramref name="kind"/> says, one
+    /// attribute at a time, and answers which writes landed, and which
     /// extended attributes were left and why.
     /// </summary>
     /// <remarks>
@@ -1363,11 +1366,24 @@ public sealed class RestoreExecutor(
     /// no more than the ACL gave it (<see cref="RestoreMetadata.WithoutAcl"/>),
     /// and its permissions are then not those captured.
     /// </para>
+    /// <para>
+    /// A symlink takes the same writes in the same order, each by a call that
+    /// changes the link itself (ADR-0101). .NET's permission setter follows a
+    /// link and would write onto whatever it points at, and its time setters
+    /// promise nothing either way, so a link's permissions and times go
+    /// through <see cref="SymlinkMetadata"/>. Its owner, group
+    /// and extended attributes are written by calls that never follow one,
+    /// and its creation time only on macOS, whose call does not. Linux gives
+    /// every link the same permissions and has no call to change them, so
+    /// there a link's captured ones are written by nothing and land only where
+    /// they are those (<see cref="RestoreMetadata.LinkPermissionsLand"/>).
+    /// </para>
     /// </remarks>
-    private Written ApplyMetadata(string destination, EntryMetadata metadata, bool folder = false)
+    private Written ApplyMetadata(string destination, EntryMetadata metadata, EntryKind kind = EntryKind.File)
     {
         var applied = CapturedMetadata.None;
-        FileSystemInfo landed = folder ? new DirectoryInfo(destination) : new FileInfo(destination);
+        var link = kind == EntryKind.Symlink;
+        FileSystemInfo landed = kind == EntryKind.DirectoryPlaceholder ? new DirectoryInfo(destination) : new FileInfo(destination);
 
         if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows() && target.Account is { } account)
         {
@@ -1395,7 +1411,7 @@ public sealed class RestoreExecutor(
         foreach (var attribute in metadata.ExtendedAttributes)
         {
             var isAcl = RestoreMetadata.IsAccessAcl(attribute.Name.Span);
-            var why = !writes ? null : RestoreMetadata.Withheld(attribute, target);
+            var why = !writes ? null : RestoreMetadata.Withheld(attribute, target, link);
             var landedHere = writes
                 && why is null
                 && ExtendedAttributes.TrySet(destination, attribute.Name.Span, attribute.Value.Span);
@@ -1426,25 +1442,44 @@ public sealed class RestoreExecutor(
                 permitted = RestoreMetadata.WithoutAcl(permitted, acl);
             }
 
-            if (Wrote(() => landed.UnixFileMode = (UnixFileMode)permitted) && permitted == (mode & 0xFFF))
+            var lands = !link
+                ? Wrote(() => landed.UnixFileMode = (UnixFileMode)permitted)
+                : SymlinkMetadata.CanSetPermissions
+                    ? SymlinkMetadata.TrySetPermissions(destination, permitted)
+                    : RestoreMetadata.LinkPermissionsLand(permitted);
+            if (lands && permitted == (mode & 0xFFF))
             {
                 applied |= CapturedMetadata.PosixMode;
             }
         }
 
-        if (FileTimes.FromUnixMilliseconds(metadata.ModifiedAt) is { } modified
-            && Wrote(() => landed.LastWriteTimeUtc = modified))
+        if (link)
         {
-            applied |= CapturedMetadata.ModifiedAt;
+            var modifiedAt = FileTimes.FromUnixMilliseconds(metadata.ModifiedAt);
+            var accessedAt = FileTimes.FromUnixMilliseconds(metadata.AccessedAt);
+            if ((modifiedAt ?? accessedAt) is not null && SymlinkMetadata.TrySetTimes(destination, modifiedAt, accessedAt))
+            {
+                applied |= (modifiedAt is null ? CapturedMetadata.None : CapturedMetadata.ModifiedAt)
+                    | (accessedAt is null ? CapturedMetadata.None : CapturedMetadata.AccessedAt);
+            }
         }
-
-        if (FileTimes.FromUnixMilliseconds(metadata.AccessedAt) is { } accessed
-            && Wrote(() => landed.LastAccessTimeUtc = accessed))
+        else
         {
-            applied |= CapturedMetadata.AccessedAt;
+            if (FileTimes.FromUnixMilliseconds(metadata.ModifiedAt) is { } modified
+                && Wrote(() => landed.LastWriteTimeUtc = modified))
+            {
+                applied |= CapturedMetadata.ModifiedAt;
+            }
+
+            if (FileTimes.FromUnixMilliseconds(metadata.AccessedAt) is { } accessed
+                && Wrote(() => landed.LastAccessTimeUtc = accessed))
+            {
+                applied |= CapturedMetadata.AccessedAt;
+            }
         }
 
         if (target.SupportsCreationTimes
+            && (!link || OperatingSystem.IsMacOS())
             && FileTimes.FromUnixMilliseconds(metadata.CreatedAt) is { } created
             && FileTimes.TrySetCreationTime(destination, created))
         {
