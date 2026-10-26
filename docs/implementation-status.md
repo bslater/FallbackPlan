@@ -4,7 +4,7 @@
 
 ---
 
-Ninety-six decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+One hundred and one decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -107,7 +107,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0080](adr/0080-a-person-deletes-a-snapshot.md) | A person deletes a snapshot, from staging and every copy: `delete_snapshots` (contract 1.51) under the set's reclaim grant. The request is a tombstone of reason *requested* that every survey reads and every plan expires. Staging keeps the snapshot until every declared destination has converged since the request, one with no rules included, and one command converges every copy, carries the deletion through in two passes and records who asked. A set keeps something to restore from | **Built** | `Retention/SnapshotDeletion` · `Retention/StagingMark` · `Retention/RetentionPlanner` · `Retention/ReplicationGate` · `Retention/StagingSweep` · `Retention/RetentionRunner` · `Repository.Format/Manifests/Tombstone` · `Repository.Index/Journal/JournalRecordCodec` · `Repository.Catalogue/Catalogue` · `Application/DestinationSyncStore` · `Agent/FanOut` · `Agent/ReplicationInitiator` · `Agent/ServiceCommandHandler.Deletion` · `Agent/AuthenticatingService` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Web/WebConsoleHost` · `Retention.Tests/SnapshotDeletionPlanTests`, `Retention.Tests/SnapshotDeletionCycleTests`, `Retention.Tests/SnapshotDeletionFanOutTests`, `Retention.Tests/SnapshotDeletionPeerTests`, `Retention.Tests/SnapshotDeletionServiceTests`, `Repository.ConformanceTests/TombstoneConformanceTests`, `Web.Tests/SnapshotDeletionCeremonyTests`, `Web.DomTests/SnapshotDeletionDomTests` · [notes](#0080--the-request-is-a-tombstone-and-a-missing-row-is-not-a-missing-copy) |
 | [0081](adr/0081-diagnostic-bundle.md) | A diagnostic bundle, and a redacted rendering that withholds what no type declares: `export_diagnostics` (contract 1.52) builds one zip whose every field is classified by the types the log uses, paths only by a per-bundle opt-in a paired console may not make; the redacted rendering is fail-closed, `LogLabel` vouches for safe words, identifiers held as text are `LogId`s, and every product log hole is classified | **Built** | `Diagnostics/LogRecordRenderer` · `Domain/Diagnostics/LogLabel` · `Domain/Diagnostics/LogId` · `Storage.Abstractions/ObjectKey` · `Agent/DiagnosticBundle` · `Agent/ServiceCommandHandler.Diagnostics` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/CliApplication` · `Hosts.Tests/DiagnosticBundleTests`, `Diagnostics.Tests/RedactedRenderingTests`, `Hosts.Tests/DiagnosticsCommandTests`, `ArchitectureTests/LoggingShapeTests`, `Cli.Tests/DiagnosticsExportVerbTests`, `Web.Tests/DiagnosticsRelayTests`, `Web.DomTests/ConsoleViewsDomTests` · [notes](#0081--a-bundle-needed-the-redaction-to-be-true-first) |
 | [0082](adr/0082-the-recovery-tools-diagnostic-bundle.md) | The recovery tool's diagnostic bundle: every verb takes a bundle file and writes a report of that run however it ended, through the rule the service's log uses, which moved to Domain so the tool could reach it; no passphrase, key, salt, sealing key, creator or machine name, identifiers shortened, paths only by an opt-in for that run | **Built** | `Domain/Diagnostics/RedactedRendering` · `Recovery/RecoveryBundle` · `Recovery/RecoveryRun` · `Recovery/RecoveryNote` · `Recovery/RecoverySession` · `Recovery/RecoveryHost` · `Hosts.Tests/RecoveryBundleTests`, `Domain.Tests/RedactedRenderingRuleTests`, `ArchitectureTests/DependencyRuleTests`, `Repository.Tests/RecoveryContainmentTests` · [notes](#0082--the-tool-that-runs-on-the-worst-day-says-what-happened) |
-| [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item; since [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) the times are written back and the list records what each write did | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
+| [0083](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md) | A restore says whether it fits, and what it will not write back. The plan measures the room each volume the run writes to needs, against what is free there: files in whole clusters with their holes skipped, a cluster a directory, room for the largest file in the engine's working copy, and credit only for what the existing-file policy frees. The run refuses before writing anything unless told to ignore free space (contract 1.53). The plan counts each captured attribute the target will not get back and names the privilege ownership needs, and receipt schema 6 names it per item; since [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) the times are written back and the list records what each write did. Since [Amendment 1](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor) an empty security descriptor, which capture had recorded on every entry it read none for, is no descriptor: capture records none, a restore declares and lists none, and the metadata digest does not tell them apart | **Built** | `Restore/RestoreSpace` · `Restore/RestoreMetadata` · `Restore/RestoreBlobSet` · `Restore/RestoreExecutor` · `Agent/ServiceCommandHandler` · `Agent/ServiceRuntime` · `Api/Commands` · `Api/Results` · `Api/ContractVersion` · `Cli/OperationGateway` · `Cli/CliApplication` · `Filesystem.Local/LocalFileSystemSource` · `Repository.Format/Manifests/FileVersionManifestCodec` · `Repository.Tests/RestoreSpaceTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Filesystem.Tests/LocalScanTests`, `Repository.Tests/Format/ManifestCodecTests`, `Repository.Tests/RestoreBreadthTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Api.Tests/ConfigurationContractTests`, `Cli.Tests/RestoreHonestyCommandTests`, `Web.DomTests/RestoreWizardDomTests` · [notes](#0083--a-plan-that-knew-the-disk) |
 | [0084](adr/0084-a-restore-writes-back-the-times-it-can-set.md) | A restore writes back the times it can set, and records what each write did: access times everywhere, and creation times on Windows and macOS through a call that refuses where it cannot set one rather than writing the modification time in its place. Each attribute is written on its own after the content, so a write the platform refuses, or a time no file can carry, is listed as not applied and neither fails the item nor ends the run. Receipt schema 6 keeps its shape, and its list now says what landed | **Built** | `Domain/FileTimes` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Restore/RestorePlan` · `Domain.Tests/FileTimesTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0084--the-receipt-says-what-landed) |
 | [0085](adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) | A restore gives a file back to its owner where it may: owner and group, captured by name, are resolved on the target and given where the restoring account may give them, which is to anyone for root or CAP_CHOWN and otherwise only to the account itself and its groups. Each is written apart, before the permissions. A set-id bit is kept only with the owner or group it runs as, and dropped and reported otherwise. The plan predicts each file, and declares privilege and a name that resolves to nothing apart. Amendment 1: a quarantine restore keeps set-id bits as any restore does, a decision documented rather than a change | **Built** | `Domain/FileOwnership` · `Restore/RestoreAccount` · `Restore/RestoreMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Domain.Tests/FileOwnershipTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests`, `TestSupport/FileOwner`, `TestSupport/PosixAccount` · [notes](#0085--whose-file-it-is) |
 | [0086](adr/0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) | A restore gives a folder its own metadata back, once nothing more lands in it: each folder's tree is read for what was captured with the folder, and a folder the run made gets its times, permissions and ownership back by the file's rule once the run has written everything else, deepest folder first. A folder already at the destination keeps its own, nothing is applied through a link, and a folder whose tree will not read is still made. The plan reads each folder's tree, names one the store does not hold, and counts folders apart from files | **Built** | `Restore/RestoreExecutor` · `Restore/RestoreBlobSet` · `Restore/RestoreMetadata` · `Domain/FileTimes` · `Repository.Tests/RestoreFolderMetadataTests`, `Domain.Tests/FileTimesTests`, `Hosts.Tests/RestoreHonestyServiceTests` · [notes](#0086--a-folders-own) |
@@ -125,6 +125,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0098](adr/0098-a-store-retires-what-its-own-checkpoints-carry.md) | A store retires what its own checkpoints carry: a delta is deleted from a store only when a checkpoint there carries a copy that opens and is the object at its key, that checkpoint's writer has published there since, and the store lists strongly; checkpoints are never retired and no tombstone is written. A reader lists the deltas before the checkpoints and looks for one gone in a second listing of them. Staging or a metadata store retires after a backup's checkpoint while nothing else holds the set; a local path or object store retires in its sync, or in the direct-ship run that wrote it, only what the plane no longer lists; a copy survives a retirement it races; a peer retires under a person's grant, judged from its own copies (Amendment 1) | **Built** | `Repository.Index/DeltaRetirer` · `Repository.Index/IndexLoader` · `Repository.Index/IndexCheckpointer` · `Agent/BackupRunner` · `Agent/ArchiveHandle` · `Agent/FanOut` · `Agent/DestinationShipSink` · `Agent/ServiceRuntime` · `Agent/ServiceCommandHandler.Configuration.cs` · `Replication/StoreToStoreCopier` · `Repository.Tests/Index/DeltaRetirerTests`, `Repository.Tests/Index/RetiredDeltaLoadTests`, `Hosts.Tests/DeltaRetirementServiceTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Replication.Tests/CopierRetiredDeltaTests` · at a peer under a person's grant, judged from the peer's own copies and named in the signed drop list (`Agent/ReplicationInitiator`, `Hosts.Tests/PeerDeltaRetirementTests`, Amendment 1) · [notes](#0098--a-store-retires-what-its-own-checkpoints-carry) |
 | [0099](adr/0099-a-folder-that-was-only-read-keeps-its-tree.md) | A folder that was only read keeps its tree: a folder whose tree would be the prior snapshot's but for its access time states the prior time and is the prior object, and one with anything else changed states the time it has now; the catalogue keeps each tree's access time at schema 11, written by every route that fills it | **Built** | `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Repository.Catalogue/Catalogue`, `Repository.Catalogue/CatalogueSchema` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/EndToEnd/FolderAccessTimeTests`, `Retention.Tests/CompactionCollectionTests` |
 | [0100](adr/0100-a-peer-replaces-what-its-own-check-finds-damaged.md) | A peer replaces what its own check finds damaged: it takes a replacement for a blob only where its own copy fails the keyless locator check, with bytes of the copy's length that pass it and state the locator the copy states, over a repair session of its own served only for the owner; the source proves its copy first, from copies it reads without dialling a peer, and proves it again over retrieval where it landed, at once in the sweep and at each sync while damage is held | **Built** | `Repository.Packing/BlobLocatorCheck` · `Agent/RepairResponder`, `Agent/RemoteServiceListener` · `Protocol/PeerRepairMessages`, `Protocol/PeerSessionNegotiation`, `Protocol/PeerAuthenticator` · `Agent/PeerRepairClient`, `Agent/PeerRepairTarget`, `Repository/ReplicaRepair`, `Agent/ReplicaRepairer` · `Agent/ReplicaSweepJob`, `Agent/FanOut` · `Hosts.Tests/PeerRepairTests`, `Hosts.Tests/PeerDeepSweepTests`, `Repository.Tests/EndToEnd/BlobLocatorCheckTests`, `Repository.Tests/EndToEnd/ReplicaRepairTests`, `Protocol.Tests/RepairMessageTests` |
+| [0101](adr/0101-a-restore-gives-a-symlink-its-own-metadata-back.md) | A restore gives a symlink its own metadata back, onto the link itself: its owner and group, its extended attributes, its times on Linux and macOS, and on macOS its permissions and creation time, each by a call that changes the link and never what it points at. On Linux a link's permissions land only where they are those every link there has, and a user-namespace attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use | **Built** | `Domain/SymlinkMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Repository.Tests/RestoreSymlinkMetadataTests`, `Domain.Tests/SymlinkMetadataTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0101--a-links-own) |
 
 ---
 
@@ -2438,10 +2439,11 @@ the slice, and has since landed
 metadata was neither written back nor named in its receipt item, which is a
 silent drop architecture 06 §3 rules out; writing it had to wait until the
 directory's children had landed, and has since landed too
-([0086](#0086--a-folders-own)). A symlink's own metadata, Windows
-attribute bits, security descriptors and alternate streams are still listed;
-extended attributes have since landed ([0087](#0087--extended-attributes)). The recovery tool and the CLI's `restore-file`
-write no metadata at all.
+([0086](#0086--a-folders-own)). Windows attribute bits, security
+descriptors and alternate streams are still listed; extended attributes have
+since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
+metadata ([0101](#0101--a-links-own)). The recovery tool and the CLI's
+`restore-file` write no metadata at all.
 
 ### 0085 — whose file it is
 
@@ -2472,8 +2474,8 @@ without the privilege.
 
 The service and CLI tests had anchored on the owner as the attribute no
 target applied, and the account running them now gets its files back. On
-POSIX they anchor on a symlink, whose own metadata is still never written
-back.
+POSIX they anchored on a symlink, whose own metadata was never written back,
+until it was ([0101](#0101--a-links-own)).
 
 The proof is split by privilege. A suite running as root, as it does in a
 container, proves the privileged half. CI's runners, which are unprivileged,
@@ -2534,9 +2536,10 @@ its contents, into the folder the restore writes into, and that folder keeps
 its own metadata; the plan does not declare the root's. The run writes by
 path, so an account that can change the tree while it runs can still redirect
 a write in the moment between a check and the write it guards. The threat
-model now says so. A symlink's own metadata, Windows attribute bits, security
-descriptors and alternate streams are still listed, for folders as for files;
-extended attributes have since landed ([0087](#0087--extended-attributes)).
+model now says so. Windows attribute bits, security descriptors and alternate
+streams are still listed, for folders as for files; extended attributes have
+since landed ([0087](#0087--extended-attributes)), and so has a symlink's own
+metadata ([0101](#0101--a-links-own)).
 
 ### 0087 — extended attributes
 
@@ -2581,8 +2584,9 @@ What remains is recorded rather than done. An ACL's entries are captured as
 numbers; capturing their names would let one come back on any machine where
 the names resolve, and is owed. macOS's own access lists are not captured,
 Windows security descriptors are not applied, and Windows keeps no extended
-attributes a restore writes. A symlink's own metadata is still owed, and the
-recovery tool and the CLI's `restore-file` still write no metadata.
+attributes a restore writes. A symlink's own metadata has since landed
+([0101](#0101--a-links-own)), and the recovery tool and the CLI's
+`restore-file` still write no metadata.
 
 ### 0088 — what is backed up
 
@@ -3106,3 +3110,47 @@ visits a peer with no retention rules when it has something to retire.
 (07 §3.3) (`Hosts.Tests/PeerDeltaRetirementTests`,
 `Hosts.Tests/PeerRollbackTests`, `Repository.Tests/Index/DeltaRetirerTests`). The limit: a peer lets go only
 when a person is present, which is already when it trims its snapshots.
+
+### 0101 — a link's own
+
+A restore made each link and wrote nothing onto it, so every receipt listed
+every link's metadata and every plan carried one line for all of them.
+Capture had always read a link's own metadata without following it. The
+restore now writes it back by the rule a file gets, in the file's order:
+owner and group, extended attributes, permissions, then the times, the
+creation time last.
+
+Every write is by a call that changes the link itself. `lchown`,
+`lsetxattr` and macOS's no-follow flag for attributes, and macOS's
+`setattrlist` for a creation time, were already link-safe.
+`Domain/SymlinkMetadata` adds the two that were not: a link's times through
+`utimensat` told not to follow it, and on macOS its permissions through
+`lchmod`. .NET's permission setter follows a link, and was measured doing
+so. Its time setters act on the link itself on this runtime, measured too,
+but promise nothing a restore could rest on.
+
+Linux keeps less on a link. Every link there is `rwxrwxrwx` and no call
+changes it, so a link captured with those permissions lands as captured and
+lists nothing, and one captured elsewhere with others is listed. Linux
+refuses a user-namespace attribute and an ACL on a link, so neither is
+attempted, and each is named. The plan counts links beside files and folders
+and adds those two lines. Windows makes no links.
+
+Writing the service test turned up a capture defect older than this slice:
+every entry captured off Windows recorded an empty security descriptor,
+which every restore then listed as not applied. That is
+[0083 Amendment 1](adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor),
+built with this slice. Capture records none, a restore reads an empty one as
+none, and the metadata digest does not tell them apart, so no manifest is
+rewritten for it.
+
+The proof is split by privilege and platform. A root container proves a link
+given away and its trusted attribute written. CI's unprivileged runners
+prove the account's own groups. macOS's leg proves a link's permissions and
+creation time.
+
+What remains is recorded rather than done. A link's metadata is written by
+path, so the window between making it and writing onto it is the one
+[0086](#0086--a-folders-own) records. Windows attribute bits, security
+descriptors and alternate streams are not applied, and the recovery tool and
+the CLI's `restore-file` still write no metadata.

@@ -84,6 +84,8 @@ Each ACL line says the group keeps no more than the lists gave it. A target that
 - **macOS's own access lists and Windows security descriptors.** Neither is written back. A security descriptor is still listed. macOS's lists are not captured.
 - **Extended attributes on Windows.** Architecture 06 §3 would keep them as alternate streams, which are not yet written back either.
 - **A symlink's own attributes.** A link is created with none of its own metadata, as before.
+
+  > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** Built: a link's attributes are written back by this record's rule, through `lsetxattr` and macOS's no-follow flag. On Linux a user-namespace attribute and an ACL on a link are withheld and named, because Linux keeps neither on one.
 - **A handle-relative restore.** Attributes are written by path, like the permissions and times, so the window [ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md) describes, between a check and the write it guards, covers them too.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.
 
