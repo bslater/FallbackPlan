@@ -238,8 +238,9 @@ internal static class ReplicationInitiator
     /// Delta keys the caller judged retirable at this destination from the
     /// destination's own copies (ADR-0098 Amendment 1), named in the drop
     /// half beside what the keep filter drops. Named only under a signer and
-    /// never in a session whose inventory set the filter aside, and only
-    /// those the destination declared holding.
+    /// never in a session whose inventory <paramref name="onInventory"/>
+    /// answered false, whether or not a filter was given, and only those the
+    /// destination declared holding.
     /// </param>
     /// <returns>What moved and what went.</returns>
     public static async Task<PushOutcome> PushAndConvergeAsync(
@@ -276,8 +277,9 @@ internal static class ReplicationInitiator
             // Asked before the listing loop, because the filter gates the
             // push as well as the drop half: a keep-set left on the push
             // would still skip objects the destination is owed.
+            var rolledBack = onInventory is not null && !onInventory(held);
             var convergenceWithheld = false;
-            if (onInventory is not null && !onInventory(held) && keeps is not null)
+            if (rolledBack && keeps is not null)
             {
                 keeps = null;
                 convergenceWithheld = true;
@@ -371,9 +373,10 @@ internal static class ReplicationInitiator
                 : null;
 
             // A delta is named only where the destination's inventory let the
-            // filter stand: a destination attesting history this side's state
-            // has never heard of is left holding everything (ADR-0062).
-            var retiring = signer is not null && !convergenceWithheld && retire is not null
+            // filter stand, or would have let one stand where none was given:
+            // a destination attesting history this side's state has never
+            // heard of is left holding everything (ADR-0062).
+            var retiring = signer is not null && !rolledBack && retire is not null
                 ? retire.Where(held.Contains).ToList()
                 : [];
 
