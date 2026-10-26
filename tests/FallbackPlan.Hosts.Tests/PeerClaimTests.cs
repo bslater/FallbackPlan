@@ -256,7 +256,9 @@ public sealed class PeerClaimTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ADestinationPairedAfterSetup_IsArmedByABackupThatNeverHeldThePassphrase()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ADestinationPairedAfterSetup_IsArmedByABackupThatNeverHeldThePassphrase(bool directShip)
     {
         // A write-only service never holds the passphrase. Had the claim key
         // been one each destination's own token had to be mixed into, only a
@@ -267,13 +269,15 @@ public sealed class PeerClaimTests : IDisposable
         // half kept in the write credential the service runs on, and
         // published on every offer. So this takes the order that would
         // break the other design: setup, then the passphrase gone from
-        // everything the process can reach, then the peer.
+        // everything the process can reach, then the peer. In both shapes,
+        // because they arm by different offers: a staging set only by its
+        // sync's, a direct-ship set by its sink's as well.
         var passphrase = Environment.GetEnvironmentVariable(_harness.PassphraseVariable)!;
         ProvisionInstallation();
         Environment.SetEnvironmentVariable(_harness.PassphraseVariable, null);
 
         await StartDestinationAsync();
-        WriteConfiguration();
+        WriteConfiguration(directShip);
         _harness.WriteSourceFile("docs/report.txt", "written after the last time anyone typed the passphrase");
         var run = await HostHarness.RunAsync(
             AgentHost.RunAsync,
@@ -473,7 +477,7 @@ public sealed class PeerClaimTests : IDisposable
         }
     }
 
-    private void WriteConfiguration() => new ClientConfiguration
+    private void WriteConfiguration(bool directShip = true) => new ClientConfiguration
     {
         SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
         Destinations =
@@ -496,7 +500,7 @@ public sealed class PeerClaimTests : IDisposable
                 Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
                 Schedule = "every 1h",
                 Destinations = [new SetDestinationReference { Ref = "friend" }],
-                DirectShip = true,
+                DirectShip = directShip,
             },
         ],
     }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
