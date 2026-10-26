@@ -225,36 +225,38 @@ public sealed class RestoreHonestyServiceTests : IDisposable
                 new PlanRestoreCommand(snapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
             out var plan);
 
-        Assert.IsNotNull(plan.Degradations);
+        // On macOS every file, folder and link here gets all it carries back,
+        // so the plan may declare nothing at all.
+        var declared = plan.Degradations ?? [];
         if (OperatingSystem.IsWindows())
         {
             Assert.Contains(
                 line => line.Contains("File attributes", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
-                plan.Degradations);
+                declared);
         }
         else
         {
             // A link gets its own metadata back, so no line speaks for links
             // as such. Linux sets no creation time, so where the volume
             // recorded the link's, it is counted with the files'.
-            Assert.DoesNotContain(line => line.Contains("Metadata captured on", StringComparison.Ordinal), plan.Degradations);
+            Assert.DoesNotContain(line => line.Contains("Metadata captured on", StringComparison.Ordinal), declared);
             if (OperatingSystem.IsLinux() && LinkStatus.Of(Path.Combine(_harness.SourceRoot, "link")).CreatedUtc is not null)
             {
                 Assert.Contains(
                     line => line.Contains("Creation times", StringComparison.Ordinal) && line.Contains("1 symlink(s)", StringComparison.Ordinal),
-                    plan.Degradations);
+                    declared);
             }
             else
             {
-                Assert.DoesNotContain(line => line.Contains("symlink(s)", StringComparison.Ordinal), plan.Degradations);
+                Assert.DoesNotContain(line => line.Contains("symlink(s)", StringComparison.Ordinal), declared);
             }
         }
 
-        Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), plan.Degradations);
+        Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), declared);
 
         // The files are the restoring account's own, so their ownership is
         // given back and not declared.
-        Assert.DoesNotContain(line => line.Contains("Ownership", StringComparison.Ordinal), plan.Degradations);
+        Assert.DoesNotContain(line => line.Contains("Ownership", StringComparison.Ordinal), declared);
 
         // With no folder named there is nothing to measure against, so the
         // plan answers as it always did, plus what its files will write.
