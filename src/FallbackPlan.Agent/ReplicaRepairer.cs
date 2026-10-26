@@ -39,6 +39,7 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     private readonly BackupSetConfiguration _set;
     private readonly string? _excluding;
     private readonly bool _includeStaging;
+    private readonly bool _includePeers;
     private readonly ArchiveHandle _archive;
     private readonly bool _userInitiated;
     private readonly string _scratchRoot;
@@ -63,12 +64,13 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
 
     private ReplicaRepairer(
         ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive, string? excluding,
-        bool includeStaging, bool userInitiated)
+        bool includeStaging, bool userInitiated, bool includePeers = true)
     {
         _runtime = runtime;
         _set = set;
         _excluding = excluding;
         _includeStaging = includeStaging;
+        _includePeers = includePeers;
         _archive = archive;
         _userInitiated = userInitiated;
         _scratchRoot = Path.Combine(runtime.Options.StateDirectory, "spool", "repair", Guid.NewGuid().ToString("n"));
@@ -86,6 +88,42 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     public static ReplicaRepairer ForStaging(
         ServiceRuntime runtime, BackupSetConfiguration set, ArchiveHandle archive, bool userInitiated) =>
         new(runtime, set, archive, excluding: null, includeStaging: false, userInitiated);
+
+    /// <summary>
+    /// A repairer for a peer's replica (ADR-0100), whose sources are the
+    /// copies this installation reads without dialling a peer: the staging
+    /// archive and the set's local paths and stores. A finding at one peer is
+    /// no reason to put a session on another's link — and a refusal by the
+    /// peer, which its own copy decides, would spend that link again on every
+    /// sync that offers the repair.
+    /// </summary>
+    /// <param name="runtime">The service.</param>
+    /// <param name="set">The set whose replica at the peer is damaged.</param>
+    /// <param name="peerName">The peer holding the damage; never a source.</param>
+    /// <param name="archive">The set's archive, for its keys and — for a staging set — its staging copy.</param>
+    /// <param name="userInitiated">Whether a person is waiting; a background repair reads its sources through their limits.</param>
+    public static ReplicaRepairer ForPeer(
+        ServiceRuntime runtime, BackupSetConfiguration set, string peerName, ArchiveHandle archive,
+        bool userInitiated) =>
+        new(runtime, set, archive, peerName, includeStaging: archive.ShipSink is null, userInitiated, includePeers: false);
+
+    /// <summary>Repairs each key at the target, in order, and says what became of each.</summary>
+    /// <param name="target">Where a proven copy is put, and read back from.</param>
+    /// <param name="keys">The keys found damaged there.</param>
+    /// <param name="cancellationToken">Cancels the repair.</param>
+    public async Task<IReadOnlyList<ReplicaRepairOutcome>> RepairAsync(
+        IRepairTarget target, IEnumerable<string> keys, CancellationToken cancellationToken)
+    {
+        var outcomes = new List<ReplicaRepairOutcome>();
+        foreach (var key in keys)
+        {
+            outcomes.Add(await ReplicaRepair.RepairAsync(
+                _archive.Repository.RepositoryId, _archive.Repository.Keys, target, ObjectKey.Parse(key), Sources(),
+                Scratch(), cancellationToken).ConfigureAwait(false));
+        }
+
+        return outcomes;
+    }
 
     /// <summary>Repairs each key at the replica, in order, and says what became of each.</summary>
     /// <param name="replica">The damaged destination's store.</param>
@@ -170,7 +208,13 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
     }
 
     private ValueTask<ReplicaRepairOutcome> RepairOneAsync(
-        IObjectStore replica, ObjectKey key, CancellationToken cancellationToken)
+        IObjectStore replica, ObjectKey key, CancellationToken cancellationToken) =>
+        ReplicaRepair.RepairAsync(
+            _archive.Repository.RepositoryId, _archive.Repository.Keys, replica, key, Sources(), Scratch(),
+            cancellationToken);
+
+    /// <summary>The stage, made on first use.</summary>
+    private IObjectStore Scratch()
     {
         if (_scratch is null)
         {
@@ -178,12 +222,11 @@ internal sealed class ReplicaRepairer : IAsyncDisposable
             _scratch = new LocalFileSystemObjectStore(_scratchRoot);
         }
 
-        return ReplicaRepair.RepairAsync(
-            _archive.Repository.RepositoryId, _archive.Repository.Keys, replica, key, Sources(), _scratch,
-            cancellationToken);
+        return _scratch;
     }
 
     /// <summary>The sources, listed once, each opened at most once.</summary>
     private IReadOnlyList<CopySource> Sources() =>
-        (_copies ??= new SetCopies(_runtime, _set, _archive, _excluding, _includeStaging, _userInitiated)).Sources;
+        (_copies ??= new SetCopies(
+            _runtime, _set, _archive, _excluding, _includeStaging, _userInitiated, _includePeers)).Sources;
 }

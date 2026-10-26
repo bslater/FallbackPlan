@@ -207,6 +207,7 @@ The features defined so far:
 | `partial-object-resume` | A transfer may begin part-way through an object: the destination declares what it part holds and the source decides where to begin ([03 §3.3.1](03-replication.md#331-replicationpartial); [ADR-0057](../../docs/adr/0057-resumable-object-transfer.md)) |
 | `replica-claim` | A machine rebuilt after total loss may prove a replica is its own and have the attribution follow it, holding the passphrase and nothing else: the destination serves the KDF salts and costs to derive against, then checks one claim per derivation ([03 §6](03-replication.md#6-the-claim); [ADR-0053](../../docs/adr/0053-peer-claim-and-configuration-recovery.md) Amendment 2). A gate is safe here because withholding it can only make the destination refuse |
 | `chunk-possession` | The peer answers a Merkle chunk challenge over its replica of a blob ([07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279)): one leaf's bytes and its authentication path, checked at the source against the root the writer signed into the index. A gate is safe here because its absence can only mean **more** work for the destination — a peer that does not offer it is read back whole, as every peer is today, so declining is self-harm rather than evasion |
+| `replica-repair` | The peer replaces a blob in a replica it holds for the dialling owner where its own copy fails the locator check, with bytes of the copy's length that pass it and state the locator the copy states ([08](08-repair.md); [ADR-0100](../../docs/adr/0100-a-peer-replaces-what-its-own-check-finds-damaged.md)). A gate is safe here because its absence can only leave damage where it is, and the check that defends the peer is made on its own copy, never on a hello |
 
 `signed-retention` is separate from `retention-instruction` rather than folded into it, because the two say different things: one is *I accept deletion instructions at all*, the other is *and I will not act on one I cannot prove came from the repository's reclaim authority*. It tells a commander at the hello what it will be held to, rather than leaving it refused mid-exchange after the objects have already crossed.
 
@@ -247,7 +248,8 @@ frame = u32(payload_length) ‖ payload
 | 271 | Reserved for later payload documents ([04 and beyond](README.md#documents)) — [05](05-quotas.md) defines none | — |
 | 272–277 | Retrieval | [07 §3](07-retrieval.md#3-messages) |
 | 278–279 | Chunk possession | [07 §3.6](07-retrieval.md#36-merkle_challenge-278--merkle_proof-279) |
-| 280+ | Reserved for later payload documents | — |
+| 280–281 | Repair | [08 §4](08-repair.md#4-messages) |
+| 282+ | Reserved for later payload documents | — |
 
 A message type a reader does not know MUST cause refusal with `message_unknown`. It MUST NOT be skipped: a protocol that ignores messages it does not understand cannot tell a new feature from a corrupted stream.
 

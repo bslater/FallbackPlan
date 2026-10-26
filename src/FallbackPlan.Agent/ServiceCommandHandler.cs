@@ -2145,7 +2145,10 @@ public sealed partial class ServiceCommandHandler(
                     ? $"{set.Name} -> {reference.Ref}: {found} damaged object(s) of {examined} read — "
                         + (repaired == found
                             ? "each was replaced from a sound copy and re-verified"
-                            : $"{repaired} replaced from a sound copy, {found - repaired} with no sound copy to replace them")
+                            : $"{repaired} replaced from a sound copy, {found - repaired} not: "
+                                + (declared.Kind == DestinationKind.Peer
+                                    ? "no sound copy here, or the peer would not take one"
+                                    : "no sound copy to replace them"))
                         + standing
                         + (stopped is null ? string.Empty : $"; then {stopped}")
                     : stopped is not null

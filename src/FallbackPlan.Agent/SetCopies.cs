@@ -44,13 +44,18 @@ internal sealed class SetCopies : IAsyncDisposable
     /// <param name="excluding">A destination that is never a copy here — the one being repaired; null for none.</param>
     /// <param name="includeStaging">Whether the staging archive is a copy: false when it is the one being read, or the set has none.</param>
     /// <param name="userInitiated">Whether a person is waiting; a background reader reads each copy through its limit.</param>
+    /// <param name="includePeers">
+    /// Whether the set's peers are copies: false where only what this
+    /// installation reads without dialling a peer may serve.
+    /// </param>
     public SetCopies(
         ServiceRuntime runtime,
         BackupSetConfiguration set,
         ArchiveHandle archive,
         string? excluding,
         bool includeStaging,
-        bool userInitiated)
+        bool userInitiated,
+        bool includePeers = true)
     {
         _runtime = runtime;
         _archive = archive;
@@ -81,7 +86,7 @@ internal sealed class SetCopies : IAsyncDisposable
             sources.Add(Once(sibling, _ => OpenObjectStore(sibling)));
         }
 
-        foreach (var sibling in siblings.Where(sibling => sibling.Kind == DestinationKind.Peer))
+        foreach (var sibling in siblings.Where(sibling => includePeers && sibling.Kind == DestinationKind.Peer))
         {
             sources.Add(Once(sibling, token => DialAsync(sibling, token)));
         }

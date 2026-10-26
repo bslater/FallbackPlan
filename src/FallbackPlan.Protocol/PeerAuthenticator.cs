@@ -246,7 +246,7 @@ public sealed class PeerAuthenticator
         PeerMessageType.SessionHello or PeerMessageType.SessionAccept =>
             state == PeerSessionState.Authenticated,
 
-        // The payload documents (03–06) apply once the session is Open, and
+        // The payload documents (03–08) apply once the session is Open, and
         // only then. A replication frame before Open is a stranger trying to
         // move objects, which is exactly what the state machine forbids.
         PeerMessageType.ReplicationOffer or PeerMessageType.ReplicationInventory
@@ -260,7 +260,8 @@ public sealed class PeerAuthenticator
             or PeerMessageType.RetrieveOpen or PeerMessageType.RetrieveReady
             or PeerMessageType.RetrieveList or PeerMessageType.RetrieveListPage
             or PeerMessageType.RetrieveRead or PeerMessageType.RetrieveData
-            or PeerMessageType.MerkleChallenge or PeerMessageType.MerkleProof =>
+            or PeerMessageType.MerkleChallenge or PeerMessageType.MerkleProof
+            or PeerMessageType.RepairOffer or PeerMessageType.RepairVerdict =>
             state == PeerSessionState.Open,
 
         _ => false,

@@ -9,7 +9,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// sound where it sits before anything at the replica is touched — its whole
 /// blob still hashes to its sealed digest, and its envelope names the blob
 /// this key derives from — and a replica with no sound copy anywhere keeps
-/// even its damaged object. The store-level half of FR-VER-007.
+/// even its damaged object. The store-level half of FR-VER-007, and of
+/// FR-VER-008's repair at a peer, where the copy goes through a target that
+/// may refuse it and is proven again where the target says it landed.
 /// </summary>
 /// <remarks>
 /// A damaged blob is still worth keeping when nothing can replace it. Its
@@ -157,6 +159,115 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
     }
 
     [TestMethod]
+    public async Task Repair_ThroughATarget_InstallsTheProvenCopy_AndProvesItWhereTheTargetSaysItLanded()
+    {
+        // A peer's replica is written through a session and read back through
+        // another, so the repair hands the proven copy to the target and
+        // proves it again where the target says it landed (ADR-0100).
+        var (source, replica, _, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        await RotAsync(ReplicaRoot, victim);
+        var target = new RecordingTarget(replica);
+
+        var outcome = await ReplicaRepair.RepairAsync(
+            Repo, keys, target, victim, [Serve("the source", source)], scratch: null, CancellationToken.None);
+
+        Assert.IsTrue(outcome.Repaired, outcome.Detail);
+        Assert.AreEqual("the source", outcome.RepairedFrom);
+        Assert.AreEqual(new FileInfo(PathOf(StoreRoot, victim)).Length, Assert.ContainsSingle(target.Installed).Length);
+        CollectionAssert.AreEqual(await ReadAsync(StoreRoot, victim), await ReadAsync(ReplicaRoot, victim));
+    }
+
+    [TestMethod]
+    public async Task Repair_ATargetOfferedOnlyACopyThatWillNotProve_IsNeverAsked()
+    {
+        var (_, replica, spare, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        await RotAsync(ReplicaRoot, victim);
+        await RotAsync(SpareRoot, victim);
+        var target = new RecordingTarget(replica);
+
+        var outcome = await ReplicaRepair.RepairAsync(
+            Repo, keys, target, victim, [Serve("destination 'spare'", spare)], scratch: null, CancellationToken.None);
+
+        Assert.IsFalse(outcome.Repaired);
+        Assert.IsEmpty(target.Installed, "nothing unproven is offered");
+    }
+
+    [TestMethod]
+    public async Task Repair_ATargetThatWillNotTakeTheCopy_KeepsWhatItHolds_AndIsOfferedNoOther()
+    {
+        // The target's refusal is about its own copy — a peer judges that on
+        // its own check (ADR-0100) — so another source's copy, which proves
+        // to be the same bytes, would be refused for the same reason. It is
+        // not opened, and the target's reason is the outcome's.
+        var (source, replica, spare, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        await RotAsync(ReplicaRoot, victim);
+        var damaged = await ReadAsync(ReplicaRoot, victim);
+        var target = new RecordingTarget(replica) { Refusal = "its own check of its copy passes" };
+        var opened = false;
+
+        var outcome = await ReplicaRepair.RepairAsync(
+            Repo, keys, target, victim,
+            [
+                Serve("the source", source),
+                new CopySource("destination 'spare'", _ =>
+                {
+                    opened = true;
+                    return ValueTask.FromResult<IObjectStore?>(spare);
+                }),
+            ],
+            scratch: null, CancellationToken.None);
+
+        Assert.IsFalse(outcome.Repaired);
+        Assert.IsFalse(outcome.Gone);
+        Assert.Contains("its own check of its copy passes", outcome.Detail, StringComparison.Ordinal);
+        Assert.IsFalse(opened, "a refusal about the target's copy is not answered with another source");
+        CollectionAssert.AreEqual(damaged, await ReadAsync(ReplicaRoot, victim));
+    }
+
+    [TestMethod]
+    public async Task Repair_ATargetThatNoLongerHoldsTheKey_SaysTheDamageHasGone_AndRepairsNothing()
+    {
+        // A peer never creates an object under a repair; the push does, if
+        // the peer is still owed it. What the repair learns is that the
+        // damage is no longer there to hold against it.
+        var (source, replica, _, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        await replica.DeleteAsync(victim, DeleteConditions.None, CancellationToken.None);
+        var target = new RecordingTarget(replica) { Gone = true };
+
+        var outcome = await ReplicaRepair.RepairAsync(
+            Repo, keys, target, victim, [Serve("the source", source)], scratch: null, CancellationToken.None);
+
+        Assert.IsTrue(outcome.Gone);
+        Assert.IsFalse(outcome.Repaired);
+        Assert.IsFalse(File.Exists(PathOf(ReplicaRoot, victim)), "a repair creates nothing");
+    }
+
+    [TestMethod]
+    public async Task Repair_ACopyTheTargetTookButThatDoesNotProveWhereItLanded_IsNotClaimed()
+    {
+        var (source, replica, spare, keys) = await SeedAsync();
+        using var held = keys;
+        var victim = (await BlobKeysAsync(replica))[0];
+        await RotAsync(ReplicaRoot, victim);
+        await RotAsync(SpareRoot, victim);
+        var target = new RecordingTarget(replica) { Landed = spare };
+
+        var outcome = await ReplicaRepair.RepairAsync(
+            Repo, keys, target, victim, [Serve("the source", source)], scratch: null, CancellationToken.None);
+
+        Assert.IsFalse(outcome.Repaired, "taken is the target's word; landed is a proof");
+        Assert.Contains("where it landed", outcome.Detail, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task Prove_SaysWhetherACopyIsHeld_AndWhetherItIsSound()
     {
         var (_, replica, spare, keys) = await SeedAsync();
@@ -181,6 +292,49 @@ public sealed class ReplicaRepairTests : ArchiveTestHarness
 
     private static CopySource Serve(string name, IObjectStore store) =>
         new(name, _ => ValueTask.FromResult<IObjectStore?>(store));
+
+    /// <summary>
+    /// A target over a local store that installs as the store's own repair
+    /// does, or answers as a peer may: that it will not take the copy, or
+    /// that it no longer holds the key.
+    /// </summary>
+    private sealed class RecordingTarget(LocalFileSystemObjectStore replica) : IRepairTarget
+    {
+        public string? Refusal { get; init; }
+
+        public bool Gone { get; init; }
+
+        /// <summary>Where the copy is proven after it is taken; the replica itself when null.</summary>
+        public IObjectStore? Landed { get; init; }
+
+        public List<(ObjectKey Key, long Length)> Installed { get; } = [];
+
+        public async ValueTask<RepairInstall> InstallAsync(
+            ObjectKey key, IObjectStore candidate, long length, CancellationToken cancellationToken)
+        {
+            Installed.Add((key, length));
+            if (Gone)
+            {
+                return RepairInstall.NoLongerHeld;
+            }
+
+            if (Refusal is { } refusal)
+            {
+                return RepairInstall.Refused(refusal);
+            }
+
+            await replica.DeleteAsync(key, DeleteConditions.None, cancellationToken);
+            await replica.PutAsync(
+                key,
+                async token => (await candidate.OpenReadAsync(key, range: null, token)).Content!,
+                PutConditions.None,
+                cancellationToken);
+            return RepairInstall.Done;
+        }
+
+        public ValueTask<IObjectStore> LandedAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult(Landed ?? replica);
+    }
 
     /// <summary>Archives a test file into a store and mirrors it to a replica and a spare.</summary>
     private async Task<(LocalFileSystemObjectStore Source, LocalFileSystemObjectStore Replica,

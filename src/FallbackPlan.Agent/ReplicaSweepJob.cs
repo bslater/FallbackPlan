@@ -408,6 +408,13 @@ internal static class ReplicaSweepJob
             replica = decorate(replica);
         }
 
+        // What the segment finds at a peer whose build takes a repair is
+        // offered a copy proven sound here, and the copy proven again where
+        // it lands over the session the segment reads through (ADR-0100).
+        await using var peerRepair = session is { SupportsReplicaRepair: true }
+            ? new PeerRepairTarget(runtime, destination, archive.Repository.RepositoryId.ToArray(), limiter, replica)
+            : null;
+
         await using (session)
         {
             // The set gate, for the same reason fan-out takes it: a retention
@@ -417,7 +424,8 @@ internal static class ReplicaSweepJob
             try
             {
                 return await SegmentAsync(
-                    runtime, set, destination, archive, replica, limiter, nowMs, userInitiated, cancellationToken)
+                    runtime, set, destination, archive, replica, limiter, nowMs, userInitiated, peerRepair,
+                    cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception exception) when (
@@ -445,6 +453,7 @@ internal static class ReplicaSweepJob
         Application.ByteRateLimiter? limiter,
         ulong nowMs,
         bool userInitiated,
+        PeerRepairTarget? peerRepair,
         CancellationToken cancellationToken)
     {
         var destinationName = destination.Name;
@@ -544,17 +553,28 @@ internal static class ReplicaSweepJob
                 outcomes = await repairer.RepairAsync(replica, result.DamagedKeys, cancellationToken)
                     .ConfigureAwait(false);
             }
+            else if (peerRepair is not null)
+            {
+                // The peer takes a replacement only where its own check of its
+                // copy agrees the copy is damaged (ADR-0100). What it will not
+                // take stays held, for its owner to remove.
+                await using var repairer = ReplicaRepairer.ForPeer(runtime, set, destinationName, archive, userInitiated);
+                outcomes = await repairer.RepairAsync(peerRepair, result.DamagedKeys, cancellationToken)
+                    .ConfigureAwait(false);
+            }
             else
             {
-                // Nothing here can write at a peer: the retrieval session
-                // reads, and a push only creates.
+                // A peer whose build takes no repair: nothing here can write
+                // there, since the retrieval session reads and a push only
+                // creates.
                 outcomes = [.. result.DamagedKeys.Select(key =>
-                    new ReplicaRepairOutcome(key, RepairedFrom: null, "a peer's replica cannot be repaired from here"))];
+                    new ReplicaRepairOutcome(key, RepairedFrom: null, "that peer's build takes no repair"))];
             }
 
             var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
             var outstanding = ledger.RecordDamage(
-                set.Id, destinationName, unrepaired: [], [.. repaired.Select(outcome => outcome.Key)], nowMs)
+                set.Id, destinationName, unrepaired: [],
+                [.. outcomes.Where(outcome => outcome.Repaired || outcome.Gone).Select(outcome => outcome.Key)], nowMs)
                 .DamagedKeys;
 
             // The damage alone: the sweep reached the replica and read it, so
@@ -569,20 +589,24 @@ internal static class ReplicaSweepJob
                 nowMs,
                 damageOnly: true);
 
-            // What the damage still standing reaches: at a local path or a
-            // store what no sound copy could replace, at a peer all of it.
-            // Counted in the words, and the files kept beside them for whoever
-            // unlocks the set (ADR-0089 Amendment 1).
-            List<string> standing = [.. outcomes.Where(outcome => !outcome.Repaired).Select(outcome => outcome.Key)];
+            // What the damage still standing reaches: what no sound copy could
+            // replace, or that a peer would not take. Counted in the words,
+            // and the files kept beside them for whoever unlocks the set
+            // (ADR-0089 Amendment 1).
+            List<string> standing =
+                [.. outcomes.Where(outcome => !outcome.Repaired && !outcome.Gone).Select(outcome => outcome.Key)];
             var reach = standing.Count > 0 ? archive.TraceDamage(standing) : null;
             runtime.Notices.Raise(
                 $"deep-verify-failed:{set.Id}:{destinationName}",
                 destination.Kind != DestinationKind.Peer
                     ? Finding(set, destination, result.Findings, outcomes, reach)
                     : PeerFinding(
-                        set, destinationName, archive, result, reach,
-                        await SoundHereAsync(runtime, set, destinationName, archive, standing, userInitiated, cancellationToken)
-                            .ConfigureAwait(false)),
+                        set, destinationName, archive, result, outcomes, takesRepair: peerRepair is not null, reach,
+                        standing.Count == 0
+                            ? null
+                            : await SoundHereAsync(
+                                    runtime, set, destinationName, archive, standing, userInitiated, cancellationToken)
+                                .ConfigureAwait(false)),
                 nowMs,
                 reach is null ? null : DamageReachText.Names(set.Id, reach));
             return new SegmentOutcome(
@@ -675,22 +699,44 @@ internal static class ReplicaSweepJob
 
     /// <summary>
     /// The notice a finding at a peer raises: what no longer matched, what
-    /// needs it, whether a copy here holds it sound, why it stays, and the one
-    /// remedy there is — which is the peer's owner's to carry out, so the
-    /// notice names what they need to find.
+    /// was replaced and from where, and of what remains, what needs it,
+    /// whether a copy here holds it sound, why it stays, and the one remedy
+    /// left — which is the peer's owner's to carry out, so the notice names
+    /// what they need to find.
     /// </summary>
     private static string PeerFinding(
         BackupSetConfiguration set, string destinationName, ArchiveHandle archive, ReplicaSweepResult result,
-        Repository.Catalogue.DamageReach? reach, SoundCopies here) =>
-        $"destination '{destinationName}' of set '{set.Name}' was found holding {result.Findings.Count} object(s) "
-        + $"that no longer match what was sealed: {Listed(result.Findings)}. "
-        + (reach is null ? string.Empty : DamageReachText.Sentences(reach) + " ")
-        + here.Sentence + " "
-        + "A peer's replica cannot be repaired from here — this installation can read what it holds but not "
-        + "replace it — so those bytes cannot be restored from there until they are gone. Ask the owner of that "
-        + $"machine to remove them from its replica of repository {archive.Repository.RepositoryId}: "
-        + $"{string.Join(", ", result.DamagedKeys)}; the next sync sends them again whole. Its storage altered a "
-        + "backup once and may again.";
+        IReadOnlyList<ReplicaRepairOutcome> outcomes, bool takesRepair, Repository.Catalogue.DamageReach? reach,
+        SoundCopies? here)
+    {
+        var repaired = outcomes.Where(outcome => outcome.Repaired).ToList();
+        var standing = outcomes.Where(outcome => !outcome.Repaired && !outcome.Gone).ToList();
+        var said = $"destination '{destinationName}' of set '{set.Name}' was found holding {result.Findings.Count} object(s) "
+            + $"that no longer match what was sealed: {Listed(result.Findings)}. ";
+        if (repaired.Count > 0)
+        {
+            var sources = string.Join(", ", repaired.Select(outcome => outcome.RepairedFrom).Distinct(StringComparer.Ordinal));
+            said += standing.Count == 0
+                ? $"Each was replaced from a sound copy ({sources}), which the peer took because its own check of its "
+                    + "copy found it damaged too, and re-verified where it landed, so the replica there is whole again. "
+                : $"{repaired.Count} were replaced from a sound copy ({sources}) and re-verified where they landed. ";
+        }
+
+        if (standing.Count > 0)
+        {
+            said += (reach is null ? string.Empty : DamageReachText.Sentences(reach) + " ")
+                + (here is null ? string.Empty : here.Sentence + " ")
+                + (takesRepair
+                    ? $"What remains could not be replaced from here ({standing[0].Detail}), "
+                    : "A peer's replica cannot be repaired from here — that peer's build takes no repair, and this "
+                        + "installation can read what it holds but not replace it — ")
+                + "so those bytes cannot be restored from there until they are gone. Ask the owner of that machine to "
+                + $"remove them from its replica of repository {archive.Repository.RepositoryId}: "
+                + $"{string.Join(", ", standing.Select(outcome => outcome.Key))}; the next sync sends them again whole. ";
+        }
+
+        return said + "Its storage altered a backup once and may again.";
+    }
 
     /// <summary>The first three findings, joined as one sentence's list: each is a sentence of its own.</summary>
     internal static string Listed(IEnumerable<string> findings) =>

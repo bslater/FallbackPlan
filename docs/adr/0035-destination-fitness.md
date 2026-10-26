@@ -443,6 +443,10 @@ two directions of copy would say neither.
   never overwrites, so replacing an object at a peer needs protocol work. A
   peer's damage is found by the read-back and the drill, and nothing repairs it
   yet.
+
+  > **Built 2026-10 ([ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md)):** a repair session of its own, which a peer
+  > serves only where its own keyless check of its copy finds the copy damaged
+  > and the replacement states that copy's locator.
 - **Sweep a peer.** §4's stated reason is gone, as its blockquote says. What
   remains is the cost to somebody else's link, which needs a stated cadence and
   a bound; that is for the record that builds it.
@@ -512,6 +516,14 @@ somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
    which a write-only service holds only under a grant. So the notice names the
    objects, the repository they sit under, and the one remedy there is: the
    peer's owner removes them, and the next push sends them again whole.
+
+   > **Amended 2026-10 ([ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md)).** Repaired where the peer's build takes a
+   > repair: a copy proven sound here is offered, the peer takes it only where
+   > its own check of its copy finds that copy damaged and the replacement
+   > states the locator the copy states, and it is proven again over the
+   > retrieval session where it landed. That needs no authority, because it
+   > can put back only the bytes that were sealed. What the peer will not take
+   > is held and named as this decision says.
 5. **Damage leaves the ledger when it has gone.** A push clears a damaged key
    the peer no longer declares holding, because it has been removed there and
    sent again if the peer is owed it. A segment clears a damaged key it has read
@@ -538,6 +550,10 @@ somebody else's link that nobody had bounded. This bounds it (FR-VER-008).
   Replacing an object from here needs a write the protocol does not have, under
   an authority a write-only service does not hold unattended; that is a record
   of its own.
+
+  > **Built 2026-10 ([ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md)):** the write is peer-protocol 08's repair, and the
+  > authority it needs is none — the peer judges every replacement on its own
+  > copy.
 - **Offer a cheaper circuit.** The scoping offered one built from
   [ADR-0065](0065-merkle-commitment-and-chunk-possession.md)'s chunk challenge:
   one leaf a blob, a mebibyte instead of the blob. It is a sampled proof, which
@@ -610,3 +626,4 @@ read back in full last night from one never read back at all (FR-VER-003).
 | 2026-10 | Amended (related) | [ADR-0093](0093-an-azure-blob-destination.md): an Azure Blob container is swept on the same terms as an S3-compatible store, only on a cadence its operator states and on the peer's segment share, and what the sweep finds there is repaired by delete and put; the notice names whoever holds the account key or a signature for the container as who else could have altered it (`Agent/ReplicaSweepJob`, `Hosts.Tests/AzureBlobDestinationTests`) |
 | 2026-10 | Amended (related) | [ADR-0012](0012-storage-provider-contract.md#amendment-5-2026-10--the-revisit-three-providers-and-the-faults-this-record-named) Amendment 5: the store contract promises ordinal order and a resume after any key, so the rotation's stated reason for sorting is corrected, and the deep sweep lists from its cursor rather than reading every blob for each segment (`Repository/ReplicaSweep`) |
 | 2026-10 | Amended | [ADR-0095](0095-the-staging-archive-heals.md) amends §4: the sweep binds every blob to its key rather than leaning on the length comparison to catch a blob stored under another's key, and a length that differs is the source's copy to prove, so the staging archive's damage is repaired there and never blamed on the destination (`Repository/ReplicaSweep`, `Repository/VerifyEngine`, `Agent/ReplicaSweepJob`). Held by `Repository.Tests/ReplicaSweepTests` and `Hosts.Tests/StagingSweepTests` |
+| 2026-10 | Amended (related) | [ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md) discharges Amendment 1's and Amendment 2's "does not do": damage the sweep finds at a peer whose build takes a repair is replaced from a copy here proven sound, which the peer takes only where its own keyless check of its copy finds the copy damaged and the replacement states that copy's locator, and is proven again over the retrieval session where it landed; each sync offers what remains held, and what the peer will not take stays under decision 4. `Agent/ReplicaSweepJob`, `Agent/FanOut`, `Agent/RepairResponder`; `Hosts.Tests/PeerDeepSweepTests`, `Hosts.Tests/PeerRepairTests` |

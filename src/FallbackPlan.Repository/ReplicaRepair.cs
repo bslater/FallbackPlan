@@ -19,6 +19,55 @@ public sealed record ReplicaRepairOutcome(string Key, string? RepairedFrom, stri
 {
     /// <summary>Whether a copy proven sound replaced the object and was proven again where it landed.</summary>
     public bool Repaired => RepairedFrom is not null;
+
+    /// <summary>
+    /// Whether the target no longer holds the object at all, so there was
+    /// no damage left there to repair — gone is not repaired, and what put
+    /// it back, if anything does, is the next copy or push.
+    /// </summary>
+    public bool Gone { get; init; }
+}
+
+/// <summary>What a repair target did with a copy proven sound.</summary>
+/// <param name="Installed">Whether the copy now stands in place of the damaged object.</param>
+/// <param name="Gone">Whether the target held nothing under the key, so took nothing.</param>
+/// <param name="Detail">Why it did not take the copy, in a person's words; empty when it did.</param>
+public readonly record struct RepairInstall(bool Installed, bool Gone, string Detail)
+{
+    /// <summary>The copy stands in place of the damaged object.</summary>
+    public static RepairInstall Done => new(Installed: true, Gone: false, string.Empty);
+
+    /// <summary>The target holds nothing under the key, and a repair creates nothing.</summary>
+    public static RepairInstall NoLongerHeld => new(Installed: false, Gone: true, "no longer held there");
+
+    /// <summary>The target would not take the copy, for a reason about its own copy.</summary>
+    /// <param name="detail">Why not, naming the target.</param>
+    public static RepairInstall Refused(string detail) => new(Installed: false, Gone: false, detail);
+}
+
+/// <summary>
+/// Where a repair puts a copy proven sound, and where it then proves it
+/// again. A store this side writes is its own target; a peer's replica is
+/// written through a repair session and read back through the retrieval
+/// session (ADR-0100), so the two halves are the target's to say.
+/// </summary>
+public interface IRepairTarget
+{
+    /// <summary>
+    /// Puts a proven copy in place of the damaged object, or says why the
+    /// target will not. A refusal is about the target's own copy, so no
+    /// other source is offered after one.
+    /// </summary>
+    /// <param name="key">The damaged object's store key.</param>
+    /// <param name="candidate">A store holding the copy proven sound under <paramref name="key"/>.</param>
+    /// <param name="length">The proven copy's length.</param>
+    /// <param name="cancellationToken">Cancels the install.</param>
+    ValueTask<RepairInstall> InstallAsync(
+        ObjectKey key, IObjectStore candidate, long length, CancellationToken cancellationToken);
+
+    /// <summary>The store a copy the target took is read back from to be proven where it landed.</summary>
+    /// <param name="cancellationToken">Cancels opening it.</param>
+    ValueTask<IObjectStore> LandedAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -117,7 +166,7 @@ public static class ReplicaRepair
     /// </param>
     /// <param name="cancellationToken">Cancels the repair; a cancelled repair has touched nothing it had not finished.</param>
     /// <returns>Which source served, or why none did.</returns>
-    public static async ValueTask<ReplicaRepairOutcome> RepairAsync(
+    public static ValueTask<ReplicaRepairOutcome> RepairAsync(
         RepositoryId repositoryId,
         RepositoryKeySet keys,
         IObjectStore replica,
@@ -126,8 +175,37 @@ public static class ReplicaRepair
         IObjectStore? scratch,
         CancellationToken cancellationToken)
     {
-        ThrowHelper.ThrowIfNull(keys);
         ThrowHelper.ThrowIfNull(replica);
+        return RepairAsync(repositoryId, keys, new StoreTarget(replica), key, sources, scratch, cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces <paramref name="key"/> at <paramref name="target"/> from the
+    /// first source whose copy proves sound, and proves it again where the
+    /// target says it landed.
+    /// </summary>
+    /// <param name="repositoryId">The repository the blob belongs to.</param>
+    /// <param name="keys">The repository's keys.</param>
+    /// <param name="target">Where the proven copy is put, and read back from.</param>
+    /// <param name="key">The damaged object's store key.</param>
+    /// <param name="sources">Where a sound copy might be, in the order to try them.</param>
+    /// <param name="scratch">
+    /// Where to stage a source's copy before proving it, or null to prove and
+    /// read the source where it sits. Whatever is staged is removed again.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the repair; a cancelled repair has touched nothing it had not finished.</param>
+    /// <returns>Which source served, or why none did.</returns>
+    public static async ValueTask<ReplicaRepairOutcome> RepairAsync(
+        RepositoryId repositoryId,
+        RepositoryKeySet keys,
+        IRepairTarget target,
+        ObjectKey key,
+        IReadOnlyList<CopySource> sources,
+        IObjectStore? scratch,
+        CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(keys);
+        ThrowHelper.ThrowIfNull(target);
         ThrowHelper.ThrowIfNull(sources);
 
         var refusals = new List<string>();
@@ -150,14 +228,25 @@ public static class ReplicaRepair
                     continue;
                 }
 
-                // Proven: only now is the damaged object given up. A delete
-                // that finds nothing is not a failure — the key is being
-                // filled either way.
-                await replica.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
-                await replica.PutAsync(key, token => OpenAsync(candidate, key, token), PutConditions.None, cancellationToken)
+                // Proven: only now is the target asked to give up its copy.
+                var install = await target.InstallAsync(key, candidate, proof.Length, cancellationToken)
                     .ConfigureAwait(false);
+                if (install.Gone)
+                {
+                    return new ReplicaRepairOutcome(key.Value, RepairedFrom: null, install.Detail) { Gone = true };
+                }
 
-                var landed = await ProveAsync(repositoryId, keys, replica, key, cancellationToken)
+                if (!install.Installed)
+                {
+                    // About the target's own copy: every other source's copy,
+                    // once proven, is these same bytes, and would be refused
+                    // for the same reason.
+                    refusals.Add(install.Detail);
+                    break;
+                }
+
+                var landedAt = await target.LandedAsync(cancellationToken).ConfigureAwait(false);
+                var landed = await ProveAsync(repositoryId, keys, landedAt, key, cancellationToken)
                     .ConfigureAwait(false);
                 if (landed.Sound)
                 {
@@ -262,8 +351,35 @@ public static class ReplicaRepair
         }
     }
 
-    private static async ValueTask<Stream> OpenAsync(IObjectStore store, ObjectKey key, CancellationToken cancellationToken)
+    /// <summary>
+    /// A store this side writes: the damaged object deleted and the copy put
+    /// in its place, since a put never overwrites (specification 01 §4).
+    /// </summary>
+    private sealed class StoreTarget(IObjectStore replica) : IRepairTarget
     {
+        public async ValueTask<RepairInstall> InstallAsync(
+            ObjectKey key, IObjectStore candidate, long length, CancellationToken cancellationToken)
+        {
+            // A delete that finds nothing is not a failure — the key is being
+            // filled either way.
+            await replica.DeleteAsync(key, DeleteConditions.None, cancellationToken).ConfigureAwait(false);
+            await replica.PutAsync(key, token => OpenAsync(candidate, key, token), PutConditions.None, cancellationToken)
+                .ConfigureAwait(false);
+            return RepairInstall.Done;
+        }
+
+        public ValueTask<IObjectStore> LandedAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult(replica);
+    }
+
+    /// <summary>Opens the proven copy for whatever puts it in place.</summary>
+    /// <param name="store">The store holding the proven copy.</param>
+    /// <param name="key">Its key.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    public static async ValueTask<Stream> OpenAsync(IObjectStore store, ObjectKey key, CancellationToken cancellationToken)
+    {
+        ThrowHelper.ThrowIfNull(store);
+
         var read = await store.OpenReadAsync(key, range: null, cancellationToken).ConfigureAwait(false);
         return read.Outcome == OpenReadOutcome.Found && read.Content is { } content
             ? content

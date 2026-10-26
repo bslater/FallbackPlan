@@ -453,6 +453,32 @@ public sealed class RemoteServiceListener : IAsyncDisposable
                     return;
                 }
 
+                // An owner offering replacements for blobs its sweep found
+                // damaged here (peer-protocol 08, ADR-0100). Its own session,
+                // like retrieval's, because the sweep that finds the damage
+                // has no push to ride, and retrieval holds no write path.
+                if (payload.Value.Type == PeerMessageType.RepairOffer)
+                {
+                    // Sending a gated message outside the negotiated
+                    // intersection is a violation, not a capability probe
+                    // (02 §6).
+                    if (!session.Supports(PeerSessionNegotiation.ReplicaRepairFeature))
+                    {
+                        var unsupported = new PeerProtocolException(
+                            PeerRefusalReason.FeatureUnsupported,
+                            "A repair arrived without the replica-repair feature in effect.");
+                        await ReplicationWire.TryRefuseAsync(session.Stream, unsupported).ConfigureAwait(false);
+                        throw unsupported;
+                    }
+
+                    var replaced = await RepairResponder.ServeAsync(
+                        _replicasRoot, _spoolRoot!, session.Stream, session.Peer, _owners!,
+                        payload.Value.Body, _stopping.Token)
+                        .ConfigureAwait(false);
+                    Log.ReplicaRepaired(_log, fingerprint, replaced);
+                    return;
+                }
+
                 if (payload.Value.Type == PeerMessageType.RetrieveOpen
                     && session.Supports(PeerSessionNegotiation.RetrievalFeature))
                 {

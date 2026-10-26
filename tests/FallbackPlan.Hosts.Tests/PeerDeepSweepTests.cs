@@ -19,10 +19,13 @@ namespace FallbackPlan.Hosts.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Nothing here can replace an object at a peer: the retrieval session reads
-/// and a push only creates. So damage found there is named with the one remedy
-/// that exists — the peer's owner removes the objects, and the next sync sends
-/// them again whole — and the push that sends them is what clears them.
+/// What it finds is replaced from a copy here proven sound, where the peer's
+/// build takes a repair and its own check of its copy agrees that copy is
+/// damaged (ADR-0100), and proven again over the retrieval session where it
+/// landed. What the peer will not take — and all of it at a peer whose build
+/// takes no repair — is named with the remedy that remains: the peer's owner
+/// removes the objects, and the next sync sends them again whole, which is
+/// what clears them.
 /// </para>
 /// <para>
 /// A peer gone between syncs is met by the sweep's own dial before any sync
@@ -30,14 +33,15 @@ namespace FallbackPlan.Hosts.Tests;
 /// next pass does not dial it again. One that drops a read stalls the circuit
 /// as a local bad sector does (ADR-0035 Amendment 1).
 /// </para>
-/// <para>
-/// Does not establish FR-VER-007: nothing at a peer is repaired from here.
-/// </para>
 /// </remarks>
 [TestClass]
 public sealed class PeerDeepSweepTests : IDisposable
 {
     private const ulong PairedAt = 1_722_600_000_000;
+
+    /// <summary>What a peer whose build predates repair offers (ADR-0100).</summary>
+    private static readonly string[] TakesNoRepair =
+        [.. PeerSessionNegotiation.SupportedFeatures.Where(feature => feature != PeerSessionNegotiation.ReplicaRepairFeature)];
 
     private readonly HostHarness _harness = new();
     private readonly CancellationTokenSource _timeout = new(TimeSpan.FromMinutes(3));
@@ -46,8 +50,13 @@ public sealed class PeerDeepSweepTests : IDisposable
     private readonly string _destinationState =
         Path.Combine(Path.GetTempPath(), "fbp-peer-sweep", Guid.NewGuid().ToString("n"));
 
+    private readonly string _neighbourState =
+        Path.Combine(Path.GetTempPath(), "fbp-peer-sweep", Guid.NewGuid().ToString("n"));
+
     private RemoteServiceListener? _listener;
     private PeerKeypair? _listenerKeypair;
+    private RemoteServiceListener? _neighbour;
+    private PeerKeypair? _neighbourKeypair;
 
     private CancellationToken Timeout => _timeout.Token;
 
@@ -95,9 +104,9 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ASweep_FindsRotAtAPeersReplica_AndHoldsThePairFailedThroughASync()
+    public async Task ASweep_FindsRotAtAPeerWhoseBuildTakesNoRepair_AndHoldsThePairFailedThroughASync()
     {
-        await using var runtime = await StartAsync(cadenceDays: 30);
+        await using var runtime = await StartAsync(cadenceDays: 30, offeredFeatures: TakesNoRepair);
         await BackUpAsync(runtime);
         await PassAsync(runtime, DateTimeOffset.Now);
         var (key, victim) = Rot(await PeerReplicaAsync());
@@ -106,7 +115,7 @@ public sealed class PeerDeepSweepTests : IDisposable
         var outcome = await SweepAsync(runtime);
 
         Assert.AreEqual(1, outcome.Damaged);
-        Assert.AreEqual(0, outcome.Repaired, "nothing here can replace an object at a peer");
+        Assert.AreEqual(0, outcome.Repaired, "nothing here can replace an object at a peer that takes no repair");
         CollectionAssert.AreEqual(damaged, await File.ReadAllBytesAsync(victim, Timeout));
 
         var found = Row(runtime);
@@ -126,15 +135,15 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ASweepFindingAtAPeer_CountsWhatNeedsTheObjects_AndNamesTheCopyHereThatHoldsThemSound()
+    public async Task ASweepFindingAtAPeerThatTakesNoRepair_CountsWhatNeedsTheObjects_AndNamesTheCopyHereThatHoldsThemSound()
     {
         // FR-VER-005: damage with a scope a person can act on. Nothing here
-        // can replace an object at a peer, so what matters to the person
-        // reading is what needs it and whether a copy they can reach is
-        // sound — which the staging archive, here, is. The file is counted
-        // in the words and named only behind the set's passphrase
-        // (FR-WOR-007, ADR-0089 Amendment 1).
-        await using var runtime = await StartAsync(cadenceDays: 30);
+        // can replace an object at a peer that takes no repair, so what
+        // matters to the person reading is what needs it and whether a copy
+        // they can reach is sound — which the staging archive, here, is. The
+        // file is counted in the words and named only behind the set's
+        // passphrase (FR-WOR-007, ADR-0089 Amendment 1).
+        await using var runtime = await StartAsync(cadenceDays: 30, offeredFeatures: TakesNoRepair);
         await BackUpAsync(runtime);
         await PassAsync(runtime, DateTimeOffset.Now);
         Rot(await PeerReplicaAsync());
@@ -149,7 +158,7 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     [TestMethod]
-    public async Task ASweepFindingAtAPeer_ThatNoCopyHereHoldsSound_SaysSo()
+    public async Task ASweepFindingAtAPeer_ThatNoCopyHereHoldsSound_IsHeld_AndSaysSo()
     {
         await using var runtime = await StartAsync(cadenceDays: 30);
         await BackUpAsync(runtime);
@@ -161,16 +170,143 @@ public sealed class PeerDeepSweepTests : IDisposable
         bytes[bytes.Length / 2] ^= 0xFF;
         await File.WriteAllBytesAsync(staged, bytes, Timeout);
 
-        await SweepAsync(runtime);
+        var outcome = await SweepAsync(runtime);
 
-        Assert.Contains(
-            "No other copy of the set here holds them sound", DeepVerifyNotice(runtime).Message, StringComparison.Ordinal);
+        Assert.AreEqual(0, outcome.Repaired, "with no sound copy here there is nothing to offer the peer");
+        Assert.AreEqual(key, Assert.ContainsSingle(Row(runtime).DamagedKeys!));
+        var notice = DeepVerifyNotice(runtime).Message;
+        Assert.Contains("No other copy of the set here holds them sound", notice, StringComparison.Ordinal);
+        Assert.Contains("sends them again", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ASweep_FindsRotAtAPeersReplica_ReplacesItFromTheStagingArchive_AndTheNextSyncFindsThePairInSync()
+    {
+        // The peer's own check of its copy fails where the rot is, so it takes
+        // the staging archive's copy, proven sound here before it was offered
+        // and proven again over the retrieval session where it landed
+        // (ADR-0100). The finding still fails the pair, as a local path's
+        // does, and its notice stands; the next sync finds nothing held.
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var (key, victim) = Rot(await PeerReplicaAsync());
+
+        var outcome = await SweepAsync(runtime);
+
+        Assert.AreEqual(1, outcome.Damaged);
+        Assert.AreEqual(1, outcome.Repaired);
+        CollectionAssert.AreEqual(
+            await File.ReadAllBytesAsync(PathOf(_harness.RepositoryPath, key), Timeout),
+            await File.ReadAllBytesAsync(victim, Timeout),
+            "the peer holds the bytes that were sealed under the key again");
+        var found = Row(runtime);
+        Assert.IsNull(found.DamagedKeys, "a replacement proven where it landed leaves nothing held");
+        Assert.AreEqual(DestinationSyncState.Failed, found.State, "the segment that finds damage records it, repaired or not");
+
+        var notice = DeepVerifyNotice(runtime).Message;
+        Assert.Contains("no longer match what was sealed", notice, StringComparison.Ordinal);
+        Assert.Contains("replaced from a sound copy (the staging archive)", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ask the owner", notice, StringComparison.Ordinal, "nothing is left for the peer's owner to do");
+
+        await PassAsync(runtime, DateTimeOffset.Now.AddHours(2));
+        var synced = Row(runtime);
+        Assert.AreEqual(DestinationSyncState.InSync, synced.State, synced.LastError);
+        Assert.IsNotNull(DeepVerifyNotice(runtime), "the finding stands until a person acknowledges it");
+    }
+
+    [TestMethod]
+    public async Task AWellFormedBlobUnderAnotherBlobsKeyAtAPeer_IsNotReplaced_AndIsHeldWithTheRemedy()
+    {
+        // What the peer's own check cannot see: another blob's bytes, whole
+        // and consistent with themselves, under this key. Only the keyed
+        // sweep here finds them wrong, and a peer acts on no word but its own
+        // check (ADR-0100), so the objects stay held for its owner.
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        WriteRandomSourceFile("docs/other.bin", 200_000);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var replica = await PeerReplicaAsync();
+        var blobs = BlobKeys(replica).Where(key => key.StartsWith("blobs/data/", StringComparison.Ordinal)).ToList();
+        Assert.IsGreaterThanOrEqualTo(2, blobs.Count, "the control: two data blobs to swap");
+        var key = blobs.First(blob => File.Exists(PathOf(_harness.RepositoryPath, blob)));
+        var victim = PathOf(replica, key);
+        await File.WriteAllBytesAsync(
+            victim, await File.ReadAllBytesAsync(PathOf(replica, blobs.First(blob => blob != key)), Timeout), Timeout);
+        var swapped = await File.ReadAllBytesAsync(victim, Timeout);
+
+        var outcome = await SweepAsync(runtime);
+
+        Assert.AreEqual(1, outcome.Damaged);
+        Assert.AreEqual(0, outcome.Repaired, "the peer's check finds its copy whole, or of another length");
+        CollectionAssert.AreEqual(swapped, await File.ReadAllBytesAsync(victim, Timeout));
+        Assert.AreEqual(key, Assert.ContainsSingle(Row(runtime).DamagedKeys!));
+        var notice = DeepVerifyNotice(runtime).Message;
+        Assert.Contains("would not take a replacement", notice, StringComparison.Ordinal);
+        Assert.Contains(key, notice, StringComparison.Ordinal);
+        Assert.Contains("sends them again", notice, StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task DamageAtAPeerNoCopyHereCouldReplace_IsReplacedByASync_OnceACopyHereIsSound()
+    {
+        // The repair sync's half (ADR-0100): damage held because nothing here
+        // was sound when the sweep found it is offered again by each sync of
+        // the pair, which is failed and so retried under its back-off.
+        await using var runtime = await StartAsync(cadenceDays: 30);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var (key, victim) = Rot(await PeerReplicaAsync());
+        var staged = PathOf(_harness.RepositoryPath, key);
+        var sound = await File.ReadAllBytesAsync(staged, Timeout);
+        var rotted = (byte[])sound.Clone();
+        rotted[rotted.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(staged, rotted, Timeout);
+        Assert.AreEqual(0, (await SweepAsync(runtime)).Repaired, "the control: nothing here was sound");
+        await File.WriteAllBytesAsync(staged, sound, Timeout);
+
+        await PassAsync(runtime, DateTimeOffset.Now.AddHours(2));
+
+        CollectionAssert.AreEqual(sound, await File.ReadAllBytesAsync(victim, Timeout));
+        var repaired = Row(runtime);
+        Assert.IsNull(repaired.DamagedKeys, "the sync that replaced it and proved it where it landed clears it");
+        Assert.AreEqual(DestinationSyncState.InSync, repaired.State, repaired.LastError);
+    }
+
+    [TestMethod]
+    public async Task APeersRepair_DialsNoOtherPeer_ThoughOneHoldsTheBlobSound()
+    {
+        // ADR-0100 §3: a peer is repaired from the copies this installation
+        // reads without dialling a peer. A finding at one peer is no reason to
+        // put a session on another's link, and a refusal the first peer's own
+        // copy decides would spend that link again on every sync that offered
+        // the repair.
+        await using var runtime = await StartAsync(cadenceDays: 30, neighbour: true);
+        await BackUpAsync(runtime);
+        await PassAsync(runtime, DateTimeOffset.Now);
+        var (key, victim) = Rot(await PeerReplicaAsync());
+        Assert.IsTrue(
+            File.Exists(PathOf(await ReplicaAsync(_neighbourState), key)), "the control: the other peer holds the blob");
+        var staged = PathOf(_harness.RepositoryPath, key);
+        var rotted = await File.ReadAllBytesAsync(staged, Timeout);
+        rotted[rotted.Length / 2] ^= 0xFF;
+        await File.WriteAllBytesAsync(staged, rotted, Timeout);
+        var damaged = await File.ReadAllBytesAsync(victim, Timeout);
+
+        var outcome = await SweepAsync(runtime);
+
+        Assert.AreEqual(1, outcome.Damaged);
+        Assert.AreEqual(0, outcome.Repaired, "the other peer's copy is not one a peer's repair reads");
+        CollectionAssert.AreEqual(damaged, await File.ReadAllBytesAsync(victim, Timeout));
+        Assert.AreEqual(key, Assert.ContainsSingle(Row(runtime).DamagedKeys!));
     }
 
     [TestMethod]
     public async Task OnceThePeersOwnerRemovesTheDamagedObject_TheNextSyncSendsItAgain_AndThePairRecovers()
     {
-        await using var runtime = await StartAsync(cadenceDays: 30);
+        // The remedy that remains where nothing here can replace the object.
+        await using var runtime = await StartAsync(cadenceDays: 30, offeredFeatures: TakesNoRepair);
         await BackUpAsync(runtime);
         await PassAsync(runtime, DateTimeOffset.Now);
         var peerReplica = await PeerReplicaAsync();
@@ -399,19 +535,24 @@ public sealed class PeerDeepSweepTests : IDisposable
     {
         _listener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _listenerKeypair?.Dispose();
+        _neighbour?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _neighbourKeypair?.Dispose();
         _timeout.Dispose();
         _harness.Dispose();
 
-        try
+        foreach (var state in new[] { _destinationState, _neighbourState })
         {
-            if (Directory.Exists(_destinationState))
+            try
             {
-                Directory.Delete(_destinationState, recursive: true);
+                if (Directory.Exists(state))
+                {
+                    Directory.Delete(state, recursive: true);
+                }
             }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Best effort: a test directory that will not delete is not a test failure.
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Best effort: a test directory that will not delete is not a test failure.
+            }
         }
     }
 
@@ -542,24 +683,35 @@ public sealed class PeerDeepSweepTests : IDisposable
     }
 
     private async Task<ServiceRuntime> StartAsync(
-        int? cadenceDays, string? transferLimit = null, IReadOnlyList<string>? offeredFeatures = null)
+        int? cadenceDays, string? transferLimit = null, IReadOnlyList<string>? offeredFeatures = null,
+        bool neighbour = false)
     {
         _harness.WriteSourceFile("docs/report.txt", "the words worth keeping");
         _harness.WriteSourceFile("docs/big.bin", new string('b', 300_000));
         var fingerprint = StartPeer(offeredFeatures);
+        List<DestinationConfiguration> destinations =
+        [
+            new DestinationConfiguration
+            {
+                Id = new string('f', 32), Name = "friend", Kind = DestinationKind.Peer,
+                Fingerprint = fingerprint, Endpoint = $"{_listener!.Endpoint.Address}:{_listener.Endpoint.Port}",
+                DeepVerifyIntervalDays = cadenceDays, TransferLimit = transferLimit,
+            },
+        ];
+        if (neighbour)
+        {
+            var theirs = StartNeighbour();
+            destinations.Add(new DestinationConfiguration
+            {
+                Id = new string('e', 32), Name = "neighbour", Kind = DestinationKind.Peer,
+                Fingerprint = theirs, Endpoint = $"{_neighbour!.Endpoint.Address}:{_neighbour.Endpoint.Port}",
+            });
+        }
 
         new ClientConfiguration
         {
             SchemaVersion = ClientConfiguration.CurrentSchemaVersion,
-            Destinations =
-            [
-                new DestinationConfiguration
-                {
-                    Id = new string('f', 32), Name = "friend", Kind = DestinationKind.Peer,
-                    Fingerprint = fingerprint, Endpoint = $"{_listener!.Endpoint.Address}:{_listener.Endpoint.Port}",
-                    DeepVerifyIntervalDays = cadenceDays, TransferLimit = transferLimit,
-                },
-            ],
+            Destinations = destinations,
             BackupSets =
             [
                 new BackupSetConfiguration
@@ -567,7 +719,7 @@ public sealed class PeerDeepSweepTests : IDisposable
                     Id = _harness.DocsSetId,
                     Name = "docs",
                     Roots = [new BackupRootConfiguration { Path = _harness.SourceRoot }],
-                    Destinations = [new SetDestinationReference { Ref = "friend" }],
+                    Destinations = [.. destinations.Select(destination => new SetDestinationReference { Ref = destination.Name })],
                     DirectShip = false,
                 },
             ],
@@ -604,13 +756,35 @@ public sealed class PeerDeepSweepTests : IDisposable
         return destinationKeypair.Identity.Fingerprint;
     }
 
+    /// <summary>A second paired peer, which holds the set too and is swept on no cadence.</summary>
+    private string StartNeighbour()
+    {
+        using var sourceKeypair = PeerKeypairStore.Open(_harness.StateDirectory);
+        using var neighbourKeypair = PeerKeypairStore.Open(_neighbourState);
+
+        var neighbourGrants = PeerGrantStore.Open(_neighbourState);
+        neighbourGrants.Pin(new PeerGrant(
+            sourceKeypair.Identity, "source", PeerRole.StoresHere, PeerTerms.None, PairedAt));
+        PeerGrantStore.Open(_harness.StateDirectory).Pin(new PeerGrant(
+            neighbourKeypair.Identity, "neighbour", PeerRole.StoresForUs, PeerTerms.None, PairedAt));
+
+        _neighbourKeypair = PeerKeypairStore.Open(_neighbourState);
+        _neighbour = RemoteServiceListener.Start(
+            _neighbourKeypair, neighbourGrants, new IPEndPoint(IPAddress.Loopback, 0), "fallbackplan-agent/test",
+            log: null, replicationStateDirectory: _neighbourState);
+        _neighbour.Bind(new UnusedService());
+        return neighbourKeypair.Identity.Fingerprint;
+    }
+
     /// <summary>
     /// The peer's replica directory, waited for: the destination finishes
     /// committing its side after the sender has already returned.
     /// </summary>
-    private async Task<string> PeerReplicaAsync()
+    private Task<string> PeerReplicaAsync() => ReplicaAsync(_destinationState);
+
+    private async Task<string> ReplicaAsync(string state)
     {
-        var replicas = Path.Combine(_destinationState, "replicas");
+        var replicas = Path.Combine(state, "replicas");
         var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
         while (true)
         {
