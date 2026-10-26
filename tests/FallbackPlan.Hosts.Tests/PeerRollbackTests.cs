@@ -15,7 +15,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// Amendment 1; FR-DEST-018, NFR-SEC-005): a whole state directory restored
 /// from an older copy is noticed from the inventory a peer declares at the
 /// start of every push — which already names every journal key it holds —
-/// so the witness costs no second session. Does not establish FR-DRL-001.
+/// so the witness costs no second session. A granted run in that state
+/// names no delta for the peer to retire either (FR-MAN-017; ADR-0098 §4).
+/// Does not establish FR-DRL-001.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -125,6 +127,60 @@ public sealed class PeerRollbackTests : IDisposable
         Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal), "the convergence must drop nothing at the peer");
         Assert.ContainsSingle(runtime.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
     }
+
+    [TestMethod]
+    public async Task AGrantedConvergence_AfterARollback_RetiresNoDeltaAtThePeer()
+    {
+        // A delta is retired at a peer on the peer's own copies, and the
+        // plane only admits: it must no longer list the delta. Four backups,
+        // the third settling the checkpoint the second wrote, so the plane
+        // has let go of what that checkpoint carries and the peer, which no
+        // backup tells to delete, holds every one of them; then a rollback
+        // to after the third. The peer's copies pass the judgement and the
+        // rolled-back plane admits them, but the inventory attests the fourth
+        // run's history, so the run keeps everything there. Peer-only, so
+        // the run has no keep filter for the inventory to set aside: the
+        // rollback must stop the retirement without one.
+        var fingerprint = await StartDestinationAsync();
+        WriteConfiguration(fingerprint, directShip: true);
+        await using (var runtime = await StartAsync(checkpointThreshold: 2))
+        {
+            foreach (var content in new[] { "first", "second", "third" })
+            {
+                _harness.WriteSourceFile("docs/a.txt", $"the {content} content");
+                await BackUpAsync(runtime);
+            }
+        }
+
+        CopyDirectory(_harness.StateDirectory, OlderState);
+        await using (var runtime = await StartAsync(checkpointThreshold: 2))
+        {
+            _harness.WriteSourceFile("docs/a.txt", "the fourth content");
+            await BackUpAsync(runtime);
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(_harness.StateDirectory, recursive: true);
+        CopyDirectory(OlderState, _harness.StateDirectory);
+        var replica = await ReplicaPathAsync();
+        var before = ReplicaKeys(replica);
+        Assert.IsNotEmpty(
+            KeysUnder(replica, "index/delta/").Except(KeysUnder(MetadataRoot, "index/delta/"), StringComparer.Ordinal),
+            "the plane must have let go of deltas the peer still holds, or the scenario proves nothing");
+        Assert.IsNotEmpty(KeysUnder(replica, "index/checkpoint/"));
+
+        await using var restarted = await StartAsync(checkpointThreshold: 2);
+        await ApplyRetentionAsync(restarted);
+
+        Assert.IsEmpty(before.Except(ReplicaKeys(replica), StringComparer.Ordinal), "the convergence must retire nothing at the peer");
+        Assert.ContainsSingle(restarted.Notices.Unacknowledged.Where(n => n.Key == NoticeKey));
+    }
+
+    private static List<string> KeysUnder(string root, string prefix) =>
+        Directory.Exists(Path.Combine(root, prefix))
+            ? [.. Directory.GetFiles(Path.Combine(root, prefix), "*", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))]
+            : [];
 
     /// <summary>
     /// Backups of A, then B, then A again — the third reusing the first's
@@ -478,7 +534,7 @@ public sealed class PeerRollbackTests : IDisposable
         }.Save(Path.Combine(_harness.StateDirectory, "config.json"));
     }
 
-    private async Task<ServiceRuntime> StartAsync()
+    private async Task<ServiceRuntime> StartAsync(int? checkpointThreshold = null)
     {
         await _harness.SetupAsync();
 
@@ -487,6 +543,7 @@ public sealed class PeerRollbackTests : IDisposable
             {
                 ArchivesRoot = _harness.ArchivesRoot,
                 StateDirectory = _harness.StateDirectory,
+                CheckpointThresholdOverride = checkpointThreshold,
                 // The placement condition (ADR-0051) judges by volume, and the
                 // fixture's every path shares one real volume — the vault is
                 // told apart by name, the compliant install's shape.
