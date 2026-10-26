@@ -56,7 +56,8 @@ internal sealed class PeerSite : IAsyncDisposable
     public string Fingerprint => _keypair.Identity.Fingerprint;
 
     /// <summary>Sets the installation up, creates its "docs" archive and starts its service and listener.</summary>
-    public static async Task<PeerSite> StartAsync(HostHarness harness, CancellationToken cancellationToken)
+    public static async Task<PeerSite> StartAsync(
+        HostHarness harness, CancellationToken cancellationToken, int? checkpointThreshold = null)
     {
         await harness.CreateRepositoryAsync();
         var runtime = await ServiceRuntime.StartAsync(
@@ -64,6 +65,7 @@ internal sealed class PeerSite : IAsyncDisposable
             {
                 ArchivesRoot = harness.ArchivesRoot,
                 StateDirectory = harness.StateDirectory,
+                CheckpointThresholdOverride = checkpointThreshold,
             },
             cancellationToken);
         return new PeerSite(harness, runtime, cancellationToken);

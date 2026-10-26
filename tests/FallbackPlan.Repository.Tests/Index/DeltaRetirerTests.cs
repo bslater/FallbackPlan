@@ -316,6 +316,37 @@ public sealed class DeltaRetirerTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Judging_NamesWhatARetirementWouldDelete_AndDeletesNothing()
+    {
+        // A peer's replica is a store this side reads and cannot delete from:
+        // it is judged here, by the same rule, and told what passes in an
+        // instruction the peer checks against the reclaim key (ADR-0098
+        // Amendment 1). So the judgement has to be the retirement's, without
+        // the deletes.
+        var store = CreateStore();
+        var sequence = Sequence();
+        var deltas = await PublishDeltasAsync(store, sequence, count: 4);
+        await CheckpointAsync(store, sequence);
+        await PublishAgainAsync(store, sequence);
+        var counting = new CountingObjectStore(store);
+
+        using var retirer = new DeltaRetirer(counting, Repo, TestAuthority.Shared.Credential);
+        var judged = await retirer.JudgeAsync(deltaId => deltaId != deltas[2], CancellationToken.None);
+
+        Assert.IsTrue(
+            judged.Retirable.Select(retirable => retirable.DeltaId).ToHashSet().SetEquals(deltas.Where(delta => delta != deltas[2])));
+        foreach (var (deltaId, key) in judged.Retirable)
+        {
+            Assert.IsTrue(MetadataStoreKeys.TryParseIndexDelta(key, out var atKey));
+            Assert.AreEqual(deltaId, atKey, "each delta is named by the key it sits at");
+        }
+
+        Assert.AreEqual(0, judged.Unsettled);
+        Assert.AreEqual(0L, counting.Deletes);
+        Assert.IsTrue((await DeltasAtTheirKeysAsync(store)).SetEquals(deltas));
+    }
+
+    [TestMethod]
     public async Task OnlyTheDeltasTheCallerAdmits_AreRetired()
     {
         var store = CreateStore();
