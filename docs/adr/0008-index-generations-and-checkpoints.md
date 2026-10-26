@@ -361,6 +361,11 @@ and compaction passes.
 > met for every store this hub reads and deletes at itself. Each of its five
 > parts is answered there; a peer still keeps every delta.
 
+> **Amended 2026-10 ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)).** A peer
+> retires too, under a person's grant: it is judged by the same rule from its
+> own copies, and told in the signed drop list. Constraint 6 is met at every
+> store.
+
 ## Amendment 2 (2026-10) — format 5 meets five of the six
 
 [ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md) is the design
@@ -441,10 +446,15 @@ an instruction signed under the reclaim grant, which only a person's retention
 apply or deletion carries, and a peer is told to drop only what staging still
 lists ([ADR-0034](0034-hub-and-spoke-destinations.md) §6).
 
+> **Amended 2026-10.** Met since [ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant):
+> under the grant, the hub judges the peer's replica over retrieval by
+> ADR-0098 §1's rule and names what passes in the signed drop list.
+
 ## Status history
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Partly built (amended) | Constraint 6 is met at a peer too, under a person's grant: the hub judges the peer's replica over retrieval and names what passes in the signed drop list ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant); `Hosts.Tests/PeerDeltaRetirementTests`) |
 | 2026-10 | Partly built (amended) | [Amendment 3](#amendment-3-2026-10--a-store-retires-what-its-own-checkpoints-carry): constraint 6 is met at staging, a metadata store, a local path and an object store, which each retire the deltas their own settled checkpoints carry; a reader lists deltas first and looks again for one gone ([ADR-0098](0098-a-store-retires-what-its-own-checkpoints-carry.md); `Repository.Index/DeltaRetirer`, `Repository.Index/IndexLoader`, `Agent/BackupRunner`, `Agent/FanOut`). A peer keeps every delta |
 | 2026-10 | Partly built (amended) | [Amendment 2](#amendment-2-2026-10--format-5-meets-five-of-the-six): format 5's checkpoint carries the deltas it subsumes, verbatim, and a load reads each carried delta from it and fetches only the rest ([ADR-0097](0097-format-5-a-checkpoint-carries-its-deltas.md); `Repository.Index/CheckpointCodec`, `Repository.Index/IndexLoader`, `Repository.Index/IndexCheckpointer`). No watermark and no checkpoint entry is acted on. Constraints 1 to 5 are met; retirement, constraint 6, is not built |
 | 2026-10 | Partly built (amended) | Every delta a writer publishes is one a reader can open. A backup put every record it wrote into one delta, so one past about 245 000 records published a delta over the 16 MiB metadata bound that every reader refused. A publication now cuts its entries into deltas at blob boundaries under that bound, the cut compaction already made (`Repository/IndexDeltaBudget`), and the publisher refuses any index object over it (`Repository.Tests/DeltaSplitPublicationTests`, `Repository.Tests/Index/OversizedIndexObjectTests`; 07 §2) |

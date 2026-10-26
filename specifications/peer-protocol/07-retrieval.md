@@ -74,6 +74,12 @@ and the session is retrieval-only from here — any later frame that is not
 `keys`), key 3 `more` (bool). Keys come in ordinal order; the owner resumes
 by sending the last key of a page as `after`.
 
+A listing MUST show every object the destination committed before it received
+the `retrieve_list`. A replication session commits each object before
+acknowledging it ([03 §5](03-replication.md#5-resumption-and-atomicity)), so an
+owner may treat the listing as strong: what it judges from a listing, a
+retirement included, rests on that.
+
 ### 3.4 `retrieve_read` (276) / `retrieve_data` (277)
 
 `retrieve_read`: key 1 `key` (text, ≤1024 bytes), key 2 `offset` (uint64), key 3 `length`

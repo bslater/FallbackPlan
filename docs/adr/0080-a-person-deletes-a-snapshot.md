@@ -36,6 +36,8 @@ Three facts of the built collector decide the shape of one:
 
 - **A decision taken once is undone by the next plan.** A tombstone is revalidated against a fresh plan before anything is deleted ([specification 11 §3.2](../../specifications/repository-format/11-lifecycle-objects.md#32-what-a-collector-must-do-before-deleting) step 3). A snapshot the policy keeps comes back "protected again" and stays. A person's deletion of such a snapshot has to be a fact every later plan reads, not one pass's decision.
 - **A copy keeps what staging no longer lists.** A converge drops at a destination only a key staging still lists, because a key staging no longer lists may be the only copy left of something the trim removed (ADR-0034 §6). Once staging has deleted a snapshot, nothing will ever remove it from a copy that still holds it.
+
+  > **Amended 2026-10.** A retired delta is the one exception, named to a peer under the grant once the peer's own checkpoint is judged to carry it ([ADR-0098 Amendment 1](0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)).
 - **Some copies never drop anything.** A destination or peer with no retention rules gets the whole copy and is never converged. A deletion at staging alone would leave every such copy holding the snapshot for ever.
 
 The owner settled four questions before any test was written:
