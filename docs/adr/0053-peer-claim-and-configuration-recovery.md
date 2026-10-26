@@ -1,6 +1,6 @@
 # ADR-0053 — A rebuilt machine claims its peer replica, and its backup set's shape survives with it
 
-**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message), [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else), [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb) and [Amendment 4](#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it)
+**Status:** Amended (2026-09) — decisions 1–3 built, decision 4 will not be done; see [Amendment 1](#amendment-1-2026-09--the-claim-key-is-the-installations-and-the-ceremony-is-one-message), [Amendment 2](#amendment-2-2026-09--the-claim-takes-the-passphrase-and-nothing-else), [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb), [Amendment 4](#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it) and [Amendment 5](#amendment-5-2026-10--a-write-only-installation-is-armed-at-setup)
 **Date:** 2026-09
 **Requirements:** FR-REP-001, FR-KIT-006, FR-DEST-006, NFR-OPS-005, FR-DR-005 (Amendment 4)
 **Related:** [ADR-0013](0013-recovery-kit.md), [ADR-0020](0020-ed25519-signing-key-semantics.md), [ADR-0030](0030-peer-identity-and-pairing.md), [ADR-0034](0034-hub-and-spoke-destinations.md), [ADR-0042](0042-write-only-repositories.md), [peer-protocol 05 §2](../../specifications/peer-protocol/05-quotas.md#2-ownership), [peer-protocol 07 §4](../../specifications/peer-protocol/07-retrieval.md)
@@ -552,6 +552,74 @@ the passphrase *and* the operator's acknowledgement ages the replica within
 the floor, which is the owner's own authority. T-21 records that residual,
 and nothing the recovery model preserves could decide between the two.
 
+## Amendment 5 (2026-10) — a write-only installation is armed at setup
+
+Open question
+[Q23](../open-questions.md#q23--arming-disaster-recovery-on-a-write-only-repository)
+asked how a write-only set arms its disaster recovery when its service never
+holds the passphrase, and offered three answers. It was written against
+[ADR-0070](0070-replica-claim-after-total-loss.md)'s design, in which each
+destination minted a token and the claim key was derived from the passphrase
+and that token. Under that design, only a session that happened to run while
+the passphrase was present could register the key.
+
+Amendment 1 had already answered it, without saying so. The claim key is the
+installation's. It is derived once, at setup, when the passphrase is present,
+and its public half is kept in the write credential the service runs on.
+Every offer publishes it
+([03 §3.1](../../specifications/peer-protocol/03-replication.md#31-replicationoffer),
+key 5). Nothing has to coincide with the passphrase being present, and none of
+Q23's three answers is needed.
+
+### The evidence
+
+`Hosts.Tests/PeerClaimTests` takes the order the token design could not
+survive:
+1. provision the installation;
+2. clear the passphrase from everything the process can reach;
+3. pair a peer and configure it;
+4. back up to it;
+5. destroy the machine;
+6. claim with the passphrase alone, and open the replica.
+
+It runs for a staging set and for a direct-ship set, because they arm by
+different offers. A staging set arms only by its sync's. A direct-ship set
+arms by its ship sink's as well, and a destination fills an absence from
+whichever offer comes first. The test passes in both shapes, and Q23 closes
+on it.
+
+### What the merge left behind
+
+ADR-0070's status history says its implementation "is removed rather than
+carried across". Its specification text and three pieces of code were carried
+across anyway. They are removed now:
+
+- **Peer-protocol 03 §3.2.1 and the inventory's key 4,** which carried the
+  token and had the source register a credential in reply. Key 4 is reserved,
+  and a reader skips it.
+- **Peer-protocol 07 §5.1–5.8,** the token ceremony. Its message numbers
+  278–281 collided with chunk possession and with repair
+  ([ADR-0100](0100-a-peer-replaces-what-its-own-check-finds-damaged.md)).
+  The sections are withdrawn, and §5.9, which this record's Amendment 4
+  relies on, is kept where it is.
+- **`ReplicationInventory.ClaimToken`, `ArchiveHandle.OpenedWithPassphrase`
+  and `PeerSession.TranscriptHash`.** Nothing set, read or answered any of
+  them.
+
+### What the token was for, and what does that job now
+
+The token separated one destination's claim key from another's, so that a
+proof captured at one would be inert at the next. The installation's key is
+the same at every destination, so separation now rests on the session
+binding of [03 §6.2](../../specifications/peer-protocol/03-replication.md#62-replicationclaim-and-replicationclaimaccepted).
+A claim signs the session identifier, which no other connection shares, at
+this destination or any other. A claim signed for another session is refused
+in the same terms as a wrong passphrase; the forged case in
+`Hosts.Tests/PeerClaimTests` signs for the wrong session. T-21 now says so.
+
+Amendment 1's constraint on rotation stands unchanged: a passphrase change
+must re-publish the claim key, or every recorded one stops verifying.
+
 ## Consequences
 
 **Positive**
@@ -602,6 +670,7 @@ the week they are least able to reconstruct them.
 
 | Date | Status | Note |
 |------|--------|------|
+| 2026-10 | Amended (write-only armed) | [Amendment 5](#amendment-5-2026-10--a-write-only-installation-is-armed-at-setup): Q23 closes, because Amendment 1's installation key arms a write-only installation at setup, and `Hosts.Tests/PeerClaimTests` claims back from a destination paired after the passphrase left the service. The superseded token design's specification text (peer-protocol 03 §3.2.1, 07 §5.1–5.8) and its three leftover code members are removed; inventory key 4 is reserved |
 | 2026-09 | Amended (claims held) | [Amendment 4](#amendment-4-2026-09--a-claim-is-held-until-the-destinations-operator-acknowledges-it): a claim that moves an attribution is held until the destination's operator acknowledges it, FR-DR-005 and ADR-0070's decision 7 carried onto this record's ceremony. The ledger's `Claim` records the hold, `Agent/ClaimResponder` raises the notice before answering, `Agent/ReplicationResponder` refuses the claimant's retention whole until the acknowledgement, which is contract 1.41's `acknowledge_replica_claim`, the agent's `acknowledge-claim` and the console's Acknowledge claim control. The listener raises into the runtime's notices. `Hosts.Tests/ClaimedReplicaRetentionTests`, `Hosts.Tests/ClaimAcknowledgementTests`, `Application.Tests/ReplicaOwnerStoreTests`, `Hosts.Tests/UnpairCommandTests`, `Web.Tests/ConsolePairingScriptTests` |
 | 2026-09 | Amended (§3 built) | [Amendment 3](#amendment-3-2026-09--the-operators-re-attribution-is-a-stated-verb): the operator's re-attribution is `reattribute_replica` / `list_replica_attributions` (contract 1.31), `fallbackplan-agent reattribute` and the console's Re-point control, with `Agent/ReplicaReattribution` behind all three and the ledger now the runtime's (`ServiceRuntime.ReplicaOwners`); refused by name for a replica that carries a claim key. `Hosts.Tests/ReplicaReattributionTests`, `Hosts.Tests/AgentPairingVerbsTests`, `Web.Tests/ConsolePairingScriptTests`. Every decision of this record is now built or closed |
 | 2026-09 | Amended | The intent of §4 is met otherwise: the set's shape travels in the archive's policy manifest and a rebuilt machine adopts a claimed replica back under its original ids ([ADR-0061](0061-adopt-a-destinations-archives.md)); `Hosts.Tests/PeerAdoptionTests` runs the drill after the claim. §3's operator re-attribution remains unbuilt |
