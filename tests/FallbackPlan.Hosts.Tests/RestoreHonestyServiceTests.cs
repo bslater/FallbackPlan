@@ -14,9 +14,9 @@ namespace FallbackPlan.Hosts.Tests;
 /// anyway. Both say which captured metadata will not be applied. The plan
 /// gives counts; the result summarises the receipt, which names it per item.
 /// The account running these tests restores its own files, so on a POSIX
-/// host it gives them back their owner and group (ADR-0085), and what is
-/// left to say comes from a symlink, whose own metadata is never written
-/// back.
+/// host it gives them back their owner and group (ADR-0085), and a symlink
+/// its own metadata, onto the link itself (ADR-0101). What is left to say
+/// there is a creation time Linux cannot set.
 /// </summary>
 [TestClass]
 public sealed class RestoreHonestyServiceTests : IDisposable
@@ -128,30 +128,34 @@ public sealed class RestoreHonestyServiceTests : IDisposable
 
         Assert.AreEqual("complete", restored.Outcome, "metadata alone does not change what a restore achieved");
 
-        // What no target here writes back: the link's own owner on a POSIX
-        // host, the only item whose owner is left off, and on Windows the
-        // attribute bits of every file and of the folder they share. A file's
-        // and a folder's access time is written back everywhere, so only the
-        // link's is listed.
-        Assert.IsNotNull(restored.NotApplied);
-        Assert.Contains(line => line.StartsWith(StillNotApplied, StringComparison.Ordinal), restored.NotApplied);
-        Assert.DoesNotContain(
-            line => line.StartsWith("accessed_at", StringComparison.Ordinal)
-                && !line.StartsWith(LinkOnly("accessed_at"), StringComparison.Ordinal),
-            restored.NotApplied);
+        // What no target here writes back: on Windows the attribute bits of
+        // every file and of the folder they share. On a POSIX host every item
+        // is the account's own and gets its owner back, the link included,
+        // and every item its access time, the link onto itself (ADR-0101).
+        // Linux sets no creation time, so where the volume recorded one,
+        // that is what each item lists.
+        var summary = restored.NotApplied ?? [];
+        Assert.DoesNotContain(line => line.StartsWith("accessed_at", StringComparison.Ordinal), summary);
 
         var receipt = NotAppliedByPath(await File.ReadAllTextAsync(restored.ReceiptPath!, _timeout.Token));
         var notes = receipt.GetValueOrDefault(ItemEndingIn(receipt, "notes.txt")) ?? [];
         Assert.DoesNotContain("accessed_at", notes);
         if (OperatingSystem.IsWindows())
         {
+            Assert.Contains(line => line.StartsWith("file_attributes not applied to 3 item(s)", StringComparison.Ordinal), summary);
             Assert.Contains("file_attributes", notes);
         }
         else
         {
-            Assert.Contains("owner", receipt[ItemEndingIn(receipt, "link")]);
+            var link = receipt.GetValueOrDefault(ItemEndingIn(receipt, "link")) ?? [];
+            CollectionAssert.IsSubsetOf(link, new[] { "created_at" }, "the link lists more than a creation time Linux cannot set");
             Assert.DoesNotContain("owner", notes);
             Assert.DoesNotContain("group", notes);
+            if (OperatingSystem.IsLinux() && LinkStatus.Of(Path.Combine(_harness.SourceRoot, "link")).CreatedUtc is not null)
+            {
+                Assert.Contains("created_at", link);
+                Assert.Contains(line => line.StartsWith("created_at not applied to", StringComparison.Ordinal), summary);
+            }
         }
     }
 
@@ -221,16 +225,38 @@ public sealed class RestoreHonestyServiceTests : IDisposable
                 new PlanRestoreCommand(snapshotId, null, Source: (await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token)).SourceId), _timeout.Token),
             out var plan);
 
-        Assert.IsNotNull(plan.Degradations);
-        var (declared, count) = OperatingSystem.IsWindows() ? ("File attributes", "2 file(s)") : ("Metadata captured", "1 symlink(s)");
-        Assert.Contains(
-            line => line.Contains(declared, StringComparison.Ordinal) && line.Contains(count, StringComparison.Ordinal),
-            plan.Degradations);
-        Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), plan.Degradations);
+        // On macOS every file, folder and link here gets all it carries back,
+        // so the plan may declare nothing at all.
+        var declared = plan.Degradations ?? [];
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains(
+                line => line.Contains("File attributes", StringComparison.Ordinal) && line.Contains("2 file(s)", StringComparison.Ordinal),
+                declared);
+        }
+        else
+        {
+            // A link gets its own metadata back, so no line speaks for links
+            // as such. Linux sets no creation time, so where the volume
+            // recorded the link's, it is counted with the files'.
+            Assert.DoesNotContain(line => line.Contains("Metadata captured on", StringComparison.Ordinal), declared);
+            if (OperatingSystem.IsLinux() && LinkStatus.Of(Path.Combine(_harness.SourceRoot, "link")).CreatedUtc is not null)
+            {
+                Assert.Contains(
+                    line => line.Contains("Creation times", StringComparison.Ordinal) && line.Contains("1 symlink(s)", StringComparison.Ordinal),
+                    declared);
+            }
+            else
+            {
+                Assert.DoesNotContain(line => line.Contains("symlink(s)", StringComparison.Ordinal), declared);
+            }
+        }
+
+        Assert.DoesNotContain(line => line.Contains("Access times", StringComparison.Ordinal), declared);
 
         // The files are the restoring account's own, so their ownership is
         // given back and not declared.
-        Assert.DoesNotContain(line => line.Contains("Ownership", StringComparison.Ordinal), plan.Degradations);
+        Assert.DoesNotContain(line => line.Contains("Ownership", StringComparison.Ordinal), declared);
 
         // With no folder named there is nothing to measure against, so the
         // plan answers as it always did, plus what its files will write.
@@ -247,12 +273,6 @@ public sealed class RestoreHonestyServiceTests : IDisposable
         (Xattr.AclOther, 0, Xattr.AclUndefinedId));
 
     /// <summary>What no target here writes back, and how many items it is left off: two files and their folder on Windows.</summary>
-    private static string StillNotApplied =>
-        OperatingSystem.IsWindows() ? "file_attributes not applied to 3 item(s)" : LinkOnly("owner");
-
-    /// <summary>The summary's line for an attribute left off the link alone.</summary>
-    private static string LinkOnly(string attribute) => $"{attribute} not applied to 1 item(s)";
-
     public void Dispose()
     {
         _timeout.Dispose();

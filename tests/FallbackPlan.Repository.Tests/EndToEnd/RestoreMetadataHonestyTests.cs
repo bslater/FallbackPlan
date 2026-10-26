@@ -32,9 +32,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// root, or CAP_CHOWN, may give a file to anyone, and any other account
 /// keeps a file as its own and gives it a group it is in. The plan
 /// predicts that per file. Extended attributes are written back where the
-/// target writes them (ADR-0087). Security descriptors and file attributes
-/// are captured and recorded, not yet written back, and a symlink is created
-/// with none of its own.
+/// target writes them (ADR-0087). A symlink gets its own back by the same
+/// rule, onto the link itself (ADR-0101). Security descriptors and file
+/// attributes are captured and recorded, not yet written back.
 /// </para>
 /// <para>
 /// An item's outcome does not change for metadata alone. A file whose
@@ -312,7 +312,7 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
     [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "a symlink needs no privilege to create only on a POSIX host")]
     [PlatformTrait(TestPlatforms.Posix)]
-    public async Task Receipt_ASymlink_IsCreatedWithoutItsCapturedMetadata_AndSaysSo()
+    public async Task Receipt_ASymlink_GetsItsTimesBack_AndListsTheOwnerATargetWithNoAccountCannotGive()
     {
         var source = new FakeFileSystemSource();
         source.AddFile("data/target.bin", Deterministic(500, 4)).Metadata = new EntryMetadata { ModifiedAt = Modified };
@@ -328,7 +328,34 @@ public sealed class RestoreMetadataHonestyTests : ArchiveTestHarness
 
         var link = receipt.Items.Single(candidate => candidate.Path == "link");
         Assert.AreEqual("restored", link.Outcome);
-        CollectionAssert.AreEqual(new[] { "modified_at", "owner" }, link.NotApplied!.ToArray());
+        CollectionAssert.AreEqual(new[] { "owner" }, link.NotApplied!.ToArray());
+    }
+
+    [TestMethod]
+    public async Task Receipt_AnEmptySecurityDescriptor_IsNoDescriptor_AndIsNotListed()
+    {
+        // What every manifest captured off Windows carries from the builds
+        // that wrote one (06 §4.1 key 7): no descriptor at all, so nothing a
+        // restore could leave out.
+        var (receipt, _) = await PublishAndRestoreAsync(EmptyDescriptor(), 0xD3, Posix);
+
+        Assert.IsNull(Assert.ContainsSingle(receipt.Items).NotApplied);
+    }
+
+    [TestMethod]
+    public async Task Plan_AnEmptySecurityDescriptor_IsNoDescriptor_AndIsNotDeclared()
+    {
+        var (plan, facts) = await PublishAndProbeAsync(EmptyDescriptor(), 0xD4);
+
+        Assert.DoesNotContain(degradation => degradation.Capability == "security-descriptors", RestoreMetadata.Declare(plan, facts, Posix));
+    }
+
+    private static FakeFileSystemSource EmptyDescriptor()
+    {
+        var source = new FakeFileSystemSource();
+        source.AddFile("plain.bin", Deterministic(700, 12)).Metadata =
+            new EntryMetadata { ModifiedAt = Modified, WindowsSecurityDescriptor = ReadOnlyMemory<byte>.Empty };
+        return source;
     }
 
     [TestMethod]

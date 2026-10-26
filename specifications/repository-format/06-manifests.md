@@ -97,6 +97,8 @@ Names rather than numeric IDs for owner and group: a UID means nothing on the ma
 
 Absent keys mean the source did not provide the value. They do not mean zero.
 
+An empty `windows_security_descriptor` is no descriptor, since a self-relative descriptor is at least twenty bytes. A writer omits key 7 where it read none, and a reader MUST treat an empty value as absent. Repositories written before this rule hold an empty key 7 on every entry captured where no descriptor was read ([ADR-0083 Amendment 1](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor)).
+
 > **Erratum (phase 1).** Several shapes in §4 and §4.1 were unassigned
 > until the first production writer needed them. Pending a normative edit,
 > [ADR-0026](../../docs/adr/0026-phase-1-capture-shapes.md) pins them:

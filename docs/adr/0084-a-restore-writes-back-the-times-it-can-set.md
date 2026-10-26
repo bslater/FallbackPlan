@@ -79,6 +79,8 @@ The plan cannot know what a write will do before it is made. It predicts by the 
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed as before ([ADR-0083](0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back on Linux and macOS, after ownership and before the permissions in §1's order. The rest of this item remains owed.
+
+  > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself: its times on Linux and macOS through a call that does not follow it, by §1's rule. Windows attribute bits, security descriptors and alternate streams remain owed.
 - **The recovery tool and the CLI's `restore-file`.** Both write content and no metadata, not even a modification time.
 
 ## Alternatives considered

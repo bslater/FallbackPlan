@@ -66,6 +66,9 @@ public enum ExtendedAttributeKinds
 
     /// <summary>A Linux POSIX ACL that names no account or group: only the owner, the group, the mask and everyone else.</summary>
     AnonymousAcl = 1 << 2,
+
+    /// <summary>One in Linux's user namespace, which Linux keeps on no symlink.</summary>
+    User = 1 << 3,
 }
 
 /// <summary>
@@ -91,7 +94,7 @@ public sealed record RestoreItemFacts(
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
 /// does not (FR-RST-003, FR-RST-004; ADR-0083, ADR-0084, ADR-0085,
-/// ADR-0086, ADR-0087; architecture 06 §3).
+/// ADR-0086, ADR-0087, ADR-0101; architecture 06 §3).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -105,7 +108,11 @@ public sealed record RestoreItemFacts(
 /// where the owner or group it goes with was given back. Extended
 /// attributes come back where the target writes them, each alone, with the
 /// exceptions <see cref="Withheld"/> names. Nothing else is written back
-/// yet. A symlink is created with none of its own metadata.
+/// yet. A symlink the run makes is held to the same rule, onto the link
+/// itself, where the platform has a call that does not follow it: its
+/// permissions only where the platform keeps a link's own, and on Linux,
+/// which gives every link the same ones, a link's captured permissions land
+/// only where they are those (<see cref="LinkPermissionsLand"/>).
 /// The plan predicts by that rule. The receipt records what each write did
 /// (ADR-0084), which the rule cannot know in advance: a volume may refuse a
 /// write the platform supports, a captured time may lie beyond what a file
@@ -203,7 +210,9 @@ public static class RestoreMetadata
             captured |= CapturedMetadata.Group;
         }
 
-        if (metadata.WindowsSecurityDescriptor is not null)
+        // An empty one is no descriptor (06 §4.1 key 7), and is what earlier
+        // builds wrote for every entry captured where none was read.
+        if (metadata.WindowsSecurityDescriptor is { IsEmpty: false })
         {
             captured |= CapturedMetadata.SecurityDescriptor;
         }
@@ -229,14 +238,21 @@ public static class RestoreMetadata
     /// <summary>
     /// The attributes the executor writes back for an entry of
     /// <paramref name="kind"/> on <paramref name="target"/>: the same for a
-    /// folder it makes as for a file it lands, and nothing for anything else.
-    /// Extended attributes are counted written back where the target writes
-    /// them, though <see cref="Withheld"/> keeps some of them back item by
-    /// item, as ownership is decided item by item.
+    /// folder it makes as for a file it lands, what the platform's calls that
+    /// never follow a link can write for a symlink it makes, and nothing for
+    /// anything else. Extended attributes are counted written back where the
+    /// target writes them, though <see cref="Withheld"/> keeps some of them
+    /// back item by item, as ownership is decided item by item, and as a
+    /// link's permissions are on Linux (<see cref="LinkPermissionsLand"/>).
     /// </summary>
     public static CapturedMetadata Applied(EntryKind kind, RestoreTargetProfile target)
     {
         ThrowHelper.ThrowIfNull(target);
+
+        if (kind == EntryKind.Symlink)
+        {
+            return AppliedToALink(target);
+        }
 
         if (kind is not (EntryKind.File or EntryKind.DirectoryPlaceholder))
         {
@@ -250,6 +266,56 @@ public static class RestoreMetadata
         }
 
         if (target.SupportsPosixMetadata && !OperatingSystem.IsWindows())
+        {
+            applied |= CapturedMetadata.PosixMode;
+        }
+
+        if (target.SupportsExtendedAttributes && ExtendedAttributes.CanSet)
+        {
+            applied |= CapturedMetadata.ExtendedAttributes;
+        }
+
+        return applied;
+    }
+
+    /// <summary>
+    /// Whether a symlink captured with <paramref name="mode"/> can carry it on
+    /// this platform: anywhere that sets a link's own permissions, and on
+    /// Linux, which gives every link <see cref="SymlinkMetadata.LinuxPermissions"/>
+    /// and has no call to change them, only where the captured ones are those.
+    /// </summary>
+    /// <param name="mode">The link's captured mode.</param>
+    public static bool LinkPermissionsLand(uint mode) =>
+        SymlinkMetadata.CanSetPermissions
+        || (OperatingSystem.IsLinux() && (mode & ModeBits) == SymlinkMetadata.LinuxPermissions);
+
+    /// <summary>
+    /// What the executor writes onto a symlink it makes, by calls that never
+    /// follow it: owner and group as for a file, item by item; extended
+    /// attributes where the target writes them; permissions where the target
+    /// applies POSIX metadata, item by item on Linux; modification and access
+    /// times where the platform sets a link's own; and a creation time only on
+    /// macOS, the one platform whose call for it does not follow a link.
+    /// </summary>
+    private static CapturedMetadata AppliedToALink(RestoreTargetProfile target)
+    {
+        if (!target.SupportsSymlinks || OperatingSystem.IsWindows())
+        {
+            return CapturedMetadata.None;
+        }
+
+        var applied = CapturedMetadata.None;
+        if (SymlinkMetadata.CanSetTimes)
+        {
+            applied |= CapturedMetadata.ModifiedAt | CapturedMetadata.AccessedAt;
+        }
+
+        if (target.SupportsCreationTimes && OperatingSystem.IsMacOS())
+        {
+            applied |= CapturedMetadata.CreatedAt;
+        }
+
+        if (target.SupportsPosixMetadata)
         {
             applied |= CapturedMetadata.PosixMode;
         }
@@ -279,6 +345,10 @@ public static class RestoreMetadata
             {
                 kinds |= NamesAccountsByNumber(attribute) ? ExtendedAttributeKinds.NumberedAcl : ExtendedAttributeKinds.AnonymousAcl;
             }
+            else if (IsUser(name))
+            {
+                kinds |= ExtendedAttributeKinds.User;
+            }
         }
 
         return kinds;
@@ -298,9 +368,15 @@ public static class RestoreMetadata
 
     /// <summary>
     /// Why a restore to <paramref name="target"/> does not attempt to write
-    /// <paramref name="attribute"/> back, or null when it does (ADR-0087).
+    /// <paramref name="attribute"/> back onto a file, a folder or, where
+    /// <paramref name="link"/>, a symlink, or null when it does (ADR-0087,
+    /// ADR-0101).
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Linux keeps no user-namespace attribute and no ACL on a symlink, and
+    /// refuses either, so neither is attempted on one there.
+    /// </para>
     /// <para>
     /// A POSIX ACL is written back only on Linux, which keeps one as an
     /// extended attribute. macOS keeps no POSIX ACLs, and would take it as an
@@ -316,9 +392,22 @@ public static class RestoreMetadata
     /// account still leaves the label the policy gave the file it made.
     /// </para>
     /// </remarks>
-    internal static string? Withheld(ExtendedAttributeEntry attribute, RestoreTargetProfile target)
+    internal static string? Withheld(ExtendedAttributeEntry attribute, RestoreTargetProfile target, bool link = false)
     {
         var name = attribute.Name.Span;
+        if (link && OperatingSystem.IsLinux())
+        {
+            if (IsPosixAcl(name))
+            {
+                return "Linux keeps no access control list on a symlink";
+            }
+
+            if (IsUser(name))
+            {
+                return "Linux keeps no user attributes on a symlink";
+            }
+        }
+
         if (IsPosixAcl(name))
         {
             if (!OperatingSystem.IsLinux())
@@ -446,6 +535,13 @@ public static class RestoreMetadata
     /// cannot create them are reported skipped by its symlink line, so
     /// their metadata goes unmentioned here.
     /// </para>
+    /// <para>
+    /// A symlink the target makes is counted on the lines a file and a folder
+    /// are, by the rule <see cref="Applied"/> gives it. Two lines are a
+    /// link's alone: permissions captured on a link that Linux, which gives
+    /// every link the same ones, cannot carry (<see cref="LinkPermissionsLand"/>),
+    /// and the user-namespace attributes and ACLs Linux keeps on no link.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<MetadataDegradation> Declare(
         RestorePlan plan, IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts, RestoreTargetProfile target)
@@ -461,7 +557,8 @@ public static class RestoreMetadata
         var numbered = new Tally();
         var unkept = new Tally();
         var privileged = new Tally();
-        var links = 0;
+        var linkPermissions = new Tally();
+        var linkAttributes = new Tally();
         var names = new Names();
 
         foreach (var item in plan.Items)
@@ -472,20 +569,33 @@ public static class RestoreMetadata
                 continue;
             }
 
-            // A file or folder is given what the rule gives it; a link nothing.
-            var held = item.Kind != EntryKind.Symlink;
-            var (given, unresolved) = held
-                ? Ownership(known.Owner, known.Group, target, names)
-                : (CapturedMetadata.None, CapturedMetadata.None);
-            if (held
-                && (Applied(item.Kind, target) & CapturedMetadata.PosixMode) != 0
+            // A link the target cannot make is skipped, which the planner's
+            // own line says. One it makes is held to the rule a file is.
+            var link = item.Kind == EntryKind.Symlink;
+            if (link && !target.SupportsSymlinks)
+            {
+                continue;
+            }
+
+            var (given, unresolved) = Ownership(known.Owner, known.Group, target, names);
+            var applied = Applied(item.Kind, target);
+            if (link
+                && (applied & CapturedMetadata.PosixMode) != 0
+                && known.Mode is { } linkMode
+                && !LinkPermissionsLand(linkMode))
+            {
+                applied &= ~CapturedMetadata.PosixMode;
+                linkPermissions.Add(item.Kind);
+            }
+
+            if ((applied & CapturedMetadata.PosixMode) != 0
                 && known.Mode is { } mode
                 && PermittedMode(mode, given) != (mode & ModeBits))
             {
                 setIds.Add(item.Kind);
             }
 
-            if (held && (Applied(item.Kind, target) & CapturedMetadata.ExtendedAttributes) != 0)
+            if ((applied & CapturedMetadata.ExtendedAttributes) != 0)
             {
                 const ExtendedAttributeKinds Acls = ExtendedAttributeKinds.NumberedAcl | ExtendedAttributeKinds.AnonymousAcl;
                 if (!OperatingSystem.IsLinux())
@@ -497,7 +607,12 @@ public static class RestoreMetadata
                 }
                 else
                 {
-                    if (!target.CapturedHere && known.Attributes.HasFlag(ExtendedAttributeKinds.NumberedAcl))
+                    if (link && (known.Attributes & (Acls | ExtendedAttributeKinds.User)) != 0)
+                    {
+                        linkAttributes.Add(item.Kind);
+                    }
+
+                    if (!link && !target.CapturedHere && known.Attributes.HasFlag(ExtendedAttributeKinds.NumberedAcl))
                     {
                         numbered.Add(item.Kind);
                     }
@@ -509,15 +624,9 @@ public static class RestoreMetadata
                 }
             }
 
-            var missing = known.Captured & ~(Applied(item.Kind, target) | given);
+            var missing = known.Captured & ~(applied | given);
             if (missing == CapturedMetadata.None)
             {
-                continue;
-            }
-
-            if (!held)
-            {
-                links += target.SupportsSymlinks ? 1 : 0;
                 continue;
             }
 
@@ -563,6 +672,9 @@ public static class RestoreMetadata
             Add("set-id-bits", setIds, string.Create(CultureInfo.InvariantCulture,
                 $"Permissions captured on {setIds} will lose a set-user-id or set-group-id bit, because "
                 + $"the owner or group the bit goes with will not be given back."));
+            Add("symlink-permissions", linkPermissions, string.Create(CultureInfo.InvariantCulture,
+                $"Permissions captured on {linkPermissions} will not be applied; this target gives every symlink "
+                + $"the same permissions and has no call that changes them."));
         }
 
         var descriptors = attributes.GetValueOrDefault(CapturedMetadata.SecurityDescriptor);
@@ -583,6 +695,9 @@ public static class RestoreMetadata
         Add("privileged-attributes", privileged, string.Create(CultureInfo.InvariantCulture,
             $"Extended attributes in the security and trusted namespaces, captured on {privileged}, will not be "
             + $"applied; writing them needs root."));
+        Add("symlink-attributes", linkAttributes, string.Create(CultureInfo.InvariantCulture,
+            $"Extended attributes captured on {linkAttributes} will not all be applied; Linux keeps no "
+            + $"user-namespace attribute and no access control list on a symlink."));
 
         var created = attributes.GetValueOrDefault(CapturedMetadata.CreatedAt);
         Add("creation-times", created, string.Create(CultureInfo.InvariantCulture,
@@ -591,12 +706,6 @@ public static class RestoreMetadata
         var flags = attributes.GetValueOrDefault(CapturedMetadata.FileAttributes);
         Add("file-attributes", flags, string.Create(CultureInfo.InvariantCulture,
             $"File attributes (read-only, hidden, system, archive) captured on {flags} will not be applied."));
-
-        if (links > 0)
-        {
-            declared.Add(new MetadataDegradation("symlink-metadata", string.Create(CultureInfo.InvariantCulture,
-                $"Metadata captured on {links} symlink(s) will not be applied; each link is created with the platform's defaults.")));
-        }
 
         return declared;
     }
@@ -676,6 +785,9 @@ public static class RestoreMetadata
         return (given, unresolved);
     }
 
+    /// <summary>Whether <paramref name="name"/> is in Linux's user namespace.</summary>
+    private static bool IsUser(ReadOnlySpan<byte> name) => name.StartsWith("user."u8);
+
     /// <summary>Whether <paramref name="name"/> is in a Linux namespace only root writes: security or trusted.</summary>
     private static bool IsPrivileged(ReadOnlySpan<byte> name) =>
         name.StartsWith("security."u8) || name.StartsWith("trusted."u8);
@@ -732,37 +844,57 @@ public static class RestoreMetadata
     private readonly record struct AclRead(bool NamesAccounts, uint? GroupObject, uint? Mask);
 
     /// <summary>
-    /// How many files and how many folders a declaration covers, said the way
-    /// a person reads it: "2 file(s)", "1 folder(s)", or both joined.
+    /// How many files, folders and symlinks a declaration covers, said the way
+    /// a person reads it: "2 file(s)", "1 symlink(s)", or those it covers
+    /// joined, as in "2 file(s), 1 folder(s) and 1 symlink(s)".
     /// </summary>
     private sealed class Tally
     {
         private int _files;
         private int _folders;
+        private int _links;
 
         /// <summary>Whether it covers anything at all.</summary>
-        public bool Any => _files + _folders > 0;
+        public bool Any => _files + _folders + _links > 0;
 
-        /// <summary>Counts one item of <paramref name="kind"/>: a folder, or else a file.</summary>
+        /// <summary>Counts one item of <paramref name="kind"/>: a folder, a symlink, or else a file.</summary>
         public void Add(EntryKind kind)
         {
-            if (kind == EntryKind.DirectoryPlaceholder)
+            switch (kind)
             {
-                _folders++;
-            }
-            else
-            {
-                _files++;
+                case EntryKind.DirectoryPlaceholder:
+                    _folders++;
+                    break;
+                case EntryKind.Symlink:
+                    _links++;
+                    break;
+                default:
+                    _files++;
+                    break;
             }
         }
 
         /// <inheritdoc />
-        public override string ToString() => (_files, _folders) switch
+        public override string ToString()
         {
-            (_, 0) => string.Create(CultureInfo.InvariantCulture, $"{_files} file(s)"),
-            (0, _) => string.Create(CultureInfo.InvariantCulture, $"{_folders} folder(s)"),
-            _ => string.Create(CultureInfo.InvariantCulture, $"{_files} file(s) and {_folders} folder(s)"),
-        };
+            List<string> parts = [];
+            if (_files > 0 || _folders + _links == 0)
+            {
+                parts.Add(string.Create(CultureInfo.InvariantCulture, $"{_files} file(s)"));
+            }
+
+            if (_folders > 0)
+            {
+                parts.Add(string.Create(CultureInfo.InvariantCulture, $"{_folders} folder(s)"));
+            }
+
+            if (_links > 0)
+            {
+                parts.Add(string.Create(CultureInfo.InvariantCulture, $"{_links} symlink(s)"));
+            }
+
+            return parts.Count == 1 ? parts[0] : $"{string.Join(", ", parts.Take(parts.Count - 1))} and {parts[^1]}";
+        }
     }
 
     /// <summary>The names one plan has resolved, so a tree of one owner asks the system once.</summary>

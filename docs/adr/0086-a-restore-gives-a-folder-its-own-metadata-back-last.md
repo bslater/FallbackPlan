@@ -69,6 +69,8 @@ The plan's probe reads a folder's tree as it reads a file's manifest, because th
 - **A symlink's own metadata, extended attributes, Windows attribute bits, security descriptors and alternate streams.** These are still captured, declared and listed, for folders as for files.
 
   > **2026-10 ([ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md)).** Extended attributes are now written back, for folders as for files. The rest of this item remains owed.
+
+  > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink's own metadata is now written back, onto the link itself, and the plan counts links apart from files and folders as it counts folders apart from files. Windows attribute bits, security descriptors and alternate streams remain owed.
 - **The snapshot's root.** Its metadata is not applied to the folder a restore writes into (§3), and the plan does not declare it, because that folder is not an item.
 - **A handle-relative restore.** The run writes by path, and checks containment before each write rather than in one step with it. Opening each folder relative to its parent, as capture does, would close the window §4 narrows.
 - **The recovery tool and the CLI's `restore-file`**, which write no metadata.

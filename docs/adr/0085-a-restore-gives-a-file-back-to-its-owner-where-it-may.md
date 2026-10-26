@@ -69,6 +69,8 @@ A set-id bit the run will drop is declared on a line of its own. The receipt sum
 
   > **2026-10 ([ADR-0086](0086-a-restore-gives-a-folder-its-own-metadata-back-last.md)).** A folder the restore makes now gets its owner and group back by §2's rule, and keeps a set-group-id bit only with its group, as §4 holds a file's.
 - **A symlink's own owner.** `lchown` could set it. It is owed with the rest of a symlink's own metadata.
+
+  > **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** Built: a link's owner and group are given back by this record's rule, through `lchown`, with the rest of its own metadata.
 - **A Windows file's owner.** It lives in the security descriptor, which is captured and not applied.
 - **Extended attributes**, POSIX ACLs among them, Windows attribute bits and alternate streams, which are still listed.
 

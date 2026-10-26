@@ -64,9 +64,12 @@ The override exists because the estimate errs high and some volumes hold more th
 
 `RestoreMetadata` holds the executor's own rule: a file's modification time everywhere, and its permissions where the target applies POSIX metadata. Nothing else is written back yet. A symlink is created with none of its own metadata, because the platform calls that would set it follow the link. Alternate streams are never applied, whatever a profile claims, because the executor writes none.
 
+> **2026-10 ([ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md)).** A symlink the restore makes now gets its own metadata back by the rule a file does, each write by a call that changes the link itself and never what it points at. The plan counts links on the lines files and folders use, and its one line for every link's metadata is gone.
+
 The plan and the receipt both read that one rule, so they cannot disagree about what a target gets back:
 
 - **The plan** declares each attribute the tree carries and the target will not get back, with how many files carry it, and only when some do — ownership, security descriptors, extended attributes, creation times, access times, file attributes, and a symlink's own metadata. For ownership it names what applying it needs: root, or CAP_CHOWN. It does not repeat what the planner already says: on a target that applies no POSIX metadata, the planner's line covers permissions and ownership.
+  > **2026-10 ([Amendment 1](#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor)).** The security-descriptor line had been declared on every plan over files captured off Windows, which never had one. An empty descriptor is now read as none.
 - **The receipt**, at schema 6, names per landed item each captured attribute not applied, in the format's order and words: `created_at`, `owner` and so on. An item's outcome does not change for metadata alone. Its content landed and verified, so it is restored; what it lacks is said beside it, as the plan said it would be. Alternate streams stay the exception they were: a file missing a stream is not the captured file, so it is degraded.
 - **The run's answer** summarises the receipt, one line an attribute with how many items it was left off.
 
@@ -102,6 +105,16 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 - **Move the engine's working copy onto the volume the restore writes to.** Rejected for this slice: one volume would mean one figure, but on a spinning disk every file would then be written, read back and written again on the same spindle. The working space is measured where it is instead.
 - **Mark a file degraded when any captured attribute is not applied.** Rejected: nearly every restored file would be degraded, because access times alone are never applied, and the outcome would stop distinguishing a file whose content is not the captured file from one whose times are not.
 
+## Amendment 1 (2026-10) — an empty security descriptor is no descriptor
+
+A restore's receipt on Linux listed `security_descriptor` as not applied on every item, and its plan declared descriptors for files that never had one. The cause was capture. It typed the descriptor's conditional as a byte array, so where no descriptor was read, the null array became an empty value rather than none. Every entry captured off Windows, and every one captured on Windows with descriptor capture turned off, recorded key 7 of its metadata map as an empty byte string. [Specification 06 §4.1](../../specifications/repository-format/06-manifests.md#41-metadata-map) defines key 7 as a descriptor in self-relative form, and the smallest of those is twenty bytes. No test exercised a descriptor on any platform.
+
+- **Capture records none.** Where no descriptor is read, an entry carries none, and a manifest written for it omits key 7. A descriptor Windows answers as empty is none too.
+- **A restore reads an empty descriptor as none.** A manifest already written keeps its empty key until its file changes, so §5's rule counts a descriptor only when it holds bytes. The plan declares nothing for an empty one, and the receipt lists nothing.
+- **The metadata digest does not tell none from empty.** The digest decides whether an unchanged file's manifest is reused verbatim (NFR-PERF-003), and every digest a catalogue holds was computed with the empty key. Told apart, every file captured off Windows would look changed once, and the next backup would fetch and rewrite its manifest. So none digests as empty, and the next backup reuses what it reused before. A real descriptor still changes the digest.
+
+Two alternatives were weighed. Fixing capture alone was rejected for the rewrite it would cost every installation once. Treating empty as none only at restore was rejected because it would leave every new manifest carrying a key the specification does not allow. The manifest codec still reads an empty key 7, which every repository written so far holds.
+
 ## Status history
 
 | Date | Status | Note |
@@ -110,3 +123,5 @@ The plan and the receipt both read that one rule, so they cannot disagree about 
 | 2026-10 | Accepted | [ADR-0084](0084-a-restore-writes-back-the-times-it-can-set.md) writes back access times everywhere and creation times where the platform can set them. The receipt's not_applied list keeps receipt schema 6's shape but now records each write's outcome, not §5's rule. The rule still drives the plan. |
 | 2026-10 | Accepted | [ADR-0085](0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md) writes ownership back where the names resolve and the account may give them. §5's plan now names two reasons ownership will not land, privilege and a name that resolves to nothing, and a set-id bit it will drop. |
 | 2026-10 | Accepted | [ADR-0087](0087-a-restore-writes-back-the-extended-attributes-it-may.md) writes extended attributes back where the account and the volume allow them. §5's plan gains a line for each kind the rule withholds item by item: ACLs naming accounts by number elsewhere, every ACL on macOS, and the namespaces only root writes. |
+| 2026-10 | Accepted (amended) | [Amendment 1](#amendment-1-2026-10--an-empty-security-descriptor-is-no-descriptor): an empty security descriptor, which capture had recorded for every entry it read none for, is no descriptor. Capture records none, a restore reads an empty one as none, and the metadata digest does not tell them apart, so no manifest is rewritten for it. |
+| 2026-10 | Accepted | [ADR-0101](0101-a-restore-gives-a-symlink-its-own-metadata-back.md) gives a symlink its own metadata back, onto the link itself. §5's plan counts links beside files and folders, and loses its one line for every link. |

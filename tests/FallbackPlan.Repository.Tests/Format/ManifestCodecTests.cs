@@ -664,6 +664,21 @@ public sealed class ManifestCodecTests
     }
 
     [TestMethod]
+    public void MetadataDigest_NoSecurityDescriptorAndAnEmptyOne_DigestAlike_AndARealOneStillCounts()
+    {
+        // Every build before the capture stopped writing an empty descriptor
+        // recorded the digest with it. Told apart, every file captured off
+        // Windows would look changed once, and its manifest be rewritten
+        // (NFR-PERF-003).
+        var none = new EntryMetadata { ModifiedAt = 1_700_000_000_000, PosixMode = 0x1A4, OwnerName = "ana" };
+        var empty = none with { WindowsSecurityDescriptor = ReadOnlyMemory<byte>.Empty };
+        var real = none with { WindowsSecurityDescriptor = new byte[] { 1, 0, 4, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } };
+
+        CollectionAssert.AreEqual(FileVersionManifestCodec.MetadataDigest(empty), FileVersionManifestCodec.MetadataDigest(none));
+        CollectionAssert.AreNotEqual(FileVersionManifestCodec.MetadataDigest(none), FileVersionManifestCodec.MetadataDigest(real));
+    }
+
+    [TestMethod]
     public void ErrorManifest_AnUnassignedReason_IsRefused()
     {
         // The other edge of the same bound. Casting an out-of-range value into

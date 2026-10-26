@@ -115,6 +115,23 @@ public sealed partial class LocalScanTests : IDisposable
     }
 
     [TestMethod]
+    public async Task Scan_WhereNoSecurityDescriptorIsRead_AnEntryCarriesNone_RatherThanAnEmptyOne()
+    {
+        // Off Windows none is ever read, and on Windows none is read when the
+        // options say not to. An empty one is no descriptor (06 §4.1 key 7):
+        // it was written onto every manifest captured off Windows, and every
+        // restore of one listed a descriptor it could not apply.
+        Write("docs/plain.txt");
+        var options = OperatingSystem.IsWindows() ? new ScanOptions { CaptureSecurityDescriptors = false } : new ScanOptions();
+
+        var events = await ScanAsync(options);
+
+        Assert.IsNull(events.OfType<ScanEvent.Leaf>().Single().Entry.Metadata.WindowsSecurityDescriptor);
+        Assert.IsNull(
+            events.OfType<ScanEvent.EnterDirectory>().Single(enter => enter.Entry.RelativePath == "docs").Entry.Metadata.WindowsSecurityDescriptor);
+    }
+
+    [TestMethod]
     [PlatformCondition(TestPlatforms.Posix, "creating a symlink on Windows needs a privilege the runner lacks")]
     [PlatformTrait(TestPlatforms.Posix)]
     public async Task Scan_TreeContainsASymlink_CapturesItAsALinkAndNeverFollowsIt()

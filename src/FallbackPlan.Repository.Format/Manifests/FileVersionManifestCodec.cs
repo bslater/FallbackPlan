@@ -414,6 +414,13 @@ public static class FileVersionManifestCodec
     /// about the observer rather than about the file.
     /// </para>
     /// <para>
+    /// <b>No security descriptor digests as an empty one.</b> An empty one is
+    /// no descriptor (06 §4.1 key 7), and capture wrote one for every entry
+    /// it read none for until ADR-0083 Amendment 1. Told apart, every file
+    /// captured off Windows would look changed once, and have its manifest
+    /// fetched and rewritten.
+    /// </para>
+    /// <para>
     /// The encoding is the same canonical CBOR the manifest itself uses, so
     /// two equal maps digest equally on every platform and in every version,
     /// and the digest is truncated to 16 bytes because it is compared for
@@ -427,7 +434,11 @@ public static class FileVersionManifestCodec
         ThrowHelper.ThrowIfNull(metadata);
 
         var writer = new CanonicalCborWriter();
-        WriteMetadata(writer, metadata with { AccessedAt = null });
+        WriteMetadata(writer, metadata with
+        {
+            AccessedAt = null,
+            WindowsSecurityDescriptor = metadata.WindowsSecurityDescriptor ?? ReadOnlyMemory<byte>.Empty,
+        });
         return System.Security.Cryptography.SHA256.HashData(writer.Encode())[..16];
     }
 
