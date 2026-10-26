@@ -79,12 +79,10 @@ public sealed class ParserFuzzTests
         // Stamp each framing magic over the head so the fuzz input gets past
         // the cheap gate and into the field validation it exists to test.
         data ??= [];
-        ReadOnlySpan<byte> magic = ((uint)magicIndex % 5) switch
+        ReadOnlySpan<byte> magic = ((uint)magicIndex % 3) switch
         {
             0 => "FBPKSREC"u8,
             1 => "FBPKBLOB"u8,
-            2 => "FBPKKEYS"u8,
-            3 => "FBPKRKIT"u8,
             _ => "FBPKSPCK"u8,
         };
 

@@ -66,7 +66,9 @@ the set's own retention as the archive recorded it, FR-DR-006),
 flagged where it does not resolve here, answered with the confirmation
 `adopt_archive` now requires),
 `login` / `resume_session` / `logout`, `list_users` / `create_user` /
-`delete_user` / `change_password` (ADR-0045).
+`delete_user` / `change_password` (ADR-0045), `restart_service` (1.23 — an
+in-process recycle of the running service, Owner-only and local callers
+only).
 
 **Configuration** — `list_backup_sets` / `upsert_backup_set` /
 `delete_backup_set`, `list_destinations` / `upsert_destination` /

@@ -4,7 +4,7 @@ using System.Text;
 
 namespace FallbackPlan.Protocol;
 
-/// <summary>One message this protocol can put on the wire (specification peer-protocol 02 §5).</summary>
+/// <summary>One message this protocol can put on the wire (specification peer-protocol 02 §7).</summary>
 /// <remarks>
 /// <see cref="BodyEntryCount"/> exists because deterministic CBOR admits no
 /// indefinite-length map, so the count must be known before the first entry is
@@ -177,7 +177,7 @@ public sealed record SessionAuthProof(ReadOnlyMemory<byte> Signature) : IPeerMes
 /// <param name="MaximumVersion">Highest protocol version this side speaks.</param>
 /// <param name="FeaturesOffered">What this side supports.</param>
 /// <param name="FeaturesRequired">What this side requires of the peer.</param>
-/// <param name="AgentVersion">Informational. Nothing may branch on it (02 §2).</param>
+/// <param name="AgentVersion">Informational. Nothing may branch on it (02 §4).</param>
 /// <param name="Terms">Present when this side is the destination (01 §4).</param>
 public sealed record SessionHello(
     ushort MinimumVersion,
@@ -266,7 +266,7 @@ public sealed record SessionHello(
     /// <summary>Reads a hello from a body positioned after the message type.</summary>
     /// <param name="reader">The frame's reader.</param>
     /// <returns>The hello.</returns>
-    /// <exception cref="PeerProtocolException">The body violates 02 §2 or a 00 §2.3 limit.</exception>
+    /// <exception cref="PeerProtocolException">The body violates 02 §4 or a 00 §2.3 limit.</exception>
     public static SessionHello Read(CborReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -304,7 +304,7 @@ public sealed record SessionHello(
                     break;
                 default:
                     // An unknown *key* inside a known message is skipped; an
-                    // unknown message *type* is refused (02 §5). The difference
+                    // unknown message *type* is refused (02 §7). The difference
                     // is that here the shape is known, so a later version adding
                     // a field cannot be confused with a corrupted stream.
                     reader.SkipValue();
@@ -364,7 +364,7 @@ public sealed record SessionHello(
     {
         var feature = reader.ReadTextString();
 
-        // 02 §4: lower-case ASCII, non-empty. Refused on the way in rather than
+        // A feature name (02 §6) is lower-case ASCII and non-empty. Refused on the way in rather than
         // normalised, because a feature name that two implementations spell
         // differently and one of them silently folds is a negotiation that
         // disagrees with itself while both sides believe they agree.
@@ -418,10 +418,10 @@ public sealed record SessionHello(
 
 /// <summary>
 /// What each side says once the other's hello is acceptable
-/// (specification peer-protocol 02 §2).
+/// (specification peer-protocol 02 §4).
 /// </summary>
-/// <param name="Version">The selected protocol version (02 §3).</param>
-/// <param name="Features">The features in effect — the intersection (02 §4).</param>
+/// <param name="Version">The selected protocol version (02 §5).</param>
+/// <param name="Features">The features in effect — the intersection (02 §6).</param>
 public sealed record SessionAccept(ushort Version, IReadOnlyList<string> Features) : IPeerMessage
 {
     /// <inheritdoc/>
@@ -472,7 +472,7 @@ public sealed record SessionAccept(ushort Version, IReadOnlyList<string> Feature
     /// <summary>Reads an acceptance from a body positioned after the message type.</summary>
     /// <param name="reader">The frame's reader.</param>
     /// <returns>The acceptance.</returns>
-    /// <exception cref="PeerProtocolException">The body violates 02 §2.</exception>
+    /// <exception cref="PeerProtocolException">The body violates 02 §4.</exception>
     public static SessionAccept Read(CborReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -513,13 +513,13 @@ public sealed record SessionAccept(ushort Version, IReadOnlyList<string> Feature
 }
 
 /// <summary>
-/// Why a side will not continue (specification peer-protocol 02 §6).
+/// Why a side will not continue (specification peer-protocol 02 §8).
 /// </summary>
 /// <param name="Reason">The code a client branches on.</param>
 /// <param name="Text">What a human reads. Nothing may parse it.</param>
 public sealed record SessionRefuse(PeerRefusalReason Reason, string Text) : IPeerMessage
 {
-    /// <summary>The most bytes the human-readable text may occupy (02 §6).</summary>
+    /// <summary>The most bytes the human-readable text may occupy (02 §8).</summary>
     public const int MaximumTextBytes = 256;
 
     /// <inheritdoc/>
@@ -533,7 +533,7 @@ public sealed record SessionRefuse(PeerRefusalReason Reason, string Text) : IPee
     /// <returns>The refusal to send.</returns>
     /// <remarks>
     /// The text comes from the exception's message, which is written for the
-    /// operator on <b>this</b> side; 02 §6 requires that a refusal served to a
+    /// operator on <b>this</b> side; 02 §8 requires that a refusal served to a
     /// stranger disclose nothing, so it is truncated but never enriched.
     /// </remarks>
     public static SessionRefuse From(PeerProtocolException exception)
@@ -556,7 +556,7 @@ public sealed record SessionRefuse(PeerRefusalReason Reason, string Text) : IPee
     /// <summary>Reads a refusal from a body positioned after the message type.</summary>
     /// <param name="reader">The frame's reader.</param>
     /// <returns>The refusal.</returns>
-    /// <exception cref="PeerProtocolException">The body violates 02 §6.</exception>
+    /// <exception cref="PeerProtocolException">The body violates 02 §8.</exception>
     public static SessionRefuse Read(CborReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
@@ -651,6 +651,22 @@ internal static class PeerCbor
             throw new PeerProtocolException(
                 PeerRefusalReason.Malformed, "A message body does not have the shape this protocol defines.", exception);
         }
+    }
+
+    /// <summary>Reads a <c>u8</c>, which CBOR does not have a distinct type for.</summary>
+    /// <param name="reader">The reader.</param>
+    /// <returns>The value.</returns>
+    /// <exception cref="PeerProtocolException">The value does not fit.</exception>
+    public static byte ReadUInt8(CborReader reader)
+    {
+        var value = reader.ReadUInt32();
+        if (value > byte.MaxValue)
+        {
+            throw new PeerProtocolException(
+                PeerRefusalReason.Malformed, $"The value {value} does not fit the u8 this field is.");
+        }
+
+        return (byte)value;
     }
 
     /// <summary>Reads a <c>u16</c>, which CBOR does not have a distinct type for.</summary>

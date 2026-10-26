@@ -212,7 +212,7 @@ internal static class Wire
     /// <summary>The set identity the suites use throughout.</summary>
     public static readonly string SetId = new('a', 32);
 
-    /// <summary>A device identity for kits and describes.</summary>
+    /// <summary>A device identity for describes.</summary>
     public const string DeviceIdHex = "00112233445566778899aabbccddeeff";
 
     /// <summary>The passphrase the installation the suites describe was set up with.</summary>

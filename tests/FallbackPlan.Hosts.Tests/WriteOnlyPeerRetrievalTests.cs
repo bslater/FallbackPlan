@@ -64,9 +64,10 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
         string snapshotId;
         string recipient;
 
-        // What the recovery kit records for a v2 repository (ADR-0042 §8):
-        // where the archive is, and how to re-derive — the KDF salt and
-        // parameters. Captured here before the loss, exactly as a kit is.
+        // How to re-derive a v2 repository's keys: the KDF salt and
+        // parameters its descriptor carries, which the replica holds and a
+        // claimant is served (ADR-0060). Captured here before the loss, so
+        // the test needs no second read of them.
         byte[] kdfSalt;
         Domain.Configuration.Argon2Parameters kdfParameters;
 
@@ -162,7 +163,7 @@ public sealed class WriteOnlyPeerRetrievalTests : IDisposable
         Assert.IsInstanceOfType<AcknowledgedResult>(
             await own.ExecuteAsync(new CloseRestoreSourceCommand(structural.SourceId), _timeout.Token));
 
-        // The passphrase re-derives against the kit-recorded salt and
+        // The passphrase re-derives against the descriptor's salt and
         // parameters; the grant arrives sealed; the bytes come back.
         Assert.IsInstanceOfType<RestoreSourceOpenedResult>(
             await handler.ExecuteAsync(

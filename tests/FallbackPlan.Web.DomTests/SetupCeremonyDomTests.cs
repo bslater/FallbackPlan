@@ -238,7 +238,7 @@ public sealed class SetupCeremonyDomTests
         await using var harness = await DomHarness.StartAsync();
         harness.Clients.Client.Respond = command => command switch
         {
-            // A service on contracts 1.14–1.28 reports kit_required between
+            // A service on contracts 1.14–1.30 reports kit_required between
             // setup_required and ready. The kit it names is gone (ADR-0060),
             // but the state still says the ceremony never finished, so the
             // console puts the ceremony up rather than the console.

@@ -4,7 +4,7 @@ using System.Formats.Cbor;
 
 namespace FallbackPlan.Protocol;
 
-/// <summary>The message types this protocol defines (specification peer-protocol 02 §5).</summary>
+/// <summary>The message types this protocol defines (specification peer-protocol 02 §7).</summary>
 public enum PeerMessageType : ushort
 {
     /// <summary>Pairing offer (01 §2.2).</summary>
@@ -19,10 +19,10 @@ public enum PeerMessageType : ushort
     /// <summary>Pairing refusal (01 §2.2).</summary>
     PairRefuse = 4,
 
-    /// <summary>Session hello (02 §2).</summary>
+    /// <summary>Session hello (02 §4).</summary>
     SessionHello = 5,
 
-    /// <summary>Session acceptance (02 §2).</summary>
+    /// <summary>Session acceptance (02 §4).</summary>
     SessionAccept = 6,
 
     /// <summary>Session refusal (02 §8).</summary>
@@ -132,15 +132,15 @@ public enum PeerMessageType : ushort
 
     /// <summary>
     /// An owner offers a replacement for a blob its sweep found damaged at the
-    /// destination (08 §3.1; feature-gated as "replica-repair").
+    /// destination (08 §4.1; feature-gated as "replica-repair").
     /// </summary>
     RepairOffer = 280,
 
-    /// <summary>What the destination will do with an offered, or a sent, replacement (08 §3.2).</summary>
+    /// <summary>What the destination will do with an offered, or a sent, replacement (08 §4.2).</summary>
     RepairVerdict = 281,
 }
 
-/// <summary>Why a peer would not continue (specification peer-protocol 02 §6).</summary>
+/// <summary>Why a peer would not continue (specification peer-protocol 02 §8).</summary>
 public enum PeerRefusalReason : ushort
 {
     /// <summary>The presented key is not the pinned key.</summary>
@@ -242,19 +242,19 @@ public sealed class PeerProtocolException : Exception
     public PeerProtocolException(string message, Exception innerException)
         : base(message, innerException) => Reason = PeerRefusalReason.Malformed;
 
-    /// <summary>The closed-set code a peer branches on (02 §6).</summary>
+    /// <summary>The closed-set code a peer branches on (02 §8).</summary>
     public PeerRefusalReason Reason { get; }
 
     /// <summary>
     /// Whether this refusal arrived off the wire from the peer, as opposed to
     /// being raised here against the peer. A received refusal is surfaced and
-    /// never echoed back as a refusal of its own (02 §6).
+    /// never echoed back as a refusal of its own (02 §8).
     /// </summary>
     public bool ReceivedFromPeer { get; init; }
 }
 
 /// <summary>
-/// One message on the wire (specification peer-protocol 02 §5).
+/// One message on the wire (specification peer-protocol 02 §7).
 /// </summary>
 /// <remarks>
 /// <para>

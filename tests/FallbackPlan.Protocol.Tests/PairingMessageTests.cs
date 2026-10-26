@@ -83,6 +83,42 @@ public sealed class PairingMessageTests
     }
 
     [TestMethod]
+    [DataRow(257u)]
+    [DataRow(258u)]
+    [DataRow(65_535u)]
+    public void PairOffer_ARoleThatIsNoU8_RefusesAsMalformed_RatherThanWrappingIntoTheVocabulary(uint role)
+    {
+        // Key 7 is a u8 (01 §2.2). Read through a wider integer and cast, 257
+        // became 1 and was accepted as stores-here: a role the peer did not
+        // declare, recorded as though it had.
+        using var keypair = PeerKeypair.Generate();
+        using var exchange = PairingExchange.Start();
+        var writer = new CborWriter(CborConformanceMode.Canonical);
+        writer.WriteStartMap(7);
+        writer.WriteInt32(PeerFrame.MessageTypeKey);
+        writer.WriteUInt32((uint)PeerMessageType.PairOffer);
+        var contribution = Contribution(keypair.Identity, exchange);
+        writer.WriteInt32(1);
+        writer.WriteByteString(contribution.Identity.PublicKey);
+        writer.WriteInt32(2);
+        writer.WriteByteString(contribution.EphemeralPublicKey.Span);
+        writer.WriteInt32(3);
+        writer.WriteByteString(contribution.Nonce.Span);
+        writer.WriteInt32(4);
+        writer.WriteTextString("laptop");
+        writer.WriteInt32(5);
+        writer.WriteUInt32(1);
+        writer.WriteInt32(7);
+        writer.WriteUInt32(role);
+        writer.WriteEndMap();
+
+        var refused = Assert.ThrowsExactly<PeerProtocolException>(
+            () => PairOffer.Read(PeerFrame.Decode(writer.Encode()).Body));
+
+        Assert.AreEqual(PeerRefusalReason.Malformed, refused.Reason);
+    }
+
+    [TestMethod]
     [DataRow(31)]
     [DataRow(33)]
     public void PairOffer_ContributionFieldIsTheWrongLength_RefusesAsMalformed(int length)

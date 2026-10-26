@@ -1313,7 +1313,7 @@ public sealed record ConfigurationResult(string Json) : ServiceResult;
 /// client meeting the unfinished state shows the ceremony in place of its
 /// normal views. Null from a service older than contract 1.13, which a
 /// client reads as "cannot tell" and so as no reason to interrupt anybody.
-/// Contract 1.14 to 1.28 had a third value, <c>"kit_required"</c>, between
+/// Contract 1.14 to 1.30 had a third value, <c>"kit_required"</c>, between
 /// the two; the recovery kit it waited for is withdrawn, and a client that
 /// still knows the word treats it as the ceremony being unfinished.
 /// </param>

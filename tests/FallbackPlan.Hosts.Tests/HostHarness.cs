@@ -71,7 +71,7 @@ public sealed class HostHarness : IDisposable
     /// <summary>The directory a backup set points at.</summary>
     public string SourceRoot => Path.Combine(_scratch, "source");
 
-    /// <summary>A scratch directory for kits and restore targets.</summary>
+    /// <summary>A scratch directory for restore targets.</summary>
     public string WorkPath => Path.Combine(_scratch, "work");
 
     /// <summary>The result of one host invocation.</summary>

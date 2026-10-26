@@ -124,8 +124,8 @@ public sealed class RepositoryWriteCredential : IDisposable
     /// half is deliberately absent, exactly as the reclaim key's is: a
     /// compromised service that could author a claim could re-point a
     /// replica's attribution to a machine of its choosing, and the claimant —
-    /// who holds the passphrase and the kit — reaches the key by derivation
-    /// rather than from anything a service stores.
+    /// who holds the passphrase — reaches the key by derivation rather than
+    /// from anything a service stores.
     /// </remarks>
     public ReadOnlySpan<byte> ClaimPublicKey => _claimPublicKey;
 

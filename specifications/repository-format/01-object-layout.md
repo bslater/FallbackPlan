@@ -27,8 +27,16 @@ It does **not** assume: atomic rename, strong listing consistency, provider-comp
 /hints/placement/<snapshot-id>
 /hints/identity/<shard>/<source-key>/<captured-at>/<snapshot-id>
 /hints/identity-pack/<device-id>/<captured-at>/<snapshot-id>/<part>
-/config/<backup-set-id>/<recorded-at>/<config-id>
 ```
+
+> **Withdrawn (2026-10).** A `/config/<backup-set-id>/<recorded-at>/<config-id>`
+> namespace was listed here for a set-configuration object
+> ([ADR-0071](../../docs/adr/0071-recovering-operation-after-total-loss.md)),
+> superseded before any build wrote one: a set's shape travels in its policy
+> manifest instead ([ADR-0061](../../docs/adr/0061-adopt-a-destinations-archives.md)).
+> No section ever defined the object, and its `<recorded-at>` would have put a
+> timestamp in a store key, which §2.1 forbids. A writer MUST NOT write under
+> `/config/`.
 
 `<store-blob-key>` is the HMAC-rendered store blob key of [02 §4.3](02-identifiers.md#43-not-leaking-writer-identity) — **never** the raw `blob_id`, whose structured formation embeds writer identity. `<shard>` is the **first four characters** of the base32-rendered store blob key. Sharding keeps any single listing prefix bounded, which matters on stores that paginate listings and on filesystems that degrade with very large directories; deriving the shard from the keyed rendering means it, too, reveals nothing (§2.1).
 
@@ -138,7 +146,7 @@ Both proceed by tombstone, grace period, and revalidation before the delete — 
 
 A reader bootstraps in this order:
 
-1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` — it MUST be 2 or 3; a reader that meets 1 refuses by name, naming re-seeding as the remedy — and `required_features`.
+1. Fetch `/repository-format`. Verify magic and digest. Check `format_version` — it MUST be 2, 3, 4 or 5 ([00 §5](00-conventions.md#5-versioning-and-feature-negotiation)); a reader that meets 1 refuses by name, naming re-seeding as the remedy — and `required_features`.
 2. Derive the root from the passphrase using `kdf_parameters`, expand the sealing scalar, and compare its public key with key 9 ([03 §2](03-keys.md#2-the-root)). A holder of the write credential instead compares the credential's public key with key 9; either way nothing is fetched and nothing is unwrapped.
 3. There is no third fetch: the derivation is the whole of the key material ([03 §3](03-keys.md#3-the-key-object)).
 4. Enumerate `/snapshots/…` to establish a stable snapshot set.

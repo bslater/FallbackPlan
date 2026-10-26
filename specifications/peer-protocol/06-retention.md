@@ -48,7 +48,7 @@ A key the spoke does not hold is not an error: deletion is idempotent, the excha
 
 ## 4 Messages
 
-This document occupies types 262+ of the range [02 §7](02-session.md#7-framing) reserves.
+This document occupies types 262–263 of the range [02 §7](02-session.md#7-framing) reserves.
 
 | Type | Message | Section |
 |------|---------|---------|

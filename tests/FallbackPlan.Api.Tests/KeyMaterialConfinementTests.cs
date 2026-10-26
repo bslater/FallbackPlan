@@ -17,11 +17,10 @@ namespace FallbackPlan.Api.Tests;
 /// for the key would have made the keystore pointless.
 /// </para>
 /// <para>
-/// The consequence for key export is deliberate: it is <b>not a command</b>.
-/// Exporting a recovery kit re-derives the key-encryption key from a
-/// user-supplied passphrase per invocation, so it runs locally with the
-/// passphrase the user just typed — which is what makes holding a running
-/// service insufficient to mint a recovery kit (ADR-0028 §9).
+/// The consequence for key export is deliberate: there is none, as a command
+/// or otherwise. The passphrase is the whole recovery credential (ADR-0060),
+/// so no command produces key material or a recovery artefact, and holding a
+/// running service is never enough to mint one (ADR-0028 §9).
 /// </para>
 /// </remarks>
 [TestClass]
@@ -140,8 +139,8 @@ public sealed class KeyMaterialConfinementTests
 
         Assert.IsTrue(
             exporting.Count == 0,
-            "Key export re-derives the KEK from a passphrase supplied per invocation and therefore runs locally, "
-            + $"never as a command: {string.Join(", ", exporting)}");
+            "No command produces key material or a recovery artefact; the passphrase is typed where the person is "
+            + $"(ADR-0060): {string.Join(", ", exporting)}");
     }
 
     [TestMethod]
@@ -157,15 +156,6 @@ public sealed class KeyMaterialConfinementTests
         // preview_adoption joined adopt_archive by decision (FR-DR-009): the
         // shape a preview shows is sealed metadata, so it takes the envelope
         // adoption takes, and opens nothing else with it.
-        //
-        // claim_replicas is the fourth, added by decision (ADR-0070). It is
-        // the same shape and the same reason as the three above: the Argon2id
-        // root is derived where the passphrase was typed, and what crosses is
-        // an envelope only this service can open. It could not be avoided by
-        // deriving service-side, because a machine rebuilt from bare metal has
-        // no repository to read the KDF salt from — the recovery kit carries
-        // it, and the kit is on the client. Sealing it is what keeps the
-        // passphrase itself off the surface.
         //
         // set_destination_credentials joined by decision (ADR-0091). An
         // S3-compatible destination's secret access key opens no archive and

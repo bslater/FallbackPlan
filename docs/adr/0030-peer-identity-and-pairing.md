@@ -25,6 +25,8 @@ The repository already has three identity-shaped things, and none of them works 
 
 **The passphrase is the human's, and it never leaves the machine that typed it.** [NFR-SEC-009](../requirements/non-functional.md) confines unlocked key material to the service account, and ADR-0028 §9 keeps kit export local for exactly this reason.
 
+> **Amended 2026-10.** Kit export went with the kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)). The rule the sentence illustrates, that passphrase work happens where the passphrase was typed, stands.
+
 So peer identity has to be a fourth thing, independent of repository membership — and that independence is a feature rather than a compromise. It is what lets a destination be someone who is not in your repository at all.
 
 ## Decision

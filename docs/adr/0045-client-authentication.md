@@ -74,6 +74,9 @@ The distinction is load-bearing, so it is stated in the terms §5 used:
 `<state>/users.json`, owner-only, written through the existing atomic write,
 beside the installation credential and the kit confirmation.
 
+> **Amended 2026-10.** The kit confirmation went with the kit ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)); the
+> installation credential is the only neighbour.
+
 Not the repository metadata plane, and the reason is not stylistic: metadata
 replicates to destinations. A credential file there would be copied to every
 peer and every local-path replica by the ordinary fan-out, and the write-only

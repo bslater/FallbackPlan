@@ -489,7 +489,7 @@ internal static class PairingCbor
                     terms = ReadTerms(reader);
                     break;
                 case 7:
-                    role = (byte)PeerCbor.ReadUInt16(reader);
+                    role = PeerCbor.ReadUInt8(reader);
                     break;
                 case 8 when !hasTerms:
                     inviteId = reader.ReadByteString();

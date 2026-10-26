@@ -237,6 +237,10 @@ set of archives rather than one. And "one writer per repository" (ADR-0028)
 multiplies into one writer role per set archive, all held by the same process —
 the rule is unchanged, its instances are counted differently.
 
+> **Amended 2026-10.** The kit no longer enumerates anything: it was withdrawn
+> ([ADR-0060](0060-the-passphrase-is-the-recovery-credential.md)), and a rebuilt machine discovers a destination's archives by their
+> descriptors ([ADR-0061](0061-adopt-a-destinations-archives.md)).
+
 **Neutral.** The repository format is untouched: no new object types, no reader
 changes, no fixture movement. The peer protocol grows messages (roles,
 termination, retention instructions) but its session and replication layers

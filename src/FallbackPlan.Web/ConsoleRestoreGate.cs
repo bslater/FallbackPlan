@@ -14,8 +14,8 @@ namespace FallbackPlan.Web;
 /// derives under the facts the service publishes for each set and proves the
 /// derivation against that set's sealing key before it seals a grant, so a
 /// console on any machine checks a passphrase alike and nothing passes a
-/// passphrase that did not check out. The same posture as key export
-/// (ADR-0028 §9): passphrase work runs where the person typed it. An
+/// passphrase that did not check out. This is ADR-0028 §9's posture:
+/// passphrase work runs where the person typed it. An
 /// S3-compatible destination's secret access key is sealed here too, for the
 /// same reason and with no derivation (ADR-0091).
 /// </summary>

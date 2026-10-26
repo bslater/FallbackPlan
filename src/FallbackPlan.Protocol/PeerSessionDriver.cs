@@ -33,7 +33,7 @@ public sealed class PeerSession
     /// <summary>The grant the peer authenticated as (02 §3).</summary>
     public PeerGrant Peer { get; }
 
-    /// <summary>The negotiated protocol version (02 §3).</summary>
+    /// <summary>The negotiated protocol version (02 §5).</summary>
     public ushort Version { get; }
 
     /// <summary>
@@ -50,11 +50,11 @@ public sealed class PeerSession
     /// </remarks>
     public ReadOnlyMemory<byte> Binding { get; }
 
-    /// <summary>The features in effect (02 §4) — a gated message is sent only when its feature is here.</summary>
+    /// <summary>The features in effect (02 §6) — a gated message is sent only when its feature is here.</summary>
     public IReadOnlyList<string> Features { get; }
 
     /// <summary>Whether a negotiated feature is in effect for this session.</summary>
-    /// <param name="feature">The feature name (02 §4).</param>
+    /// <param name="feature">The feature name (02 §6).</param>
     public bool Supports(string feature) => Features.Contains(feature, StringComparer.Ordinal);
 
     /// <summary>
@@ -78,7 +78,7 @@ public sealed class PeerSession
 /// what this adds is the wire. The order is fixed by 02 §3.1: send this side's
 /// <see cref="SessionAuth"/> at once without waiting, then take the peer's,
 /// answer with the proof, and verify theirs — so authentication is one round
-/// trip. Negotiation follows authentication deliberately (02 §3): a stranger
+/// trip. Negotiation follows authentication deliberately (02 §4): a stranger
 /// has no business learning what a device supports.
 /// </para>
 /// <para>
@@ -238,7 +238,7 @@ public static class PeerSessionDriver
         }
         catch (PeerProtocolException exception)
         {
-            // Tell the peer it was refused and nothing more (02 §6, §8). A
+            // Tell the peer it was refused and nothing more (02 §8). A
             // refusal that cannot itself be sent — the connection is already
             // gone — is not worth masking the real failure with. A refusal
             // the peer sent is not echoed back: this side was refused, it is
@@ -310,7 +310,7 @@ public static class PeerSessionDriver
             // moment the refusal is written turns the peer's in-flight write
             // into a reset, and the reset purges the refusal out of its
             // receive buffer unread — a Revoked told as "broken pipe" loses
-            // the one fact the refusal existed to carry (02 §6). Reading
+            // the one fact the refusal existed to carry (02 §8). Reading
             // until end-of-stream consumes whatever the peer was mid-send on
             // and returns as soon as it has read the refusal and hung up.
             var discard = new byte[4096];

@@ -1,6 +1,6 @@
 # FallbackPlan repository format — specification
 
-**Format versions:** 3 (created) and 2 (still written by repositories created before it, and still creatable on request) · **Status:** unfrozen — see [stability](#stability)
+**Format versions:** 5 (created); 2, 3 and 4 (read in place, written by repositories created at them until a format upgrade, and still creatable on request — [00 §5](00-conventions.md#5-versioning-and-feature-negotiation)) · **Status:** unfrozen — see [stability](#stability)
 
 ---
 

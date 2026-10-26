@@ -34,8 +34,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// </para>
 /// <para>
 /// What the in-process drill cannot prove is stated in ADR-0054 and belongs to
-/// <c>eng/recovery-drill.sh</c>: the kit file's own parse, the standalone
-/// tool's dependency closure, and the machine actually being gone.
+/// <c>eng/recovery-drill.sh</c>: the standalone tool's dependency closure,
+/// and the machine actually being gone.
 /// </para>
 /// </remarks>
 [TestClass]

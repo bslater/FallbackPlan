@@ -41,7 +41,7 @@ These are recorded limitations, not vulnerabilities. Reporting them is welcome i
 Stated plainly because a backup product that overstates its guarantees is itself a hazard:
 
 - it cannot protect data on a machine that is already compromised;
-- it cannot recover a repository whose keys and recovery kit are all lost — that is by design;
+- it cannot recover a repository whose passphrase is lost — that is by design, and there is no recovery kit to fall back on ([ADR-0060](docs/adr/0060-the-passphrase-is-the-recovery-credential.md));
 - it cannot prevent an administrator with access to every device and to retention controls from destroying data, only make it attributable;
 - it cannot detect malware inside historical snapshots, which is why restore defaults to a quarantine path.
 - it restores a set-user-id program faithfully, quarantine included: restored as root into a folder other accounts can reach, an old one from a historical snapshot is within their reach, flaws and all ([ADR-0085 Amendment 1](docs/adr/0085-a-restore-gives-a-file-back-to-its-owner-where-it-may.md#amendment-1-2026-10--a-quarantine-restore-keeps-set-id-bits)). A restore as root recreates a program's file capabilities the same way ([ADR-0087](docs/adr/0087-a-restore-writes-back-the-extended-attributes-it-may.md)).

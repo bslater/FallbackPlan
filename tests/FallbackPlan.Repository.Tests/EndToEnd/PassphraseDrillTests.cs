@@ -167,8 +167,14 @@ public sealed class PassphraseDrillTests : IDisposable
 
         using var wrong = Passphrase.Create("an entirely different installation's passphrase");
 
-        await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
+        var refused = await Assert.ThrowsExactlyAsync<KeyUnwrapFailedException>(
             async () => await RecoverySession.OpenAsync(wrong, store, CancellationToken.None));
+
+        // What a person reads names what the passphrase was checked against,
+        // which is the repository's own descriptor. There is no kit to
+        // disagree with (ADR-0060).
+        Assert.Contains("sealing key", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("kit", refused.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]
