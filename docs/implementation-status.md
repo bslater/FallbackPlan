@@ -4,7 +4,7 @@
 
 ---
 
-One hundred and one decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
+One hundred and two decision records say what this system should do. This says which of them the code actually does, and — where the answer is "some of it" — which part.
 
 It exists because the two drift apart silently and in one direction. An ADR is written before the work and is never wrong afterwards; nothing in it goes red when the thing it decided turns out to be half-built. The [traceability matrix](requirements/traceability.md) had exactly this failure and had to be rebuilt from fiction: 73 of its 86 test citations named classes nobody had written. That repair is the reason this page cites files rather than intentions, and the reason a checker resolves it on every run.
 
@@ -126,6 +126,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0099](adr/0099-a-folder-that-was-only-read-keeps-its-tree.md) | A folder that was only read keeps its tree: a folder whose tree would be the prior snapshot's but for its access time states the prior time and is the prior object, and one with anything else changed states the time it has now; the catalogue keeps each tree's access time at schema 11, written by every route that fills it | **Built** | `Repository/SnapshotPublication` · `Repository/ManifestBuilder` · `Repository.Catalogue/Catalogue`, `Repository.Catalogue/CatalogueSchema` · `Repository/CatalogueProjector` · `Repository.Catalogue/Forensic/ForensicRebuilder` · `Repository.Tests/EndToEnd/FolderAccessTimeTests`, `Retention.Tests/CompactionCollectionTests` |
 | [0100](adr/0100-a-peer-replaces-what-its-own-check-finds-damaged.md) | A peer replaces what its own check finds damaged: it takes a replacement for a blob only where its own copy fails the keyless locator check, with bytes of the copy's length that pass it and state the locator the copy states, over a repair session of its own served only for the owner; the source proves its copy first, from copies it reads without dialling a peer, and proves it again over retrieval where it landed, at once in the sweep and at each sync while damage is held | **Built** | `Repository.Packing/BlobLocatorCheck` · `Agent/RepairResponder`, `Agent/RemoteServiceListener` · `Protocol/PeerRepairMessages`, `Protocol/PeerSessionNegotiation`, `Protocol/PeerAuthenticator` · `Agent/PeerRepairClient`, `Agent/PeerRepairTarget`, `Repository/ReplicaRepair`, `Agent/ReplicaRepairer` · `Agent/ReplicaSweepJob`, `Agent/FanOut` · `Hosts.Tests/PeerRepairTests`, `Hosts.Tests/PeerDeepSweepTests`, `Repository.Tests/EndToEnd/BlobLocatorCheckTests`, `Repository.Tests/EndToEnd/ReplicaRepairTests`, `Protocol.Tests/RepairMessageTests` |
 | [0101](adr/0101-a-restore-gives-a-symlink-its-own-metadata-back.md) | A restore gives a symlink its own metadata back, onto the link itself: its owner and group, its extended attributes, its times on Linux and macOS, and on macOS its permissions and creation time, each by a call that changes the link and never what it points at. On Linux a link's permissions land only where they are those every link there has, and a user-namespace attribute or ACL on a link is withheld and named. The plan counts links on the lines files and folders use | **Built** | `Domain/SymlinkMetadata` · `Restore/RestoreExecutor` · `Restore/RestoreMetadata` · `Repository.Tests/RestoreSymlinkMetadataTests`, `Domain.Tests/SymlinkMetadataTests`, `Repository.Tests/RestoreMetadataHonestyTests`, `Hosts.Tests/RestoreHonestyServiceTests`, `Cli.Tests/RestoreHonestyCommandTests` · [notes](#0101--a-links-own) |
+| [0102](adr/0102-a-restore-gives-a-hard-link-group-back-as-one-file.md) | A restore gives a hard-link group back as one file: the first name of a group the run reaches lands as any file does, and each later name that agrees with it in content, length and every attribute but the access time is a link to that file, through the existing-file policy at its own destination. A name that does not agree, or that the target will not link, is restored as a file of its own and says why. Receipt schema 7 names the file a name shares, and the plan measures a group once | **Built** | `Domain/HardLinks` · `Restore/RestoreHardLinks` · `Restore/RestoreExecutor` · `Restore/RestoreSpace` · `Restore/RestoreBlobSet` · `Repository.Tests/RestoreHardLinkTests`, `Domain.Tests/HardLinksTests`, `Repository.Tests/RestoreBreadthTests`, `Repository.Tests/RestoreMetadataHonestyTests` · [notes](#0102--one-file-every-name) |
 
 ---
 
@@ -2392,8 +2393,9 @@ Every plan over real files now lists access times, and most list creation
 times and ownership. That is the truth, and it is the next slice's work.
 Still owed: writing those back, which the times have since been
 ([0084](#0084--the-receipt-says-what-landed)); architecture 06 §3's refusal
-for a security descriptor; hard links, which restore as separate files
-without saying so; the physical transfer size; plan export and resume;
+for a security descriptor; hard links, which restored as separate files
+without saying so until [0102](#0102--one-file-every-name); the physical
+transfer size; plan export and resume;
 archival-tier reporting; and the recovery tool's own restore.
 
 ### 0084 — the receipt says what landed
@@ -3154,3 +3156,34 @@ path, so the window between making it and writing onto it is the one
 [0086](#0086--a-folders-own) records. Windows attribute bits, security
 descriptors and alternate streams are not applied, and the recovery tool and
 the CLI's `restore-file` still write no metadata.
+
+### 0102 — one file, every name
+
+Capture has always recorded a hard-link group, in manifest key 12, and
+0026 said a restore would rebuild it. None did: each name came back as a
+copy with its own bytes, the plan measured room for every copy, and the
+receipt said nothing. Now the first name of a group a run reaches lands as
+any file does, and each later name is a link to it through
+`Domain/HardLinks`, POSIX `link` or Windows `CreateHardLinkW`. Nothing is
+read or verified for a later name, because it is the file that was, and
+its receipt item names the name it shares, in schema 7's `linked_to`.
+
+The group is not proof on its own. It keys on the device's identity and
+the file's, not on a filesystem's, so two different files on two
+filesystems can share one. `Restore/RestoreHardLinks` links a later name
+only where it agrees with the first in content, length and every attribute
+but the access time, which reading the first name moves. A name that does
+not agree is a file of its own and says why, and so is one the target will
+not link, on another volume or one that keeps no links. Specification 06
+§4 now tells an independent reader the same.
+
+Each name meets the existing-file policy at its own destination, as a file
+does. The plan's space measure counts a group once, so a tree of links (a
+package store, a series of snapshot folders) is no longer refused for room
+it does not need.
+
+What remains is recorded rather than done. A group is one file within one
+run only, never a name and a file already at the destination. The
+derivation still keys on the device and not the filesystem, so a collision
+restores as two files. The recovery tool and the CLI's `restore-file` make
+no links.

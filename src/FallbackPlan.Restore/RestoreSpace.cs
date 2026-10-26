@@ -173,12 +173,15 @@ public static class RestoreSpace
     /// <summary>
     /// What each file writes, read from its manifest through
     /// <paramref name="reader"/>. A manifest that will not read answers null,
-    /// and the measure takes that file at its logical length.
+    /// and the measure takes that file at its logical length. A later name of
+    /// a hard-link group the run makes one file again writes nothing
+    /// (ADR-0102), so a tree of links is measured once, not once a name.
     /// </summary>
     public static Func<RestorePlanItem, CancellationToken, ValueTask<ulong?>> WrittenBytesThrough(RepositoryReader reader)
     {
         ThrowHelper.ThrowIfNull(reader);
 
+        var linked = new HashSet<string>(StringComparer.Ordinal);
         return async (item, cancellationToken) =>
         {
             RecordReadResult read;
@@ -198,7 +201,8 @@ public static class RestoreSpace
 
             try
             {
-                return WrittenBytes(FileVersionManifestCodec.Decode(read.Plaintext));
+                var manifest = FileVersionManifestCodec.Decode(read.Plaintext);
+                return RestoreHardLinks.KeyOf(manifest) is { } key && !linked.Add(key) ? 0 : WrittenBytes(manifest);
             }
             catch (FormatException)
             {
@@ -207,13 +211,21 @@ public static class RestoreSpace
         };
     }
 
-    /// <summary>What each file writes, as the plan probe found it (<see cref="RestoreBlobSetResult.Facts"/>).</summary>
+    /// <summary>
+    /// What each file writes, as the plan probe found it
+    /// (<see cref="RestoreBlobSetResult.Facts"/>), a later name of a hard-link
+    /// group nothing, as <see cref="WrittenBytesThrough"/> says.
+    /// </summary>
     public static Func<RestorePlanItem, CancellationToken, ValueTask<ulong?>> WrittenBytesFrom(
         IReadOnlyDictionary<ObjectId, RestoreItemFacts> facts)
     {
         ThrowHelper.ThrowIfNull(facts);
+
+        var linked = new HashSet<string>(StringComparer.Ordinal);
         return (item, _) => ValueTask.FromResult(
-            facts.TryGetValue(item.ObjectId, out var known) ? known.WrittenBytes : (ulong?)null);
+            !facts.TryGetValue(item.ObjectId, out var known)
+                ? (ulong?)null
+                : known.HardLink is { } key && !linked.Add(key) ? 0 : known.WrittenBytes);
     }
 
     /// <summary>

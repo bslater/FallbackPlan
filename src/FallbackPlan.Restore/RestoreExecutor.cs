@@ -146,6 +146,17 @@ public sealed record ReceiptItem
     [JsonPropertyName("not_applied")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? NotApplied { get; init; }
+
+    /// <summary>
+    /// The item this one shares a file with: the first name of its hard-link
+    /// group the run landed, which this name is now a further name for
+    /// (FR-RST-004; ADR-0102). Null for a file that is one of no group, for a
+    /// group's first name, and for a name restored as a file of its own,
+    /// whose detail says why.
+    /// </summary>
+    [JsonPropertyName("linked_to")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LinkedTo { get; init; }
 }
 
 /// <summary>
@@ -177,9 +188,11 @@ public sealed record RestoreReceipt
     /// Version 6 added the optional per-item <c>not_applied</c> (FR-RST-004,
     /// ADR-0083): the captured metadata the target did not get back, which
     /// architecture 06 §3 always said the receipt records and which it had
-    /// never once written.
+    /// never once written. Version 7 added the optional per-item
+    /// <c>linked_to</c> (ADR-0102): a hard-link group's later names are links
+    /// to the file its first name landed as, and say which.
     /// </remarks>
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
@@ -274,9 +287,16 @@ public sealed record RestoreExecutionOptions
 /// receipt that accounts for everything (FR-RST-004/005).
 /// </summary>
 public sealed class RestoreExecutor(
-    RepositoryReader reader, RestoreTargetProfile target, ILogger? logger = null)
+    RepositoryReader reader, RestoreTargetProfile target, ILogger? logger = null, Func<string, string, bool>? makeLink = null)
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
+    /// <summary>
+    /// How a further name is made for a file the run landed: the platform's
+    /// call (<see cref="HardLinks.TryCreate"/>) unless the caller says how,
+    /// as a test of a target that refuses one does.
+    /// </summary>
+    private readonly Func<string, string, bool> _makeLink = makeLink ?? HardLinks.TryCreate;
 
     /// <summary>The owners' names this run has resolved, so a tree of one owner asks the system once.</summary>
     private readonly Dictionary<string, uint?> _owners = new(StringComparer.Ordinal);
@@ -483,6 +503,10 @@ public sealed class RestoreExecutor(
         var folders = new List<Folder>();
         var displaced = new List<string>();
 
+        // The first name of each hard-link group the run lands, by group, so
+        // a later name can be made that file again (ADR-0102).
+        var groups = new Dictionary<string, LandedName>(StringComparer.Ordinal);
+
         var existingPolicy = options.ExistingDestination.ToString();
         Log.RestoreStarting(_logger, plan.Items.Count, new LogPath(root), new LogLabel(existingPolicy));
 
@@ -597,6 +621,29 @@ public sealed class RestoreExecutor(
             {
                 case EntryKind.File:
                 {
+                    // A later name of a group the run has landed is a link to
+                    // that file, where it agrees with it and the target makes
+                    // one; otherwise it is restored as a file of its own, and
+                    // says why.
+                    var group = RestoreHardLinks.GroupOf(manifest);
+                    string? notLinked = null;
+                    if (group is not null && groups.TryGetValue(group, out var first))
+                    {
+                        if (!string.Equals(first.Key, RestoreHardLinks.KeyOf(manifest), StringComparison.Ordinal))
+                        {
+                            notLinked = $"not linked to {first.Path}: its content or attributes differ from that name's, so it was restored as a file of its own";
+                        }
+                        else if (Link(item, destination, first, displacedRoot, displaced, options) is { } linked)
+                        {
+                            items.Add(linked);
+                            continue;
+                        }
+                        else
+                        {
+                            notLinked = $"not linked to {first.Path}: the target would not make a hard link here, so it was restored as a file of its own";
+                        }
+                    }
+
                     var spool = destination + ".fbp-restore-tmp";
                     RestoreResult result;
                     try
@@ -766,18 +813,25 @@ public sealed class RestoreExecutor(
                         items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                         {
                             Path = item.Path, Outcome = "degraded", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                            Detail = $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
-                                + "and not written back on this target (declared in the plan)"
-                                + (written.Detail is { } left ? $"; {left}" : string.Empty),
+                            Detail = Joined(
+                                notLinked,
+                                $"{manifest.Metadata.AlternateStreams.Count} alternate data stream(s) were captured "
+                                    + "and not written back on this target (declared in the plan)"
+                                    + (written.Detail is { } left ? $"; {left}" : string.Empty)),
                             NotApplied = notApplied,
                         }));
                         break;
                     }
 
+                    if (group is not null && notLinked is null)
+                    {
+                        groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, landing, notApplied));
+                    }
+
                     items.Add(ReadAroundOf(item.ObjectId, manifest, new ReceiptItem
                     {
                         Path = item.Path, Outcome = "restored", Bytes = (ulong)result.Length, WrittenAs = writtenAs,
-                        Detail = written.Detail, NotApplied = notApplied,
+                        Detail = Joined(notLinked, written.Detail), NotApplied = notApplied,
                     }));
                     break;
                 }
@@ -1328,6 +1382,96 @@ public sealed class RestoreExecutor(
     }
 
     /// <summary>
+    /// Makes the later name <paramref name="item"/> of a hard-link group a
+    /// further name for the file <paramref name="first"/> landed as
+    /// (ADR-0102), meeting the existing-file policy at its destination as a
+    /// file would. Answers the item's receipt entry: restored as a link, or
+    /// failed by the policy. Answers null where the target would not make the
+    /// link, so the caller restores the name as a file of its own.
+    /// </summary>
+    /// <remarks>
+    /// The file's metadata is the file's, written once with its first name,
+    /// so a later name lists what that file did not get. Nothing is read or
+    /// verified for it: it is the file that was.
+    /// </remarks>
+    private ReceiptItem? Link(
+        RestorePlanItem item, string destination, LandedName first, string displacedRoot, List<string> displaced,
+        RestoreExecutionOptions options)
+    {
+        if (Directory.Exists(destination))
+        {
+            return new ReceiptItem
+            {
+                Path = item.Path, Outcome = "failed", Bytes = 0,
+                Detail = "a directory occupies this destination; no existing-file policy applies to a directory",
+            };
+        }
+
+        var landing = destination;
+        string? writtenAs = null;
+        try
+        {
+            if (File.Exists(destination))
+            {
+                switch (options.ExistingDestination)
+                {
+                    case ExistingDestinationPolicy.Fail:
+                        return new ReceiptItem
+                        {
+                            Path = item.Path, Outcome = "failed", Bytes = 0,
+                            Detail = "a file is already at this destination and the policy is to fail",
+                        };
+
+                    case ExistingDestinationPolicy.Preserve:
+                        if (!TryResolve(displacedRoot, item.Path, out var refuge, out var refusal))
+                        {
+                            return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = refusal };
+                        }
+
+                        Directory.CreateDirectory(Path.GetDirectoryName(refuge)!);
+                        File.Move(destination, refuge);
+                        displaced.Add(item.Path);
+                        Log.DisplacedExisting(_logger, new LogPath(destination), new LogPath(refuge));
+                        break;
+
+                    case ExistingDestinationPolicy.WriteBeside:
+                        if (!TryBesideName(destination, options.NowUnixMilliseconds, out landing, out var besideRefusal))
+                        {
+                            return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = besideRefusal };
+                        }
+
+                        writtenAs = BesidePath(item.Path, landing);
+                        Log.WroteBeside(_logger, new LogPath(destination), new LogPath(landing));
+                        break;
+
+                    default: // Replace
+                        File.Delete(destination);
+                        break;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return new ReceiptItem { Path = item.Path, Outcome = "failed", Bytes = 0, Detail = exception.Message };
+        }
+
+        if (!_makeLink(first.Landing, landing))
+        {
+            return null;
+        }
+
+        return new ReceiptItem
+        {
+            Path = item.Path, Outcome = "restored", Bytes = (ulong)new FileInfo(landing).Length, WrittenAs = writtenAs,
+            NotApplied = first.NotApplied, LinkedTo = first.Path,
+        };
+    }
+
+    /// <summary>The parts of an item's detail there are, joined, or null when there are none.</summary>
+    private static string? Joined(params string?[] parts) =>
+        parts.Where(part => part is not null).ToList() is { Count: > 0 } present ? string.Join("; ", present) : null;
+
+    /// <summary>
     /// Writes back what the target takes of <paramref name="metadata"/> onto
     /// the file landed, the folder made or the symlink made at
     /// <paramref name="destination"/>, as <paramref name="kind"/> says, one
@@ -1517,6 +1661,13 @@ public sealed class RestoreExecutor(
             return id;
         }
     }
+
+    /// <summary>The first name of a hard-link group the run landed, which its later names are made again.</summary>
+    /// <param name="Key">What a later name must agree on with it (<see cref="RestoreHardLinks.KeyOf"/>).</param>
+    /// <param name="Path">Its path in the snapshot.</param>
+    /// <param name="Landing">Where it landed.</param>
+    /// <param name="NotApplied">What its file did not get back, which every name of it shares.</param>
+    private sealed record LandedName(string Key, string Path, string Landing, IReadOnlyList<string>? NotApplied);
 
     /// <summary>What the metadata writes for one file or folder did.</summary>
     /// <param name="Applied">The attributes that landed as captured.</param>

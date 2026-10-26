@@ -23,7 +23,9 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// schema 5, the optional <c>read_from</c> and <c>read_around</c> a run that
 /// reads around damage writes, which this run does not; schema 6, the
 /// optional <c>not_applied</c>, which a file carrying only what every target
-/// applies does not write) (FR-RST-004), several prefixes in one plan, and
+/// applies does not write; schema 7, the optional <c>linked_to</c>, which a
+/// file that is one of no hard-link group does not write) (FR-RST-004),
+/// several prefixes in one plan, and
 /// the targeted blob load.
 /// </summary>
 /// <remarks>
@@ -365,7 +367,7 @@ public sealed class RestoreBreadthTests : ArchiveTestHarness
 
     private const string GoldenReceipt = """
         {
-          "schema_version": 6,
+          "schema_version": 7,
           "snapshot_id": "e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4",
           "started_at": 1722700000000,
           "completed_at": 1722700000000,

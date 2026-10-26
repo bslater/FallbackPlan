@@ -82,6 +82,7 @@ public enum ExtendedAttributeKinds
 /// <param name="Group">The name of the group it was captured under, which the plan resolves on the target.</param>
 /// <param name="Mode">Its captured POSIX mode, whose set-id bits depend on the ownership given back.</param>
 /// <param name="Attributes">The kinds of extended attribute it carries that are not written back everywhere.</param>
+/// <param name="HardLink">What it must agree on with its hard-link group's first name to share that name's file, or null for a file of no group (ADR-0102).</param>
 public sealed record RestoreItemFacts(
     EntryKind Kind,
     ulong WrittenBytes,
@@ -89,7 +90,8 @@ public sealed record RestoreItemFacts(
     string? Owner = null,
     string? Group = null,
     uint? Mode = null,
-    ExtendedAttributeKinds Attributes = ExtendedAttributeKinds.None);
+    ExtendedAttributeKinds Attributes = ExtendedAttributeKinds.None,
+    string? HardLink = null);
 
 /// <summary>
 /// Which captured metadata a restore writes back, and saying so where it
