@@ -201,7 +201,8 @@ names six constraints a checkpoint must meet before the product publishes one:
 
 Format 5 meets the first five, because a carried delta is the delta, and no
 watermark or checkpoint entry is acted on. ADR-0098 meets the sixth everywhere
-the hub reads and deletes itself; a peer is the part still owed.
+the hub reads and deletes itself, and at a peer under a person's grant
+([Amendment 1](adr/0098-a-store-retires-what-its-own-checkpoints-carry.md#amendment-1-2026-10--a-peer-retires-under-a-persons-grant)).
 
 **The gap patience runs out from format 4.** It is counted in generations.
 Below format 4 the generation never advances, so a gap a service rebuild finds
