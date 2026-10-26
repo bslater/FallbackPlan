@@ -403,7 +403,9 @@ public sealed class RestoreExtendedAttributesTests : ArchiveTestHarness
 
         var (plan, probed) = await PublishAndProbeAsync(source, 0xA9);
 
-        Assert.AreEqual(ExtendedAttributeKinds.None, probed.Facts[ObjectIdOf(plan, "plain.bin")].Attributes);
+        // A user attribute is written back onto any file or folder, and is
+        // counted because Linux keeps none on a symlink (ADR-0101).
+        Assert.AreEqual(ExtendedAttributeKinds.User, probed.Facts[ObjectIdOf(plan, "plain.bin")].Attributes);
         Assert.AreEqual(
             ExtendedAttributeKinds.Privileged | ExtendedAttributeKinds.NumberedAcl,
             probed.Facts[ObjectIdOf(plan, "guarded.bin")].Attributes);

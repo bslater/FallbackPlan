@@ -55,24 +55,24 @@ public sealed class RestoreHonestyCommandTests : IDisposable
 
         var restore = await _cli.RunAsync("restore", snapshot, "--output", Path.Combine(_cli.WorkPath, "restored"));
 
-        // What no target here writes back: on a POSIX host the link's own
-        // owner, the only item whose owner is left off, because the files and
-        // their folder are the account's own and get theirs back (ADR-0085,
-        // ADR-0086); on Windows the attribute bits of both files and of the
-        // folder one of them is in. A file's and a folder's access time is
-        // written back everywhere, so only the link's is listed. Metadata
-        // alone does not fail the restore.
+        // What no target here writes back: on Windows the attribute bits of
+        // both files and of the folder one of them is in. On a POSIX host the
+        // files, their folder and the link are the account's own and get
+        // their owner back (ADR-0085, ADR-0086, ADR-0101), and the link its
+        // own times, so neither is listed. Metadata alone does not fail the
+        // restore.
         Assert.IsTrue(restore.ExitCode == 0, restore.All);
         if (OperatingSystem.IsWindows())
         {
             Assert.Contains("file_attributes not applied to 3 item(s)", restore.Output, StringComparison.Ordinal);
-            Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
         }
         else
         {
-            Assert.Contains("owner not applied to 1 item(s)", restore.Output, StringComparison.Ordinal);
-            Assert.Contains("accessed_at not applied to 1 item(s)", restore.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("owner not applied", restore.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("modified_at not applied", restore.Output, StringComparison.Ordinal);
         }
+
+        Assert.DoesNotContain("accessed_at not applied", restore.Output, StringComparison.Ordinal);
     }
 
     [TestMethod]
