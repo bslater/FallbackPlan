@@ -391,6 +391,7 @@ public sealed class RestoreWizardDomTests
             RunRestoreCommand { Resume: "0123456789abcdef" } => new ApiRestoreResult(
                 1, 0, "/restore/out", "complete", ReceiptPath: "/state/receipts/fedcba9876543210.json",
                 FoundInPlace: 1, Run: "fedcba9876543210"),
+            PlanResumeRestoreCommand => new RestorePlanResult(1, 5, [], WriteBytes: 5, Landed: 1),
             _ => fakes(command),
         };
 
@@ -403,6 +404,15 @@ public sealed class RestoreWizardDomTests
 
         await Expect(page.GetByText($"Restore {outcome}")).ToBeVisibleAsync();
         await page.Locator("#rst-resume").ClickAsync();
+
+        // Planned first by the run's name, through the same source, and
+        // shown before anything is resumed (ADR-0123).
+        var planned = await harness.ReceivedAsync<PlanResumeRestoreCommand>();
+        Assert.AreEqual("0123456789abcdef", planned.Run);
+        Assert.AreEqual("src-1", planned.Source);
+        await Expect(page.Locator("#rst-landed b")).ToHaveTextAsync("1");
+        Assert.IsEmpty(harness.Clients.Client.Received.OfType<RunRestoreCommand>().Where(command => command.Resume is not null));
+        await page.Locator("#rst-resume-confirm").ClickAsync();
 
         var resumed = await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null);
         Assert.AreEqual("0123456789abcdef", resumed.Resume);
@@ -417,6 +427,73 @@ public sealed class RestoreWizardDomTests
         await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
         await Expect(page.Locator("#rst-found-in-place")).ToContainTextAsync("1 file(s)");
         await Expect(page.Locator("#rst-resume")).ToHaveCountAsync(0);
+    }
+
+    [TestMethod]
+    public async Task Wizard_AResumeOfARunCutShort_ThatWillNotFit_IsArmedOnlyWhenThePersonSaysSo()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            RunRestoreCommand { Resume: null } => new ApiRestoreResult(
+                0, 1, "/restore/out", "failed", ReceiptPath: "/state/receipts/0123456789abcdef.json", Run: "0123456789abcdef"),
+            RunRestoreCommand => new ApiRestoreResult(1, 0, "/restore/out", "complete", Run: "0123456789abcdef"),
+            PlanResumeRestoreCommand => new RestorePlanResult(
+                1, 5, [], WriteBytes: 5, Space: [new RestoreSpaceDescriptor("/restore/out", 8_192, 100, false)], Landed: 0),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+        await page.Locator("#rst-resume").ClickAsync();
+
+        await Expect(page.Locator("#rst-space-short")).ToBeVisibleAsync();
+        var go = page.Locator("#rst-resume-confirm");
+        await Expect(go).ToBeDisabledAsync();
+        await page.CheckAsync("#rst-ignore-space");
+        await Expect(go).ToBeEnabledAsync();
+        await go.ClickAsync();
+
+        var resumed = await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null);
+        Assert.IsTrue(resumed.IgnoreFreeSpace, "the choice to go on is the run's");
+    }
+
+    [TestMethod]
+    public async Task Wizard_AResumeTheServiceCannotPlan_IsStillOffered_AsBefore()
+    {
+        var now = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await using var harness = await DomHarness.StartAsync();
+        var fakes = WizardFakes(now);
+        harness.Clients.Client.Respond = command => command switch
+        {
+            RunRestoreCommand { Resume: null } => new ApiRestoreResult(
+                0, 1, "/restore/out", "failed", ReceiptPath: "/state/receipts/0123456789abcdef.json", Run: "0123456789abcdef"),
+            RunRestoreCommand => new ApiRestoreResult(1, 0, "/restore/out", "complete", Run: "0123456789abcdef"),
+            PlanResumeRestoreCommand => new ServiceError(ServiceErrorReason.InvalidArgument, "Unknown command."),
+            _ => fakes(command),
+        };
+
+        await using var context = await BrowserSession.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await WalkToThePlanAsync(page, harness);
+        await harness.ReceivedAsync<PlanRestoreCommand>(plan => plan.Source == "src-1");
+        await page.FillAsync("#confirm-word", "restore");
+        await page.Locator("#rst-run-go").ClickAsync();
+        await page.Locator("#rst-resume").ClickAsync();
+
+        var go = page.Locator("#rst-resume-confirm");
+        await Expect(go).ToBeEnabledAsync();
+        await Expect(page.Locator("#rst-landed")).ToHaveCountAsync(0);
+        await go.ClickAsync();
+
+        Assert.AreEqual("0123456789abcdef", (await harness.ReceivedAsync<RunRestoreCommand>(command => command.Resume is not null)).Resume);
+        await Expect(page.GetByText("Restore complete")).ToBeVisibleAsync();
     }
 
     [TestMethod]

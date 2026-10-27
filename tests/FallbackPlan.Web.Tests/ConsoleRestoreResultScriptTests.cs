@@ -53,13 +53,15 @@ public sealed class ConsoleRestoreResultScriptTests
     public void TheResultStep_OffersAResume_NamingTheRunTheServiceSaid_AndSaysWhatItFoundInPlace()
     {
         // FR-RST-008, ADR-0110: the button the DOM suite presses, and the
-        // count of what a resume left as it stood.
+        // count of what a resume left as it stood. Since ADR-0123 the run's
+        // name is planned first and the resume asked with the name planned.
         var script = AppJs();
         var step = FunctionBody(script, "rstStep6");
 
         Assert.Contains("W.result.run", step, StringComparison.Ordinal, "a resume is not offered for the run the service named");
         Assert.Contains("id=\"rst-resume\"", step, StringComparison.Ordinal);
         Assert.Contains("W.result.foundInPlace", step, StringComparison.Ordinal, "what a resume found in place is not shown");
-        Assert.Contains("resume: W.result.run", script, StringComparison.Ordinal, "the resume does not name the run");
+        Assert.Contains("const name = W.result.run;", script, StringComparison.Ordinal, "the resume offered is not of the run the service named");
+        Assert.Contains("resume: name, ignoreFreeSpace", script, StringComparison.Ordinal, "the resume does not name the run");
     }
 }
