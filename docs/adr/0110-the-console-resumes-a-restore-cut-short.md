@@ -62,6 +62,8 @@ Through the service, a run that failed or was stopped says to run it again with 
 - **Resume a run the console did not see end.** The wizard offers a resume for the result in front of it. A run cut short by the service stopping returns no result, so it is resumed from the command line by its folder's name, as before.
 
   > **2026-10 ([ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md)).** The service names such a run and says so in a notice, which the console's notices show. The command line resumes it by its name alone with `restore-resume`. The wizard still offers a resume only for the result in front of it.
+
+  > **2026-10 ([ADR-0116](0116-the-console-resumes-a-restore-it-did-not-see-end.md)).** The console resumes such a run too: its snapshots page and the run's notice offer to restore what is left, and the wizard asks the service to resume it by its name alone.
 - **Resume a plan.** A kept plan is still not run.
 
 ## Alternatives considered
@@ -76,3 +78,4 @@ Through the service, a run that failed or was stopped says to run it again with 
 |------|--------|------|
 | 2026-10 | Accepted | Built in one slice, tests first. A restore's result names the run a resume of it gives (contract 1.68). The wizard offers to restore what is left for a run that failed or was stopped, asking for it as it was confirmed and naming that run, and says what was found in place. The command line says how to resume such a run through the service. |
 | 2026-10 | Accepted | [ADR-0115](0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md): a run the console did not see end is named by the service and noticed, and the command line resumes it by its name alone (contract 1.71). The wizard's offer is unchanged. |
+| 2026-10 | Accepted | [ADR-0116](0116-the-console-resumes-a-restore-it-did-not-see-end.md): a run the console did not see end is resumed from the console, from the snapshots page's list of runs left unfinished or from the run's notice, by its name alone. |

@@ -140,6 +140,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0113](adr/0113-the-console-keeps-a-restores-plan.md) | The console keeps a restore's plan: the file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked, and both clients write it; the console's endpoint asks the service for the plan the wizard sends and gives back the file, and the wizard offers to keep a plan while one is on screen | **Built** | `Api/RestorePlanFile` · `Cli/RestorePlanExport` · `Web/WebConsoleHost` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleRestorePlanFileTests`, `Web.DomTests/RestoreWizardDomTests`, `Cli.Tests/RestorePlanCommandTests` · [notes](#0113--a-restores-plan-kept-from-the-console) |
 | [0114](adr/0114-a-kept-plan-is-run-as-it-was-approved.md) | A kept plan is run as it was approved: `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what it said; otherwise it names each change and writes nothing | **Built** | `Api/RestorePlanFile` · `Cli/CliApplication`, `Cli/RestorePlanReport` · `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/RestorePlanFileTests` · [notes](#0114--a-kept-plan-run-as-approved) |
 | [0115](adr/0115-a-restore-cut-short-is-named-and-resumed-by-its-name-alone.md) | A restore cut short is named, and resumed by its name alone: the service names each restore run in `restore-runs.json` before it writes and keeps it until a run of it finishes, says each one left unfinished, at start too, lists them without the backup's file names, resumes one as it was asked by its name alone, and lets one go (contract 1.71, `restore-resume`) | **Built** | `Application/RestoreRunJournal` · `Agent/ServiceCommandHandler`, `Agent/UnfinishedRestoreNotice`, `Agent/ServiceRuntime` · `Cli/CliApplication`, `Cli/OperationGateway` · `Application.Tests/RestoreRunJournalTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Hosts.Tests/ClientModeTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0115--a-restore-cut-short-named-and-resumed-by-name) |
+| [0116](adr/0116-the-console-resumes-a-restore-it-did-not-see-end.md) | The console resumes a restore it did not see end: the snapshots page lists the restores left unfinished without their files, the list and each run's notice offer to restore what is left, the wizard's resume mode unlocks the passphrase and opens a source of the run's own set before the service resumes the run by its name, and a run can be let go | **Built** | the console script of `FallbackPlan.Web` · `Web.DomTests/RestoreUnfinishedDomTests` · [notes](#0116--the-console-resumes-a-restore-it-did-not-see-end) |
 
 ---
 
@@ -3497,3 +3498,19 @@ What remains is recorded rather than done. The console's wizard still offers
 a resume only for the result in front of it, so a run it did not see end is
 resumed from the command line, and a quarantined run whose folder is gone is
 refused, and can be let go.
+
+### 0116 — the console resumes a restore it did not see end
+
+The service named each restore left unfinished and the command line resumed
+one by its name, but the console's wizard offered a resume only for the
+result in front of it, so a run cut off when a tab closed sent its person to
+a command line. The snapshots page now lists the runs left unfinished, without
+their files, and that list and each run's notice offer to restore what is
+left. The wizard's resume mode unlocks the passphrase, opens a source of the
+run's own set, refuses one that does not hold the run's backup, and asks the
+service to resume the run by its name, with no date, file or target to choose.
+A run can be let go from the list.
+
+What remains is recorded rather than done. A resume is still not planned, and
+what a run left unfinished was asked for is not shown file by file, which
+would need the passphrase.
