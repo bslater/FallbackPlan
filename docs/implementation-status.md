@@ -144,6 +144,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0117](adr/0117-the-command-line-asks-a-restore-as-the-console-does.md) | The command line asks a restore as the console does: `restore` takes several paths, `--target`, `--existing` and `--in-place`, asks the service the run and its plan in that shape, restores and plans several paths under the policy in direct mode while refusing the original location there, keeps the plan of the run as asked, and holds `--as-planned` to every field, so a plan the console kept runs from the command line | **Built** | `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanExport` · `Cli.Tests/RestoreShapeCommandTests`, `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Hosts.Tests/ClientModeTests` · [notes](#0117--the-command-line-asks-a-restore-as-the-console-does) |
 | [0118](adr/0118-the-console-runs-a-kept-plan-as-it-was-approved.md) | The console runs a kept plan as it was approved: the console process reads the file with the command line's reader, plans the kept run again through a source of the plan's own set, holds it to the kept plan with the comparison both clients now share, and runs it as kept only where nothing changed; otherwise it names each change and runs nothing | **Built** | `Api/RestorePlanFile` · `Web/WebConsoleHost` · `Cli/RestorePlanReport` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleKeptPlanTests`, `Web.DomTests/RestoreKeptPlanDomTests` · [notes](#0118--the-console-runs-a-kept-plan-as-it-was-approved) |
 | [0119](adr/0119-direct-mode-restores-to-the-original-location.md) | Direct mode restores to the original location: the mapping of a plan onto a set's roots, and the merge of their receipts, move into the restore library for the service and direct mode alike, and direct mode plans, measures and restores each root's slice in place from the set the state directory configures, refusing a snapshot of no configured set and a label no root carries | **Built** | `Restore/RestoreOriginalLocation` · `Cli/OperationGateway`, `Cli/RestorePlanReport` · `Agent/ServiceCommandHandler` · `Repository.Tests/RestoreOriginalLocationTests`, `Cli.Tests/RestoreOriginalDirectTests`, `Cli.Tests/GatewayRestoreReportTests` · [notes](#0119--direct-mode-restores-to-the-original-location) |
+| [0120](adr/0120-a-resume-is-planned.md) | A resume is planned: measured where its run landed, by length as the resume is, and saying how many files the run already landed; `restore --resume --plan` plans the run asked, through the service or in direct mode, and `restore-resume <run> --plan` plans a run left unfinished by its name alone, restoring nothing; a plan of a resume is not kept (contract 1.72) | **Built** | `Restore/RestoreSpace` · `Agent/ServiceCommandHandler` · `Cli/CliApplication`, `Cli/OperationGateway`, `Cli/RestorePlanReport` · `FallbackPlan.Api` · `Repository.Tests/RestoreSpaceTests`, `Hosts.Tests/RestoreUnfinishedServiceTests`, `Cli.Tests/RestoreResumeCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Cli.Tests/RestoreResumeVerbTests`, `Api.Tests/ConfigurationContractTests` · [notes](#0120--a-resume-is-planned) |
 
 ---
 
@@ -3518,7 +3519,8 @@ A run can be let go from the list.
 
 What remains is recorded rather than done. A resume is still not planned, and
 what a run left unfinished was asked for is not shown file by file, which
-would need the passphrase.
+would need the passphrase. ADR-0120 has since planned a resume from the
+command line.
 
 ### 0117 — the command line asks a restore as the console does
 
@@ -3568,3 +3570,18 @@ they were captured, where its first line named an empty folder.
 What remains is recorded rather than done. A snapshot captured from a folder
 named on the command line has no recorded root to go back to, and direct mode
 still keeps no receipt.
+
+### 0120 — a resume is planned
+
+A resume could not be planned: ADR-0109 refused it, because saying which files
+a resume would find means hashing them. The resume's own measure never hashed
+them; it goes by length. A plan of a resume now goes the same way: it is
+measured where its run landed, as the resume will meet it, and says how many
+files lie there at their length, which the resume checks by hash when it
+reaches them. `restore --resume --plan` plans the run asked, through the
+service or in direct mode, and `restore-resume <run> --plan` asks the service
+to plan a run left unfinished as it was asked, by its name alone. A plan of a
+resume restores nothing and is not kept. Contract 1.72 carries it: `resume` on
+`plan_restore`, `plan_resume_restore`, and `landed` on `restore_plan`.
+
+What remains is recorded rather than done. The console plans no resume.
