@@ -93,7 +93,8 @@ internal static class StoreComposition
 
                 refusal = null;
                 return new S3ObjectStore(
-                    S3LocationOf(destination, repositoryIdHex), accessKey, runtime.LoggerFor<S3ObjectStore>());
+                    S3LocationOf(destination, repositoryIdHex), accessKey, runtime.LoggerFor<S3ObjectStore>(),
+                    new S3StoreOptions { Observer = CountedFor(runtime, destination) });
 
             case DestinationKind.AzureBlob:
                 if (runtime.DestinationCredentials.TryLoadAzureBlob(destination.Id) is not { } credential)
@@ -110,12 +111,29 @@ internal static class StoreComposition
 
                 refusal = null;
                 return new AzureBlobObjectStore(
-                    AzureBlobLocationOf(destination, repositoryIdHex), credential, runtime.LoggerFor<AzureBlobObjectStore>());
+                    AzureBlobLocationOf(destination, repositoryIdHex), credential, runtime.LoggerFor<AzureBlobObjectStore>(),
+                    new AzureBlobStoreOptions { Observer = CountedFor(runtime, destination) });
 
             default:
                 throw new ArgumentException(
                     $"Destination '{destination.Name}' is not an object store.", nameof(destination));
         }
+    }
+
+    /// <summary>
+    /// What counts a destination's requests into the service's ledger
+    /// (FR-DEST-019, ADR-0111): every store opened for it, whatever opened
+    /// it, so a sync, a sweep, a drill, a restore and a probe are all on the
+    /// bill they are on.
+    /// </summary>
+    private static LedgerObserver CountedFor(ServiceRuntime runtime, DestinationConfiguration destination) =>
+        new(runtime.StoreRequests, destination.Id);
+
+    /// <summary>One destination's requests, told to the ledger.</summary>
+    private sealed class LedgerObserver(StoreRequestLedger ledger, string destinationId) : IStoreRequestObserver
+    {
+        public void Requested(string operation, long bytesSent, long bytesReceived) =>
+            ledger.Record(destinationId, operation, bytesSent, bytesReceived);
     }
 
     /// <summary>What a destination with no credential stored is told, with the two ways to store one.</summary>

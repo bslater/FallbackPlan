@@ -1,3 +1,5 @@
+using FallbackPlan.Storage.Abstractions;
+
 namespace FallbackPlan.Storage.AzureBlob;
 
 /// <summary>How hard an Azure Blob store tries before a request is a fault (ADR-0093).</summary>
@@ -21,4 +23,10 @@ public sealed record AzureBlobStoreOptions
     /// taken and it is sent; the system's temporary directory when null.
     /// </summary>
     public string? SpoolDirectory { get; init; }
+
+    /// <summary>
+    /// Told of every request sent, once an attempt (FR-DEST-019, ADR-0111);
+    /// none when null.
+    /// </summary>
+    public IStoreRequestObserver? Observer { get; init; }
 }

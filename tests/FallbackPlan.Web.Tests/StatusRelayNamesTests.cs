@@ -8,7 +8,8 @@ namespace FallbackPlan.Web.Tests;
 /// <summary>
 /// Contract 1.19's full-backup facts reaching the console's status matrix
 /// (ADR-0047 §§5–6): the destination rows <c>app.js</c> renders as "awaiting
-/// full backup" instead of a bare "behind".
+/// full backup" instead of a bare "behind". Later names ride here too, among
+/// them 1.69's requests a cloud destination's store was sent (FR-DEST-019).
 /// </summary>
 /// <remarks>
 /// Same rationale as <c>DiagnosticsRelayTests</c>: the console serialises
@@ -105,6 +106,53 @@ public sealed class StatusRelayNamesTests
         Assert.AreEqual("blobs/data/ab/abcdef", sweep.GetProperty("stalledOn").GetString());
 
         Assert.AreEqual(JsonValueKind.Null, destinations[1].GetProperty("deepSweep").ValueKind);
+    }
+
+    [TestMethod]
+    public async Task GetStatus_OverTheRelay_CarriesTheRequestNamesTheViewReads()
+    {
+        // Contract 1.69 (FR-DEST-019, ADR-0111). requestsLabel() reads nine
+        // camelCase names off the row's requests, and draws no row where the
+        // object is null: a destination nothing is counted for.
+        await using var harness = await ConsoleHarness.StartAsync();
+        harness.Clients.Client.Respond = _ => new StatusResult(
+            MachineName: "hub",
+            Sets:
+            [
+                new BackupSetStatusDescriptor(
+                    "docs", new BackupSetStatus(ProtectionState.Protected, Verification: null, Warnings: []), NextRun: null,
+                    [
+                        new DestinationStatusDescriptor(
+                            "cloud", "s3", "in-sync", LastSuccessAt: 9_000, Detail: null, "other-site", "proven",
+                            Requests: new StoreRequestsDescriptor(
+                                Days: 30, Puts: 1, Gets: 2, Heads: 3, Lists: 4, Deletes: 5, BytesSent: 600, BytesReceived: 700,
+                                Since: 8_000)),
+                        new DestinationStatusDescriptor(
+                            "vault", "local-path", "in-sync", LastSuccessAt: 9_000, Detail: null, "other-drive", "proven"),
+                    ]),
+            ],
+            ObservedAt: 10_000,
+            Notices: []);
+
+        using var request = harness.Command("""{"command":"get_status"}""");
+        using var response = await harness.Http.SendAsync(request);
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var destinations = body.RootElement.GetProperty("sets")[0].GetProperty("destinations");
+
+        var requests = destinations[0].GetProperty("requests");
+        Assert.AreEqual(30, requests.GetProperty("days").GetInt32());
+        Assert.AreEqual(1, requests.GetProperty("puts").GetInt64());
+        Assert.AreEqual(2, requests.GetProperty("gets").GetInt64());
+        Assert.AreEqual(3, requests.GetProperty("heads").GetInt64());
+        Assert.AreEqual(4, requests.GetProperty("lists").GetInt64());
+        Assert.AreEqual(5, requests.GetProperty("deletes").GetInt64());
+        Assert.AreEqual(600, requests.GetProperty("bytesSent").GetInt64());
+        Assert.AreEqual(700, requests.GetProperty("bytesReceived").GetInt64());
+        Assert.AreEqual(8_000, requests.GetProperty("since").GetInt64());
+
+        Assert.AreEqual(JsonValueKind.Null, destinations[1].GetProperty("requests").ValueKind);
     }
 
     [TestMethod]

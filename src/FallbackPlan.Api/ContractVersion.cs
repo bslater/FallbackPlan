@@ -694,8 +694,17 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// continued. Additive: a pre-1.68 client ignores the field, and a
     /// pre-1.68 service's result names none and offers no resume.
     /// </para>
+    /// <para>
+    /// 1.69 says what a cloud destination's store was asked (FR-DEST-019,
+    /// ADR-0111). `DestinationStatusDescriptor` gains `requests`: the
+    /// requests sent to the store over the thirty days ending today, by
+    /// operation, with the bytes they carried both ways and, where counting
+    /// began inside the window, when. Null for a destination no store bills
+    /// by the request. Additive: a pre-1.69 client ignores the field, and a
+    /// pre-1.69 service's row reads as nothing counted, never as nothing asked.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 68);
+    public static ContractVersion Current { get; } = new(1, 69);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

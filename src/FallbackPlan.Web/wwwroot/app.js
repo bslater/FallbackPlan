@@ -849,6 +849,23 @@ function sweepLabel(d) {
   return `<span class="detail">not read back in full yet · ${esc(cadence)}</span>`;
 }
 
+// What a cloud destination's store was asked (contract 1.69): the requests
+// sent over the window a bill is read in, by operation, and the bytes both
+// ways. No row where nothing is counted — a local path, a peer, a service
+// older than 1.69 — because zeros there would say the store was asked
+// nothing. A count begun inside the window says when, or a week counted
+// would read as a month of little asked.
+function requestsLabel(d) {
+  if (d.requests == null) return null;
+  const r = d.requests;
+  const asked = [
+    `${fmtCount(r.puts)} put`, `${fmtCount(r.gets)} get`, `${fmtCount(r.heads)} head`,
+    `${fmtCount(r.lists)} list`, `${fmtCount(r.deletes)} delete`,
+  ].join(" · ");
+  const since = r.since == null ? "" : `, counted since ${fmtWhen(r.since)}`;
+  return `${esc(asked)} <span class="detail">in the last ${fmtCount(r.days)} days${esc(since)} · ${esc(fmtBytes(r.bytesSent))} sent, ${esc(fmtBytes(r.bytesReceived))} received</span>`;
+}
+
 // A staging set's own staging archive, swept as a destination is (contract
 // 1.63): drawn by the same words, so it can never claim what a destination's
 // sweep would not, and not drawn at all for a set with no staging archive or
@@ -939,6 +956,7 @@ function renderSetCard(set) {
     const key = `${set.setName}|${d.name}`;
     const pr = destPriority(d.name);
     const sweep = sweepLabel(d);
+    const requests = requestsLabel(d);
 
     // The card's one caption line: the circle in words, then, while
     // something is moving files here, what — never the job's own counts,
@@ -979,6 +997,7 @@ function renderSetCard(set) {
           <button type="button" class="btn small" data-action="drill" data-set="${esc(set.setName)}" data-destination="${esc(d.name)}"
             title="Restore a sample of files from this destination's own copy now, and record the answer here">Run restore drill</button></span></div>
         ${sweep ? `<div><span class="detail">Deep verify</span><span>${sweep}</span></div>` : ""}
+        ${requests ? `<div><span class="detail">Requests</span><span>${requests}</span></div>` : ""}
         <div><span class="detail">Last sync</span><span>${esc(rel(d.lastSuccessAt))}</span></div>
         ${d.detail ? `<div class="dest-note detail">${esc(d.detail)}</div>` : ""}
         ${d.reason === "catching-up" && set.lastCompletedAt

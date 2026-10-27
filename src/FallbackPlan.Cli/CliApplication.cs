@@ -3181,6 +3181,10 @@ public static class CliApplication
                         {
                             output.WriteLine(
                                 $"  -> {row.Name,-18} {row.Kind,-11} {row.State,-13} {row.FailureDomain,-13} {row.Verification,-21} {DescribeDrill(row)}{(DescribeSweep(row) is { Length: > 0 } sweep ? $" {sweep}" : string.Empty)}{(row.Detail is null ? string.Empty : $" {row.Detail}")}");
+                            if (DescribeRequests(row) is { } requests)
+                            {
+                                output.WriteLine($"     {requests}");
+                            }
                         }
                     }
                 }
@@ -3426,6 +3430,32 @@ public static class CliApplication
     /// stored object was read back.
     /// </remarks>
     internal static string DescribeSweep(DestinationStatusDescriptor row) => SweepToken(row.DeepSweep);
+
+    /// <summary>
+    /// What a cloud destination's store was asked over the window (contract
+    /// 1.69, FR-DEST-019), by operation and in bytes both ways, or null where
+    /// nothing is counted: a local path, a peer, a service before 1.69.
+    /// </summary>
+    /// <remarks>
+    /// A count begun inside the window says when, because a week counted is
+    /// not a month in which the store was asked that little.
+    /// </remarks>
+    internal static string? DescribeRequests(DestinationStatusDescriptor row)
+    {
+        ThrowHelper.ThrowIfNull(row);
+        if (row.Requests is not { } asked)
+        {
+            return null;
+        }
+
+        var since = asked.Since is { } began
+            ? string.Create(CultureInfo.InvariantCulture, $", counted since {DateTimeOffset.FromUnixTimeMilliseconds((long)began):yyyy-MM-dd}")
+            : string.Empty;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"requests ({asked.Days} days{since}): {asked.Puts} put, {asked.Gets} get, {asked.Heads} head, {asked.Lists} list, "
+            + $"{asked.Deletes} delete; {asked.BytesSent} bytes sent, {asked.BytesReceived} bytes received");
+    }
 
     /// <summary>
     /// A staging set's sweep of its own staging archive (contract 1.63,

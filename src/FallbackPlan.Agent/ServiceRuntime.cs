@@ -297,6 +297,9 @@ public sealed class ServiceRuntime : IAsyncDisposable
     /// <summary>Each staging set's sweep of its own staging archive (FR-VER-009).</summary>
     public StagingSweepStore StagingSweeps { get; private set; } = null!;
 
+    /// <summary>What each cloud destination's store was asked, by day (FR-DEST-019, ADR-0111).</summary>
+    public StoreRequestLedger StoreRequests { get; private set; } = null!;
+
     /// <summary>The durable notices ledger (architecture 10 §3.1's third channel).</summary>
     public NoticeStore Notices { get; private set; } = null!;
 
@@ -677,6 +680,7 @@ public sealed class ServiceRuntime : IAsyncDisposable
                 {
                     DestinationSync = DestinationSyncStore.Open(options.StateDirectory, options.DestinationSyncObserver),
                     StagingSweeps = StagingSweepStore.Open(options.StateDirectory),
+                    StoreRequests = StoreRequestLedger.Open(options.StateDirectory),
                     Notices = notices,
                 });
         }
@@ -1591,6 +1595,10 @@ public sealed class ServiceRuntime : IAsyncDisposable
         }
 
         _setGates.Clear();
+
+        // After the queue has drained too: no job is left to send a request
+        // this would not count.
+        StoreRequests.Dispose();
         _writerRole.Dispose();
     }
 }
