@@ -12,6 +12,8 @@ namespace FallbackPlan.Hosts.Tests;
 /// rest, and says how many it found in place, as its receipt does file by
 /// file. It is measured for what it still writes. A name that is not a run's,
 /// or a run whose folder is not there, is refused before anything is written.
+/// Under rename, the console's own policy, a resume finds the copy the run it
+/// continues wrote beside a file in the way (ADR-0109 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeServiceTests : IDisposable
@@ -106,26 +108,30 @@ public sealed class RestoreResumeServiceTests : IDisposable
     }
 
     [TestMethod]
-    public async Task Resume_UnderTheRenamePolicy_IsRefused()
+    public async Task Resume_UnderTheRenamePolicy_FindsTheCopyTheRunItContinuesWroteBeside()
     {
-        // A copy written beside a kept file is named for the day it was
-        // written, so a resume cannot tell its own from anybody's.
+        // ADR-0109 Amendment 1, under the console's own policy: a file in the
+        // way is kept and the restored copy written beside it, and a resume
+        // finds that copy rather than write a second.
         await using var runtime = await BackUpAndStartAsync();
         var handler = new ServiceCommandHandler(runtime, RemoteBindingState.Off);
         var destination = Path.Combine(_harness.WorkPath, "restored");
-        var first = await RestoreAsync(handler, destination);
-        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var notes = Path.Combine(destination, "notes.txt");
+        Directory.CreateDirectory(destination);
+        await File.WriteAllTextAsync(notes, "the live file", _timeout.Token);
 
-        Assert.IsInstanceOfType<ServiceError>(
-            await handler.ExecuteAsync(
-                new RunRestoreCommand(
-                    await SnapshotIdAsync(handler), null, destination, Source: source.SourceId,
-                    Existing: "rename", Resume: Path.GetFileName(first.OutputDirectory)),
-                _timeout.Token),
-            out var refused);
+        var first = await RenameInPlaceAsync(handler, destination, resume: null);
+        Assert.AreEqual(1, first.WrittenBeside);
+        File.Delete(Path.Combine(destination, "nested", "deeper.txt"));
 
-        Assert.AreEqual(ServiceErrorReason.InvalidArgument, refused.Reason);
-        Assert.Contains("rename", refused.Message, StringComparison.Ordinal);
+        var resumed = await RenameInPlaceAsync(handler, destination, Path.GetFileNameWithoutExtension(first.ReceiptPath));
+
+        Assert.AreEqual("complete", resumed.Outcome);
+        Assert.AreEqual(1, resumed.FoundInPlace);
+        Assert.AreEqual(1, resumed.WrittenBeside, "the copy found beside is said to stand beside");
+        Assert.ContainsSingle(Directory.EnumerateFiles(destination, "notes (restored *).txt"));
+        Assert.AreEqual("the live file", await File.ReadAllTextAsync(notes, _timeout.Token));
+        Assert.AreEqual("deeper", await File.ReadAllTextAsync(Path.Combine(destination, "nested", "deeper.txt"), _timeout.Token));
     }
 
     public void Dispose()
@@ -147,6 +153,19 @@ public sealed class RestoreResumeServiceTests : IDisposable
         return await handler.ExecuteAsync(
             new RunRestoreCommand(await SnapshotIdAsync(handler), null, destination, Source: source.SourceId, Resume: resume),
             _timeout.Token);
+    }
+
+    /// <summary>A restore in place under rename, the console wizard's shape.</summary>
+    private async Task<RestoreResult> RenameInPlaceAsync(ServiceCommandHandler handler, string destination, string? resume)
+    {
+        var source = await _harness.OpenGrantedSourceAsync(handler.ExecuteAsync, "docs", null, _timeout.Token);
+        var answer = await handler.ExecuteAsync(
+            new RunRestoreCommand(
+                await SnapshotIdAsync(handler), null, destination, Source: source.SourceId,
+                Existing: "rename", InPlace: true, Resume: resume),
+            _timeout.Token);
+        Assert.IsInstanceOfType<RestoreResult>(answer, out var restored, (answer as ServiceError)?.Message);
+        return restored;
     }
 
     private async Task<string> SnapshotIdAsync(ServiceCommandHandler handler)
