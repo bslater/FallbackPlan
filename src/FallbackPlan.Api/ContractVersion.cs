@@ -711,8 +711,19 @@ public readonly record struct ContractVersion(int Major, int Minor)
     /// such a replica until the object is rehydrated. Additive: a pre-1.70
     /// client ignores the fields, and a pre-1.70 service's row names none.
     /// </para>
+    /// <para>
+    /// 1.71 names a restore run left unfinished, and resumes it by its name
+    /// alone (FR-RST-008, ADR-0115). `list_restore_runs` answers
+    /// `restore_runs`: each run the service began and has not seen finish,
+    /// with its snapshot, set, destination and when it began, never the
+    /// paths it was asked for. `resume_restore` takes a run's name, a source
+    /// and `ignore_free_space`, and runs the run again as it was asked, as a
+    /// resume, answering `restore`. `forget_restore_run` lets a run go.
+    /// Additive: a pre-1.71 client never asks, and a pre-1.71 service names
+    /// no run, so its runs are resumed by their folders' names as before.
+    /// </para>
     /// </remarks>
-    public static ContractVersion Current { get; } = new(1, 70);
+    public static ContractVersion Current { get; } = new(1, 71);
 
     /// <summary>Whether a peer at <paramref name="other"/> can be spoken to.</summary>
     /// <param name="other">The peer's version.</param>

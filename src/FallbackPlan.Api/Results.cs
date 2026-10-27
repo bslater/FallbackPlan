@@ -48,6 +48,7 @@ public enum ServiceErrorReason
 [JsonDerivedType(typeof(DirectoryResult), "directory")]
 [JsonDerivedType(typeof(RestorePlanResult), "restore_plan")]
 [JsonDerivedType(typeof(RestoreResult), "restore")]
+[JsonDerivedType(typeof(RestoreRunsResult), "restore_runs")]
 [JsonDerivedType(typeof(RestoreSourceOpenedResult), "restore_source")]
 [JsonDerivedType(typeof(VerificationResult), "verification")]
 [JsonDerivedType(typeof(CheckResult), "check")]
@@ -911,6 +912,34 @@ public sealed record RestoreResult(
     IReadOnlyList<string>? NotApplied = null,
     long FoundInPlace = 0,
     string? Run = null) : ServiceResult;
+
+/// <summary>
+/// One restore run the service began and has not seen finish (contract 1.71,
+/// ADR-0115), as a person chooses whether to resume it: what it restores and
+/// where, never the paths within the snapshot it was asked for, which are
+/// the backup's file names (ADR-0089).
+/// </summary>
+/// <param name="Run">The run's name, which <see cref="ResumeRestoreCommand"/> takes.</param>
+/// <param name="SnapshotId">The snapshot it restores, hex-encoded.</param>
+/// <param name="Set">The name of the set the snapshot is of; null where the service did not know it.</param>
+/// <param name="OutputDirectory">Where it writes, on the service's machine; null or empty where it lands where the files came from.</param>
+/// <param name="BeganAt">When the run under this name last began, Unix milliseconds.</param>
+/// <param name="Target">Its target, as <see cref="RunRestoreCommand"/> takes it; null where none was asked.</param>
+/// <param name="Existing">Its existing-file policy, as <see cref="RunRestoreCommand"/> takes it; null for the default.</param>
+/// <param name="InPlace">Whether it lands in place rather than under quarantine.</param>
+public sealed record RestoreRunDescriptor(
+    string Run,
+    string SnapshotId,
+    string? Set,
+    string? OutputDirectory,
+    ulong BeganAt,
+    string? Target = null,
+    string? Existing = null,
+    bool InPlace = false);
+
+/// <summary>The restore runs left unfinished, oldest first (contract 1.71, ADR-0115).</summary>
+/// <param name="Runs">Each run, as <see cref="RestoreRunDescriptor"/> describes it.</param>
+public sealed record RestoreRunsResult(IReadOnlyList<RestoreRunDescriptor> Runs) : ServiceResult;
 
 /// <summary>
 /// An opened restore source (ADR-0041): the handle the source-aware verbs

@@ -96,6 +96,10 @@ public sealed partial class ServiceCommandHandler(
                     $"restore {restore.SnapshotId}",
                     token => RunRestoreAsync(restore, token),
                     cancellationToken).ConfigureAwait(false),
+                ResumeRestoreCommand resume => await OnReaderLaneAsync(
+                    $"resume restore {resume.Run}",
+                    token => ResumeRestoreAsync(resume, token),
+                    cancellationToken).ConfigureAwait(false),
                 OpenRestoreSourceCommand openSource => await OnReaderLaneAsync(
                     $"open restore source {openSource.SetName}",
                     token => OpenRestoreSourceAsync(openSource, token),
@@ -682,6 +686,8 @@ public sealed partial class ServiceCommandHandler(
         ListSnapshotsCommand => await ListSnapshotsAsync(cancellationToken).ConfigureAwait(false),
         ListDirectoryCommand list => await ListDirectoryAsync(list, cancellationToken).ConfigureAwait(false),
         CloseRestoreSourceCommand close => await CloseRestoreSourceAsync(close).ConfigureAwait(false),
+        ListRestoreRunsCommand => ListRestoreRuns(),
+        ForgetRestoreRunCommand forget => ForgetRestoreRun(forget),
         ProvisionWriteOnlySetCommand provision =>
             await ProvisionWriteOnlySetAsync(provision, cancellationToken).ConfigureAwait(false),
         ProvisionInstallationCommand setup => ProvisionInstallation(setup),
@@ -1019,9 +1025,7 @@ public sealed partial class ServiceCommandHandler(
         // becomes a folder's (ADR-0109): nothing else may reach the path.
         if (command.Resume is { } named && !IsRunId(named))
         {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                $"'{named}' names no run: a run is named by the sixteen lowercase hex digits of the folder it landed in.");
+            return NamesNoRun(named);
         }
 
         if (RefuseUnproved(command.Source, command.SessionId, setId: null, "A restore") is { } unproved)
@@ -1138,82 +1142,197 @@ public sealed partial class ServiceCommandHandler(
                     + "anyway, ignoring free space: a volume that compresses what it stores can hold more than this estimate.");
             }
 
-            // The output directory is a path on the machine running the
-            // service: a restore commanded from elsewhere writes here and the
-            // caller is told what happened, never sent the files (ADR-0028 §6).
-            var executor = new RestoreExecutor(reader, target, runtime.LoggerFor<RestoreExecutor>());
-            var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
-            foreach (var (slice, outputDirectory, labelPrefix) in slices)
+            // Named before it writes a byte, under the name its result gives
+            // (ADR-0115): a run cut short with the machine is then on record
+            // when the service starts again, though nobody heard it end.
+            var record = new RestoreRunRecord
             {
-                receipts.Add((
-                    await executor.ExecuteAsync(slice, outputDirectory, options, cancellationToken).ConfigureAwait(false),
-                    labelPrefix));
+                Run = options.ResumedRunId ?? options.RunId,
+                SetName = context.Source?.SetName ?? context.Set?.Name,
+                SnapshotId = Convert.ToHexStringLower(snapshotId),
+                Path = command.Path,
+                Paths = command.Paths,
+                OutputDirectory = command.OutputDirectory,
+                Target = command.Target,
+                Existing = command.Existing,
+                InPlace = command.InPlace,
+                BeganAt = options.NowUnixMilliseconds,
+            };
+            runtime.RestoreRuns.Begin(record, continues: command.Resume);
+            if (command.Resume is { } continued && continued != record.Run)
+            {
+                UnfinishedRestoreNotice.Resolve(runtime, continued, options.NowUnixMilliseconds);
             }
 
-            var receipt = MergeReceipts(receipts);
-            var receiptPath = PersistReceipt(receipt, options.RunId);
-            if (copies is not null)
+            RestoreResult? answered = null;
+            try
             {
-                RecordReadAroundFindings(context.Set!, context.Archive!, copies, reader, options.NowUnixMilliseconds);
+                // The output directory is a path on the machine running the
+                // service: a restore commanded from elsewhere writes here and the
+                // caller is told what happened, never sent the files (ADR-0028 §6).
+                var executor = new RestoreExecutor(reader, target, runtime.LoggerFor<RestoreExecutor>());
+                var receipts = new List<(RestoreReceipt Receipt, string LabelPrefix)>();
+                foreach (var (slice, outputDirectory, labelPrefix) in slices)
+                {
+                    receipts.Add((
+                        await executor.ExecuteAsync(slice, outputDirectory, options, cancellationToken).ConfigureAwait(false),
+                        labelPrefix));
+                }
+
+                var receipt = MergeReceipts(receipts);
+                var receiptPath = PersistReceipt(receipt, options.RunId);
+                if (copies is not null)
+                {
+                    RecordReadAroundFindings(context.Set!, context.Archive!, copies, reader, options.NowUnixMilliseconds);
+                }
+
+                // What a person needs to hear of: a file that came from another
+                // copy because a copy passed over was damaged or would not read.
+                // One that came from a destination only because staging no longer
+                // holds it came from where its bytes were meant to come from.
+                var readAround = receipt.Items.Where(item => item.ReadAround is not null).ToList();
+
+                // Files, not entries. The receipt records a created directory as
+                // "restored" too, but the contract documents this field as files
+                // written — and PlanRestore counts the same way, so a caller
+                // comparing the plan against the outcome is comparing like with
+                // like.
+                var directories = plan.Items
+                    .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
+                    .Select(item => item.Path)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
+                var notApplied = RestoreMetadata.Summarise(receipt.Items, target);
+                answered = new RestoreResult(
+                    // A degraded file's content was written and verified, so it
+                    // counts among the files written; the Outcome carries the
+                    // shortfall (Partial), exactly as it carries a skipped
+                    // symlink's.
+                    receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
+                    failures.Count,
+                    // Where the files actually are, not where the caller pointed.
+                    // Historical content quarantines by default (FR-RST-006), so
+                    // the two differ, and a caller told the wrong one cannot find
+                    // its data.
+                    receipt.WrittenTo,
+                    // The outcome the executor computed — carried whole so a
+                    // Partial restore is not reported to a remote client as
+                    // success (FR-RST-005).
+                    receipt.Outcome.ToString().ToLowerInvariant(),
+                    Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
+                    Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
+                    Displaced: receipt.Displaced.Count,
+                    WrittenBeside: receipt.Items.Count(item => item.WrittenAs is not null),
+                    ReceiptPath: receiptPath,
+                    FailedSample: failures.Count == 0
+                        ? null
+                        : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")],
+                    ReadAround: readAround.Count,
+                    ReadAroundSample: readAround.Count == 0
+                        ? null
+                        : [.. readAround.Take(20).Select(item =>
+                            $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
+                            + $"around {string.Join("; ", item.ReadAround!)}")],
+                    NotApplied: notApplied.Count == 0 ? null : notApplied,
+                    FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
+                    Run: record.Run);
+                return answered;
             }
-
-            // What a person needs to hear of: a file that came from another
-            // copy because a copy passed over was damaged or would not read.
-            // One that came from a destination only because staging no longer
-            // holds it came from where its bytes were meant to come from.
-            var readAround = receipt.Items.Where(item => item.ReadAround is not null).ToList();
-
-            // Files, not entries. The receipt records a created directory as
-            // "restored" too, but the contract documents this field as files
-            // written — and PlanRestore counts the same way, so a caller
-            // comparing the plan against the outcome is comparing like with
-            // like.
-            var directories = plan.Items
-                .Where(item => item.Kind == EntryKind.DirectoryPlaceholder)
-                .Select(item => item.Path)
-                .ToHashSet(StringComparer.Ordinal);
-
-            var failures = receipt.Items.Where(item => item.Outcome == "failed").ToList();
-            var notApplied = RestoreMetadata.Summarise(receipt.Items, target);
-            return new RestoreResult(
-                // A degraded file's content was written and verified, so it
-                // counts among the files written; the Outcome carries the
-                // shortfall (Partial), exactly as it carries a skipped
-                // symlink's.
-                receipt.Items.Count(item => item.Outcome is "restored" or "degraded" && !directories.Contains(item.Path)),
-                failures.Count,
-                // Where the files actually are, not where the caller pointed.
-                // Historical content quarantines by default (FR-RST-006), so
-                // the two differ, and a caller told the wrong one cannot find
-                // its data.
-                receipt.WrittenTo,
-                // The outcome the executor computed — carried whole so a
-                // Partial restore is not reported to a remote client as
-                // success (FR-RST-005).
-                receipt.Outcome.ToString().ToLowerInvariant(),
-                Skipped: receipt.Items.Count(item => item.Outcome == "skipped"),
-                Degraded: receipt.Items.Count(item => item.Outcome == "degraded"),
-                Displaced: receipt.Displaced.Count,
-                WrittenBeside: receipt.Items.Count(item => item.WrittenAs is not null),
-                ReceiptPath: receiptPath,
-                FailedSample: failures.Count == 0
-                    ? null
-                    : [.. failures.Take(20).Select(item => $"{item.Path} — {item.Detail}")],
-                ReadAround: readAround.Count,
-                ReadAroundSample: readAround.Count == 0
-                    ? null
-                    : [.. readAround.Take(20).Select(item =>
-                        $"{item.Path} — read from {string.Join(", ", item.ReadFrom ?? [])}, "
-                        + $"around {string.Join("; ", item.ReadAround!)}")],
-                NotApplied: notApplied.Count == 0 ? null : notApplied,
-                FoundInPlace: receipt.Items.Count(item => item.FoundInPlace),
-                Run: options.ResumedRunId ?? options.RunId);
+            finally
+            {
+                Settle(record, answered);
+            }
         }
         finally
         {
             context.Source?.Gate.Release();
         }
     }
+
+    /// <summary>
+    /// Records how a run named before it wrote ended (ADR-0115): one that
+    /// completed, or skipped only what the target cannot hold, is finished,
+    /// since a resume would add nothing (ADR-0110). Any other end leaves it
+    /// named, and says so.
+    /// </summary>
+    private void Settle(RestoreRunRecord record, RestoreResult? answered)
+    {
+        var nowMs = (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (answered?.Outcome is "complete" or "partial")
+        {
+            runtime.RestoreRuns.Finish(record.Run);
+            UnfinishedRestoreNotice.Resolve(runtime, record.Run, nowMs);
+            return;
+        }
+
+        runtime.RestoreRuns.Leave(record.Run);
+        UnfinishedRestoreNotice.Raise(runtime, record, nowMs);
+    }
+
+    /// <summary>
+    /// Resumes a run left unfinished by its name alone (ADR-0115): the run
+    /// asked again as it was asked, as a resume, through the caller's source.
+    /// </summary>
+    private async ValueTask<ServiceResult> ResumeRestoreAsync(
+        ResumeRestoreCommand command, CancellationToken cancellationToken)
+    {
+        if (!IsRunId(command.Run))
+        {
+            return NamesNoRun(command.Run);
+        }
+
+        // On the reader lane, as every run is, so a run of this name that
+        // was under way when this was asked has ended by now.
+        if (runtime.RestoreRuns.Find(command.Run) is not { } record)
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No restore run {command.Run} is left unfinished: a run that finished, or was let go, is named no "
+                + "more. A run left by a service before it named its runs is resumed by its folder's name with "
+                + "`restore --resume`.");
+        }
+
+        return await RunRestoreAsync(
+            new RunRestoreCommand(
+                record.SnapshotId, record.Path, record.OutputDirectory ?? string.Empty, command.Source, record.Paths,
+                record.Target, record.Existing, record.InPlace, command.IgnoreFreeSpace, Resume: command.Run)
+            {
+                SessionId = command.SessionId,
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The runs left unfinished, without the paths they were asked for (ADR-0089).</summary>
+    private RestoreRunsResult ListRestoreRuns() =>
+        new([.. runtime.RestoreRuns.Unfinished.Select(run => new RestoreRunDescriptor(
+            run.Run, run.SnapshotId, run.SetName, run.OutputDirectory, run.BeganAt, run.Target, run.Existing, run.InPlace))]);
+
+    /// <summary>Lets a run left unfinished go: named no more, and its notice resolved (ADR-0115).</summary>
+    private ServiceResult ForgetRestoreRun(ForgetRestoreRunCommand command)
+    {
+        if (!IsRunId(command.Run))
+        {
+            return NamesNoRun(command.Run);
+        }
+
+        // A run under way is not left unfinished yet, so it is not the
+        // person's to let go.
+        if (!runtime.RestoreRuns.Forget(command.Run))
+        {
+            return new ServiceError(
+                ServiceErrorReason.NotFound,
+                $"No restore run {command.Run} is left unfinished: it finished, was let go, or is still under way.");
+        }
+
+        UnfinishedRestoreNotice.Resolve(runtime, command.Run, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return new AcknowledgedResult();
+    }
+
+    private static ServiceError NamesNoRun(string named) =>
+        new(
+            ServiceErrorReason.InvalidArgument,
+            $"'{named}' names no run: a run is named by the sixteen lowercase hex digits of the folder it landed in.");
 
     /// <summary>Whether <paramref name="name"/> is a run's: sixteen lowercase hex digits, as every run is named.</summary>
     private static bool IsRunId(string name) =>
