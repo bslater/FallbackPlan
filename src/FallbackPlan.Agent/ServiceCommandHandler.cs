@@ -1024,14 +1024,6 @@ public sealed partial class ServiceCommandHandler(
                 $"'{named}' names no run: a run is named by the sixteen lowercase hex digits of the folder it landed in.");
         }
 
-        if (command.Resume is not null && existing == ExistingDestinationPolicy.WriteBeside)
-        {
-            return new ServiceError(
-                ServiceErrorReason.InvalidArgument,
-                "A restore under rename cannot be resumed: a copy written beside a kept file is named for the day it "
-                + "was written, so a resume cannot tell its own copies from anybody's.");
-        }
-
         if (RefuseUnproved(command.Source, command.SessionId, setId: null, "A restore") is { } unproved)
         {
             return unproved;

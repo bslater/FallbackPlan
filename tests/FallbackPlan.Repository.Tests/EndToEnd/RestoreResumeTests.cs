@@ -19,7 +19,10 @@ namespace FallbackPlan.Repository.Tests.EndToEnd;
 /// from the store. Its captured metadata is applied again, because a run cut
 /// short may have stopped between the two. Every other item lands as any run
 /// lands it. A quarantined run is resumed in the folder the earlier run
-/// landed in, and the receipt says which files were found in place.
+/// landed in, and the receipt says which files were found in place. Under
+/// rename a resume looks beside a file in the way too, where the restore
+/// writes its copy, and finds there a copy of the snapshot's content under a
+/// name the restore would have written (ADR-0109 Amendment 1).
 /// </summary>
 [TestClass]
 public sealed class RestoreResumeTests : ArchiveTestHarness
@@ -173,6 +176,175 @@ public sealed class RestoreResumeTests : ArchiveTestHarness
 
         Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
         Assert.IsTrue(receipt.Items.Single(item => item.Path == "data/alpha.bin").FoundInPlace);
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderRename_TheCopyAnEarlierRunWroteBeside_IsFoundThere_AndNoSecondIsWritten()
+    {
+        // ADR-0109 Amendment 1: under rename a file in the way is kept and
+        // the restored copy written beside it, named for its day. A resume
+        // looks there too, whatever day the earlier run wrote it.
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside", 0xDC);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-out");
+        var live = Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        var earlier = Land(output, "data/alpha (restored 2024-08-02).bin", Alpha);
+        var before = FileIdOf(earlier);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        Assert.AreEqual(RestoreOutcome.Complete, receipt.Outcome);
+        var found = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsTrue(found.FoundInPlace);
+        Assert.AreEqual("data/alpha (restored 2024-08-02).bin", found.WrittenAs, "the receipt says where the copy found stands");
+        Assert.AreEqual(before, FileIdOf(earlier));
+        Assert.IsFalse(File.Exists(Path.Combine(output, "data", "alpha (restored 2024-08-03).bin")), "no second copy is written beside");
+        SequenceAssert.AreEqual(Deterministic(9_000, 99), File.ReadAllBytes(live));
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderRename_ACopyBesideWhoseContentDiffers_IsLeft_AndTheRestoredCopyIsWrittenBesideToo()
+    {
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-differs", 0xDD);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-differs-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        var somebodys = Land(output, "data/alpha (restored 2024-08-02).bin", Deterministic(9_000, 98));
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-differs-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var written = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsFalse(written.FoundInPlace);
+        Assert.AreEqual("data/alpha (restored 2024-08-03).bin", written.WrittenAs);
+        SequenceAssert.AreEqual(Alpha, File.ReadAllBytes(Path.Combine(output, "data", "alpha (restored 2024-08-03).bin")));
+        SequenceAssert.AreEqual(Deterministic(9_000, 98), File.ReadAllBytes(somebodys));
+    }
+
+    [TestMethod]
+    [DataRow("alpha (restored 2024-08-02) copy.bin", DisplayName = "more after the date")]
+    [DataRow("alpha (restored not-a-date).bin", DisplayName = "no date")]
+    [DataRow("alpha (restored 2024-08-02-101).bin", DisplayName = "past the hundredth")]
+    [DataRow("alpha (restored 2024-08-02-02).bin", DisplayName = "a counter written otherwise")]
+    [DataRow("alpha (restored 2024-08-02_2).bin", DisplayName = "a counter after something else")]
+    [DataRow("alphx (restored 2024-08-02).bin", DisplayName = "another file's")]
+    [DataRow("alpha (restored 2024-08-02).txt", DisplayName = "another extension")]
+    public async Task Resume_UnderRename_ANameTheRestoreWouldNotHaveWritten_IsNotItsCopy(string name)
+    {
+        // Only a name the restore writes beside is the restore's: the stem,
+        // " (restored ", a date, a counter of at most a hundred, ")", the
+        // extension.
+        var label = $"beside-name-{Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name)))[..8]}";
+        var (plan, target, store, keys, catalogue) = await PublishAsync(label, 0xDE);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, label + "-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        Land(output, "data/" + name, Alpha);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-name-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var written = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsFalse(written.FoundInPlace, name);
+        Assert.AreEqual("data/alpha (restored 2024-08-03).bin", written.WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderRename_ACountedCopyBeside_IsFoundToo()
+    {
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-counted", 0xDF);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-counted-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        Land(output, "data/alpha (restored 2024-08-02).bin", Deterministic(9_000, 98));
+        Land(output, "data/alpha (restored 2024-08-02-2).bin", Alpha);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-counted-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var found = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsTrue(found.FoundInPlace);
+        Assert.AreEqual("data/alpha (restored 2024-08-02-2).bin", found.WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderRename_WithNothingInTheWay_LandsTheFileWhereItGoes()
+    {
+        // Rename writes beside only a file in the way. With none there now,
+        // this run would land the file at its destination, so that is where
+        // a resume looks, and where the file lands.
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-clear", 0xE2);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-clear-out");
+        Land(output, "data/alpha (restored 2024-08-02).bin", Alpha);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-clear-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var written = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsFalse(written.FoundInPlace);
+        Assert.IsNull(written.WrittenAs);
+        SequenceAssert.AreEqual(Alpha, File.ReadAllBytes(Path.Combine(output, "data", "alpha.bin")));
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderRename_OfTwoCopiesBesideBothHoldingIt_TheFirstByNameIsTaken()
+    {
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-two", 0xE3);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-two-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        Land(output, "data/alpha (restored 2024-08-02).bin", Alpha);
+        Land(output, "data/alpha (restored 2024-08-01).bin", Alpha);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Resumed("beside-two-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        Assert.AreEqual("data/alpha (restored 2024-08-01).bin", receipt.Items.Single(item => item.Path == "data/alpha.bin").WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task WithoutResume_UnderRename_ACopyBesideHoldingTheSnapshot_IsNotThisRunsOwn()
+    {
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-fresh", 0xE0);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-fresh-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        Land(output, "data/alpha (restored 2024-08-02).bin", Alpha);
+
+        var receipt = await ExecuteAsync(
+            store, keys, catalogue, target, plan, output, Fresh("beside-fresh-run") with { ExistingDestination = ExistingDestinationPolicy.WriteBeside });
+
+        var written = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsFalse(written.FoundInPlace);
+        Assert.AreEqual("data/alpha (restored 2024-08-03).bin", written.WrittenAs);
+    }
+
+    [TestMethod]
+    public async Task Resume_UnderAnotherPolicy_NoCopyBesideIsLookedFor()
+    {
+        // Only rename writes beside, so only a resume under it looks there.
+        var (plan, target, store, keys, catalogue) = await PublishAsync("beside-preserve", 0xE1);
+        using var _ = keys;
+        using var __ = catalogue;
+        var output = Path.Combine(SpoolDirectory, "beside-preserve-out");
+        Land(output, "data/alpha.bin", Deterministic(9_000, 99));
+        Land(output, "data/alpha (restored 2024-08-02).bin", Alpha);
+
+        var receipt = await ExecuteAsync(store, keys, catalogue, target, plan, output, Resumed("beside-preserve-run"));
+
+        var written = receipt.Items.Single(item => item.Path == "data/alpha.bin");
+        Assert.IsFalse(written.FoundInPlace);
+        Assert.IsNull(written.WrittenAs);
+        Assert.Contains("data/alpha.bin", receipt.Displaced);
     }
 
     [TestMethod]

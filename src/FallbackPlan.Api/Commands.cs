@@ -595,9 +595,9 @@ public sealed record PlanRestoreCommand(
 /// the quarantine. A quarantined run lands in that folder, which must be
 /// there; one in place or at the original location lands where any run
 /// does. Either way a file already holding the snapshot's content is left as
-/// it stands, and the rest land as any run lands them. Null resumes nothing.
-/// Refused under <c>rename</c>, whose copies a resume cannot tell from
-/// anybody's.
+/// it stands, and the rest land as any run lands them. Under <c>rename</c>
+/// that includes a copy beside a file in the way, under a name the restore
+/// writes beside (ADR-0109 Amendment 1). Null resumes nothing.
 /// </param>
 public sealed record RunRestoreCommand(
     string SnapshotId,

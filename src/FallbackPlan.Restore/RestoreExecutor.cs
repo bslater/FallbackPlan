@@ -366,13 +366,14 @@ public sealed class RestoreExecutor(
     /// </para>
     /// <para>
     /// A file a resumed run will leave as it stands needs none of its
-    /// content, so the wave asks <c>landed</c> and prefetches none of it.
+    /// content, so the wave asks <c>landed</c> where it stands and prefetches
+    /// none of it when it stands somewhere.
     /// </para>
     /// </remarks>
     private sealed class PrefetchWave(
         RepositoryReader reader,
         RestorePlan plan,
-        Func<int, FileVersionManifest, CancellationToken, ValueTask<bool>> landed)
+        Func<int, FileVersionManifest, CancellationToken, ValueTask<string?>> landed)
     {
         private const int MaximumItems = 1024;
         private const int MaximumSegments = 512;
@@ -471,7 +472,7 @@ public sealed class RestoreExecutor(
                     continue;
                 }
 
-                if (await landed(index, manifest, cancellationToken).ConfigureAwait(false))
+                if (await landed(index, manifest, cancellationToken).ConfigureAwait(false) is not null)
                 {
                     continue;
                 }
@@ -567,26 +568,48 @@ public sealed class RestoreExecutor(
         // one a blob. The wave prefetches a bounded run of upcoming items'
         // manifests and their segments together, so everything one blob owes
         // this restore is asked for at once.
-        var landedAt = new Dictionary<int, bool>();
-        var wave = new PrefetchWave(reader, plan, AlreadyLandedAsync);
+        var landedAt = new Dictionary<int, string?>();
+        var listed = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        var wave = new PrefetchWave(reader, plan, LandedAsync);
 
-        // Whether a resumed run finds each file already landed, decided once:
-        // ahead of the loop, so none of its content is read, and in it.
-        async ValueTask<bool> AlreadyLandedAsync(int at, FileVersionManifest manifest, CancellationToken token)
+        // Where a resumed run finds each file already landed, decided once:
+        // ahead of the loop, so none of its content is read, and in it. That
+        // is where this run would land it: its destination, or, under rename
+        // with a file in the way, beside it (ADR-0109 Amendment 1).
+        async ValueTask<string?> LandedAsync(int at, FileVersionManifest manifest, CancellationToken token)
         {
             if (!options.Resume || manifest.EntryKind != EntryKind.File)
             {
-                return false;
+                return null;
             }
 
-            if (!landedAt.TryGetValue(at, out var landed))
+            if (landedAt.TryGetValue(at, out var known))
             {
-                landed = TryResolve(root, plan.Items[at].Path, out var where, out _)
-                    && await HoldsAsync(where, manifest, token).ConfigureAwait(false);
-                landedAt[at] = landed;
+                return known;
             }
 
-            return landed;
+            string? found = null;
+            if (TryResolve(root, plan.Items[at].Path, out var where, out _))
+            {
+                if (await HoldsAsync(where, manifest, token).ConfigureAwait(false))
+                {
+                    found = where;
+                }
+                else if (options.ExistingDestination == ExistingDestinationPolicy.WriteBeside && File.Exists(where))
+                {
+                    foreach (var copy in BesideCopies(where, listed))
+                    {
+                        if (await HoldsAsync(copy, manifest, token).ConfigureAwait(false))
+                        {
+                            found = copy;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            landedAt[at] = found;
+            return found;
         }
 
         for (var index = 0; index < plan.Items.Count; index++)
@@ -717,23 +740,25 @@ public sealed class RestoreExecutor(
                     // stands, whatever the policy says: the policy is about
                     // somebody else's file, and this one holds exactly what
                     // the run would write (ADR-0109).
-                    bool inPlace;
+                    string? inPlace;
                     try
                     {
-                        inPlace = await AlreadyLandedAsync(index, manifest, cancellationToken).ConfigureAwait(false);
+                        inPlace = await LandedAsync(index, manifest, cancellationToken).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
                     }
 
-                    if (inPlace)
+                    if (inPlace is { } standing)
                     {
                         var (kept, keptNotApplied, keptDegraded) = Settle(
-                            item, manifest, destination, manifest.LogicalLength, writtenAs: null, notLinked, foundInPlace: true);
+                            item, manifest, standing, manifest.LogicalLength,
+                            writtenAs: string.Equals(standing, destination, StringComparison.Ordinal) ? null : BesidePath(item.Path, standing),
+                            notLinked, foundInPlace: true);
                         if (!keptDegraded && group is not null && notLinked is null)
                         {
-                            groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, destination, keptNotApplied));
+                            groups.TryAdd(group, new LandedName(RestoreHardLinks.KeyOf(manifest)!, item.Path, standing, keptNotApplied));
                         }
 
                         items.Add(kept);
@@ -1363,6 +1388,65 @@ public sealed class RestoreExecutor(
 
         refusal = "refused: a hundred beside-named copies already sit at this destination";
         return false;
+    }
+
+    /// <summary>
+    /// The copies written beside <paramref name="destination"/> under the
+    /// names <see cref="TryBesideName"/> gives, whatever day they were
+    /// written, in name order. Its folder is listed once a run, in
+    /// <paramref name="listed"/>; one that will not list holds none.
+    /// </summary>
+    private static IEnumerable<string> BesideCopies(string destination, Dictionary<string, string[]> listed)
+    {
+        var directory = Path.GetDirectoryName(destination)!;
+        if (!listed.TryGetValue(directory, out var names))
+        {
+            try
+            {
+                names = [.. Directory.EnumerateFiles(directory).Select(path => Path.GetFileName(path))];
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                names = [];
+            }
+
+            listed[directory] = names;
+        }
+
+        var prefix = Path.GetFileNameWithoutExtension(destination) + " (restored ";
+        var suffix = ")" + Path.GetExtension(destination);
+        return names
+            .Where(name => name.Length > prefix.Length + suffix.Length
+                && name.StartsWith(prefix, StringComparison.Ordinal)
+                && name.EndsWith(suffix, StringComparison.Ordinal)
+                && IsBesideMark(name[prefix.Length..^suffix.Length]))
+            .Order(StringComparer.Ordinal)
+            .Select(name => Path.Combine(directory, name));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="mark"/> is what <see cref="TryBesideName"/>
+    /// writes after "restored ": a date, alone or with a counter from 2 to
+    /// 100 written as it writes one.
+    /// </summary>
+    private static bool IsBesideMark(string mark)
+    {
+        if (mark.Length < 10 || !DateTime.TryParseExact(
+            mark[..10], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out _))
+        {
+            return false;
+        }
+
+        if (mark.Length == 10)
+        {
+            return true;
+        }
+
+        return mark[10] == '-'
+            && int.TryParse(mark[11..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var counter)
+            && counter is >= 2 and <= 100
+            && string.Equals(mark[11..], counter.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
     }
 
     /// <summary>The receipt's repository-relative rendering of a beside landing.</summary>
