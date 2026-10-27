@@ -5794,6 +5794,8 @@ function openRestoreWizard(prefill) {
     // A run left unfinished, resumed by its name alone (ADR-0116): asked
     // again as it was asked, so the date, files and target are not chosen.
     resume: prefill?.resume ?? null,
+    resumePlan: null,         // the resume's plan, as the service made it (ADR-0121)
+    resumePlanFailed: false,  // the resume's plan was asked for and did not come
     // A kept plan run as it was approved (ADR-0118): the run as kept, planned
     // again through the source opened, and run only where nothing changed.
     kept: prefill?.kept ?? null,
@@ -6131,18 +6133,27 @@ function rstStep6() {
   }
 
   // A resume repeats a run that was confirmed when it began, as it was
-  // asked; the service measures what it still writes.
+  // asked; the service measures what it still writes. Its plan comes first
+  // (ADR-0121), and a resume the service cannot plan is offered as before.
   if (W.resume) {
+    const plan = W.resumePlan;
+    const short = rstShort(plan);
+    const details = plan ? rstPlanDetails(plan, 'data-action-change="rst-resume-arm"')
+      : W.resumePlanFailed
+        ? `<p class="subtle">The resume was not planned; it is still measured before it writes anything.</p>
+          <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
+            small — a volume that compresses what it stores can hold more than the estimate</label>`
+        : `<p class="subtle">Planning the resume…</p>`;
     return `
       <p class="dlg-sub" id="rst-resume-summary">Restore what is left of ${describeRun(W.resume)}.</p>
       <p class="dlg-sub">Each file already holding the snapshot's content stays as it stands, and the rest are restored.
       A resume that will not fit is refused before anything is written.</p>
-      <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
-        small — a volume that compresses what it stores can hold more than the estimate</label>
+      ${details}
       <div class="dlg-actions">
         <button type="button" class="btn" data-action="close-dialog">Cancel</button>
         <button type="button" class="btn" data-action="rst-back">‹ Back</button>
-        <button type="button" class="btn primary" id="rst-resume-go" data-action="rst-resume-go">Restore what is left</button>
+        <button type="button" class="btn primary" id="rst-resume-go" data-action="rst-resume-go"${
+          (plan || W.resumePlanFailed) && !short ? "" : " disabled"}>Restore what is left</button>
       </div>`;
   }
 
@@ -6150,35 +6161,8 @@ function rstStep6() {
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
   const plan = W.plan;
-  // The room the run needs on each volume it writes to (FR-RST-003). A
-  // volume short of it arms the restore only when the person chooses to go on.
-  const space = plan?.space ?? [];
-  const short = space.some(need => need.availableBytes != null && need.availableBytes < need.neededBytes);
-  const figures = plan ? `
-    <div class="plan-figures">
-      <div class="fig"><b>${fmtCount(plan.files)}</b><span>files</span></div>
-      <div class="fig"><b>${fmtBytes(plan.writeBytes ?? plan.bytes)}</b><span>to write</span></div>
-      ${plan.readBytes != null ? `<div class="fig" id="rst-read"><b>${fmtBytes(plan.readBytes)}</b><span>to read</span></div>` : ""}
-      <div class="fig"><b>${fmtCount(plan.missingObjects?.length ?? 0)}</b><span>missing objects</span></div>
-      <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
-    </div>
-    ${space.length ? `<p class="subtle" id="rst-space">${space.map(need => `Needs <b>${fmtBytes(need.neededBytes)}</b>
-      ${need.working ? "of working space for the largest file in" : "on the disk holding"}
-      <span class="mono">${esc(need.directory)}</span> —
-      ${need.availableBytes == null ? "free space unknown" : `${fmtBytes(need.availableBytes)} free`}.`).join("<br>")}</p>` : ""}
-    ${short ? `<div id="rst-space-short">
-      <ul class="warnings"><li>The restore will not fit where it writes, so nothing will be written unless you choose
-        to restore anyway. Free some space or go back and choose another folder.</li></ul>
-      <label class="check-row"><input type="checkbox" id="rst-ignore-space" data-arms="confirm-word">
-        Restore anyway — a disk that compresses what it stores can hold more than this estimate</label></div>` : ""}
-    ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
-      needs cannot be found — those files will fail.</li></ul>` : ""}
-    ${plan.archivedObjects?.length ? `<div id="rst-archived"><ul class="warnings"><li>${fmtCount(plan.archivedObjects.length)} file(s)
-      are held only in the store's archival tier, which serves nothing until they are rehydrated there — rehydrate them
-      first, or those files will fail.</li></ul>
-      <pre class="report">${esc(plan.archivedObjects.slice(0, 20).join("\n"))}</pre></div>` : ""}
-    ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
-    ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`
+  const short = rstShort(plan);
+  const figures = plan ? rstPlanDetails(plan, 'data-arms="confirm-word"')
     : W.planFailed
       ? `<p class="subtle">No plan could be made, so there is nothing to confirm. Go back and continue to plan again.</p>`
       : `<p class="subtle">Planning…</p>`;
@@ -6199,6 +6183,47 @@ function rstStep6() {
         title="Save this plan as a file, in the shape restore --export writes">Keep plan</button>` : ""}
       <button type="button" class="btn danger" id="rst-run-go" data-action="rst-run" disabled>Restore</button>
     </div>`;
+}
+
+/* Whether a volume the run writes to has less free than it needs (FR-RST-003). */
+function rstShort(plan) {
+  return (plan?.space ?? []).some(need => need.availableBytes != null && need.availableBytes < need.neededBytes);
+}
+
+/*
+ * What a plan says, as the wizard shows it: its figures, the room each volume
+ * needs, and what will not come back. A volume short of room arms the run only
+ * when the person chooses to go on; `arming` is how its checkbox says so. A
+ * resume's plan says how many files its run already landed (ADR-0120).
+ */
+function rstPlanDetails(plan, arming) {
+  const space = plan.space ?? [];
+  return `
+    <div class="plan-figures">
+      <div class="fig"><b>${fmtCount(plan.files)}</b><span>files</span></div>
+      ${plan.landed != null ? `<div class="fig" id="rst-landed"><b>${fmtCount(plan.landed)}</b><span>already landed</span></div>` : ""}
+      <div class="fig"><b>${fmtBytes(plan.writeBytes ?? plan.bytes)}</b><span>to write</span></div>
+      ${plan.readBytes != null ? `<div class="fig" id="rst-read"><b>${fmtBytes(plan.readBytes)}</b><span>to read</span></div>` : ""}
+      <div class="fig"><b>${fmtCount(plan.missingObjects?.length ?? 0)}</b><span>missing objects</span></div>
+      <div class="fig"><b>${fmtCount(plan.conflicts ?? 0)}</b><span>conflicts</span></div>
+    </div>
+    ${space.length ? `<p class="subtle" id="rst-space">${space.map(need => `Needs <b>${fmtBytes(need.neededBytes)}</b>
+      ${need.working ? "of working space for the largest file in" : "on the disk holding"}
+      <span class="mono">${esc(need.directory)}</span> —
+      ${need.availableBytes == null ? "free space unknown" : `${fmtBytes(need.availableBytes)} free`}.`).join("<br>")}</p>` : ""}
+    ${rstShort(plan) ? `<div id="rst-space-short">
+      <ul class="warnings"><li>The restore will not fit where it writes, so nothing will be written unless you choose
+        to restore anyway. Free some space or go back and choose another folder.</li></ul>
+      <label class="check-row"><input type="checkbox" id="rst-ignore-space" ${arming}>
+        Restore anyway — a disk that compresses what it stores can hold more than this estimate</label></div>` : ""}
+    ${plan.missingObjects?.length ? `<ul class="warnings"><li>${fmtCount(plan.missingObjects.length)} object(s) the plan
+      needs cannot be found — those files will fail.</li></ul>` : ""}
+    ${plan.archivedObjects?.length ? `<div id="rst-archived"><ul class="warnings"><li>${fmtCount(plan.archivedObjects.length)} file(s)
+      are held only in the store's archival tier, which serves nothing until they are rehydrated there — rehydrate them
+      first, or those files will fail.</li></ul>
+      <pre class="report">${esc(plan.archivedObjects.slice(0, 20).join("\n"))}</pre></div>` : ""}
+    ${plan.conflictSample?.length ? `<pre class="report">${esc(plan.conflictSample.join("\n"))}</pre>` : ""}
+    ${plan.degradations?.length ? `<p class="subtle">${plan.degradations.map(esc).join("<br>")}</p>` : ""}`;
 }
 
 async function rstGateCheck() {
@@ -6314,6 +6339,17 @@ const rstActions = {
       }
       W.step = 6;
       W.result = null;
+      W.resumePlan = null;
+      W.resumePlanFailed = false;
+      rstRender();
+
+      // Planned by the run's name alone, as the service will resume it.
+      const plan = await run(
+        { command: "plan_resume_restore", run: W.resume.run, source: W.source.sourceId },
+        { errToast: "The resume was not planned" });
+      if (!W || W.step !== 6 || W.result) return;
+      if (plan?.result === "restore_plan") W.resumePlan = plan;
+      else W.resumePlanFailed = true;
       rstRender();
       return;
     }
@@ -6635,6 +6671,13 @@ function boot() {
 
     if (event.target.matches("[data-action-change='kept-plan-chosen']")) {
       keptPlanChosen(event.target);
+      return;
+    }
+
+    // A resume that will not fit is asked only when the person says to go on.
+    if (W && event.target.matches("[data-action-change='rst-resume-arm']")) {
+      const go = document.getElementById("rst-resume-go");
+      if (go) go.disabled = !event.target.checked;
       return;
     }
 
