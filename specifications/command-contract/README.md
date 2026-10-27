@@ -1,6 +1,6 @@
 # Command contract — the client↔service surface
 
-**Status:** register · **Authority:** the code — see below · **Current version:** 1.64
+**Status:** register · **Authority:** the code — see below · **Current version:** 1.65
 
 ---
 
@@ -48,7 +48,7 @@ touches a byte already written.
 
 ## Verbs, by area
 
-The register as of 1.64 — 65 commands. One line each; parameters, results
+The register as of 1.65 — 65 commands. One line each; parameters, results
 and refusal semantics live with the records in `Commands.cs`/`Results.cs`.
 
 **Service, setup and sessions** — `describe_service` (version, machine,
@@ -131,7 +131,8 @@ write (`write_bytes`); `run_restore` refuses a run that will not fit before
 writing anything unless told `ignore_free_space`, and `restore` says which
 captured metadata was not applied (`not_applied`) ([ADR-0083](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md)).
 Since 1.64 the plan also says what its run will read from where it restores
-from (`read_bytes`) ([ADR-0083 Amendment 2](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads)).
+from (`read_bytes`), and since 1.65 what every copy holds only in an
+archival tier (`archived_objects`) ([ADR-0103](../../docs/adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md)) ([ADR-0083 Amendment 2](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads)).
 Since 1.45, a `run_restore` of a set's
 own archive that read some files from another copy, because a copy passed
 over was damaged or would not read, says how many (`read_around`) and which
@@ -248,3 +249,4 @@ verification, status) and predate the per-version changelog convention.
 | 1.62 | Deleted-file history ([ADR-0094](../../docs/adr/0094-a-deleted-file-stays-restorable.md), FR-GC-014). `RetentionPolicyDescriptor` gains `keep_deleted_days`, on a set's retention and on a destination's override alike: how many days a file deleted from the sources stays restorable. On `upsert_backup_set`, null keeps what stands, because a pre-1.62 client cannot see the field to send it back, and zero clears it; a descriptor holding only a zero is still the empty "no policy". `list_backup_sets`, `archive_adopted` and `adoption_preview` carry it back. Additive: a pre-1.62 client's edits leave the duration as they found it. |
 | 1.63 | The staging archive's own sweep ([ADR-0095](../../docs/adr/0095-the-staging-archive-heals.md), FR-VER-009). `BackupSetStatusDescriptor` gains `staging_sweep`, a `DeepSweepDescriptor` read as a destination row's `deep_sweep` is: when the circuit over the set's staging archive last closed, how far the one under way has read, whether it has stopped, and its cadence. A set with no staging archive reports none. Damage found there that no destination's copy has yet replaced is said in the set's `warnings`, which already crossed. Additive: a pre-1.63 client ignores the field, and a pre-1.63 service's sets read as reporting no staging sweep. |
 | 1.64 | What a restore will read ([ADR-0083 Amendment 2](../../docs/adr/0083-a-restore-says-whether-it-fits-and-what-it-will-not-write-back.md#amendment-2-2026-10--a-plan-says-what-its-run-reads), FR-RST-003). `restore_plan` gains `read_bytes`, beside `write_bytes`: the bytes the run will read from where it restores from, each record it needs that a copy holds once, as the reader sizes it, and the envelope of each blob they sit in once. Content stored compressed, once however many files repeat it, or not at all where a file keeps a hole is read in fewer bytes than it writes. Additive: a pre-1.64 client ignores the field, and a pre-1.64 service's plan reads as not saying, never as nothing to read. |
+| 1.65 | What is held only in an archival tier ([ADR-0103](../../docs/adr/0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md), FR-RST-003). `restore_plan` gains `archived_objects`, beside `missing_objects`: the paths whose manifest or content every copy that holds it holds only in a tier that serves nothing until it is rehydrated. A path with something no copy holds is missing, not archived. Null when there are none. Additive: a pre-1.65 client ignores the field, and a pre-1.65 service's plan names none. |
