@@ -138,6 +138,7 @@ It exists because the two drift apart silently and in one direction. An ADR is w
 | [0111](adr/0111-a-cloud-destination-says-what-its-store-was-asked.md) | A cloud destination says what its store was asked: each network store tells an observer of every request it sends, once an attempt, with its bytes; the service counts them by destination and by UTC day; and the destination's status row says what its store was asked over the thirty days ending today, and when counting began where that falls inside them (contract 1.69), on the command line and the console | **Built** | `Storage.Abstractions/IStoreRequestObserver` · `Storage.S3/S3ObjectStore`, `Storage.AzureBlob/AzureBlobObjectStore` · `Application/StoreRequestLedger` · `Agent/StoreComposition`, `Agent/ServiceCommandHandler` · `Cli/CliApplication` · `Storage.ContractTests/StoreRequestObserverTests`, `Application.Tests/StoreRequestLedgerTests`, `Hosts.Tests/ObjectStoreDestinationTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusRequestsLineTests`, `Web.DomTests/DestinationRequestsDomTests` · [notes](#0111--what-a-cloud-destinations-store-was-asked) |
 | [0112](adr/0112-a-store-that-archives-a-replicas-metadata-restores-nothing.md) | A store that archives a replica's metadata restores nothing: each sync to an object store asks after the replica's format with a head, the sync's read-back and the deep sweep tell an archived metadata blob from a data blob, the ledger keeps the first object met until it is served again (schema 13), and a notice and the status row say nothing restores from the destination until it is rehydrated and that only data blobs may be held archived (contract 1.70), on the command line and the console | **Built** | `Agent/FanOut`, `Agent/ReplicaSweepJob`, `Agent/ArchivedMetadataNotice`, `Agent/ServiceCommandHandler` · `Application/DestinationSyncStore` · `Cli/CliApplication` · `Hosts.Tests/ObjectStoreDestinationTests`, `Application.Tests/DestinationSyncStoreTests`, `Api.Tests/ContractAdditiveFieldsTests`, `Cli.Tests/StatusArchivedMetadataLineTests`, `Web.DomTests/ArchivedMetadataDomTests` · [notes](#0112--a-replicas-metadata-held-archived) |
 | [0113](adr/0113-the-console-keeps-a-restores-plan.md) | The console keeps a restore's plan: the file's shape moves into the contract's assembly at version 2, which keeps version 1's fields and adds the run as asked, and both clients write it; the console's endpoint asks the service for the plan the wizard sends and gives back the file, and the wizard offers to keep a plan while one is on screen | **Built** | `Api/RestorePlanFile` · `Cli/RestorePlanExport` · `Web/WebConsoleHost` · `Api.Tests/RestorePlanFileTests`, `Web.Tests/ConsoleRestorePlanFileTests`, `Web.DomTests/RestoreWizardDomTests`, `Cli.Tests/RestorePlanCommandTests` · [notes](#0113--a-restores-plan-kept-from-the-console) |
+| [0114](adr/0114-a-kept-plan-is-run-as-it-was-approved.md) | A kept plan is run as it was approved: `restore --as-planned <file>` reads the kept plan back, holds it to the run asked before anything is asked, plans again through either gateway, and runs only where the files, what is missing, what is held archived and the conflicts are what it said; otherwise it names each change and writes nothing | **Built** | `Api/RestorePlanFile` · `Cli/CliApplication`, `Cli/RestorePlanReport` · `Cli.Tests/RestoreAsPlannedCommandTests`, `Cli.Tests/GatewayRestoreReportTests`, `Api.Tests/RestorePlanFileTests` · [notes](#0114--a-kept-plan-run-as-approved) |
 
 ---
 
@@ -3463,3 +3464,17 @@ wizard offers it while a plan is on screen.
 
 What remains is recorded rather than done. A kept plan is still not run, from
 either client.
+
+### 0114 — a kept plan run as approved
+
+A plan was kept so someone could decide whether to run it, and nothing tied
+the run to what they read: `restore` planned afresh and ran whatever it found.
+`restore --as-planned <file>` reads the kept plan back, of either version,
+holds it to the run asked before anything is asked, plans again through either
+gateway, and runs only where the files, what is missing, what is held archived
+and the conflicts are what the kept plan said. Otherwise each change is named,
+a name at a time, and nothing is written.
+
+What remains is recorded rather than done. The command line asks one path, so
+a console's plan of several paths, a target or a policy is refused there by
+name, and the console runs no kept plan.

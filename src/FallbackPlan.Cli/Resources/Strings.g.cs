@@ -121,6 +121,44 @@ internal static class Strings
         string.Format(CultureInfo.CurrentCulture, CliApplication_RestoreRefused, arg0);
 
     /// <summary>
+    /// --as-planned runs the restore its plan was kept for, and a plan restores nothing while a resume is not planned: use it without --plan, --export or --resume.
+    /// </summary>
+    internal static string CliApplication_AsPlannedIsARun => Get(nameof(CliApplication_AsPlannedIsARun));
+
+    /// <summary>
+    /// '{0}' cannot be run as planned: {1}
+    /// </summary>
+    private static string CliApplication_AsPlannedUnreadable => Get(nameof(CliApplication_AsPlannedUnreadable));
+
+    /// <summary>
+    /// '{0}' cannot be run as planned: {1}
+    /// </summary>
+    internal static string FormatCliApplication_AsPlannedUnreadable(object? arg0, object? arg1) =>
+        string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedUnreadable, arg0, arg1);
+
+    /// <summary>
+    /// '{0}' keeps the plan of another run: snapshot {1}, {2}, to {3}. Restore that run as planned, or plan this one again.
+    /// </summary>
+    private static string CliApplication_AsPlannedAnotherRun => Get(nameof(CliApplication_AsPlannedAnotherRun));
+
+    /// <summary>
+    /// '{0}' keeps the plan of another run: snapshot {1}, {2}, to {3}. Restore that run as planned, or plan this one again.
+    /// </summary>
+    internal static string FormatCliApplication_AsPlannedAnotherRun(object? arg0, object? arg1, object? arg2, object? arg3) =>
+        string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedAnotherRun, arg0, arg1, arg2, arg3);
+
+    /// <summary>
+    /// '{0}' keeps the plan of a run the command line does not ask: several paths, a target, an existing-file policy or a landing in place. Restore it where it was planned, or plan one path here.
+    /// </summary>
+    private static string CliApplication_AsPlannedNotAsked => Get(nameof(CliApplication_AsPlannedNotAsked));
+
+    /// <summary>
+    /// '{0}' keeps the plan of a run the command line does not ask: several paths, a target, an existing-file policy or a landing in place. Restore it where it was planned, or plan one path here.
+    /// </summary>
+    internal static string FormatCliApplication_AsPlannedNotAsked(object? arg0) =>
+        string.Format(CultureInfo.CurrentCulture, CliApplication_AsPlannedNotAsked, arg0);
+
+    /// <summary>
     /// --resume runs a restore, and a plan restores nothing: plan the restore without --resume, or resume it without --plan or --export.
     /// </summary>
     internal static string CliApplication_ResumeIsNotPlanned => Get(nameof(CliApplication_ResumeIsNotPlanned));

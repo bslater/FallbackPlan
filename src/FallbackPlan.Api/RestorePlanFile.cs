@@ -46,6 +46,67 @@ public static class RestorePlanFile
     public static void Write(Stream stream, PlanRestoreCommand request, RestorePlanResult plan, DateTimeOffset plannedAt) =>
         JsonSerializer.Serialize(stream, DocumentOf(request, plan, plannedAt), Indented);
 
+    /// <summary>
+    /// Reads a kept plan back, of this version or an earlier one, as the run
+    /// it was kept for and the plan (ADR-0114).
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <returns>The kept plan.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The text is not JSON, not a kept restore plan, of a version this build
+    /// does not read, or holds no plan; the message says which.
+    /// </exception>
+    public static Kept Read(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        Document? document;
+        try
+        {
+            document = JsonSerializer.Deserialize<Document>(text, FrameCodec.SerializerOptions);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException($"it is not JSON: {exception.Message}", exception);
+        }
+
+        if (document is null || !string.Equals(document.Kind, Kind, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"it is not a kept restore plan: it says it is '{document?.Kind}'");
+        }
+
+        if (document.Version is < 1 or > Version)
+        {
+            throw new InvalidDataException(string.Create(
+                CultureInfo.InvariantCulture,
+                $"it is a kept restore plan of version {document.Version}, and this build reads versions 1 to {Version}"));
+        }
+
+        if (document.Plan is null || string.IsNullOrEmpty(document.SnapshotId))
+        {
+            throw new InvalidDataException("it is a kept restore plan with no plan or no snapshot in it");
+        }
+
+        return new Kept(
+            document.Version,
+            document.Contract,
+            new PlanRestoreCommand(
+                document.SnapshotId, document.Path, Paths: document.Paths, OutputDirectory: document.OutputDirectory,
+                Target: document.Target, Existing: document.Existing, InPlace: document.InPlace),
+            document.Plan,
+            DateTimeOffset.TryParse(document.PlannedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at)
+                ? at
+                : null);
+    }
+
+    /// <summary>A plan read back from its file.</summary>
+    /// <param name="Version">The shape's version the file was written under.</param>
+    /// <param name="Contract">The contract the plan was answered under, as the file says it.</param>
+    /// <param name="Request">The run it was kept for, as the service is asked it; never naming a source.</param>
+    /// <param name="Plan">The plan, as it was answered.</param>
+    /// <param name="PlannedAt">When it was planned; null where the file says no time this build reads.</param>
+    public sealed record Kept(int Version, string? Contract, PlanRestoreCommand Request, RestorePlanResult Plan, DateTimeOffset? PlannedAt);
+
     private static Document DocumentOf(PlanRestoreCommand request, RestorePlanResult plan, DateTimeOffset plannedAt)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -80,16 +141,16 @@ public static class RestorePlanFile
     /// <param name="PlannedAt">When, ISO-8601 UTC.</param>
     /// <param name="Plan">The plan, in the contract's words.</param>
     private sealed record Document(
-        string Kind,
+        string? Kind,
         int Version,
-        string Contract,
-        string SnapshotId,
+        string? Contract,
+        string? SnapshotId,
         string? Path,
         IReadOnlyList<string>? Paths,
         string? OutputDirectory,
         string? Target,
         string? Existing,
         bool InPlace,
-        string PlannedAt,
-        RestorePlanResult Plan);
+        string? PlannedAt,
+        RestorePlanResult? Plan);
 }

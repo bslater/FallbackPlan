@@ -15,7 +15,9 @@ namespace FallbackPlan.Cli.Tests;
 /// <c>restore --plan</c> prints through the service (FR-RST-003, ADR-0107):
 /// the plan for the run's own shape, with nothing run. And what
 /// <c>restore --resume</c> asks of the service (FR-RST-008, ADR-0109): the
-/// run it continues, named, and what that run found already in place.
+/// run it continues, named, and what that run found already in place. And a
+/// plan held to a kept one through the service (FR-RST-003, ADR-0114): what
+/// changed since it was kept, or that nothing did.
 /// </summary>
 [TestClass]
 public sealed class GatewayRestoreReportTests
@@ -177,6 +179,76 @@ public sealed class GatewayRestoreReportTests
     }
 
     [TestMethod]
+    public async Task APlanHeldToAKeptOne_ThroughTheService_SaysWhatChanged_AndRunsNothing()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, ["docs/gone.txt"], ArchivedObjects: ["docs/cold.txt"]));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(
+                new RestoreRequest(SnapshotId, null, "/out", AsPlanned: Kept(new RestorePlanResult(2, 9_000, []))), token),
+            timeout.Token);
+
+        Assert.IsFalse(report.Ok, "a plan that changed since it was kept is not the run that was approved");
+        var said = string.Join(" | ", report.Lines);
+        Assert.Contains("no longer as kept in /plans/approved.json", said, StringComparison.Ordinal);
+        Assert.Contains("docs/gone.txt", said, StringComparison.Ordinal);
+        Assert.Contains("docs/cold.txt", said, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>());
+    }
+
+    [TestMethod]
+    public async Task APlanHeldToAKeptOne_SaysWhatNoLongerHolds_AndEveryCountThatMoved()
+    {
+        // Better news is still news: the run approved is not the run it
+        // would now be.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, []));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(
+                new RestoreRequest(SnapshotId, null, "/out", AsPlanned: Kept(new RestorePlanResult(
+                    3, 9_000, ["docs/back.txt"], Conflicts: 1, ArchivedObjects: ["docs/warm.txt"]))),
+                token),
+            timeout.Token);
+
+        Assert.IsFalse(report.Ok);
+        var said = string.Join(" | ", report.Lines);
+        Assert.Contains("missing no longer: docs/back.txt", said, StringComparison.Ordinal);
+        Assert.Contains("archived no longer: docs/warm.txt", said, StringComparison.Ordinal);
+        Assert.Contains("files: 3 kept, 2 now", said, StringComparison.Ordinal);
+        Assert.Contains("conflicts: 1 kept, 0 now", said, StringComparison.Ordinal);
+        Assert.IsEmpty(client.Received.OfType<RunRestoreCommand>());
+    }
+
+    [TestMethod]
+    public async Task APlanHeldToAKeptOne_ThatIsUnchanged_SaysSo_EvenWhereItWouldFailFiles()
+    {
+        // The plan approved named a file it could not bring back: that was
+        // part of what was approved, and is not news.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var client = new ScriptedClient(
+            new RestoreResult(2, 0, "/out", "complete"),
+            new RestorePlanResult(2, 9_000, ["docs/gone.txt"], Conflicts: 1));
+
+        var report = await ThroughAsync(
+            client,
+            (gateway, token) => gateway.PlanRestoreAsync(
+                new RestoreRequest(SnapshotId, null, "/out", AsPlanned: Kept(new RestorePlanResult(2, 9_000, ["docs/gone.txt"], Conflicts: 1))),
+                token),
+            timeout.Token);
+
+        Assert.IsTrue(report.Ok, string.Join(" | ", report.Lines));
+        Assert.Contains("as kept in /plans/approved.json", report.Lines[0], StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public async Task APlanNamingFilesHeldOnlyInAnArchivalTier_IsNotOk_AndNamesThem()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -218,6 +290,11 @@ public sealed class GatewayRestoreReportTests
     /// <summary>Plans what <see cref="RestoreAsync"/> would run, as <c>restore --plan</c> does.</summary>
     private static Task<OperationReport> PlanAsync(ScriptedClient client, CancellationToken cancellationToken) =>
         ThroughAsync(client, (gateway, token) => gateway.PlanRestoreAsync(new RestoreRequest(SnapshotId, null, "/out"), token), cancellationToken);
+
+    /// <summary>A plan kept for the run <see cref="RestoreAsync"/> makes, as <c>restore --export</c> keeps one.</summary>
+    private static KeptPlan Kept(RestorePlanResult plan) =>
+        new("/plans/approved.json", RestorePlanFile.Read(RestorePlanFile.Serialize(
+            new PlanRestoreCommand(SnapshotId, null, OutputDirectory: "/out"), plan, DateTimeOffset.UtcNow)));
 
     private static async Task<OperationReport> ThroughAsync(
         ScriptedClient client, Func<ServiceGateway, CancellationToken, ValueTask<OperationReport>> verb, CancellationToken cancellationToken)

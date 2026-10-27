@@ -26,6 +26,11 @@ internal static class RestorePlanReport
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(request);
+        if (request.AsPlanned is { } kept)
+        {
+            return HeldTo(plan, kept);
+        }
+
         var outputDirectory = request.OutputDirectory;
 
         var reading = plan.ReadBytes is { } read
@@ -87,5 +92,66 @@ internal static class RestorePlanReport
         return new OperationReport(
             fits && plan.MissingObjects.Count == 0 && plan.ArchivedObjects is not { Count: > 0 },
             lines);
+    }
+
+    /// <summary>
+    /// A plan held to a kept one (ADR-0114): a success only where nothing a
+    /// person approved has changed — the files, what is missing, what is held
+    /// archived, the conflicts — so the run that follows is the run that was
+    /// approved. What the kept plan already said would fail was approved too,
+    /// and is not news.
+    /// </summary>
+    /// <remarks>
+    /// Room is left to the run, which refuses a restore that will not fit
+    /// unless told otherwise, whatever the kept plan said of it.
+    /// </remarks>
+    /// <param name="now">The plan made now.</param>
+    /// <param name="kept">The plan kept, and its file.</param>
+    private static OperationReport HeldTo(RestorePlanResult now, KeptPlan kept)
+    {
+        var then = kept.Plan.Plan;
+        var planned = kept.Plan.PlannedAt is { } at
+            ? string.Create(CultureInfo.InvariantCulture, $", planned {at.UtcDateTime:yyyy-MM-dd HH:mm} UTC")
+            : string.Empty;
+
+        List<string> changed = [];
+        if (now.Files != then.Files)
+        {
+            changed.Add(string.Create(CultureInfo.InvariantCulture, $"  files: {then.Files} kept, {now.Files} now"));
+        }
+
+        Differ(changed, "missing", then.MissingObjects, now.MissingObjects);
+        Differ(changed, "archived", then.ArchivedObjects ?? [], now.ArchivedObjects ?? []);
+        if (now.Conflicts != then.Conflicts)
+        {
+            changed.Add(string.Create(CultureInfo.InvariantCulture, $"  conflicts: {then.Conflicts} kept, {now.Conflicts} now"));
+        }
+
+        if (changed.Count == 0)
+        {
+            return new OperationReport(
+                true,
+                [
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"plan: as kept in {kept.File}{planned}: {now.Files} file(s), {now.MissingObjects.Count} missing, "
+                        + $"{now.ArchivedObjects?.Count ?? 0} archived, {now.Conflicts} conflict(s)"),
+                ]);
+        }
+
+        return new OperationReport(
+            false,
+            [
+                $"plan: no longer as kept in {kept.File}{planned}:",
+                .. changed,
+                "nothing was restored: the plan has changed since it was kept; plan the restore again",
+            ]);
+    }
+
+    /// <summary>The names one plan says and another does not, each way.</summary>
+    private static void Differ(List<string> changed, string what, IReadOnlyList<string> then, IReadOnlyList<string> now)
+    {
+        changed.AddRange(now.Except(then, StringComparer.Ordinal).Select(path => $"  {what} now: {path}"));
+        changed.AddRange(then.Except(now, StringComparer.Ordinal).Select(path => $"  {what} no longer: {path}"));
     }
 }
