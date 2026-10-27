@@ -165,6 +165,8 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 
   > **2026-10 ([ADR-0107](0107-the-command-line-plans-a-restore-on-its-own.md)).** The command line now prints a plan on its own, through either path, and exits non-zero unless the run would work. A plan is still not exported to a file, and a restore is not resumed.
 
+  > **2026-10 ([ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md)).** A plan is kept in a file with `restore --export`. A restore is still not resumed.
+
 ### Alternatives considered
 
 - **Reproduce the reader's coalescing to predict its bridges.** Rejected. The waves a run reads in depend on the reader's budgets and its order, and a figure that copied them would go wrong whenever they changed. The bound is stated instead.
@@ -184,3 +186,4 @@ A restore of part of a tree can meet the first, and a tree larger than the read 
 | 2026-10 | Accepted (amended) | [Amendment 2](#amendment-2-2026-10--a-plan-says-what-its-run-reads): a plan says what its run will read, each record a copy holds once as the reader sizes it and each blob's envelope once, as contract 1.64's `read_bytes`, shown by the console's wizard. A whole tree read as a run reads it takes no more and not 1% less (`Restore/RestoreBlobSet`; `Repository.Tests/RestoreReadTests`). |
 | 2026-10 | Accepted | [ADR-0103](0103-a-restore-plan-names-what-is-held-only-in-an-archival-tier.md) names in the plan what every copy holds only in an archival tier, apart from the missing objects §2 already named (contract 1.65). Of what this record left owed, plan export and resume remain. |
 | 2026-10 | Accepted | [ADR-0107](0107-the-command-line-plans-a-restore-on-its-own.md): `restore --plan` prints this record's plan from the command line, made by the service or in direct mode alike, and restores nothing; export to a file and resume stay owed. |
+| 2026-10 | Accepted | [ADR-0108](0108-a-restores-plan-can-be-kept-in-a-file.md): the command line keeps this record's plan in a file as JSON with `restore --export`; resume stays owed. |
