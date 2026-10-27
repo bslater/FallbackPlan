@@ -86,6 +86,7 @@ const S = {
   status: null,             // StatusResult
   sets: [],                 // BackupSetDescriptor[]
   snapshots: [],            // SnapshotDescriptor[]
+  restoreRuns: [],          // RestoreRunDescriptor[]: restores the service began and has not seen finish
   jobs: [],                 // JobDescriptor[]
   progress: new Map(),      // jobId -> JobProgress (live, via SSE)
   eta: new Map(),           // jobId -> smoothed completion-rate tracking (trackEta)
@@ -416,11 +417,15 @@ async function refreshJobs() {
 }
 
 async function refreshSnapshots() {
-  const result = await api({ command: "list_snapshots" }).catch(() => null);
-  if (result?.result === "snapshots") {
-    S.snapshots = result.snapshots;
-    if (S.view === "snapshots") renderSnapshots();
-  }
+  // A service before contract 1.71 names no run, and answers the ask with
+  // an error, which leaves the list empty.
+  const [result, runs] = await Promise.all([
+    api({ command: "list_snapshots" }).catch(() => null),
+    api({ command: "list_restore_runs" }).catch(() => null),
+  ]);
+  S.restoreRuns = runs?.result === "restore_runs" ? runs.runs : [];
+  if (result?.result === "snapshots") S.snapshots = result.snapshots;
+  if (S.view === "snapshots") renderSnapshots();
 }
 
 async function refreshDesc() {
@@ -1149,6 +1154,7 @@ function renderSnapshots() {
   el.innerHTML = `
     <h2>Snapshots</h2>
     <p class="view-sub">Every committed point in time. Restores write on the service's machine — content never streams to this page.</p>
+    ${renderUnfinishedRuns()}
     ${filter}
     ${snapshots.length === 0
       ? `<div class="card empty mt"><span class="big">📸</span>No snapshots yet. The first backup creates one.</div>`
@@ -1172,6 +1178,38 @@ function renderSnapshots() {
               </td>
             </tr>`).join("")}</tbody>
         </table></div></div>`}`;
+}
+
+// The restores the service began and has not seen finish (ADR-0116): stopped,
+// failing files, or cut short with the service or the machine. Named without
+// the paths they were asked for, which need the passphrase (ADR-0089).
+function renderUnfinishedRuns() {
+  if (!S.restoreRuns?.length) return "";
+  return `
+    <div class="card mt" id="unfinished-runs">
+      <h3>Restores left unfinished</h3>
+      <p class="dlg-sub">Each was begun and did not finish. Restoring what is left asks it again as it was asked:
+      each file already holding the snapshot's content stays as it stands.</p>
+      ${S.restoreRuns.map(runDescriptor => `
+        <div class="notice">
+          <span class="text">${describeRun(runDescriptor)}
+            <span class="subtle" title="${esc(fmtWhen(runDescriptor.beganAt))}">· begun ${esc(rel(runDescriptor.beganAt))}</span></span>
+          <button type="button" class="btn small" data-action="resume-run" data-run="${esc(runDescriptor.run)}">Restore what is left…</button>
+          <button type="button" class="btn small" data-action="forget-run" data-run="${esc(runDescriptor.run)}">Let it go…</button>
+        </div>`).join("")}
+    </div>`;
+}
+
+/* A restore run, as a person chooses whether to resume it. */
+function describeRun(runDescriptor) {
+  const where = runDescriptor.outputDirectory
+    ? `to <span class="mono">${esc(runDescriptor.outputDirectory)}</span>`
+    : "to where its files came from";
+  const how = [runDescriptor.inPlace ? "in place" : "", runDescriptor.existing ? `${esc(runDescriptor.existing)} where a file is in the way` : ""]
+    .filter(Boolean).join(", ");
+  return `Run <span class="mono">${esc(runDescriptor.run)}</span>: the backup
+    <span class="mono">${esc(runDescriptor.snapshotId.slice(0, 16))}</span>${runDescriptor.set ? ` of <b>${esc(runDescriptor.set)}</b>` : ""}
+    ${where}${how ? `, ${how}` : ""}`;
 }
 
 /* ----- jobs ----- */
@@ -1317,6 +1355,8 @@ function renderNotices() {
               ${notice.acknowledgedAt ? `· acknowledged ${esc(rel(notice.acknowledgedAt))}` : ""}</span></span>
             ${!notice.acknowledgedAt && notice.key?.startsWith("staging-retirable:")
               ? `<button type="button" class="btn small" data-action="retire-staging" data-key="${esc(notice.key)}">Retire staging…</button>` : ""}
+            ${!notice.acknowledgedAt && notice.key?.startsWith("restore-unfinished:")
+              ? `<button type="button" class="btn small" data-action="resume-run" data-run="${esc(notice.key.slice("restore-unfinished:".length))}">Restore what is left…</button>` : ""}
             ${!notice.acknowledgedAt && notice.key?.startsWith("format-upgradable:")
               ? `<button type="button" class="btn small" data-action="upgrade-format" data-key="${esc(notice.key)}">Upgrade format…</button>` : ""}
             ${!notice.acknowledgedAt && S.signedInRole === "Owner" && notice.key?.startsWith("replica-claimed:")
@@ -2815,6 +2855,49 @@ const actions = {
     // passphrase is asked for again (FR-WOR-007).
     if (B) { run({ command: "close_restore_source", sourceId: B.source }); B = null; }
     openRestoreWizard({ snapshotId: el.dataset.snapshot, path: el.dataset.path ?? "" });
+  },
+
+  // Asked of the service afresh: a notice outlives the run it names until it
+  // is resolved, and the run may have finished elsewhere meanwhile.
+  async "resume-run"(el) {
+    await withBusy(el, async () => {
+      const listed = await run({ command: "list_restore_runs" }, { errToast: "The service names no restore runs" });
+      if (listed?.result !== "restore_runs") return;
+      S.restoreRuns = listed.runs;
+      const named = listed.runs.find(candidate => candidate.run === el.dataset.run);
+      if (!named) {
+        toast("warn", "That restore is no longer left unfinished: it finished, or was let go.");
+        if (S.view === "snapshots") renderSnapshots();
+        return;
+      }
+      if (B) { run({ command: "close_restore_source", sourceId: B.source }); B = null; }
+      openRestoreWizard({ resume: named });
+    });
+  },
+
+  "forget-run"(el) {
+    const named = S.restoreRuns.find(candidate => candidate.run === el.dataset.run);
+    openDialog(`
+      <h3>Let the restore go</h3>
+      <p class="dlg-sub">${named ? describeRun(named) : `Run <span class="mono">${esc(el.dataset.run)}</span>`}.</p>
+      <p class="dlg-sub">The service will name it no more, and its notice is withdrawn. What it landed stays where it
+      landed, and can still be resumed from the command line by its folder's name.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn primary" id="forget-run-go" data-action="forget-run-go" data-run="${esc(el.dataset.run)}">Let it go</button>
+      </div>`);
+  },
+
+  async "forget-run-go"(el) {
+    await withBusy(el, async () => {
+      const result = await run(
+        { command: "forget_restore_run", run: el.dataset.run }, { okToast: "Let go.", errToast: "Not let go" });
+      if (result) {
+        closeDialog();
+        refreshSnapshots();
+        refreshStatus();
+      }
+    });
   },
 
   async "gate-unlock"(el) {
@@ -5642,6 +5725,9 @@ function openRestoreWizard(prefill) {
     planFailed: false,        // the plan was asked for and did not come
     result: null,
     prefill: prefill?.snapshotId ? prefill : null,
+    // A run left unfinished, resumed by its name alone (ADR-0116): asked
+    // again as it was asked, so the date, files and target are not chosen.
+    resume: prefill?.resume ?? null,
   };
   dialog.classList.add("wide");
   rstRender();
@@ -5718,7 +5804,7 @@ function rstStep2() {
     <p class="dlg-sub">Where to restore <b>from</b>. A destination's replica serves when this machine's own
     archive is damaged or gone — a peer's travels the paired connection, a store's its endpoint.</p>
     <label class="field" for="rst-set">Backup set</label>
-    <select id="rst-set">${W.sets.map(set =>
+    <select id="rst-set" ${W.resume ? "disabled" : ""}>${W.sets.map(set =>
       `<option ${set.name === W.setName ? "selected" : ""}>${esc(set.name)}</option>`).join("")}</select>
     <label class="field">Source</label>
     ${options.join("")}
@@ -5933,6 +6019,22 @@ function rstStep6() {
       </div>`;
   }
 
+  // A resume repeats a run that was confirmed when it began, as it was
+  // asked; the service measures what it still writes.
+  if (W.resume) {
+    return `
+      <p class="dlg-sub" id="rst-resume-summary">Restore what is left of ${describeRun(W.resume)}.</p>
+      <p class="dlg-sub">Each file already holding the snapshot's content stays as it stands, and the rest are restored.
+      A resume that will not fit is refused before anything is written.</p>
+      <label class="check"><input type="checkbox" id="rst-ignore-space"> Restore even if the destination looks too
+        small — a volume that compresses what it stores can hold more than the estimate</label>
+      <div class="dlg-actions">
+        <button type="button" class="btn" data-action="close-dialog">Cancel</button>
+        <button type="button" class="btn" data-action="rst-back">‹ Back</button>
+        <button type="button" class="btn primary" id="rst-resume-go" data-action="rst-resume-go">Restore what is left</button>
+      </div>`;
+  }
+
   // The word confirms the plan shown above it, so its field takes nothing
   // until there is one (FR-RST-003) — and the plan's arrival re-renders this
   // step, which would throw away a word typed while it was on its way.
@@ -6049,7 +6151,13 @@ const rstActions = {
     W.sets = sets?.result === "backup_sets" ? sets.sets : [];
     W.dests = dests?.result === "destinations" ? dests.destinations : [];
     if (W.sets.length === 0) { toast("warn", "No backup sets are configured."); return; }
-    if (W.prefill) {
+    if (W.resume) {
+      if (!W.sets.some(candidate => candidate.name === W.resume.set)) {
+        toast("warn", `The set this restore was of, '${W.resume.set ?? "unknown"}', is not configured.`);
+        return;
+      }
+      W.setName = W.resume.set;
+    } else if (W.prefill) {
       const row = S.snapshots.find(candidate => candidate.snapshotId === W.prefill.snapshotId);
       const set = row ? W.sets.find(candidate => candidate.id === row.backupSetId) : null;
       W.setName = set?.name ?? W.sets[0].name;
@@ -6062,6 +6170,17 @@ const rstActions = {
 
   async continue2() {
     if (!await rstOpenSource()) { rstRender(); return; }
+    if (W.resume) {
+      if (!W.source.snapshots.some(row => row.snapshotId === W.resume.snapshotId)) {
+        W.sourceError = "This source does not hold the backup this run restores; choose another.";
+        rstRender();
+        return;
+      }
+      W.step = 6;
+      W.result = null;
+      rstRender();
+      return;
+    }
     if (W.source.snapshots.length === 0) {
       W.sourceError = "This source holds no backups of the set.";
       rstRender();
@@ -6131,7 +6250,8 @@ const rstActions = {
 
 Object.assign(actions, {
   "rst-back"() {
-    W.step = Math.max(1, W.step - 1);
+    // A resume chooses no date, files or target, so it goes back to its source.
+    W.step = W.resume && W.step === 6 ? 2 : Math.max(1, W.step - 1);
     W.result = null;
     rstRender();
   },
@@ -6197,10 +6317,29 @@ Object.assign(actions, {
   // (ADR-0110): what already landed is left, and the rest restored.
   async "rst-resume"(el) {
     await withBusy(el, async () => {
-      await rstRunRestore({ resume: W.result.run }, "Resume refused");
+      if (W.resume) await rstResumeRun(W.result.run, false);
+      else await rstRunRestore({ resume: W.result.run }, "Resume refused");
+    });
+  },
+
+  async "rst-resume-go"(el) {
+    await withBusy(el, async () => {
+      await rstResumeRun(W.resume.run, document.getElementById("rst-ignore-space")?.checked ?? false);
     });
   },
 });
+
+/* A run left unfinished, asked again by the service by its name alone (ADR-0116). */
+async function rstResumeRun(name, ignoreFreeSpace) {
+  const result = await run(
+    { command: "resume_restore", run: name, source: W.source.sourceId, ignoreFreeSpace }, { errToast: "Resume refused" });
+  if (result?.result === "restore") {
+    W.result = result;
+    rstRender();
+    refreshJobs();
+    refreshSnapshots();
+  }
+}
 
 /* The plan of the run the wizard is about to confirm, as the service is asked it. */
 function rstPlanRequest() {
