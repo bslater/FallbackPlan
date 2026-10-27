@@ -61,6 +61,11 @@ public sealed class RestoreOriginalDirectTests : IDisposable
         Assert.IsFalse(Directory.Exists(Path.Combine(docs, "media")), "a label's files go back into its own root");
         Assert.Contains("2 file(s)", run.Output, StringComparison.Ordinal);
         Assert.Contains($"to {docs}; {media}", run.Output, StringComparison.Ordinal);
+
+        // One receipt for the run, each path under the label it was asked by.
+        var kept = await File.ReadAllTextAsync(Assert.ContainsSingle(Directory.GetFiles(Path.Combine(_cli.StatePath, "receipts"), "*.json")));
+        Assert.Contains("\"docs/one.txt\"", kept, StringComparison.Ordinal);
+        Assert.Contains("\"media/clip.txt\"", kept, StringComparison.Ordinal);
     }
 
     [TestMethod]

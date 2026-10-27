@@ -251,6 +251,25 @@ public sealed record RestoreReceipt
 
     /// <summary>The receipt as indented JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, SerializerOptions);
+
+    /// <summary>
+    /// Keeps the receipt as its run's own file, <c>{runId}.json</c>, under
+    /// <paramref name="receiptsDirectory"/> (FR-RST-004, ADR-0122): written
+    /// whole beside its place and moved there, so a reader never meets half
+    /// of one, and a receipt kept again under its run replaces the last.
+    /// </summary>
+    /// <param name="receiptsDirectory">Where a state directory keeps restore receipts.</param>
+    /// <param name="runId">The run's sixteen lowercase hex digits.</param>
+    /// <returns>Where the receipt was kept.</returns>
+    public string Keep(string receiptsDirectory, string runId)
+    {
+        Directory.CreateDirectory(receiptsDirectory);
+        var path = Path.Combine(receiptsDirectory, $"{runId}.json");
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, ToJson());
+        File.Move(temporary, path, overwrite: true);
+        return path;
+    }
 }
 
 /// <summary>Executor switches.</summary>

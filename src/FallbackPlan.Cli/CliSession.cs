@@ -92,6 +92,9 @@ public sealed class CliSession : IDisposable
     /// <summary>The user-editable configuration — the second store (11 §3).</summary>
     public string ConfigurationPath => Path.Combine(StateDirectory, "config.json");
 
+    /// <summary>Where a restore's receipt is kept, as the service keeps one in the same state directory (ADR-0122).</summary>
+    public string ReceiptsDirectory => Path.Combine(StateDirectory, "receipts");
+
     /// <summary>Durable local state — the third store: identities and job history.</summary>
     public LocalState State => _state ??= LocalState.LoadOrCreate(StateDirectory);
 

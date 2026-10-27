@@ -1446,15 +1446,7 @@ public sealed partial class ServiceCommandHandler(
     /// now nobody kept it, which made "the restore succeeded" an impression
     /// rather than a checkable claim once the dialog closed.
     /// </summary>
-    private string PersistReceipt(RestoreReceipt receipt, string runId)
-    {
-        Directory.CreateDirectory(runtime.ReceiptsRoot);
-        var path = Path.Combine(runtime.ReceiptsRoot, $"{runId}.json");
-        var temporary = path + ".tmp";
-        File.WriteAllText(temporary, receipt.ToJson());
-        File.Move(temporary, path, overwrite: true);
-        return path;
-    }
+    private string PersistReceipt(RestoreReceipt receipt, string runId) => receipt.Keep(runtime.ReceiptsRoot, runId);
 
     /// <summary>Verifies every stored blob of every set's archive at the requested level.</summary>
     private async ValueTask<ServiceResult> VerifyAsync(VerifyCommand command, CancellationToken cancellationToken)
