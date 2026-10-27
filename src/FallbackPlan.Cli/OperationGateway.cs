@@ -204,7 +204,12 @@ public interface IOperationGateway : IAsyncDisposable
 /// Whether to restore although the volume looks too small (FR-RST-003). A
 /// restore that will not fit is otherwise refused before anything is written.
 /// </param>
-public sealed record RestoreRequest(string SnapshotId, string? Path, string OutputDirectory, bool IgnoreFreeSpace = false);
+/// <param name="PlanExport">
+/// Where a plan of the restore is kept as JSON, on the machine running the
+/// command line (ADR-0108); null keeps none. A file already there is refused.
+/// </param>
+public sealed record RestoreRequest(
+    string SnapshotId, string? Path, string OutputDirectory, bool IgnoreFreeSpace = false, string? PlanExport = null);
 
 /// <summary>Resolves which gateway a command gets.</summary>
 public static class OperationGateway
@@ -617,7 +622,7 @@ internal sealed class ServiceGateway(
                     request.SnapshotId, request.Path, Source: source, OutputDirectory: request.OutputDirectory),
                 "a restore's plan",
                 cancellationToken).ConfigureAwait(false);
-            return RestorePlanReport.Describe(plan, request.OutputDirectory);
+            return RestorePlanReport.Describe(plan, request);
         }
         finally
         {
@@ -1393,7 +1398,7 @@ internal sealed class DirectGateway(CliSession session, ILogger? logger = null) 
                 ],
                 (long)probed.ReadBytes,
                 probed.Archived.Count == 0 ? null : probed.Archived),
-            request.OutputDirectory);
+            request);
     }
 
     /// <summary>How this machine says how much room a directory's volume has.</summary>

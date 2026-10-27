@@ -16,12 +16,17 @@ namespace FallbackPlan.Cli;
 /// </remarks>
 internal static class RestorePlanReport
 {
-    /// <summary>The plan's lines, and whether the run would restore every file and fit.</summary>
+    /// <summary>
+    /// The plan's lines, and whether the run would restore every file and fit;
+    /// the plan kept as JSON too, where the request names a file for it.
+    /// </summary>
     /// <param name="plan">The plan.</param>
-    /// <param name="outputDirectory">Where the run would write, as it was asked for.</param>
-    public static OperationReport Describe(RestorePlanResult plan, string outputDirectory)
+    /// <param name="request">The restore it plans, as it was asked for.</param>
+    public static OperationReport Describe(RestorePlanResult plan, RestoreRequest request)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(request);
+        var outputDirectory = request.OutputDirectory;
 
         var reading = plan.ReadBytes is { } read
             ? string.Create(CultureInfo.InvariantCulture, $", {read} byte(s) read")
@@ -71,6 +76,12 @@ internal static class RestorePlanReport
         }
 
         lines.AddRange(plan.Degradations ?? []);
+        if (request.PlanExport is { } file)
+        {
+            RestorePlanExport.Write(file, request, plan);
+            lines.Add($"plan kept in {file}");
+        }
+
         lines.Add("nothing was restored: this was a plan");
 
         return new OperationReport(

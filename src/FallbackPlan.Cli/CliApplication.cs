@@ -1500,6 +1500,11 @@ public static class CliApplication
                 Description = "Say what the restore would do and restore nothing: what it writes and reads, whether it fits, "
                     + "and what it could not bring back. Exits non-zero unless the restore would bring back every file and fit.",
             };
+            var exportOption = new Option<string?>("--export")
+            {
+                Description = "Keep the plan in this file as JSON as well as printing it; implies --plan, so nothing is "
+                    + "restored. A file already there is refused and left alone.",
+            };
             var command = WithRemoteCapableSession(new Command(
                 "restore", "Restore a snapshot (or a path within it), each file verified per segment and by whole-file hash."));
             command.Arguments.Add(snapshotArgument);
@@ -1507,22 +1512,35 @@ public static class CliApplication
             command.Options.Add(outputOption);
             command.Options.Add(ignoreFreeSpaceOption);
             command.Options.Add(planOption);
+            command.Options.Add(exportOption);
             command.Options.Add(directOption);
 
-            command.SetAction((parse, cancellationToken) => GuardAsync(() => ReadThroughGatewayAsync(
-                parse,
-                (gateway, token) =>
+            command.SetAction((parse, cancellationToken) => GuardAsync(() =>
+            {
+                // First, before anything is asked: a file already where the
+                // plan is to be kept is somebody's.
+                var export = parse.GetValue(exportOption) is { Length: > 0 } named ? Path.GetFullPath(named) : null;
+                if (export is not null && !RestorePlanExport.IsFree(export))
                 {
-                    var request = new RestoreRequest(
-                        parse.GetValue(snapshotArgument)!,
-                        parse.GetValue(pathArgument),
-                        parse.GetValue(outputOption)!,
-                        parse.GetValue(ignoreFreeSpaceOption));
-                    return parse.GetValue(planOption)
-                        ? gateway.PlanRestoreAsync(request, token)
-                        : gateway.RestoreAsync(request, token);
-                },
-                cancellationToken)));
+                    throw new CliFailureException(RestorePlanExport.Refusal(export));
+                }
+
+                return ReadThroughGatewayAsync(
+                    parse,
+                    (gateway, token) =>
+                    {
+                        var request = new RestoreRequest(
+                            parse.GetValue(snapshotArgument)!,
+                            parse.GetValue(pathArgument),
+                            parse.GetValue(outputOption)!,
+                            parse.GetValue(ignoreFreeSpaceOption),
+                            export);
+                        return parse.GetValue(planOption) || export is not null
+                            ? gateway.PlanRestoreAsync(request, token)
+                            : gateway.RestoreAsync(request, token);
+                    },
+                    cancellationToken);
+            }));
         }
 
         // --------------------------------------------------------------- check
